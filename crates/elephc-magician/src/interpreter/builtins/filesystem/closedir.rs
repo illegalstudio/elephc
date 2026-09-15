@@ -65,9 +65,12 @@ pub(in crate::interpreter) fn eval_unary_directory_result(
     match name {
         "closedir" => {
             if let Some(result) = eval_user_wrapper_closedir_result(id, context, values)? {
+                values.resource_closed(dir_handle)?;
                 return Ok(result);
             }
-            context.stream_resources_mut().close_directory(id);
+            if context.stream_resources_mut().close_directory(id) {
+                values.resource_closed(dir_handle)?;
+            }
             values.null()
         }
         "readdir" => {

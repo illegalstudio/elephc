@@ -110,13 +110,13 @@ pub(super) fn lower_pipe_runtime_call(
     let result_type = pipe_runtime_result_type(ctx, callable, expr);
     let value = lower_expr(ctx, value);
     let callable = lower_expr(ctx, callable);
-    ctx.emit_value(
+    emit_descriptor_invoker_value(
+        ctx,
         Op::PipeCall,
         vec![value.value, callable.value],
         None,
         result_type,
-        Op::PipeCall.default_effects(),
-        Some(expr.span),
+        expr.span,
     )
 }
 
@@ -134,4 +134,3 @@ pub(super) fn pipe_runtime_result_type(
         _ => fallback_expr_type(expr),
     }
 }
-

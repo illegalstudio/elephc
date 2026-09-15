@@ -16,6 +16,7 @@ mod php_num_scan;
 mod str_eq;
 mod str_loose_eq;
 mod str_to_number;
+mod numeric_value;
 mod str_to_int;
 mod str_to_int_base;
 mod number_format;
@@ -45,6 +46,7 @@ mod str_ends_with;
 mod str_replace;
 mod explode;
 mod implode;
+mod implode_cast;
 mod implode_bool;
 mod implode_int;
 mod ucwords;
@@ -118,6 +120,7 @@ pub use str_eq::emit_str_eq;
 pub use str_loose_eq::emit_str_loose_eq;
 /// Emit case-insensitive string equality check.
 pub use str_to_number::emit_str_to_number;
+pub use numeric_value::emit_str_numeric_value;
 /// Emit string-to-int parameter coercion validation helper.
 pub use str_to_number::emit_str_looks_like_int_for_coercion;
 /// Emit string-to-number conversion helper.

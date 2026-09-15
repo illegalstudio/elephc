@@ -9,8 +9,8 @@
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
 //! - TWO independent invariants live in the boxed-Mixed element path, and both are pinned by
 //!   tests. Do not drop either when reworking this emitter:
-//!   1. OWNERSHIP (#601): `__rt_mixed_cast_string` persists string payloads into a fresh heap
-//!      block. Implode owns that block and releases it once the bytes are copied, via the
+//!   1. OWNERSHIP (#601): element conversion persists strings and object hook results into
+//!      owned heap storage. Implode releases that storage once the bytes are copied, via the
 //!      per-iteration "owned mixed-cast slot" (`[sp, #48]` on AArch64, `[rbp - 72]` on x86_64).
 //!      Pinned by `tests/codegen/runtime_gc/regressions.rs` (the `#601` implode tests) and by
 //!      `test_implode_{arm64,x86_64}_releases_mixed_cast_string` below.
@@ -18,6 +18,7 @@
 //!      cast, and the ABSOLUTE end offset is stamped on completion. Pinned by
 //!      `callback_return_type_matrix_joins_like_php` in `tests/array_result_type_tests.rs` and
 //!      by `test_implode_{arm64,x86_64}_publishes_live_cursor_across_mixed_cast` below.
+//!      Warning and object callbacks preserve this prefix through `implode_cast` snapshots.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -33,6 +34,7 @@ use crate::codegen_support::platform::Arch;
 /// The result is written into the shared concat buffer and _concat_off is updated
 /// to reflect the bytes consumed by this call.
 pub fn emit_implode(emitter: &mut Emitter) {
+    super::implode_cast::emit_implode_element_cast(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_implode_linux_x86_64(emitter);
         return;
@@ -111,14 +113,13 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("sub x14, x9, x13");                                    // absolute offset of the live implode destination cursor
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the concat offset variable address
     emitter.instruction("str x14, [x13]");                                      // reserve everything written so far against the nested cast's scratch
-    emitter.instruction("bl __rt_mixed_cast_string");                           // cast the boxed Mixed element to a string payload
+    emitter.instruction("bl __rt_implode_cast_string");                         // cast scalar values or invoke an object's PHP string hook
     emitter.instruction("ldr x9, [sp, #56]");                                   // restore destination cursor after the mixed string cast
     emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length after the mixed string cast
     emitter.instruction("ldr x11, [sp, #72]");                                  // restore loop index after the mixed string cast
-    // Record the cast result as this frame's owned temporary (#601). `__rt_mixed_cast_string`
-    // only ALLOCATES for tag 1 (string), where it routes through `__rt_str_persist` and always
-    // returns a fresh `__rt_heap_alloc` block that no other owner aliases. Tag 0/2 (int/float)
-    // and tag 3 true format into the shared `_concat_buf` scratch, tag 3 false and null/objects
+    // Record the cast result as this frame's owned temporary (#601). String payloads and
+    // object hook results return independently owned storage. Tag 0/2 (int/float)
+    // and tag 3 true format into the shared `_concat_buf` scratch, tag 3 false and null
     // return a null pointer: `__rt_heap_free` ignores all of those by contract (AArch64 rejects
     // pointers outside `_heap_buf.._heap_buf+_heap_off`; x86_64 rejects payloads without the
     // heap magic marker, explicitly to let callers pass concat-buffer storage). The pointer is
@@ -142,7 +143,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #56]");                                   // preserve destination cursor across the heap release
     emitter.instruction("str x10, [sp, #64]");                                  // preserve array length across the heap release
     emitter.instruction("str x11, [sp, #72]");                                  // preserve loop index across the heap release
-    emitter.instruction("bl __rt_heap_free");                                   // release the persisted string produced by __rt_mixed_cast_string
+    emitter.instruction("bl __rt_heap_free");                                   // release an owned element conversion result and ignore borrowed text
     emitter.instruction("ldr x9, [sp, #56]");                                   // restore destination cursor after the heap release
     emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length after the heap release
     emitter.instruction("ldr x11, [sp, #72]");                                  // restore loop index after the heap release
@@ -252,9 +253,9 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r9, r8");                                          // absolute offset of the live implode destination cursor
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
     emitter.instruction("mov QWORD PTR [r8], r9");                              // reserve everything written so far against the nested cast's scratch
-    emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed Mixed element to a string payload
-    // Record the cast result as this frame's owned temporary (#601): only tag 1 (string) routes
-    // through `__rt_str_persist` and allocates. Int/float/bool scratch pointers into `_concat_buf`
+    emitter.instruction("call __rt_implode_cast_string");                       // cast scalar values or invoke an object's PHP string hook
+    // Record owned string payloads and object hook results as this frame's temporary (#601).
+    // Int/float/bool scratch pointers into `_concat_buf`
     // are rejected by `__rt_heap_free`'s heap-magic check, which exists for exactly this caller.
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // record the persisted mixed-cast string to release once its bytes are copied
     emitter.instruction("mov r8, rax");                                         // move the cast string pointer into the copy-loop source register
@@ -276,7 +277,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // load the owned mixed-cast string, or zero for borrowed element slots
     emitter.instruction("test rax, rax");                                       // borrowed element slots own no temporary to release
     emitter.instruction("jz __rt_implode_next_advance");                        // skip the release when the current element was copied from borrowed storage
-    emitter.instruction("call __rt_heap_free");                                 // release the persisted string produced by __rt_mixed_cast_string
+    emitter.instruction("call __rt_heap_free");                                 // release an owned element conversion result and ignore borrowed text
     emitter.label("__rt_implode_next_advance");
     emitter.instruction("add QWORD PTR [rbp - 56], 1");                         // advance the indexed-array loop cursor to the next element
     emitter.instruction("jmp __rt_implode_loop");                               // continue joining indexed-array elements into the concat buffer

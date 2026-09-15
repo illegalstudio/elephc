@@ -11,12 +11,34 @@
 //! - A reference property's slot holds a pointer to a 16-byte ref-cell; reads and writes
 //!   on either the local alias or the property dereference the shared cell, so a write
 //!   through one side is observed through the other.
-//! - By-reference returns hand the caller the cell pointer, which `$x = &call()` binds
-//!   non-owning. The cell pointer is one machine word for every element type — including
-//!   `string` (a `{ptr,len}` cell) and `float` (a `d`-register cell) — so it travels in the
-//!   integer result register, never split across the string/float result registers.
+//! - Resolved by-reference returns transfer a managed cell owner to `$x = &call()`;
+//!   borrowed cells remain non-owning. Ordinary value calls copy the referenced value.
+//! - Every raw cell pointer travels in the integer result register, including cells
+//!   containing a string pair or a float, without using string/float result registers.
 
 use crate::support::*;
+
+/// A fresh by-reference foreach value must be canonical null when the source is empty.
+/// Capturing it by reference immediately afterwards exercises the raw-to-ref-cell path,
+/// which previously promoted an uninitialized frame word when the loop ran zero times.
+#[test]
+fn test_empty_foreach_initializes_fresh_by_ref_value_before_capture() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [1];
+array_pop($items);
+foreach ($items as &$value) {
+}
+$read = function () use (&$value): mixed {
+    return $value;
+};
+echo is_null($read()) ? "null" : "not-null";
+$value = "updated";
+echo "|", $read();
+"#,
+    );
+    assert_eq!(out, "null|updated");
+}
 
 /// `$x = &$obj->prop` aliases a scalar property: writing the local updates the property
 /// and writing the property updates the local (write-through in both directions).

@@ -7,6 +7,8 @@
 //! Key details:
 //! - Recursive counting tracks visited arrays to avoid cycles.
 //! - Top-level objects dispatch through `Countable::count()` when applicable.
+//! - Direct calls consume their temporary operands; value hooks borrow cells the
+//!   caller already owns, and recursive counting retires every key and element it reads.
 
 use super::super::super::*;
 
@@ -40,6 +42,11 @@ pub(in crate::interpreter) fn eval_count_declared_values_result(
 }
 
 /// Evaluates the builtin `count(...)` for arrays and `Countable` objects.
+///
+/// Direct dispatch hands this hook unevaluated expressions and releases nothing on its
+/// behalf, so the operands are taken through `with_eval_operands`: a borrowed storage read
+/// acquires a lease, an owned temporary such as `count($table["items"])` keeps its single
+/// owner, and both are retired on the success and failure paths.
 pub(in crate::interpreter) fn eval_builtin_count(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -47,14 +54,13 @@ pub(in crate::interpreter) fn eval_builtin_count(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match args {
-        [value] => {
-            let value = eval_expr(value, context, scope, values)?;
-            eval_count_result(value, None, context, values)
-        }
+        [value] => with_eval_operands(&[value], context, scope, values, |args, context, _, values| {
+            eval_count_result(args[0], None, context, values)
+        }),
         [value, mode] => {
-            let value = eval_expr(value, context, scope, values)?;
-            let mode = eval_expr(mode, context, scope, values)?;
-            eval_count_result(value, Some(mode), context, values)
+            with_eval_operands(&[value, mode], context, scope, values, |args, context, _, values| {
+                eval_count_result(args[0], Some(args[1]), context, values)
+            })
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -99,6 +105,10 @@ fn eval_countable_object_matches(
 }
 
 /// Recursively counts nested eval arrays for `count($value, COUNT_RECURSIVE)`.
+///
+/// The boxed key and the fetched element are both owned results of the runtime bridge, so
+/// each is released before the next position is read, including when the nested count or a
+/// cleanup call fails.
 pub(in crate::interpreter) fn eval_count_recursive_len(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -114,12 +124,28 @@ pub(in crate::interpreter) fn eval_count_recursive_len(
     let mut total = len;
     for position in 0..len {
         let key = values.array_iter_key(value, position)?;
-        let element = values.array_get(value, key)?;
-        if values.is_array_like(element)? {
-            total = total
-                .checked_add(eval_count_recursive_len(element, values, arrays_seen)?)
-                .ok_or(EvalStatus::RuntimeFatal)?;
-        }
+        let element = values.array_get(value, key);
+        let key_released = values.release(key);
+        let element = match (element, key_released) {
+            (Ok(element), Ok(())) => element,
+            (Ok(element), Err(status)) => {
+                let _ = values.release(element);
+                return Err(status);
+            }
+            (Err(status), _) => return Err(status),
+        };
+        let nested = (|| {
+            if values.is_array_like(element)? {
+                eval_count_recursive_len(element, values, arrays_seen)
+            } else {
+                Ok(0)
+            }
+        })();
+        let element_released = values.release(element);
+        total = total
+            .checked_add(nested?)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        element_released?;
     }
 
     arrays_seen.pop();

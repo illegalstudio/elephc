@@ -1,16 +1,16 @@
 ---
-title: "array_diff_assoc() — internals"
+title: "array_diff_assoc() - internals"
 description: "Compiler internals for array_diff_assoc(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 8
 ---
 
-## `array_diff_assoc()` — internals
+## `array_diff_assoc()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_diff_assoc.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_diff_assoc.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -24,11 +24,44 @@ pub(super) fn lower_static_method_call(
             && !args.is_empty()
         {
             let closure = lower_expr(ctx, &args[0]);
+            if let (Some(new_this), Some(scope)) = (args.get(1), args.get(2)) {
+                if let Some(plan) = plan_scoped_closure_bind(ctx, &args[0], scope) {
+                    return lower_planned_scoped_closure_bind(
+                        ctx, plan, closure, new_this, scope, expr,
+                    );
+                }
+            }
+            // Callable identity invalidation widens an escaped closure local to boxed Mixed
+            // storage. ClosureBind consumes the descriptor payload, not the Mixed-cell address,
+            // so normalize it at the same boundary as bindTo() before publishing operand roots.
+            let closure = if matches!(
+                ctx.builder.value_php_type(closure.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) {
+                unbox_callable_param_storage(ctx, closure, Some(args[0].span))
+            } else {
+                closure
+            };
+            let result_staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
+            let (closure, closure_owner) = root_owned_call_operand(ctx, closure, args[0].span);
             let new_this = match args.get(1) {
                 Some(arg) => lower_expr(ctx, arg),
                 None => lower_null(ctx, expr),
             };
-            return emit_closure_bind(ctx, closure.value, new_this.value, expr);
+            let (new_this, receiver_owner) = root_owned_call_operand(
+                ctx,
+                new_this,
+                args.get(1).map_or(expr.span, |arg| arg.span),
+            );
+            let bound = emit_closure_bind(ctx, closure.value, new_this.value, expr);
+            stage_call_result(ctx, result_staging.as_ref(), bound, expr.span);
+            if let Some(slot) = receiver_owner {
+                retire_owned_call_operand(ctx, slot, expr.span);
+            }
+            if let Some(slot) = closure_owner {
+                retire_owned_call_operand(ctx, slot, expr.span);
+            }
+            return take_prepublished_call_result(ctx, result_staging, bound, expr.span);
         }
     }
 
@@ -64,11 +97,10 @@ pub(super) fn lower_static_method_call(
     let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
-    let operands =
-        coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
-    let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
-    let data = ctx.intern_string(&name);
+    // The result type and the alias summary are decided by the receiver and the method alone, so
+    // they are resolved up front: the reference lease and the ordinary owned result both need
+    // their staging published BEFORE any argument expression runs, and the result staging has to
+    // be declared with the exact type the call is emitted with.
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
@@ -89,6 +121,28 @@ pub(super) fn lower_static_method_call(
         }
         _ => result_type,
     };
+    let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
+    // A by-reference-returning static method transfers a lease that must outlive this caller's
+    // argument cleanup, so its staging is published before the arguments are evaluated.
+    let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
+    let result_staging = prepublish_user_call_result(
+        ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
+    );
+    begin_call_argument_evaluation(ctx);
+    let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let mut operands =
+        coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
+    let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
+    let data = ctx.intern_string(&name);
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    let roots = root_user_call_operands(
+        ctx,
+        &mut operands,
+        sig.as_ref(),
+        &return_alias,
+        &result_type,
+        expr.span,
+    );
     let call = ctx.emit_value(
         Op::StaticMethodCall,
         operands.clone(),
@@ -97,16 +151,23 @@ pub(super) fn lower_static_method_call(
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     );
-    let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
-    release_owned_call_arg_temporaries_with_signature(
+    ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &operands);
+    let call = finish_reference_return_call(
+        ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    release_owned_call_arg_temporaries_with_roots(
         ctx,
         &operands,
         Some(call.value),
         &return_alias,
         sig.as_ref(),
+        &roots,
         expr.span,
     );
-    call
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
+    finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }
 
 /// Returns preserved late-static return syntax for EIR static dispatch.
@@ -242,26 +303,32 @@ pub(super) fn lower_static_method_descriptor_call(
     let wrapper_sig = sig
         .as_ref()
         .map(crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig);
-    let target = CallableTarget::StaticMethod {
-        receiver: receiver.clone(),
-        method: method.to_string(),
-    };
-    let descriptor = lower_first_class_callable(ctx, &target, expr);
-    let mut operands = Vec::with_capacity(args.len() + 1);
-    operands.push(descriptor.value);
-    operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
         .unwrap_or_else(|| fallback_expr_type(expr));
-    ctx.emit_value(
+    let target = CallableTarget::StaticMethod {
+        receiver: receiver.clone(),
+        method: method.to_string(),
+    };
+    let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
+    let descriptor = lower_first_class_callable(ctx, &target, expr);
+    let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
+    let mut operands = vec![descriptor.value];
+    operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
+    let result = emit_descriptor_invoker_value(
+        ctx,
         Op::ExprCall,
         operands,
         callable_profile_immediate(),
         result_type,
-        Op::ExprCall.default_effects(),
-        Some(expr.span),
-    )
+        expr.span,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    if let Some(slot) = descriptor_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    take_prepublished_call_result(ctx, result_staging, result, expr.span)
 }
 
 /// Lowers a static-method descriptor call when operands have already been evaluated.
@@ -273,25 +340,37 @@ pub(super) fn lower_static_method_descriptor_value_call(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let sig = static_method_implementation_signature(ctx, receiver, method).cloned();
-    let target = CallableTarget::StaticMethod {
-        receiver: receiver.clone(),
-        method: method.to_string(),
-    };
-    let descriptor = lower_first_class_callable(ctx, &target, expr);
-    let mut operands = Vec::with_capacity(args.len() + 1);
-    operands.push(descriptor.value);
-    operands.extend(args);
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
         .unwrap_or_else(|| fallback_expr_type(expr));
-    Some(ctx.emit_value(
+    let target = CallableTarget::StaticMethod {
+        receiver: receiver.clone(),
+        method: method.to_string(),
+    };
+    let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
+    let descriptor = lower_first_class_callable(ctx, &target, expr);
+    let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
+    let mut operands = Vec::with_capacity(args.len() + 1);
+    operands.push(descriptor.value);
+    operands.extend(args);
+    let result = emit_descriptor_invoker_value(
+        ctx,
         Op::ExprCall,
         operands,
         callable_profile_immediate(),
         result_type,
-        Op::ExprCall.default_effects(),
-        Some(expr.span),
+        expr.span,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    if let Some(slot) = descriptor_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    Some(take_prepublished_call_result(
+        ctx,
+        result_staging,
+        result,
+        expr.span,
     ))
 }
 
@@ -422,4 +501,3 @@ pub(super) fn static_receiver_class_name(
         }
     }
 }
-

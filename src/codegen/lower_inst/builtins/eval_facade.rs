@@ -9,6 +9,14 @@
 
 use super::*;
 
+/// Appends live eval declarations to the current owned native inventory container.
+pub(in crate::codegen::lower_inst) fn append_eval_inventory(
+    ctx: &mut FunctionContext<'_>,
+    constants: bool,
+) -> Result<()> {
+    eval::append_eval_inventory(ctx, constants)
+}
+
 /// Lowers a statically-known eval fragment through the current bridge fallback path.
 pub(in crate::codegen::lower_inst) fn lower_eval_literal_call(
     ctx: &mut FunctionContext<'_>,
@@ -284,4 +292,3 @@ pub(in crate::codegen::lower_inst) fn lower_eval_static_property_set(
 ) -> Result<()> {
     eval::lower_eval_static_property_set(ctx, inst, value, class_name, property_name)
 }
-

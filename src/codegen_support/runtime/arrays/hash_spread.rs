@@ -114,7 +114,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_loop");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the source hash pointer
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the insertion-order iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next source entry in insertion order
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next source entry in insertion order
     emitter.instruction("cmn x0, #1");                                          // did the iterator report the terminal done sentinel?
     emitter.instruction("b.eq __rt_hash_spread_done");                          // finish once every source entry has been flattened
     emitter.instruction("str x0, [sp, #24]");                                   // save the next insertion-order iterator cursor
@@ -285,7 +285,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_x86_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the source hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the insertion-order iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next source entry in insertion order
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next source entry in insertion order
     emitter.instruction("cmp rax, -1");                                         // did the iterator report the terminal done sentinel?
     emitter.instruction("je __rt_hash_spread_x86_done");                        // finish once every source entry has been flattened
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the next insertion-order iterator cursor

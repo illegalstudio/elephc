@@ -173,8 +173,8 @@ fn eval_rejects_the_stream_options_with_a_warning_not_a_fatal() {
     ));
     assert_eq!(output.stdout, "aot=hello-curl\neval=ffff\nalive\n");
     // The MESSAGE is the AOT one verbatim. The `Warning: ` PREFIX is not: the interpreter
-    // emits through its own generic warning channel, which does not prepend the label (or
-    // a newline) the compiled `__elephc_curl_setopt_unsupported_warning` does. That is a
+    // emits through its own generic warning channel, which does not prepend the label
+    // the compiled `__elephc_curl_setopt_unsupported_warning` does. That is a
     // pre-existing eval-vs-AOT formatting difference across every eval warning, not
     // something these four options introduce, so it is asserted as-is rather than
     // papered over.

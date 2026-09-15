@@ -74,7 +74,7 @@ pub fn render_c_header(library_stem: &str, exports: &[&ExportedFunction]) -> Str
 
 /// Renders one public export prototype using its resolved PHP signature.
 fn render_export(out: &mut String, export: &ExportedFunction) {
-    if is_string_return_signature(&export.sig) {
+    if is_string_return_signature(&export.source_sig) {
         writeln!(out, "/* On success, *output_ptr is caller-owned and must be released with").unwrap();
         writeln!(out, " * elephc_free(); output_len is authoritative and excludes the optional").unwrap();
         writeln!(out, " * trailing NUL byte. Failure leaves both outputs NULL/zero. */").unwrap();
@@ -86,7 +86,7 @@ fn render_export(out: &mut String, export: &ExportedFunction) {
         return;
     }
 
-    let return_type = c_scalar_return_type(&export.sig.return_type);
+    let return_type = c_scalar_return_type(&export.source_sig.return_type);
     write!(out, "{return_type} {}(", export.c_name).unwrap();
     let parameters = c_export_parameters(export, &[]);
     if parameters.is_empty() {
@@ -100,8 +100,8 @@ fn render_export(out: &mut String, export: &ExportedFunction) {
 /// Flattens validated PHP parameters into their public C declaration fragments.
 fn c_export_parameters(export: &ExportedFunction, reserved: &[&str]) -> Vec<String> {
     let mut parameters = Vec::new();
-    let names = c_parameter_names(&export.sig.params, reserved);
-    for ((_, php_type), name) in export.sig.params.iter().zip(names) {
+    let names = c_parameter_names(&export.source_sig.params, reserved);
+    for ((_, php_type), name) in export.source_sig.params.iter().zip(names) {
         match php_type {
             PhpType::Str => {
                 parameters.push(format!("const char *{name}_ptr"));
@@ -307,24 +307,40 @@ mod tests {
     /// Builds a resolved export fixture for deterministic header tests.
     fn export(name: &str, params: Vec<(&str, PhpType)>, return_type: PhpType) -> ExportedFunction {
         let len = params.len();
+        let source_sig = FunctionSig {
+            params: params.into_iter().map(|(name, ty)| (name.to_string(), ty)).collect(),
+            param_type_exprs: vec![None; len],
+            param_attributes: vec![Vec::new(); len],
+            defaults: vec![None; len],
+            return_type,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; len],
+            declared_params: vec![true; len],
+            variadic: None,
+            deprecation: None,
+        };
         ExportedFunction {
             name: name.to_string(),
             c_name: super::super::public_c_name(name),
-            sig: FunctionSig {
-                params: params.into_iter().map(|(name, ty)| (name.to_string(), ty)).collect(),
-                param_type_exprs: vec![None; len],
-                param_attributes: vec![Vec::new(); len],
-                defaults: vec![None; len],
-                return_type,
-                declared_return: true,
-                by_ref_return: false,
-                ref_params: vec![false; len],
-                declared_params: vec![true; len],
-                variadic: None,
-                deprecation: None,
-            },
+            source_sig: source_sig.clone(),
+            internal_sig: source_sig,
             span: Span::dummy(),
         }
+    }
+
+    /// Adds the internal collector produced when unrelated eval or backtrace code captures frames.
+    fn add_internal_collector(export: &mut ExportedFunction) {
+        export.internal_sig.params.push((
+            crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ));
+        export.internal_sig.param_type_exprs.push(None);
+        export.internal_sig.param_attributes.push(Vec::new());
+        export.internal_sig.defaults.push(None);
+        export.internal_sig.ref_params.push(false);
+        export.internal_sig.declared_params.push(false);
+        export.internal_sig.variadic = Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string());
     }
 
     /// Renders every required ABI declaration and owned-string lifetime comment.
@@ -408,5 +424,23 @@ mod tests {
         assert!(header.contains(
             "int64_t keywords(int64_t php_class, int64_t php_class_2, const char *php_new_ptr, size_t php_new_len);"
         ));
+    }
+
+    /// Keeps an unrelated eval or backtrace collector out of the generated public header.
+    #[test]
+    fn hides_the_internal_frame_collector_from_the_c_header() {
+        let mut export = export(
+            "roundtrip",
+            vec![("input", PhpType::Str)],
+            PhpType::Str,
+        );
+        add_internal_collector(&mut export);
+
+        let header = render_c_header("collector", &[&export]);
+        assert!(header.contains(
+            "int32_t roundtrip(const char *input_ptr, size_t input_len, char **output_ptr, size_t *output_len);"
+        ));
+        assert!(!header.contains(crate::func_args::HIDDEN_ARGS_PARAM));
+        assert!(!header.contains("Array"));
     }
 }

@@ -45,6 +45,8 @@ impl Checker {
         // pass runs TWICE, so an inherited or leftover entry would also make the same name markable
         // in one pass and not the other.
         let saved_ref_params = std::mem::take(&mut self.active_ref_params);
+        let saved_external_ref_bindings =
+            std::mem::take(&mut self.active_external_ref_bindings);
         let mut global_env = self.seed_global_env();
         // The pre-scan has to decide before the first statement is checked: a marked local binds
         // boxed `Mixed` at its FIRST store. Top level has no parameters, so the by-reference and
@@ -77,6 +79,7 @@ impl Checker {
         self.eval_barrier_active = saved_eval_barrier_active;
         self.null_probe_scope_is_top_level = saved_null_probe_scope;
         self.active_ref_params = saved_ref_params;
+        self.active_external_ref_bindings = saved_external_ref_bindings;
         self.exit_local_binding_scope(saved_local_binding_scope);
         (global_env, all_errors)
     }
@@ -175,14 +178,18 @@ impl Checker {
     /// Returns `true` if the given error message is in the suppressible set for initial top-level errors.
     ///
     /// Suppressible messages include array-index, property-access, and callable-related diagnostics
-    /// that commonly arise when a class is referenced before its definition.
+    /// that arise before method bodies refine property and return types. A parameter mismatch
+    /// caused by provisional null metadata is discarded only when the final statement has no errors.
     fn is_suppressible_initial_top_level_error(message: &str) -> bool {
         matches!(
             message,
             "Array index must be integer"
                 | "Cannot index non-array"
                 | "Property access requires an object or typed pointer"
-        ) || (message.starts_with("Cannot call $") && message.contains("not a callable"))
+        ) || message.starts_with("Undefined property: ")
+            || (message.starts_with("Cannot call $") && message.contains("not a callable"))
+            || (message.contains(" parameter $")
+                && message.ends_with(" expects Callable, got Void"))
     }
 
     /// Builds the initial `TypeEnv` with built-in globals `$argc`, `$argv`, and external globals.

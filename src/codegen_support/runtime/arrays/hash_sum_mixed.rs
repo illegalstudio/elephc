@@ -38,7 +38,7 @@ pub fn emit_hash_sum_mixed(emitter: &mut Emitter) {
     emitter.label("__rt_hash_sum_mixed_loop");
     emitter.instruction("ldr x0, [sp]");                                        // reload the source hash pointer for the iterator
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the insertion-order cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next entry with cursor x0, payload x3/x4, and tag x5
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next entry with cursor x0, payload x3/x4, and tag x5
     emitter.instruction("cmn x0, #1");                                          // did the iterator return its terminal negative-one cursor?
     emitter.instruction("b.eq __rt_hash_sum_mixed_done");                       // finish after every associative entry has contributed
     emitter.instruction("str x0, [sp, #8]");                                    // preserve the next insertion-order cursor
@@ -77,7 +77,7 @@ fn emit_hash_sum_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_sum_mixed_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source hash pointer for the iterator
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the insertion-order cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next entry with cursor rax, payload rcx/r8, and tag r9
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next entry with cursor rax, payload rcx/r8, and tag r9
     emitter.instruction("cmp rax, -1");                                         // did the iterator return its terminal cursor?
     emitter.instruction("je __rt_hash_sum_mixed_done_x86");                     // finish after every associative entry has contributed
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the next insertion-order cursor

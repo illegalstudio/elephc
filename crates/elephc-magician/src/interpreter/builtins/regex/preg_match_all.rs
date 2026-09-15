@@ -26,33 +26,8 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match args {
-        [pattern, subject] => {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let subject = eval_expr(subject, context, scope, values)?;
-            eval_preg_match_all_result(pattern, subject, values)
-        }
-        [pattern, subject, matches] => {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let subject = eval_expr(subject, context, scope, values)?;
-            let matches_target = eval_preg_matches_target(matches, context, scope, values)?;
-            let (result, matches_array) =
-                eval_preg_match_all_capture_result(pattern, subject, None, values)?;
-            eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
-            Ok(result)
-        }
-        [pattern, subject, matches, flags] => {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let subject = eval_expr(subject, context, scope, values)?;
-            let matches_target = eval_preg_matches_target(matches, context, scope, values)?;
-            let flags = eval_expr(flags, context, scope, values)?;
-            let (result, matches_array) =
-                eval_preg_match_all_capture_result(pattern, subject, Some(flags), values)?;
-            eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
-            Ok(result)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
+    let args = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+    eval_builtin_preg_match_all_call(&args, context, scope, values)
 }
 
 /// Evaluates PHP `preg_match_all()` over full eval call metadata.
@@ -62,26 +37,27 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["pattern", "subject", "matches", "flags"],
-        &evaluated_args,
-        false,
-    )?;
-    let pattern = required_evaluated_ref_arg(&bound, 0)?;
-    let subject = required_evaluated_ref_arg(&bound, 1)?;
-    let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
-    let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
-        return eval_preg_match_all_result(pattern.value, subject.value, values);
-    };
-    let target = matches
-        .ref_target
-        .clone()
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    let (result, matches_array) =
-        eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
-    eval_write_preg_matches_target(&target, matches_array, context, values)?;
-    Ok(result)
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+        let (bound, _) = bind_evaluated_ref_builtin_args(
+            &["pattern", "subject", "matches", "flags"],
+            &evaluated_args,
+            false,
+        )?;
+        let pattern = required_evaluated_ref_arg(&bound, 0)?;
+        let subject = required_evaluated_ref_arg(&bound, 1)?;
+        let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+        let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
+            return eval_preg_match_all_result(pattern.value, subject.value, values);
+        };
+        let target = matches
+            .ref_target
+            .clone()
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        let (result, matches_array) =
+            eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
+        eval_write_preg_matches_target(&target, matches_array, context, values)?;
+        Ok(result)
+    })
 }
 
 /// Counts all non-overlapping regex matches in one subject string.

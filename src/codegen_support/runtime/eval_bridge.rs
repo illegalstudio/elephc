@@ -9,6 +9,7 @@
 //! - Exported wrapper labels use platform C-symbol mangling because they are
 //!   referenced from Rust object files, while internal `__rt_*` calls keep the
 //!   existing assembly ABI.
+//! - Native eval fragments share value wrappers but never emit Rust scope adapters.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -26,11 +27,58 @@ fn x86_64_mixed_heap_kind_instruction() -> String {
 
 /// Emits every eval value wrapper required by `libelephc-magician`.
 pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
+    emit_eval_value_runtime(emitter);
+    emit_object_clone_shallow_eval_export(emitter);
+    emit_magic_set_guard_eval_exports(emitter);
+    scope_release::emit(emitter);
+}
+
+/// Emits self-contained value wrappers shared by native eval fragments and Magician.
+pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: eval bridge value wrappers ---");
     match emitter.target.arch {
         Arch::AArch64 => emit_aarch64_wrappers(emitter),
         Arch::X86_64 => emit_x86_64_wrappers(emitter),
+    }
+    emit_gc_lifecycle_wrappers(emitter);
+    release_boundary::emit(emitter);
+    array_reference_query::emit_array_entry_reference_query(emitter);
+    resources::emit_resource_inventory_wrapper(emitter);
+    backtrace::emit_backtrace_entry_wrapper(emitter);
+}
+
+/// Emits the boxed shallow-clone adapter shared by Magician and PHP 8.5 `clone()`.
+pub(crate) fn emit_object_clone_shallow_runtime(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: boxed object shallow clone ---");
+    match emitter.target.arch {
+        Arch::AArch64 => emit_aarch64_object_clone_shallow_wrapper(emitter),
+        Arch::X86_64 => emit_x86_64_object_clone_shallow_wrapper(emitter),
+    }
+}
+
+/// Exposes the native clone adapter through the C ABI expected by Magician.
+fn emit_object_clone_shallow_eval_export(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_value_object_clone_shallow");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("b __rt_object_clone_shallow_boxed"), // tail-call the native clone adapter through the eval C export
+        Arch::X86_64 => emitter.instruction("jmp __rt_object_clone_shallow_boxed"), // tail-call the native clone adapter through the eval C export
+    }
+}
+
+/// Exposes the shared native `__set` recursion guard through Magician's C ABI.
+fn emit_magic_set_guard_eval_exports(emitter: &mut Emitter) {
+    let branch = match emitter.target.arch {
+        Arch::AArch64 => "b",
+        Arch::X86_64 => "jmp",
+    };
+    for (wrapper, target) in [
+        ("__elephc_eval_magic_set_guard_push", "__rt_magic_set_guard_push"),
+        ("__elephc_eval_magic_set_guard_pop", "__rt_magic_set_guard_pop"),
+    ] {
+        label_c_global(emitter, wrapper);
+        emitter.instruction(&format!("{branch} {target}"));                     // tail-call the internal guard without changing its assembly ABI
     }
 }
 
@@ -48,6 +96,7 @@ mod x86_64_numeric;
 mod x86_64_compare;
 mod x86_64_output;
 mod raw_object_helpers;
+mod array_reference_query;
 mod aarch64_reflection_names;
 mod aarch64_reflection_members;
 mod x86_64_reflection_names;
@@ -58,6 +107,11 @@ mod aarch64_clone;
 mod x86_64_clone;
 mod clone_rejections;
 mod runtime_builtin_dispatch;
+mod resources;
+mod backtrace;
+mod gc_boundary;
+mod release_boundary;
+mod scope_release;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;
@@ -134,16 +188,250 @@ fn label_c_global(emitter: &mut Emitter, name: &str) {
     emitter.label_global(&symbol);
 }
 
+/// Exposes GC controls, bounding collection exceptions before returning to Rust.
+fn emit_gc_lifecycle_wrappers(emitter: &mut Emitter) {
+    gc_boundary::emit_gc_collection_boundary(emitter);
+    let branch = match emitter.target.arch {
+        Arch::AArch64 => "b",
+        Arch::X86_64 => "jmp",
+    };
+    for (wrapper, target) in [
+        ("__elephc_eval_gc_disable", "__rt_gc_disable"),
+        ("__elephc_eval_gc_enable", "__rt_gc_enable"),
+        ("__elephc_eval_gc_enabled", "__rt_gc_enabled"),
+        ("__elephc_eval_gc_mem_caches", "__rt_gc_mem_caches"),
+        ("__elephc_eval_gc_status_metric", "__rt_gc_status_metric"),
+    ] {
+        label_c_global(emitter, wrapper);
+        emitter.instruction(&format!("{branch} {target}"));                     // non-collecting controls return through their internal runtime helper
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::{Platform, Target};
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
 
     /// Emits the whole eval bridge for one target and returns the assembly text.
     fn emit_for(target: Target) -> String {
         let mut emitter = Emitter::new(target);
         emit_eval_bridge_runtime(&mut emitter);
         emitter.output()
+    }
+
+    /// The native clone body is emitted exactly once when native clone or the eval bridge can
+    /// reach it, while the C ABI export remains exclusive to the full eval bridge.
+    ///
+    /// It used to live inside the eval-only class wrappers, so an ordinary `clone()` program
+    /// had no adapter to call while an eval-enabled one would now define it twice. Counting the
+    /// label definition is what keeps both halves of that move honest.
+    #[test]
+    fn the_boxed_shallow_clone_adapter_is_defined_once_per_program() {
+        use crate::codegen_support::runtime::emit_runtime;
+        use crate::codegen_support::runtime_features::RuntimeFeatures;
+
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            for (features, expected_native, expected_eval_export) in [
+                (RuntimeFeatures::none(), 0, 0),
+                (
+                    RuntimeFeatures {
+                        object_clone: true,
+                        ..RuntimeFeatures::none()
+                    },
+                    1,
+                    0,
+                ),
+                (
+                    RuntimeFeatures {
+                        eval_bridge: true,
+                        ..RuntimeFeatures::none()
+                    },
+                    1,
+                    1,
+                ),
+            ] {
+                let mut emitter = Emitter::new(target);
+                emit_runtime(&mut emitter, features);
+                let asm = emitter.output();
+                assert_eq!(
+                    asm.matches("__rt_object_clone_shallow_boxed:\n").count(),
+                    expected_native,
+                    "{target:?}: wrong native clone adapter definition count"
+                );
+                let eval_export = format!(
+                    "{}:\n",
+                    target.extern_symbol("__elephc_eval_value_object_clone_shallow")
+                );
+                assert_eq!(
+                    asm.matches(&eval_export).count(),
+                    expected_eval_export,
+                    "{target:?}: wrong eval clone export definition count"
+                );
+            }
+        }
+    }
+
+    /// Magician reaches the native magic-property recursion guard through target-mangled C
+    /// exports, while generated assembly continues to call the internal runtime labels.
+    #[test]
+    fn magic_set_guard_exports_follow_the_c_abi_on_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            for (wrapper, internal) in [
+                ("__elephc_eval_magic_set_guard_push", "__rt_magic_set_guard_push"),
+                ("__elephc_eval_magic_set_guard_pop", "__rt_magic_set_guard_pop"),
+            ] {
+                let export = format!("{}:\n", target.extern_symbol(wrapper));
+                assert_eq!(asm.matches(&export).count(), 1, "{target:?}: missing {wrapper}");
+                let tail_call = match target.arch {
+                    Arch::AArch64 => format!("b {internal}"),
+                    Arch::X86_64 => format!("jmp {internal}"),
+                };
+                assert!(asm.contains(&tail_call), "{target:?}: {wrapper} must tail-call {internal}");
+            }
+        }
+    }
+
+    /// Byte views bypass allocating string casts on both architectures and all Apple variants.
+    #[test]
+    fn string_byte_views_borrow_existing_payloads_on_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            let start = format!("{}:\n", target.extern_symbol("__elephc_eval_value_string_bytes"));
+            let end = format!("{}:\n", target.extern_symbol("__elephc_eval_value_truthy"));
+            let wrapper = asm.split_once(&start).unwrap().1.split_once(&end).unwrap().0;
+            let unbox = wrapper.find("__rt_mixed_unbox").unwrap();
+            let cast = wrapper.find("__rt_mixed_cast_string").unwrap();
+            let store = wrapper.find("__elephc_eval_value_string_bytes_store:").unwrap();
+            assert!(unbox < cast && cast < store, "{target:?}: inspect before fallback cast");
+            match target.arch {
+                Arch::AArch64 => assert!(wrapper.contains("b.eq __elephc_eval_value_string_bytes_store")),
+                Arch::X86_64 => {
+                    assert!(wrapper.contains("jmp __elephc_eval_value_string_bytes_store"));
+                    assert!(wrapper.contains("sub rsp, 32") && wrapper.contains("add rsp, 32"));
+                    let borrowed = wrapper.split_once("call __rt_mixed_unbox").unwrap().1
+                        .split_once("jmp __elephc_eval_value_string_bytes_store").unwrap().0;
+                    assert!(borrowed.contains("mov rax, rdi"), "borrow the unboxed pointer");
+                    assert!(!borrowed.contains("mov rdx,"), "preserve the unboxed length in rdx");
+                }
+            }
+        }
+    }
+
+    /// String reversal borrows existing bytes and boxes only its result on every supported target.
+    #[test]
+    fn strrev_borrows_string_inputs_before_scalar_cast_fallback_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let asm = emit_for(target);
+            let start = format!("{}:\n", target.extern_symbol("__elephc_eval_value_strrev"));
+            let end = format!("{}:\n", target.extern_symbol("__elephc_eval_value_fdiv"));
+            let wrapper = asm.split_once(&start).unwrap().1.split_once(&end).unwrap().0;
+            let unbox = wrapper.find("__rt_mixed_unbox").unwrap();
+            let cast = wrapper.find("__rt_mixed_cast_string").unwrap();
+            let reverse = wrapper.find("__elephc_eval_value_strrev_reverse:").unwrap();
+            assert!(unbox < cast && cast < reverse, "{name}: inspect before scalar fallback");
+            assert_eq!(wrapper.matches("__rt_mixed_from_value").count(), 1, "{name}");
+            assert!(!wrapper.contains("__rt_str_persist"), "{name}");
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(wrapper.contains("b.eq __elephc_eval_value_strrev_reverse"), "{name}");
+                    assert!(wrapper.contains("sub sp, sp, #32") && wrapper.contains("add sp, sp, #32"));
+                }
+                Arch::X86_64 => {
+                    assert!(wrapper.contains("mov rax, rdi\n    jmp __elephc_eval_value_strrev_reverse"));
+                    assert!(wrapper.contains("sub rsp, 16") && wrapper.contains("add rsp, 16"));
+                }
+            }
+        }
+    }
+
+    /// Resource and backtrace inventory adapters export their C ABI on every supported target.
+    #[test]
+    fn core_inventory_wrappers_apply_platform_c_symbol_mangling() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            for wrapper in [
+                "__elephc_eval_resource_inventory",
+                "__elephc_eval_resource_state",
+                "__elephc_eval_backtrace_entry",
+            ] {
+                let symbol = target.extern_symbol(wrapper);
+                assert!(asm.contains(&format!(".globl {symbol}\n")), "{target:?}: missing export {symbol}");
+                assert!(asm.contains(&format!("{symbol}:\n")), "{target:?}: missing label {symbol}");
+            }
+            assert!(asm.contains("__elephc_eval_resource_state_closed:"), "{target:?}");
+        }
+    }
+
+    /// Verifies GC bridge exports use the platform C symbol while targeting internal helpers.
+    #[test]
+    fn gc_lifecycle_wrappers_apply_platform_c_symbol_mangling() {
+        for (target, c_prefix, branch) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "_",
+                "b",
+            ),
+            (
+                Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+                "_",
+                "b",
+            ),
+            (
+                Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+                "_",
+                "b",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::AArch64),
+                "",
+                "b",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "",
+                "jmp",
+            ),
+        ] {
+            let asm = emit_for(target);
+            for (wrapper, internal) in [
+                ("__elephc_eval_gc_disable", "__rt_gc_disable"),
+                ("__elephc_eval_gc_enable", "__rt_gc_enable"),
+                ("__elephc_eval_gc_enabled", "__rt_gc_enabled"),
+                ("__elephc_eval_gc_mem_caches", "__rt_gc_mem_caches"),
+                ("__elephc_eval_gc_status_metric", "__rt_gc_status_metric"),
+            ] {
+                let export = format!("{c_prefix}{wrapper}:");
+                let tail = format!("{branch} {internal}");
+                assert!(asm.contains(&export), "missing {export} on {target:?}:\n{asm}");
+                assert!(asm.contains(&tail), "missing {tail} on {target:?}:\n{asm}");
+            }
+        }
     }
 
     /// Pins the AArch64 tag-9 arm of `__elephc_eval_value_cast_string`.

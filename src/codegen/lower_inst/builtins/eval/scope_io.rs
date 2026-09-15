@@ -118,7 +118,11 @@ pub(super) fn emit_eval_scope_set(ctx: &mut FunctionContext<'_>, local: &EvalSyn
 }
 
 /// Reloads synchronized locals from the eval scope after the eval interpreter returns.
-pub(super) fn reload_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[EvalSyncLocal]) -> Result<()> {
+pub(super) fn reload_eval_scope_locals(
+    ctx: &mut FunctionContext<'_>,
+    locals: &[EvalSyncLocal],
+    pending_throw: Option<usize>,
+) -> Result<()> {
     for local in locals {
         emit_eval_scope_get(ctx, local);
         let missing = ctx.next_label("eval_scope_reload_missing");
@@ -126,10 +130,10 @@ pub(super) fn reload_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[
         emit_branch_if_scope_entry_missing(ctx, &missing);
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
-        store_mixed_scope_cell_to_local(ctx, local)?;
+        store_mixed_scope_cell_to_local(ctx, local, pending_throw)?;
         abi::emit_jump(ctx.emitter, &done);
         ctx.emitter.label(&missing);
-        store_missing_scope_entry_to_local(ctx, local)?;
+        store_missing_scope_entry_to_local(ctx, local, pending_throw)?;
         ctx.emitter.label(&done);
     }
     Ok(())
@@ -139,6 +143,7 @@ pub(super) fn reload_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[
 pub(super) fn reload_eval_global_scope(
     ctx: &mut FunctionContext<'_>,
     globals: &[EvalSyncGlobal],
+    pending_throw: Option<usize>,
 ) -> Result<()> {
     for global in globals {
         emit_eval_global_scope_get(ctx, global);
@@ -147,10 +152,10 @@ pub(super) fn reload_eval_global_scope(
         emit_branch_if_scope_entry_missing(ctx, &missing);
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
-        store_mixed_scope_cell_to_global(ctx, global)?;
+        store_mixed_scope_cell_to_global(ctx, global, pending_throw)?;
         abi::emit_jump(ctx.emitter, &done);
         ctx.emitter.label(&missing);
-        store_missing_scope_entry_to_global(ctx, global)?;
+        store_missing_scope_entry_to_global(ctx, global, pending_throw)?;
         ctx.emitter.label(&done);
     }
     Ok(())
@@ -168,10 +173,10 @@ pub(super) fn reload_eval_globals_from_local_scope(
         emit_branch_if_scope_entry_missing(ctx, &missing);
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
-        store_mixed_scope_cell_to_global(ctx, global)?;
+        store_mixed_scope_cell_to_global(ctx, global, None)?;
         abi::emit_jump(ctx.emitter, &done);
         ctx.emitter.label(&missing);
-        store_missing_scope_entry_to_global(ctx, global)?;
+        store_missing_scope_entry_to_global(ctx, global, None)?;
         ctx.emitter.label(&done);
     }
     Ok(())

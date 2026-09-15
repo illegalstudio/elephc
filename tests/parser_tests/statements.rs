@@ -96,6 +96,31 @@ fn test_parenthesized_expression_statement() {
     );
 }
 
+/// Standalone arrays, including spreads and nested arrays, are expressions rather than patterns.
+#[test]
+fn test_array_expression_statements_are_not_destructuring() {
+    for source in ["<?php [];", "<?php [...$items];", "<?php [[1], [...$items]];"] {
+        let statements = parse_source(source);
+        assert_eq!(statements.len(), 1, "{source}");
+        assert!(matches!(&statements[0].kind, StmtKind::ExprStmt(Expr { kind: ExprKind::ArrayLiteral(_), .. })), "{source}: {statements:?}");
+    }
+    let statements = parse_source("<?php [1, 2][0];");
+    assert!(matches!(&statements[0].kind, StmtKind::ExprStmt(Expr { kind: ExprKind::ArrayAccess { .. }, .. })));
+}
+
+/// Matching the outer bracket retains positional, nested and keyed destructuring assignments.
+#[test]
+fn test_bracket_assignment_still_selects_destructuring() {
+    for source in ["<?php [$a] = $items;", "<?php [[$a], $b] = $items;", "<?php ['key' => $a] = $items;"] {
+        let statements = parse_source(source);
+        assert!(!statements.is_empty(), "{source}");
+        assert!(!matches!(&statements[0].kind, StmtKind::ExprStmt(_)), "{source}");
+    }
+    for source in ["<?php [...$a] = $items;", "<?php [1] = $items;", "<?php [...$items;"] {
+        assert!(parse_fails(source), "{source}");
+    }
+}
+
 /// Verifies `$this->n++;` parses to the same read-modify-write statement as `$this->n += 1;`.
 /// Regression: the `$this` statement parser used to reject the trailing `++`.
 #[test]

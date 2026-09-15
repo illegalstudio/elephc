@@ -29,12 +29,10 @@ pub(in crate::interpreter) fn eval_stream_select_declared_call(
     if !(4..=5).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated_args.push(eval_expr(arg, context, scope, values)?);
-    }
-    eval_stream_select_by_value_ref_warnings(evaluated_args.len(), values)?;
-    eval_stream_select_result(&evaluated_args, context, values)
+    let args = args.iter().collect::<Vec<_>>();
+    with_eval_operands(&args, context, scope, values, |arguments, context, _, values| {
+        eval_stream_select_declared_values_result(arguments, context, values)
+    })
 }
 
 /// Evaluates `stream_select()` from already evaluated by-value arguments.
@@ -54,28 +52,29 @@ pub(in crate::interpreter) fn eval_builtin_stream_select_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["read", "write", "except", "seconds", "microseconds"],
-        &evaluated_args,
-        false,
-    )?;
-    let read = required_evaluated_ref_arg(&bound, 0)?;
-    let write = required_evaluated_ref_arg(&bound, 1)?;
-    let except = required_evaluated_ref_arg(&bound, 2)?;
-    let seconds = required_evaluated_ref_arg(&bound, 3)?;
-    let targets = vec![
-        read.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?,
-        write.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?,
-        except.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?,
-    ];
-    let mut selected_args = vec![read.value, write.value, except.value, seconds.value];
-    if let Some(microseconds) = optional_evaluated_ref_arg(&bound, 4) {
-        selected_args.push(microseconds.value);
-    }
-    let result = eval_stream_select_result(&selected_args, context, values)?;
-    eval_write_stream_select_empty_arrays(&targets, context, values)?;
-    Ok(result)
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+        let (bound, _) = bind_evaluated_ref_builtin_args(
+            &["read", "write", "except", "seconds", "microseconds"],
+            &evaluated_args,
+            false,
+        )?;
+        let read = required_evaluated_ref_arg(&bound, 0)?;
+        let write = required_evaluated_ref_arg(&bound, 1)?;
+        let except = required_evaluated_ref_arg(&bound, 2)?;
+        let seconds = required_evaluated_ref_arg(&bound, 3)?;
+        let targets = vec![
+            read.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?,
+            write.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?,
+            except.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?,
+        ];
+        let mut selected_args = vec![read.value, write.value, except.value, seconds.value];
+        if let Some(microseconds) = optional_evaluated_ref_arg(&bound, 4) {
+            selected_args.push(microseconds.value);
+        }
+        let result = eval_stream_select_result(&selected_args, context, values)?;
+        eval_write_stream_select_empty_arrays(&targets, context, values)?;
+        Ok(result)
+    })
 }
 
 /// Evaluates materialized `stream_select(...)` arguments.

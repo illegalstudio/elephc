@@ -73,7 +73,7 @@ pub fn emit_array_intersect_key(emitter: &mut Emitter) {
     emitter.label("__rt_array_isect_key_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // x0 = hash1 pointer
     emitter.instruction("ldr x1, [sp, #24]");                                   // x1 = current iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // get next entry, x0=next_cursor, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // get next entry, x0=next_cursor, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi, x5=val_tag
 
     // -- check if iteration is done --
     emitter.instruction("cmn x0, #1");                                          // check if x0 == -1 (end of iteration)
@@ -172,7 +172,7 @@ fn emit_array_intersect_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_isect_key_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source associative-array pointer for the next insertion-order iteration step
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the current insertion-order iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // advance one associative-array insertion-order entry and return its key plus payload
+    emitter.instruction("call __rt_hash_iter_next_value");                      // advance one associative-array insertion-order entry and return its key plus payload
     emitter.instruction("cmp rax, -1");                                         // has associative-array iteration reached the done sentinel?
     emitter.instruction("je __rt_array_isect_key_done");                        // finish once every source associative-array entry has been visited
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the updated insertion-order iterator cursor for the next loop step

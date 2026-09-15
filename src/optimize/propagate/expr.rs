@@ -32,6 +32,15 @@ pub(crate) fn captured_constant_env(
 /// so a stale fact is never propagated across an in-expression write. Returns a new
 /// expression with substitutions applied, followed by constant folding.
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
+    let invalidation = expr_invalidation(&expr);
+    if matches!(invalidation, Invalidation::All) {
+        // A present element in a scalar-only array fact cannot warn. Fold only
+        // wholly read-only scalar expressions here, never across a call, write,
+        // or unknown/missing read whose handler could invalidate another fact.
+        if let Some(folded) = try_fold_read_only_scalar(&expr, env) {
+            return folded;
+        }
+    }
     let reduced_env;
     // Drop the names this expression may write before substituting, so a stale
     // constant is never propagated into a read sequenced after the write in the
@@ -41,7 +50,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     // the expression; unwritten names keep folding. `All` (include, yield,
     // spread into a by-ref callee, top-level global-writing call) blocks
     // everything.
-    let env = match expr_invalidation(&expr) {
+    let env = match invalidation {
         Invalidation::Names(writes) if writes.is_empty() => env,
         Invalidation::Names(writes) => {
             reduced_env = env
@@ -218,7 +227,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 variadic_by_ref,
                 variadic_type,
                 return_type,
-                body: super::stmt::with_function_scope(|| {
+                body: super::stmt::with_function_scope_mode(by_ref_return, || {
                     propagate_block(body, captured_constant_env(&captures, &capture_refs, env)).0
                 }),
                 is_arrow,
@@ -382,6 +391,38 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     };
 
     fold_expr(Expr { kind, span })
+}
+
+/// Proves a whole expression is a constant scalar without skipping any effectful operand.
+fn try_fold_read_only_scalar(expr: &Expr, env: &ConstantEnv) -> Option<Expr> {
+    if scalar_value(expr).is_some() {
+        return Some(expr.clone());
+    }
+    let kind = match &expr.kind {
+        ExprKind::Variable(name) => env.get(name)?.as_scalar()?.clone().into_expr_kind(),
+        ExprKind::ArrayAccess { array, index } => {
+            let array = match &array.kind {
+                ExprKind::Variable(name) => match env.get(name)? {
+                    PropagatedValue::ArrayLit(fact) => fact,
+                    _ => return None,
+                },
+                _ => array.as_ref(),
+            };
+            let index = try_fold_read_only_scalar(index, env)?;
+            try_fold_array_access(array, &index)?
+        }
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+            left: Box::new(try_fold_read_only_scalar(left, env)?),
+            op: op.clone(),
+            right: Box::new(try_fold_read_only_scalar(right, env)?),
+        },
+        ExprKind::Negate(inner) => ExprKind::Negate(Box::new(try_fold_read_only_scalar(inner, env)?)),
+        ExprKind::Not(inner) => ExprKind::Not(Box::new(try_fold_read_only_scalar(inner, env)?)),
+        ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(try_fold_read_only_scalar(inner, env)?)),
+        _ => return None,
+    };
+    let folded = fold_expr(Expr::new(kind, expr.span));
+    scalar_value(&folded).is_some().then_some(folded)
 }
 
 /// Propagates constants into the target of an instanceof expression. If the target is a bare

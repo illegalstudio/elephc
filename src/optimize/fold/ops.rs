@@ -375,6 +375,12 @@ fn try_fold_indexed_array_access(items: &[Expr], index: &Expr) -> Option<ExprKin
 /// last-wins, matching the order the literal is built in. Declines whenever a key cannot be
 /// normalized (a lossy float key) or nothing matches (the runtime owns the warning).
 fn try_fold_assoc_array_access(items: &[(Expr, Expr)], index: &Expr) -> Option<ExprKind> {
+    // A spread entry is carried as a pair whose key IS the spread and whose value is an inert
+    // null placeholder. Its source can supply the requested key and overwrite a later-folded
+    // entry, so nothing in a literal that has one is provably independent of it.
+    if crate::optimize::effects::assoc_literal_has_spread(items) {
+        return None;
+    }
     let index = php_array_key(&scalar_value(index)?)?;
     let mut selected = None;
 

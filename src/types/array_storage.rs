@@ -1,5 +1,5 @@
 //! Purpose:
-//! Defines the two storage-representation conversions a PHP array local can undergo, as ONE
+//! Defines the storage-representation conversions a PHP array local can undergo, as one
 //! predicate shared by the type checker and the IR lowering.
 //!
 //! Called from:
@@ -15,24 +15,29 @@
 use super::PhpType;
 
 /// Returns the storage representation a local's type transition converts its array to, when the
-/// transition is one of the two that REWRITE the array's storage at runtime.
+/// transition rewrites the array's storage at runtime.
 ///
 /// - `Array(T)` -> `Array(Mixed)` (`Op::ArrayToMixed`): every element slot is replaced by a pointer
 ///   to a boxed Mixed cell, so an op compiled against raw slots reads a pointer as a scalar.
 /// - `Array(_)` -> `AssocArray` (`Op::ArrayToHash`): the packed element vector is replaced by a hash
-///   table, so an op compiled against the packed layout reads the wrong memory entirely — and,
+///   table, so an op compiled against the packed layout reads the wrong memory entirely and,
 ///   because a hash lookup of a live key simply misses instead of faulting, that one loses data
 ///   silently.
+/// - A concrete array -> PHP `array`: a boxed cell can hold either packed or keyed storage after
+///   a declared by-reference parameter writes through it.
 ///
 /// A local with no previous type is not converted: there was no earlier representation for the code
-/// above it to have been compiled against. A local leaving `AssocArray` is not either — no op
-/// converts a hash back to packed storage, so such a transition REBINDS the local to a different
-/// array rather than converting the one already there.
+/// above it to have been compiled against. A hash-to-packed transition rebinds the local to a
+/// different array rather than converting the one already there.
 pub(crate) fn array_storage_conversion(
     previous: Option<&PhpType>,
     next: &PhpType,
 ) -> Option<PhpType> {
-    let PhpType::Array(previous_elem) = previous?.codegen_repr() else {
+    let previous = previous?;
+    if next.is_php_array() && matches!(previous, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return Some(next.clone());
+    }
+    let PhpType::Array(previous_elem) = previous.codegen_repr() else {
         return None;
     };
     match next.codegen_repr() {
@@ -56,6 +61,9 @@ pub(crate) fn array_storage_conversion(
 /// type join to a Mixed-valued hash, because the arm the other value type came from would otherwise
 /// insert entries tagged differently from what the merge reads back.
 pub(crate) fn join_array_storage_conversion(previous: &PhpType, next: &PhpType) -> PhpType {
+    if previous.is_php_array() || next.is_php_array() {
+        return PhpType::php_array();
+    }
     match (previous.codegen_repr(), next.codegen_repr()) {
         (PhpType::Array(_), PhpType::Array(_)) => PhpType::Array(Box::new(PhpType::Mixed)),
         (

@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+//! - A matching entry whose runtime value tag is 11 belongs to a PHP reference set. The
+//!   returned payload registers are dereferenced through its managed cell so every reader sees a
+//!   value, while the entry address keeps pointing at the reference entry itself.
 //! - Besides the borrowed payload, the lookup returns the matching entry's ADDRESS
 //!   (`x4` / `r8`, null on a miss) so callers that must write the slot back can reach
 //!   it; the probe already computes that address (issue #580).
@@ -132,6 +135,12 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x12, #24]");                                  // x1 = value_lo
     emitter.instruction("ldr x2, [x12, #32]");                                  // x2 = value_hi
     emitter.instruction("ldr x3, [x12, #40]");                                  // x3 = value_tag
+    emitter.instruction("cmp x3, #11");                                         // does this entry belong to a PHP reference set?
+    emitter.instruction("b.ne __rt_hash_get_found_return");                     // ordinary entries already return a value payload
+    emitter.instruction("ldr x1, [x1]");                                        // read the boxed Mixed value the reference cell owns
+    emitter.instruction("mov x2, #0");                                          // boxed Mixed payloads carry no high word
+    emitter.instruction("mov x3, #7");                                          // report the dereferenced payload as boxed Mixed
+    emitter.label("__rt_hash_get_found_return");
     emitter.instruction("mov x4, x12");                                         // x4 = matching entry address for write-back callers
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
@@ -240,6 +249,12 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r8 + 24]");                        // return the low payload word in the first borrowed-value result register
     emitter.instruction("mov rsi, QWORD PTR [r8 + 32]");                        // return the high payload word in the second borrowed-value result register
     emitter.instruction("mov rcx, QWORD PTR [r8 + 40]");                        // return the runtime value tag in the borrowed-value tag result register
+    emitter.instruction("cmp rcx, 11");                                         // does this entry belong to a PHP reference set?
+    emitter.instruction("jne __rt_hash_get_found_return");                      // ordinary entries already return a value payload
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // read the boxed Mixed value the reference cell owns
+    emitter.instruction("xor esi, esi");                                        // boxed Mixed payloads carry no high word
+    emitter.instruction("mov rcx, 7");                                          // report the dereferenced payload as boxed Mixed
+    emitter.label("__rt_hash_get_found_return");
     emitter.instruction("mov rax, 1");                                          // return found = 1 in the standard integer result register
     emitter.instruction("add rsp, 48");                                         // release the lookup spill slots before returning the borrowed payload
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code

@@ -12,13 +12,14 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, IrHeapKind, IrType, ValueId};
-use crate::names::{label_fragment, method_symbol};
+use crate::names::label_fragment;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
 use super::{
-    direct_call_stack_pad_bytes, emit_dynamic_instance_method_call,
-    emit_mixed_method_class_dispatch, expect_operand, load_value_to_first_int_arg,
+    direct_call_stack_pad_bytes, emit_mixed_method_class_dispatch, emit_resolved_method_call,
+    expect_operand,
+    load_value_to_first_int_arg,
     lower_runtime_object_method_call, materialize_method_call_args_with_receiver_reg_and_refs,
     mixed_method_candidates, predicates, store_if_result, strings,
 };
@@ -384,14 +385,7 @@ fn emit_mixed_tostring_candidate_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(slot) = candidate.target.dynamic_slot {
-        emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&candidate.target.impl_class, &candidate.target.method_key),
-        );
-    }
+    emit_resolved_method_call(ctx, &candidate.target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     Ok(candidate.target.return_ty.clone())

@@ -15,7 +15,11 @@ eval_builtin! {
 }
 
 use super::super::super::*;
-use super::super::{eval_class_metadata_name, eval_class_relation_name_exists};
+use super::super::collection_builder::EvalArrayBuilder;
+use super::super::{
+    eval_class_metadata_name, eval_class_relation_name_exists,
+    eval_object_class_metadata_name, eval_owned_runtime_string_array_to_vec,
+};
 
 /// Dispatches direct eval calls for the `class_implements` symbol builtin.
 pub(in crate::interpreter) fn eval_class_implements_declared_call(
@@ -146,9 +150,7 @@ fn eval_runtime_class_interface_names(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
     let names_array = values.reflection_class_interface_names(class_name)?;
-    let names = eval_class_relation_runtime_string_array_to_vec(names_array, values)?;
-    values.release(names_array)?;
-    Ok(names)
+    eval_owned_runtime_string_array_to_vec(names_array, values)
 }
 
 /// Builds `class_uses()` data for generated/AOT direct trait-use metadata.
@@ -157,8 +159,7 @@ fn eval_runtime_class_trait_names_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let names_array = values.reflection_class_trait_names(class_name)?;
-    let names = eval_class_relation_runtime_string_array_to_vec(names_array, values)?;
-    values.release(names_array)?;
+    let names = eval_owned_runtime_string_array_to_vec(names_array, values)?;
     eval_class_relation_names_result(names, values)
 }
 
@@ -235,21 +236,6 @@ fn eval_class_relation_push_unique_name(
     }
 }
 
-/// Copies a runtime string array into Rust-owned class/interface names.
-fn eval_class_relation_runtime_string_array_to_vec(
-    array: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<String>, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut result = Vec::with_capacity(len);
-    for position in 0..len {
-        let key = values.int(position as i64)?;
-        let value = values.array_get(array, key)?;
-        result.push(eval_class_metadata_name(value, values)?);
-    }
-    Ok(result)
-}
-
 /// Returns whether a class-relation target refers to a known class-like symbol.
 fn eval_class_relation_target_name(
     target: RuntimeCellHandle,
@@ -257,8 +243,7 @@ fn eval_class_relation_target_name(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<String>, EvalStatus> {
     if values.type_tag(target)? == EVAL_TAG_OBJECT {
-        let name = super::get_class::eval_get_class_result(target, context, values)?;
-        let name = eval_class_metadata_name(name, values)?;
+        let name = eval_object_class_metadata_name(target, context, values)?;
         return Ok(eval_class_relation_name_exists(&name, context, values)?.then_some(name));
     }
     let name = eval_class_metadata_name(target, values)?;
@@ -271,11 +256,9 @@ fn eval_class_relation_names_result(
     names: Vec<String>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(names.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, names.len())?;
     for name in names {
-        let key = values.string(&name)?;
-        let value = values.string(&name)?;
-        result = values.array_set(result, key, value)?;
+        result.string(&name, |values| values.string(&name))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

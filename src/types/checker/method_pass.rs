@@ -98,18 +98,11 @@ impl Checker {
                                 .map(|(_, t)| t.clone())
                                 .unwrap_or(PhpType::Int)
                         };
-                        // PHP's __unserialize($data) always receives the associative
-                        // array produced by __serialize(); a bare `array` hint resolves
-                        // to an indexed Array(Mixed) that rejects $data['key']. Type the
-                        // first parameter as a string/int-keyed assoc array so the body
-                        // can read string keys, matching the bare hash the unserialize
-                        // runtime passes in (kept in sync with build_method_sig). Scoped
-                        // to user methods (real span); synthetic SPL bodies keep `array`.
+                        // Match build_method_sig and the runtime hydration adapter:
+                        // user hooks consume boxed PHP arrays, synthetic SPL keeps
+                        // the raw representation declared by its generated signature.
                         let ty = if method_key == "__unserialize" && i == 0 && method.span.line != 0 {
-                            PhpType::AssocArray {
-                                key: Box::new(PhpType::Mixed),
-                                value: Box::new(PhpType::Mixed),
-                            }
+                            PhpType::php_array()
                         } else {
                             ty
                         };
@@ -236,7 +229,7 @@ impl Checker {
         method_env: &mut TypeEnv,
     ) {
         if let Some(ci) = self.classes.get(&class.name).cloned() {
-            for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
+            for (i, (pname, type_ann, _, is_ref)) in method.params.iter().enumerate() {
                 if type_ann.is_some() {
                     continue;
                 }
@@ -245,11 +238,12 @@ impl Checker {
                         continue;
                     }
                     if let Some((_, (_, ty))) = ci.visible_property(prop_name) {
-                        method_env.insert(pname.clone(), ty.clone());
+                        let param_ty = if *is_ref { PhpType::Mixed } else { ty.clone() };
+                        method_env.insert(pname.clone(), param_ty.clone());
                         if let Some(ci_mut) = self.classes.get_mut(&class.name) {
                             if let Some(sig) = ci_mut.methods.get_mut("__construct") {
                                 if i < sig.params.len() {
-                                    sig.params[i].1 = ty.clone();
+                                    sig.params[i].1 = param_ty;
                                 }
                             }
                         }
@@ -511,6 +505,7 @@ fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
 fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
     for (idx, (_, ty)) in sig.params.iter_mut().enumerate() {
         if !sig.declared_params.get(idx).copied().unwrap_or(false)
+            && !sig.ref_params.get(idx).copied().unwrap_or(false)
             && matches!(ty, PhpType::Mixed)
         {
             *ty = PhpType::Int;

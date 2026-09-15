@@ -55,6 +55,9 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        if let PhpType::Union(members) = actual {
+            return members.iter().all(|member| self.type_accepts(expected, member));
+        }
         match expected {
             PhpType::Mixed => true,
             PhpType::Bool if matches!(actual, PhpType::False) => true,
@@ -67,16 +70,9 @@ impl Checker {
             {
                 true
             }
-            PhpType::Union(members) => match actual {
-                PhpType::Union(actual_members) => actual_members.iter().all(|actual_member| {
-                    members
-                        .iter()
-                        .any(|expected_member| self.type_accepts(expected_member, actual_member))
-                }),
-                _ => members
-                    .iter()
-                    .any(|member| self.type_accepts(member, actual)),
-            },
+            PhpType::Union(members) => members
+                .iter()
+                .any(|member| self.type_accepts(member, actual)),
             PhpType::Array(expected_elem) => match actual {
                 PhpType::Array(actual_elem) if matches!(actual_elem.as_ref(), PhpType::Never) => {
                     true

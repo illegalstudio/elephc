@@ -81,11 +81,20 @@ use return_coercions::*;
 use static_property_helpers::*;
 
 pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr};
+// Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel
+// for `__unset` that the write path needs for `__set`.
+pub(crate) use instance_property_writes::{
+    borrow_receiver_as_runtime_class, emit_receiver_instanceof, magic_accessor_subclasses,
+};
+pub(super) use typed_foreach::coerce_typed_assign_value;
+pub(crate) use typed_foreach::promote_by_ref_foreach_source;
+pub(super) use instance_property_writes::contextualize_property_array_value;
+pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;
 pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };
 pub(super) use array_write_storage::{
-    finish_indexed_array_local_write, prepare_indexed_array_local_write,
+    finish_indexed_array_local_write, load_array_local_for_write, prepare_indexed_array_local_write,
     ref_bound_mixed_indexed_array_write,
 };
 
@@ -220,7 +229,12 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             try_body,
             catches,
             finally_body,
-        } => lower_try(ctx, try_body, catches, finally_body.as_deref(), stmt.span),
+        } => {
+            let callable_snapshot = ctx.static_callable_locals_snapshot();
+            let callable_epochs = ctx.static_callable_local_epochs_snapshot();
+            lower_try(ctx, try_body, catches, finally_body.as_deref(), stmt.span);
+            ctx.restore_unchanged_static_closure_locals(callable_snapshot, &callable_epochs);
+        }
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
         StmtKind::ExprStmt(expr) => {

@@ -9,7 +9,10 @@
 
 use super::*;
 
-use crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_array_values;
+use crate::codegen::lower_inst::builtins::arrays::values::{
+    emit_loaded_assoc_array_values, emit_loaded_boxed_array_values,
+    emit_loaded_dynamic_mixed_array_values,
+};
 
 /// Stack cleanup slots for split builtin string coercions that allocate owned temporaries.
 pub(super) struct SplitStringTempCleanups {
@@ -305,25 +308,34 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     let array_index = inst.operands.len() - 1;
     let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
-    let hash_copy = implode_hash_value_type(ctx, inst, array_index)?;
+    let normalized_copy = implode_normalized_value_type(ctx, inst, array_index)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_implode_aarch64(ctx, inst, array_index)?,
         Arch::X86_64 => lower_implode_x86_64(ctx, inst, array_index)?,
     }
-    let Some(value_ty) = hash_copy else {
+    let Some(value_ty) = normalized_copy else {
         abi::emit_call_label(ctx.emitter, runtime_label);
+        abi::emit_call_label(ctx.emitter, "__rt_str_persist");
         return store_if_result(ctx, inst);
     };
-    // The hash operand was copied into a fresh indexed array the caller owns. It has to
-    // outlive the join and then be released, and the join answers in the STRING result
-    // register PAIR — so the answer is stacked while the copy is released, rather than the
-    // copy being released first, which would free the payload the join just read.
+    // Normalization produces an owned dense array. Its cleanup record must remain
+    // visible when a Mixed element invokes a PHP string conversion that throws.
     let array_reg = implode_array_argument_reg(ctx);
     abi::emit_push_reg(ctx.emitter, array_reg);
+    let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_temporary_stack_address(ctx.emitter, owner_address, 0);
+    abi::emit_push_call_operand_owner(ctx.emitter, owner_address, false);
     abi::emit_call_label(ctx.emitter, runtime_label);
+    // Stabilize the scratch result before releasing values whose destructors may
+    // reenter string rendering. All implode paths now return one owned string.
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    abi::emit_pop_call_operand_owner(ctx.emitter);
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    abi::emit_temporary_stack_address(ctx.emitter, owner_address, 0);
+    abi::emit_push_call_operand_owner(ctx.emitter, owner_address, false);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 64);
     abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(value_ty)));
+    abi::emit_pop_call_operand_owner(ctx.emitter);
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -603,12 +615,13 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
     }
 }
 
-/// Returns the associative-array VALUE type when `implode()` must copy its values first.
+/// Returns the dense element type when `implode()` owns a normalized input array.
 ///
 /// The renderers walk a dense indexed payload, so a hash operand is converted through the
-/// same extraction `array_values()` uses. That copy is a fresh owned array, which is why the
-/// caller has to release it once the join has read it.
-fn implode_hash_value_type(
+/// same extraction `array_values()` uses. Boxed packed values are widened to Mixed slots;
+/// potentially promoted Mixed arrays are retained or copied after checking their heap kind.
+/// Every normalization result must be released once the join has read it.
+fn implode_normalized_value_type(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
     array_index: usize,
@@ -616,6 +629,8 @@ fn implode_hash_value_type(
     let array = expect_operand(inst, array_index)?;
     match ctx.value_php_type(array)? {
         PhpType::AssocArray { value, .. } => Ok(Some(value.codegen_repr())),
+        PhpType::Mixed | PhpType::Union(_) => Ok(Some(PhpType::Mixed)),
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => Ok(Some(PhpType::Mixed)),
         _ => Ok(None),
     }
 }
@@ -639,7 +654,7 @@ pub(super) fn lower_implode_aarch64(
         load_value_as_string_to_regs(ctx, glue, "implode", "x1", "x2")?;
     }
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the glue string while materializing the array argument
-    load_implode_array_aarch64(ctx, array)?;
+    load_implode_array(ctx, array, array_index)?;
     ctx.emitter.instruction("mov x3, x0");                                      // pass the indexed array pointer as the third implode argument
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the glue string into primary implode argument registers
     Ok(())
@@ -664,58 +679,34 @@ pub(super) fn lower_implode_x86_64(
         load_value_as_string_to_regs(ctx, glue, "implode", "rax", "rdx")?;
     }
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    load_implode_array_x86_64(ctx, array)?;
+    load_implode_array(ctx, array, array_index)?;
     ctx.emitter.instruction("mov rdx, rax");                                    // pass the indexed array pointer as the third implode argument
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
     Ok(())
 }
 
-/// Loads the raw indexed-array payload consumed by `implode()` on AArch64.
-pub(super) fn load_implode_array_aarch64(
+/// Loads or normalizes an array into the dense payload required by the join renderers.
+fn load_implode_array(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
+    array_index: usize,
 ) -> Result<()> {
+    ctx.load_value_to_result(array)?;
     match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_reg(array, "x0")?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed array payload to implode()
-            Ok(())
+            let message = if array_index == 0 {
+                "implode(): Argument #1 ($separator) must be of type array when called with one argument"
+            } else {
+                "implode(): Argument #2 ($array) must be of type array"
+            };
+            emit_loaded_boxed_array_values(ctx, message)
         }
-        // A hash has no dense payload for the renderers to walk, so its values are copied
-        // into a fresh indexed array first — the same extraction `array_values()` uses.
-        // `lower_implode` releases that copy once the join has read it.
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            emit_loaded_dynamic_mixed_array_values(ctx)
+        }
         PhpType::AssocArray { value, .. } => {
-            ctx.load_value_to_reg(array, "x0")?;
             emit_loaded_assoc_array_values(ctx, &value.codegen_repr())
         }
-        _ => {
-            ctx.load_value_to_reg(array, "x0")?;
-            Ok(())
-        }
-    }
-}
-
-/// Loads the raw indexed-array payload consumed by `implode()` on x86_64.
-pub(super) fn load_implode_array_x86_64(
-    ctx: &mut FunctionContext<'_>,
-    array: ValueId,
-) -> Result<()> {
-    match ctx.value_php_type(array)?.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_reg(array, "rax")?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed array payload to implode()
-            Ok(())
-        }
-        // See the AArch64 loader: a hash operand is copied into an indexed array first.
-        PhpType::AssocArray { value, .. } => {
-            ctx.load_value_to_reg(array, "rax")?;
-            emit_loaded_assoc_array_values(ctx, &value.codegen_repr())
-        }
-        _ => {
-            ctx.load_value_to_reg(array, "rax")?;
-            Ok(())
-        }
+        _ => Ok(()),
     }
 }

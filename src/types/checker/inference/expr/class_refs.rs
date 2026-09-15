@@ -9,7 +9,7 @@
 //! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, StaticReceiver};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 
@@ -37,6 +37,38 @@ impl Checker {
         class_names.sort();
 
         for class_name in class_names {
+            let constructor = self
+                .classes
+                .get(&class_name)
+                .and_then(|class| class.methods.get("__construct"))
+                .cloned();
+            if let Some(constructor) = constructor {
+                for (arg_index, arg) in args.iter().enumerate() {
+                    let (param_index, value) = match &arg.kind {
+                        ExprKind::NamedArg { name, value } => (
+                            constructor
+                                .params
+                                .iter()
+                                .position(|(param, _)| param == name)
+                                .unwrap_or(arg_index),
+                            value.as_ref(),
+                        ),
+                        _ => (arg_index, arg),
+                    };
+                    if constructor
+                        .ref_params
+                        .get(param_index)
+                        .copied()
+                        .unwrap_or(false)
+                        && matches!(value.kind, ExprKind::ArrayAccess { .. })
+                    {
+                        return Err(CompileError::new(
+                            value.span,
+                            "new static() cannot bind an array element by reference because the runtime constructor target is late-bound",
+                        ));
+                    }
+                }
+            }
             self.infer_new_object_type(&class_name, args, expr, env)?;
         }
 

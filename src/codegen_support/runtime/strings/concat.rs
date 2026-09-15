@@ -15,9 +15,8 @@
 //! - `left_len + right_len` is checked for unsigned wrap before the reservation, so a wrapped
 //!   total can never size a destination smaller than the bytes the copy loops write.
 
-use crate::codegen_support::runtime::strings::concat_scratch::{
-    CONCAT_BUF_CAPACITY, CONCAT_TEMP_HEAP_KIND,
-};
+use crate::codegen_support::runtime::strings::concat_scratch::CONCAT_BUF_CAPACITY;
+use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_concat` runtime helper for concatenating two byte-strings.
@@ -74,6 +73,7 @@ pub fn emit_concat(emitter: &mut Emitter) {
     // -- copy left string bytes --
     emitter.instruction("ldp x1, x2, [sp, #0]");                                // reload left ptr and length
     emitter.instruction("mov x10, x0");                                         // set dest cursor to start of output
+    emitter.raw(".p2align 6");
     emitter.label("__rt_concat_cl");
     emitter.instruction("cbz x2, __rt_concat_cr_setup");                        // if no bytes left, move to right string
     emitter.instruction("ldrb w11, [x1], #1");                                  // load byte from left string, advance src
@@ -147,6 +147,7 @@ fn emit_concat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, rax");                                        // set the concat destination cursor to the start of the reservation
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // load left source pointer
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // load remaining left byte count
+    emitter.raw(".p2align 6");
     emitter.label("__rt_concat_cl");
     emitter.instruction("test r9, r9");                                         // check whether all left bytes have been copied
     emitter.instruction("je __rt_concat_cr_setup");                             // continue with the right string when left is exhausted
@@ -204,6 +205,7 @@ mod tests {
         assert!(asm.contains("call __rt_concat_publish\n"));
         assert!(asm.contains("mov r11b, BYTE PTR [r8]\n"));
         assert!(asm.contains("mov rax, QWORD PTR [rbp - 48]\n"));
+        assert!(asm.contains(".p2align 6\n__rt_concat_cl:\n"));
     }
 
     #[test]
@@ -218,5 +220,6 @@ mod tests {
         assert!(asm.contains("bl __rt_concat_publish\n"));
         assert!(asm.contains("adds x5, x2, x4\n"));
         assert!(asm.contains("b.cs __rt_concat_size_overflow\n"));
+        assert!(asm.contains(".p2align 6\n__rt_concat_cl:\n"));
     }
 }

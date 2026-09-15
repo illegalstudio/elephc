@@ -31,6 +31,7 @@ pub(crate) fn emit_microtime(emitter: &mut Emitter) {
     // -- call gettimeofday syscall --
     emitter.instruction("add x0, sp, #0");                                      // x0 = pointer to timeval struct on stack
     emitter.instruction("mov x1, #0");                                          // x1 = NULL (timezone not needed)
+    emitter.instruction("mov x2, #0");                                          // x2 = NULL (Darwin mach_absolute_time output not requested)
     emitter.syscall(116);
 
     // -- extract tv_sec and tv_usec --
@@ -102,6 +103,7 @@ pub(crate) fn emit_microtime_build_into(emitter: &mut Emitter) {
     // -- call gettimeofday --
     emitter.instruction("add x0, sp, #0");                                      // x0 = pointer to the timeval struct on the stack
     emitter.instruction("mov x1, #0");                                          // x1 = NULL (timezone not needed)
+    emitter.instruction("mov x2, #0");                                          // x2 = NULL (Darwin mach_absolute_time output not requested)
     emitter.syscall(116);
 
     // -- reload the buffer and write the "0." prefix --
@@ -403,4 +405,31 @@ fn emit_microtime_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the scratch, flag save, and padding
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed Mixed pointer in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
+
+    /// Verifies every AArch64 gettimeofday call clears Darwin's optional third output pointer.
+    #[test]
+    fn aarch64_gettimeofday_calls_clear_mach_time_output_pointer() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_microtime(&mut emitter);
+            emit_microtime_build_into(&mut emitter);
+            let asm = emitter.output();
+            assert_eq!(
+                asm.matches("mov x2, #0\n").count(),
+                2,
+                "every gettimeofday call must clear x2 on {target:?}\n{asm}"
+            );
+        }
+    }
 }

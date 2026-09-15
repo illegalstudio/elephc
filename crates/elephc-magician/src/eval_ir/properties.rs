@@ -33,6 +33,12 @@ pub struct EvalClassProperty {
 }
 
 impl EvalClassProperty {
+    /// Recognizes a generated accessor belonging to this property's actual hook declarations.
+    pub(crate) fn matches_hook_method(&self, method: &str) -> bool {
+        (self.has_get_hook && method.eq_ignore_ascii_case(&format!("__propget_{}", self.name)))
+            || (self.has_set_hook && method.eq_ignore_ascii_case(&format!("__propset_{}", self.name)))
+    }
+
     /// Creates a public eval class property with an optional initializer.
     pub fn new(name: impl Into<String>, default: Option<EvalExpr>) -> Self {
         Self::with_visibility(name, EvalVisibility::Public, default)

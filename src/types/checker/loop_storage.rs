@@ -319,6 +319,14 @@ fn join_loop_flow_type(existing: PhpType, incoming: PhpType) -> PhpType {
     if existing == incoming {
         return existing;
     }
+    if existing.is_php_array() || incoming.is_php_array() {
+        // A boxed representation need not erase a proven packed-or-hash array contract.
+        return if is_array_like(&existing) && is_array_like(&incoming) {
+            PhpType::php_array()
+        } else {
+            PhpType::Mixed
+        };
+    }
     match (existing, incoming) {
         (PhpType::Array(left), PhpType::Array(right)) => {
             PhpType::Array(Box::new(join_array_payload_type(*left, *right)))
@@ -383,6 +391,9 @@ fn representation_contract(
     fixed: &PhpType,
     has_whole_mixed_source: bool,
 ) -> Option<PhpType> {
+    if fixed.is_php_array() {
+        return (!entry.is_php_array()).then(|| fixed.clone());
+    }
     match (entry.codegen_repr(), fixed.codegen_repr()) {
         (PhpType::Array(entry_element), PhpType::Array(fixed_element))
             if entry_element.codegen_repr() != PhpType::Mixed
@@ -417,12 +428,9 @@ fn representation_contract(
     }
 }
 
-/// Returns whether a loop-entry type is an indexed or associative array local.
+/// Recognizes concrete array storage and the boxed, non-null PHP array contract.
 fn is_array_like(ty: &PhpType) -> bool {
-    matches!(
-        ty.codegen_repr(),
-        PhpType::Array(_) | PhpType::AssocArray { .. }
-    )
+    ty.is_php_array() || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
 /// Returns a self-evident scalar type when semantic inference is unavailable.
@@ -1011,5 +1019,61 @@ fn call_arg_value(argument: &Expr) -> &Expr {
     match &argument.kind {
         ExprKind::NamedArg { value, .. } => value,
         _ => argument,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{join_loop_flow_type, representation_contract};
+    use crate::types::PhpType;
+
+    /// Joining concrete storage with a declared array preserves the logical array proof.
+    #[test]
+    fn declared_array_loop_joins_preserve_the_contract_in_both_orders() {
+        for concrete in [
+            PhpType::Array(Box::new(PhpType::Never)),
+            PhpType::Array(Box::new(PhpType::Int)),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Int),
+            },
+        ] {
+            assert_eq!(
+                join_loop_flow_type(concrete.clone(), PhpType::php_array()),
+                PhpType::php_array(),
+            );
+            assert_eq!(
+                join_loop_flow_type(PhpType::php_array(), concrete.clone()),
+                PhpType::php_array(),
+            );
+            let contract = representation_contract(&concrete, &PhpType::php_array(), true)
+                .expect("concrete entry storage must widen before the loop");
+            assert!(contract.is_php_array());
+            assert_eq!(contract.codegen_repr(), PhpType::Mixed);
+        }
+        assert_eq!(
+            representation_contract(&PhpType::php_array(), &PhpType::php_array(), true),
+            None,
+        );
+    }
+
+    /// Boxed storage alone never proves that nullable, scalar or unknown values are arrays.
+    #[test]
+    fn declared_array_loop_joins_reject_non_array_evidence() {
+        for non_array in [
+            PhpType::Mixed,
+            PhpType::Int,
+            PhpType::Void,
+            PhpType::Union(vec![PhpType::php_array(), PhpType::Void]),
+        ] {
+            assert_eq!(
+                join_loop_flow_type(PhpType::php_array(), non_array.clone()),
+                PhpType::Mixed,
+            );
+            assert_eq!(
+                join_loop_flow_type(non_array, PhpType::php_array()),
+                PhpType::Mixed,
+            );
+        }
     }
 }

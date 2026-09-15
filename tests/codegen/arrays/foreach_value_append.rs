@@ -21,6 +21,55 @@
 
 use crate::support::*;
 
+/// Empty builders preserve float and bool tags after COW/growth and a boxed PHP array return.
+#[test]
+fn test_array_builder_scalar_tags_survive_boxed_return_and_cow() {
+    let source = r#"<?php
+function floatBuilder(float $value): array {
+    $empty = [];
+    $items = $empty;
+    for ($i = 0; $i < 12; $i++) { $items[] = $value; }
+    echo count($empty), ":";
+    return $items;
+}
+function boolBuilder(bool $value): array { $items = []; $items[] = $value; return $items; }
+function floatSetBuilder(float $value): array { $items = []; $items[0] = $value; return $items; }
+$floats = floatBuilder(1.25);
+echo gettype($floats[0]), ":", $floats[0], ":", $floats[11], "|";
+$bools = boolBuilder(false);
+echo gettype($bools[0]), ":", $bools[0] === false ? "false" : "bad", "|";
+$written = floatSetBuilder(2.5);
+echo gettype($written[0]), ":", $written[0];
+unset($floats, $bools, $written);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0:double:1.25:1.25|boolean:false|double:2.5", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Appended descriptors keep their header tag and captures alive after the source local is released.
+#[test]
+fn test_array_builder_callable_tag_retains_returned_captures() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function callableBuilder(string $prefix): array {
+    $callback = function(string $name) use ($prefix): string { return $prefix . $name; };
+    $items = [];
+    $items[] = $callback;
+    unset($callback);
+    return $items;
+}
+$items = callableBuilder(str_repeat("p", 3));
+$callback = $items[0];
+unset($items);
+echo $callback("ok");
+unset($callback);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "pppok", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Issue #405 minimal repro: appending the foreach value of an exploded CSV
 /// and returning the array previously printed nothing and exhausted the heap
 /// when the caller read it back.

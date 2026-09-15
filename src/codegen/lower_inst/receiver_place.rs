@@ -3,6 +3,7 @@
 //! and republishes a possibly-relocated container pointer into that place.
 //!
 //! Called from:
+//! - `crate::codegen::lower_inst::arrays` (managed associative element references).
 //! - `crate::codegen::lower_inst::builtins::arrays` (`array_pop`, `array_shift`, `array_unshift`,
 //!   `array_splice`, the sort/shuffle family, `array_multisort`, the hash link sorters).
 //! - `crate::codegen::lower_inst::hashes` (`hash_set`).
@@ -20,6 +21,7 @@
 
 use crate::codegen::context::FunctionContext;
 use crate::codegen::{CodegenIrError, Result};
+use crate::codegen_support::abi;
 use crate::ir::{Immediate, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
@@ -94,6 +96,54 @@ impl ReceiverPlace {
             ))),
             _ => Ok(()),
         }
+    }
+
+    /// Gives a consuming COW helper the owner it is allowed to retire.
+    ///
+    /// A raw local transfers its existing slot owner into the helper. A ref-cell load is only a
+    /// borrowed view of storage whose previous owner is retired during write-back, so it needs a
+    /// separate helper owner before the call. Acquiring that owner also forces the helper to split
+    /// a sole stored value, avoiding same-pointer publication followed by retirement. A direct
+    /// property receiver already reaches this layer through an owning `Acquire`; its normal EIR
+    /// cleanup retires the replacement transient after the property store retains it. Concrete
+    /// containers unboxed from a Mixed raw local already carry a detached owner; releasing the
+    /// superseded box transfers that owner into the helper.
+    pub(super) fn prepare_consuming_storeback(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        value: ValueId,
+    ) -> Result<()> {
+        match self {
+            Self::Local(slot) => ctx.release_mutated_source_local_owner(*slot, value),
+            Self::RefCell(_) => {
+                let value_ty = ctx.load_value_to_result(value)?;
+                abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+                Ok(())
+            }
+            Self::Opaque | Self::Property { .. } => Ok(()),
+        }
+    }
+
+    /// Reloads a local-backed receiver from the place that owns its current value.
+    ///
+    /// EIR values preserve source evaluation order, so a receiver load may precede an earlier
+    /// mutation that copy-on-write splits and republishes the same local. A later mutating use
+    /// must not keep using that stale SSA snapshot. Re-materializing the ordinary local load,
+    /// including its storage coercion, makes the published slot authoritative before another
+    /// consuming helper probes or mutates the container.
+    pub(super) fn reload_local_value(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        value: ValueId,
+    ) -> Result<()> {
+        let slot = match self {
+            Self::Local(slot) | Self::RefCell(slot) => *slot,
+            Self::Opaque | Self::Property { .. } => return Ok(()),
+        };
+        let source_ty = ctx.load_local_to_result(slot)?;
+        let result_ty = ctx.value_php_type(value)?;
+        super::coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+        ctx.store_result_value(value)
     }
 
     /// Publishes the receiver's current pointer back into the place it was read from.

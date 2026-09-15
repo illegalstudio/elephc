@@ -6,7 +6,8 @@
 //! - `crate::codegen::lower_inst::builtins::arrays::lower_array_keys()`.
 //!
 //! Key details:
-//! - Associative keys are collected in insertion order through `__rt_hash_iter_next`.
+//! - Associative keys are collected in insertion order through the raw `__rt_hash_iter_next`.
+//!   Only keys are read, so there is no payload to dereference through a reference cell.
 //! - String keys are copied out of hash-owned storage before entering the result array.
 //! - Mixed key arrays box each normalized int/string key into an owned Mixed cell.
 

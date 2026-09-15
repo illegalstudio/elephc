@@ -479,8 +479,107 @@ $ref[] = "router";               // also reaches $container->services
 ```
 
 Reference returns are supported for object-property targets of any scalar or container
-type — arrays, objects, integers, strings, and floats. Returning a reference to a plain
-local is not meaningful (the local does not outlive the call) and is not supported.
+type: arrays, objects, integers, strings, and floats. A plain local is also supported.
+It is promoted to a managed reference cell that keeps the variable's identity and outlives
+the call, so the caller's alias and any later write through the same variable agree.
+
+A `finally` clause cannot change which reference a pending `return` hands back. The
+reference is captured when the `return` runs, exactly as in PHP, so rebinding the returned
+variable inside a `finally` that falls through has no effect on the caller. A second
+`return` inside the `finally` does replace it.
+
+The caller's reference is published before any of the caller's own post-call cleanup runs,
+so a destructor that throws while the call's argument temporaries, an owning receiver, or
+the previous binding of the target are retired cannot lose the returned reference. A
+`catch` in the same function still sees the referenced value released exactly once.
+
+### Reference-return forms this compiler does not support yet
+
+The forms below are valid PHP. They are rejected at compile time because this compiler
+cannot yet transfer an owning reference cell for them, not because PHP lacks the
+semantics:
+
+- Returning an alias of an array element (`$slot = &$numbers[0]; return $slot;`). That
+  alias addresses storage inside the array's payload, which owns no reference cell of its
+  own, so there is nothing to hand the caller that would keep the element alive.
+- Returning a place that is neither a variable nor a property, such as an array element
+  read or the result of another call. PHP returns a reference to those places; this
+  lowering has no cell to transfer for them.
+- Capturing a reference with `$x = &f()` from a call the compiler cannot resolve to a
+  by-reference return. A named function, a method, a static method, and a closure whose
+  binding is known (including one produced by `Closure::bind`) are all resolved. A call
+  made through a runtime-selected callable, such as a variable holding a function-name
+  string, is not: that path is lowered through the dynamic descriptor invoker, which hands
+  back a copied value rather than the callee's reference cell.
+
+One case cannot be decided at compile time. A function that returns its own by-reference
+parameter has no way to know what the caller bound to it, so a caller that passed an alias
+of an array element is caught at run time instead: the return raises a catchable `Error`,
+`Cannot return a reference to storage that has no independent reference cell`, rather than
+handing back an address the array may free.
+
+The same `Error` is raised when a by-reference function without a declared result type
+falls off the end of a path that returned nothing. A by-reference result is an address
+the caller dereferences and may alias, so that path fails closed instead of handing back
+the null placeholder an ordinary return would use. Declare a result type to have the
+missing return reported at compile time instead.
+
+### Payload agreement between the callee and its caller
+
+The caller dereferences the transferred cell with the representation of the callee's
+**declared result**, so the returned storage has to hold a payload that can be read that
+way.
+
+An ordinary local can be boxed into the declared result's `Mixed` representation before
+its reference cell is created, including a typed array local returned as PHP `array`.
+Storage that is already shared cannot be re-shaped behind the aliases that hold it, so it
+is checked instead of converted. This applies to a by-reference parameter and to an object
+property alike:
+
+```php
+<?php
+class Holder { public int $value = 7; }
+
+// Rejected at compile time: the slot stores a raw int, while a `mixed` result makes the
+// caller read the cell as a boxed value.
+function &slot(Holder $h): mixed { return $h->value; }
+```
+
+Compatible object class types still share the same pointer layout, so returning a property
+holding a subclass instance through a base-typed result is accepted. Container element
+layouts are part of the payload, so an `array` of one element representation cannot be
+returned as an `array` of another.
+
+When the receiver's class is only known at run time (a `mixed` parameter, or the `$this`
+of a closure bound with `Closure::bind`), the decision is made per class at the point of
+return, never for the whole function. A call that lands on a class whose slot is
+compatible gets its reference; a call on a class whose slot is not raises a catchable
+`Error`, `Cannot return a reference to a property whose stored representation differs from
+the declared by-reference result type`, and publishes no pointer at all, so the object and
+every other alias of it are left exactly as they were:
+
+```php
+<?php
+class GoodHolder { public mixed $value = 7; }
+class BadHolder  { public int   $value = 9; }
+function &dynamicSlot(mixed $holder): mixed { return $holder->value; }
+
+$good = new GoodHolder();
+$bad  = new BadHolder();
+$goodAlias = &$good->value;               // makes each property a reference property
+$badAlias  = &$bad->value;
+
+$reference = &dynamicSlot($good);         // 7, aliases $good->value
+try {
+    $refused = &dynamicSlot($bad);
+} catch (Error $error) {
+    echo $bad->value;                     // 9, untouched
+}
+```
+
+Both the compile-time rejection and the run-time `Error` are compiler subset limits, not
+PHP restrictions on reference returns: PHP's references are untyped and have no equivalent
+condition.
 
 ## Variadic functions
 

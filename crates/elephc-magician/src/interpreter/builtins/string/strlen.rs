@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and implemented through the existing string-length hook.
+//! - Direct calls consume temporary operands; value hooks borrow their already-materialized input.
 
 eval_builtin! {
     contract: "strlen",
@@ -26,8 +26,9 @@ pub(in crate::interpreter) fn eval_builtin_strlen(
     let [value] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let value = eval_expr(value, context, scope, values)?;
-    eval_strlen_result(value, values)
+    with_eval_operands(&[value], context, scope, values, |args, _, _, values| {
+        eval_strlen_result(args[0], values)
+    })
 }
 
 /// Returns the byte length of one materialized eval string.

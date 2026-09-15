@@ -1,11 +1,11 @@
 ---
-title: "opcache_compile_file() — internals"
+title: "opcache_compile_file() - internals"
 description: "Compiler internals for opcache_compile_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 613
+  order: 636
 ---
 
-## `opcache_compile_file()` — internals
+## `opcache_compile_file()` - internals
 
 ## Where it lives
 

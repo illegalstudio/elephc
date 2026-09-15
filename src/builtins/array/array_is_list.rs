@@ -33,7 +33,7 @@ builtin! {
 /// it once for side effects, and arity (exactly 1) is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(
+    if !ty.is_php_array() && !matches!(
         ty,
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
     ) {

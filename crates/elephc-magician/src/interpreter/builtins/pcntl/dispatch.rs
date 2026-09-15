@@ -42,9 +42,10 @@ pub(in crate::interpreter) fn eval_builtin_pcntl_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated = eval_call_arg_values(args, context, scope, values)?;
-    let bound = eval_pcntl_bind_args(name, &evaluated)?;
-    eval_pcntl_bound_result(name, &bound, PcntlCallMode::Direct, context, values)
+    with_eval_call_arguments(args, context, scope, values, |evaluated, context, _, values| {
+        let bound = eval_pcntl_bind_args(name, &evaluated)?;
+        eval_pcntl_bound_result(name, &bound, PcntlCallMode::Direct, context, values)
+    })
 }
 
 /// Evaluates positional expression hooks when registry dispatch is invoked directly.
@@ -55,16 +56,10 @@ pub(in crate::interpreter) fn eval_builtin_pcntl_expr_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut evaluated = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated.push(EvaluatedCallArg {
-            name: None,
-            value: eval_expr(arg, context, scope, values)?,
-            ref_target: None,
-        });
-    }
-    let bound = eval_pcntl_bind_args(name, &evaluated)?;
-    eval_pcntl_bound_result(name, &bound, PcntlCallMode::Callable, context, values)
+    let args = args.iter().collect::<Vec<_>>();
+    with_eval_operands(&args, context, scope, values, |arguments, context, _, values| {
+        eval_pcntl_values_result(name, arguments, context, values)
+    })
 }
 
 /// Evaluates an already-bound callable PCNTL invocation by value.

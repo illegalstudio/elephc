@@ -31,6 +31,38 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function(
     .unwrap_or(0)
 }
 
+/// Registers one generated native PHP function's explicit PHP signature shape.
+///
+/// `visible_regular_param_count` and `required_param_count` describe the SOURCE declaration, and
+/// `shape_flags` carries `NATIVE_SHAPE_FLAG_SOURCE_VARIADIC` and
+/// `NATIVE_SHAPE_FLAG_COLLECTOR_CARRIES_COUNT`. None of it may be re-derived from the registered
+/// defaults, which are absent whenever a declared default has no eval representation.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `name_ptr` must be readable for
+/// `name_len` bytes when `name_len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_shape(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    visible_regular_param_count: u64,
+    required_param_count: u64,
+    shape_flags: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_shape_inner(
+            ctx,
+            name_ptr,
+            name_len,
+            visible_regular_param_count,
+            required_param_count,
+            shape_flags,
+        )
+    })
+    .unwrap_or(0)
+}
+
 /// Registers one generated native PHP function parameter name in an eval context.
 ///
 /// # Safety

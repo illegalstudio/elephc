@@ -96,6 +96,7 @@ fn compile_lfc_eval_project_and_run(
         // neither kind-specific destructor arm.
         popen_resource: false,
         directory_resource: false,
+        ..elephc::codegen::RuntimeFeatures::none()
     };
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);

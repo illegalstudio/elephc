@@ -217,7 +217,7 @@ fn lower_assoc_array_search_aarch64(
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("ldr x0, [sp, #32]");                               // load the associative-array hash pointer for iteration
     ctx.emitter.instruction("ldr x1, [sp]");                                    // load the current insertion-order iterator cursor
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
     ctx.emitter.instruction("cmn x0, #1");                                      // check whether hash iteration reached the end sentinel
     ctx.emitter.instruction(&format!("b.eq {}", miss_label));                   // return false when no associative-array value matches
     ctx.emitter.instruction("str x0, [sp]");                                    // save the next iterator cursor for the following scan step
@@ -260,7 +260,7 @@ fn lower_assoc_array_search_x86_64(
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                   // load the associative-array hash pointer for iteration
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                        // load the current insertion-order iterator cursor
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
     ctx.emitter.instruction("cmp rax, -1");                                     // check whether hash iteration reached the end sentinel
     ctx.emitter.instruction(&format!("je {}", miss_label));                     // return false when no associative-array value matches
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the next iterator cursor for the following scan step
@@ -303,7 +303,7 @@ fn lower_assoc_in_array_aarch64(
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("ldr x0, [sp, #32]");                               // load the associative-array hash pointer for iteration
     ctx.emitter.instruction("ldr x1, [sp]");                                    // load the current insertion-order iterator cursor
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
     ctx.emitter.instruction("cmn x0, #1");                                      // check whether hash iteration reached the end sentinel
     ctx.emitter.instruction(&format!("b.eq {}", miss_label));                   // return false when no associative-array value matches
     ctx.emitter.instruction("str x0, [sp]");                                    // save the next iterator cursor for the following scan step
@@ -343,7 +343,7 @@ fn lower_assoc_in_array_x86_64(
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                   // load the associative-array hash pointer for iteration
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                        // load the current insertion-order iterator cursor
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
     ctx.emitter.instruction("cmp rax, -1");                                     // check whether hash iteration reached the end sentinel
     ctx.emitter.instruction(&format!("je {}", miss_label));                     // return false when no associative-array value matches
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the next iterator cursor for the following scan step

@@ -36,16 +36,24 @@ impl Checker {
     ) -> Result<FunctionSig, CompileError> {
         match target {
             CallableTarget::Function(name) => {
-                let function_name = name.as_str();
+                let canonical_function_name = self
+                    .canonical_function_name_folded(name.as_str())
+                    .unwrap_or_else(|| name.as_str().to_string());
+                let function_name = canonical_function_name.as_str();
                 let function_key =
                     crate::names::php_symbol_key(function_name.trim_start_matches('\\'));
                 let prefer_extension_builtin = !crate::strict_php::is_enabled()
                     && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
                         &function_key,
                         true,
-                    );
+                );
                 if prefer_extension_builtin {
                     self.require_first_class_callable_builtin_libraries(&function_key);
+                    if let Some(message) =
+                        crate::builtins::registry::first_class_callable_rejection(&function_key)
+                    {
+                        return Err(CompileError::new(span, message));
+                    }
                     return crate::types::first_class_callable_builtin_sig(&function_key)
                         .ok_or_else(|| {
                             CompileError::new(
@@ -57,6 +65,12 @@ impl Checker {
                             )
                         });
                 }
+                if self.function_variant_groups.contains_key(function_name)
+                    && !self.functions.contains_key(function_name)
+                {
+                    self.ensure_function_variant_group_signature(function_name, span)?;
+                }
+                self.promote_descriptor_variadic_container(function_name)?;
                 if let Some(sig) = self.functions.get(function_name) {
                     let effective_sig =
                         Self::callable_sig_for_declared_params(sig, &sig.declared_params);
@@ -65,6 +79,7 @@ impl Checker {
                 if let Some(decl) = self.fn_decls.get(function_name).cloned() {
                     let param_types = self.initial_function_param_types(function_name, &decl)?;
                     self.resolve_function_signature(function_name, &decl, param_types)?;
+                    self.promote_descriptor_variadic_container(function_name)?;
                     if let Some(sig) = self.functions.get(function_name) {
                         let effective_sig =
                             Self::callable_sig_for_declared_params(sig, &sig.declared_params);
@@ -88,6 +103,11 @@ impl Checker {
                 }
                 if crate::name_resolver::is_builtin_function(function_name) {
                     self.require_first_class_callable_builtin_libraries(&function_key);
+                    if let Some(message) =
+                        crate::builtins::registry::first_class_callable_rejection(&function_key)
+                    {
+                        return Err(CompileError::new(span, message));
+                    }
                     return crate::types::first_class_callable_builtin_sig(function_name)
                         .ok_or_else(|| {
                             CompileError::new(
@@ -108,6 +128,7 @@ impl Checker {
                 ))
             }
             CallableTarget::StaticMethod { receiver, method } => {
+                let method_key = crate::names::php_symbol_key(method);
                 let resolved_class_name = match receiver {
                     StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
                     StaticReceiver::Self_ => {
@@ -148,11 +169,19 @@ impl Checker {
                     }
                 };
 
+                // Before the signature is read, not after: handing out the callable is what makes
+                // the method descriptor-reachable, and the wrapper published below has to
+                // describe the container the method's own frame will be compiled for.
+                self.promote_descriptor_variadic_container_for_method(
+                    &resolved_class_name,
+                    &method_key,
+                    true,
+                );
                 let class_info = self.classes.get(&resolved_class_name).ok_or_else(|| {
                     CompileError::new(span, &format!("Undefined class: {}", resolved_class_name))
                 })?;
-                let sig = class_info.static_methods.get(method).ok_or_else(|| {
-                    if class_info.methods.contains_key(method) {
+                let sig = class_info.static_methods.get(&method_key).ok_or_else(|| {
+                    if class_info.methods.contains_key(&method_key) {
                         CompileError::new(
                             span,
                             &format!(
@@ -170,10 +199,10 @@ impl Checker {
                         )
                     }
                 })?;
-                if let Some(visibility) = class_info.static_method_visibilities.get(method) {
+                if let Some(visibility) = class_info.static_method_visibilities.get(&method_key) {
                     let declaring_class = class_info
                         .static_method_declaring_classes
-                        .get(method)
+                        .get(&method_key)
                         .map(String::as_str)
                         .unwrap_or(resolved_class_name.as_str());
                     if !self.can_access_member(declaring_class, visibility) {
@@ -188,18 +217,27 @@ impl Checker {
                         ));
                     }
                 }
-                let declared_flags = Self::declared_method_param_flags(class_info, method, true);
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, &method_key, true);
                 let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
                 Ok(Self::callable_wrapper_sig(&effective_sig))
             }
             CallableTarget::Method { object, method } => {
+                let method_key = crate::names::php_symbol_key(method);
                 let object_ty = self.infer_type(object, env)?;
                 match object_ty {
                     PhpType::Object(class_name) => {
+                        // See the static-method arm: promote before publishing the wrapper, so
+                        // the descriptor and the method frame agree on one collector container.
+                        self.promote_descriptor_variadic_container_for_method(
+                            &class_name,
+                            &method_key,
+                            false,
+                        );
                         let class_info = self.classes.get(&class_name).ok_or_else(|| {
                             CompileError::new(span, &format!("Undefined class: {}", class_name))
                         })?;
-                        let sig = class_info.methods.get(method).ok_or_else(|| {
+                        let sig = class_info.methods.get(&method_key).ok_or_else(|| {
                             CompileError::new(
                                 span,
                                 &format!(
@@ -208,10 +246,10 @@ impl Checker {
                                 ),
                             )
                         })?;
-                        if let Some(visibility) = class_info.method_visibilities.get(method) {
+                        if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
                             let declaring_class = class_info
                                 .method_declaring_classes
-                                .get(method)
+                                .get(&method_key)
                                 .map(String::as_str)
                                 .unwrap_or(class_name.as_str());
                             if !self.can_access_member(declaring_class, visibility) {
@@ -226,8 +264,11 @@ impl Checker {
                                 ));
                             }
                         }
-                        let declared_flags =
-                            Self::declared_method_param_flags(class_info, method, false);
+                        let declared_flags = Self::declared_method_param_flags(
+                            class_info,
+                            &method_key,
+                            false,
+                        );
                         let effective_sig =
                             Self::callable_sig_for_declared_params(sig, &declared_flags);
                         Ok(Self::callable_wrapper_sig(&effective_sig))
@@ -267,15 +308,22 @@ impl Checker {
                 if crate::name_resolver::is_builtin_function(name.as_str()) {
                     return Ok(base_sig);
                 }
-                let normalized_args =
-                    self.normalize_named_call_args(&base_sig, args, span, "first-class callable", env)?;
+                let function_name = self
+                    .canonical_function_name_folded(name.as_str())
+                    .unwrap_or_else(|| name.as_str().to_string());
+                let plan = self.plan_named_call_args(&base_sig, args, span, "first-class callable", env)?;
+                let defaults = plan.default_argument_mask();
+                let descriptor_projections = plan.descriptor_projection_mask();
+                let normalized_args = plan.normalized_args();
                 self.check_function_call_pre_normalized(
-                    name.as_str(),
+                    &function_name,
                     &normalized_args,
+                    &defaults,
+                    &descriptor_projections,
                     span,
                     env,
                 )?;
-                self.specialize_untyped_function_params(name.as_str(), &normalized_args, env)?;
+                self.specialize_untyped_function_params(&function_name, &normalized_args, env)?;
             }
             CallableTarget::StaticMethod { receiver, method } => {
                 let call_expr = Expr::new(
@@ -303,6 +351,289 @@ impl Checker {
         self.resolve_first_class_callable_sig(target, span, env)
     }
 
+    /// Specializes a first-class target for a descriptor invocation such as `call_user_func()`.
+    ///
+    /// A Traversable spread has no statically addressable elements, so ordinary direct-call
+    /// specialization cannot synthesize array-index reads for its parameter slots. Preserve the
+    /// already-checked fallback signature and let descriptor-aware validation accept the runtime
+    /// iterator walk. Array spreads and calls without spreads keep the existing specialization.
+    pub(crate) fn specialize_first_class_callable_target_for_descriptor_call(
+        &mut self,
+        target: &CallableTarget,
+        args: &[Expr],
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<FunctionSig, CompileError> {
+        if !self.descriptor_call_has_traversable_spread(args, env)? {
+            return self.specialize_first_class_callable_target(target, args, span, env);
+        }
+        self.resolve_first_class_callable_sig(target, span, env)
+    }
+
+    /// Recompiles `name` for the descriptor container contract when it collects a variadic tail.
+    ///
+    /// Handing out a first-class callable makes the callable reachable through a descriptor
+    /// invoker, whose container holds exactly the arguments PHP supplied, names included. The
+    /// invoker's tail collector copies every unconsumed name into an associative hash, so the
+    /// callee must read its variadic parameter through the runtime heap kind. Neither the
+    /// untyped `array<int>` fallback nor the declared `array<T>` of an `int ...$xs` can: the body
+    /// reads the tail hash's header as indexed storage (entry count as the length, the
+    /// insertion-order head slot as element 0) and releases it as an indexed array, leaking the
+    /// persisted string keys.
+    ///
+    /// `crate::types::signatures::descriptor_variadic_container` is the storage the invoker's own
+    /// tail collector fills, so both agree on one callee shape. The signature is re-resolved
+    /// through `resolve_function_signature` rather than patched in place, because the body's own
+    /// checked metadata (foreach storage types above all) has to be recorded against the promoted
+    /// parameter type. `param_type_exprs` and `declared_params` come back from the DECLARATION on
+    /// every re-resolve, so a declared `int ...$xs` keeps the source element contract its direct
+    /// call sites are checked against while only its storage moves. It is idempotent:
+    /// `array<mixed>` is already dynamic, so a second descriptor for the same function changes
+    /// nothing.
+    pub(crate) fn promote_descriptor_variadic_container(
+        &mut self,
+        name: &str,
+    ) -> Result<(), CompileError> {
+        // A conditional function is a VARIANT GROUP: the group name carries the unified signature
+        // every call site sees, and each variant carries the body that is actually compiled. Both
+        // have to move, or the descriptor publishes one container while the selected variant's
+        // frame reads the other. Promoting the variants first and re-unifying afterwards keeps
+        // the group signature derived from them rather than patched independently.
+        if let Some(variants) = self.function_variant_groups.get(name).cloned() {
+            // All or nothing, checked BEFORE the first variant moves. A group is only legal while
+            // every variant shares one signature, so promoting a subset would either be rejected
+            // by the re-unification below as a variant mismatch, or leave the group publishing a
+            // container that the one variant that could not move does not read. A group with any
+            // immovable variant therefore keeps indexed storage throughout, and a named tail
+            // aimed at it is refused by the invoker rather than silently reinterpreted.
+            if !variants
+                .iter()
+                .all(|variant| self.declared_variadic_container_is_movable(variant))
+            {
+                return Ok(());
+            }
+            let mut promoted = false;
+            for variant in &variants {
+                promoted |= self.promote_declared_variadic_container(variant)?;
+            }
+            if promoted {
+                self.functions.remove(name);
+                self.ensure_function_variant_group_signature(name, crate::span::Span::dummy())?;
+            }
+            return Ok(());
+        }
+        self.promote_declared_variadic_container(name)?;
+        Ok(())
+    }
+
+    /// Promotes ONE declared function's variadic collector, reporting whether it moved.
+    ///
+    /// Returns `false` without touching anything when the function has no declaration to
+    /// re-resolve, when its body is already being walked (the promotion would recurse into the
+    /// resolution it is running inside), or when the collector is already the descriptor
+    /// container. A function with no declaration cannot be recompiled for a different parameter
+    /// type, so it keeps its current shape rather than receiving a signature its body was never
+    /// checked against; the invoker refuses a named tail for such a callee rather than filling a
+    /// container it cannot read (see
+    /// `crate::codegen::runtime_callable_invoker::variadic_collector_accepts_named_entries`).
+    fn promote_declared_variadic_container(
+        &mut self,
+        name: &str,
+    ) -> Result<bool, CompileError> {
+        if self.resolving_functions.contains(name) {
+            return Ok(false);
+        }
+        let Some(sig) = self.functions.get(name) else {
+            return Ok(false);
+        };
+        if !crate::types::signatures::variadic_needs_descriptor_container(sig) {
+            return Ok(false);
+        }
+        let Some(index) = crate::types::signatures::variadic_param_index(sig) else {
+            return Ok(false);
+        };
+        let mut param_types = sig.params.clone();
+        param_types[index].1 = crate::types::signatures::descriptor_variadic_container();
+        let Some(decl) = self.fn_decls.get(name).cloned() else {
+            return Ok(false);
+        };
+        self.resolve_function_signature(name, &decl, param_types)?;
+        Ok(true)
+    }
+
+    /// Returns whether a variant can move to descriptor-safe variadic storage atomically.
+    fn declared_variadic_container_is_movable(&self, name: &str) -> bool {
+        if self.resolving_functions.contains(name) {
+            return false;
+        }
+        let Some(sig) = self.functions.get(name) else {
+            return false;
+        };
+        !crate::types::signatures::variadic_needs_descriptor_container(sig)
+            || self.fn_decls.contains_key(name)
+    }
+
+    /// Promotes a class method's variadic collector for the descriptor container contract.
+    ///
+    /// A method reached through `$o->m(...)`, `C::m(...)`, or a `[$o, 'm']` callable is invoked
+    /// through the same descriptor invoker as a free function, so its collector needs the same
+    /// storage. Unlike a free function there is nothing to re-resolve here: the stored class
+    /// signature IS what seeds the body's parameter environment
+    /// (`crate::types::checker::method_pass`, which reads the collector out of `sig_params`), and
+    /// `type_check_methods_until_stable` runs method bodies to a fixed point over `self.classes`.
+    /// Mutating the stored signature therefore makes that loop observe a change and re-check the
+    /// body against the promoted container by itself. Returning early when nothing moves is what
+    /// keeps the fixed point reachable.
+    pub(crate) fn promote_descriptor_variadic_container_for_method(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        is_static: bool,
+    ) {
+        let Some(class_info) = self.classes.get_mut(class_name) else {
+            return;
+        };
+        let table = if is_static {
+            &mut class_info.static_methods
+        } else {
+            &mut class_info.methods
+        };
+        // Method tables are keyed by the folded PHP symbol key, but the callers reach this with
+        // the spelling their own syntax carried: first-class callable syntax hands over the
+        // source name, and a `[$o, 'Add']` callable array hands over a string literal PHP
+        // matches case-insensitively. Trying the given spelling first keeps the exact-match
+        // path allocation-free and makes the fold a fallback rather than a reformatting step.
+        let key = if table.contains_key(method) {
+            method.to_string()
+        } else {
+            crate::names::php_symbol_key(method)
+        };
+        let Some(sig) = table.get_mut(&key) else {
+            return;
+        };
+        crate::types::signatures::promote_variadic_to_descriptor_container(sig);
+    }
+
+    /// Gives every eval-reachable native variadic the container Magician actually constructs.
+    ///
+    /// Unlike a statically resolved first-class callable, `eval()` can name any method or
+    /// constructor through a runtime string. Magician therefore binds every source variadic into
+    /// an array of boxed Mixed cells. A narrower native container such as `array<string>` would
+    /// interpret those cell pointers as inline string pairs and corrupt the first consumer.
+    /// Promoting only the storage type keeps `param_type_exprs` unchanged, so the binder still
+    /// coerces each element according to the PHP declaration and Reflection still reports it.
+    pub(crate) fn promote_eval_native_variadic_containers(&mut self) -> Result<(), CompileError> {
+        self.eval_native_callables_reachable = true;
+        let mut function_names = self
+            .fn_decls
+            .iter()
+            .filter(|(_, declaration)| {
+                declaration
+                    .variadic
+                    .as_deref()
+                    .is_some_and(|name| name != crate::func_args::HIDDEN_ARGS_PARAM)
+            })
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for (group, variants) in &self.function_variant_groups {
+            if variants.iter().any(|variant| function_names.contains(variant)) {
+                function_names.retain(|name| !variants.contains(name));
+                function_names.push(group.clone());
+            }
+        }
+        function_names.sort();
+        function_names.dedup();
+        for name in function_names {
+            self.promote_descriptor_variadic_container(&name)?;
+        }
+        for class_info in self.classes.values_mut() {
+            for signature in class_info
+                .methods
+                .values_mut()
+                .chain(class_info.static_methods.values_mut())
+            {
+                crate::types::signatures::promote_variadic_to_descriptor_container(signature);
+            }
+        }
+        Ok(())
+    }
+
+    /// Promotes whatever callable a resolved [`CallableTarget`] names, for any of its three kinds.
+    ///
+    /// `resolve_first_class_callable_sig` covers the targets written as first-class callable
+    /// syntax, but a `[$object, 'method']` or `[Klass::class, 'method']` callable array reaches
+    /// the SAME descriptor invoker without ever passing through it: the pair is recorded as a
+    /// target when it is assigned (`crate::types::checker::stmt_check::assignments::locals`) and
+    /// invoked through that record (`Checker::infer_callable_array_target_call`). Both of those
+    /// are descriptor materialization points, so both promote through here.
+    ///
+    /// Receiver resolution is deliberately INFERENCE-FREE. The two call sites either already
+    /// inferred the receiver or are recording an assignment whose environment already holds its
+    /// type, and re-running `infer_type` for a promotion decision would re-record argument
+    /// aliases and re-emit narrowing as a side effect of asking a storage question. An
+    /// unresolvable receiver simply promotes nothing: the callee then keeps indexed storage and
+    /// the invoker refuses a named tail rather than corrupting it (see
+    /// `crate::codegen::runtime_callable_invoker::variadic_collector_accepts_named_entries`).
+    pub(crate) fn promote_descriptor_variadic_container_for_callable_target(
+        &mut self,
+        target: &CallableTarget,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        match target {
+            CallableTarget::Function(name) => {
+                self.promote_descriptor_variadic_container(name.as_str())
+            }
+            CallableTarget::StaticMethod { receiver, method } => {
+                if let Some(class_name) = self.static_receiver_class_without_inference(receiver) {
+                    self.promote_descriptor_variadic_container_for_method(
+                        &class_name,
+                        method,
+                        true,
+                    );
+                }
+                Ok(())
+            }
+            CallableTarget::Method { object, method } => {
+                let receiver_ty = match &object.kind {
+                    ExprKind::Variable(name) => env.get(name).cloned(),
+                    _ => None,
+                }
+                .unwrap_or_else(|| {
+                    crate::types::checker::infer_expr_type_syntactic(object)
+                });
+                if let Some(class_name) = self.invokable_class_for_type(&receiver_ty) {
+                    self.promote_descriptor_variadic_container_for_method(
+                        &class_name,
+                        method,
+                        false,
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Resolves a static receiver to a class name without inferring anything, or gives up.
+    ///
+    /// `self::`, `static::` and `parent::` are answered from the checker's current class context,
+    /// which is the same context `resolve_first_class_callable_sig` reads. Unlike that path this
+    /// one reports `None` instead of a diagnostic: it serves a storage decision, and a receiver
+    /// that cannot be resolved here is either reported by the surrounding call check or is not a
+    /// call at all.
+    fn static_receiver_class_without_inference(
+        &self,
+        receiver: &StaticReceiver,
+    ) -> Option<String> {
+        match receiver {
+            StaticReceiver::Named(class_name) => Some(class_name.as_str().to_string()),
+            StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone(),
+            StaticReceiver::Parent => self
+                .classes
+                .get(self.current_class.as_deref()?)
+                .and_then(|class_info| class_info.parent.clone()),
+        }
+    }
+
     /// Infers the return type of a first-class callable target without performing specialization.
     ///
     /// Delegates to `resolve_first_class_callable_sig` and extracts the `return_type` field.
@@ -316,5 +647,197 @@ impl Checker {
         Ok(self
             .resolve_first_class_callable_sig(target, span, env)?
             .return_type)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parser::ast::{Stmt, StmtKind};
+    use crate::codegen_support::platform::Target;
+    use crate::types::PhpType;
+
+    /// Eval promotes free, method and constructor variadics to boxed-Mixed storage on every target.
+    ///
+    /// The declared `string` contract remains in `param_type_exprs`; only the physical collector
+    /// changes. Magician coerces each eval argument against that source contract before filling
+    /// the collector, while the native body reads the cells through their real Mixed layout.
+    #[test]
+    fn eval_native_variadics_use_the_native_bridge_container_on_every_target() {
+        let source = r#"<?php
+function evalTypedFreeVariadic(string ...$parts): int { return count($parts); }
+class EvalTypedVariadicBridge {
+    public function __construct(string ...$parts) {}
+    public static function collect(string ...$parts): int { return count($parts); }
+}
+eval('new EvalTypedVariadicBridge("a", "b");');
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let checked =
+                crate::types::checker::check_types(&program, target).expect("check");
+            let function = checked
+                .functions
+                .get("evalTypedFreeVariadic")
+                .expect("typed free variadic signature");
+            let function_index = crate::types::signatures::variadic_param_index(function)
+                .expect("source variadic slot");
+            assert_eq!(
+                function.params[function_index].1,
+                crate::types::signatures::descriptor_variadic_container(),
+                "{name}: eval-native free function binding requires boxed-Mixed storage",
+            );
+            assert_eq!(
+                function.param_type_exprs[function_index],
+                Some(crate::parser::ast::TypeExpr::Str),
+                "{name}: free function promotion must preserve string coercion metadata",
+            );
+            let class = checked
+                .classes
+                .get("EvalTypedVariadicBridge")
+                .expect("typed variadic fixture class");
+            for (method, signature) in [
+                ("__construct", class.methods.get("__construct")),
+                ("collect", class.static_methods.get("collect")),
+            ] {
+                let signature = signature.expect("typed variadic method signature");
+                let index = crate::types::signatures::variadic_param_index(signature)
+                    .expect("source variadic slot");
+                assert_eq!(
+                    signature.params[index].1,
+                    crate::types::signatures::descriptor_variadic_container(),
+                    "{name} {method}: eval-native binding requires boxed-Mixed storage",
+                );
+                assert_eq!(
+                    signature.param_type_exprs[index],
+                    Some(crate::parser::ast::TypeExpr::Str),
+                    "{name} {method}: storage promotion must preserve string coercion metadata",
+                );
+            }
+        }
+    }
+
+    /// A variadic reached only through a callable descriptor compiles for the dynamic container.
+    ///
+    /// `keepsSpareName` has no direct call site, so nothing else can tell the checker that its
+    /// `...$rest` may receive a NAME: the descriptor invoker's tail collector copies every
+    /// unconsumed name into an associative hash, and a body compiled for the untyped `array<int>`
+    /// fallback reads that hash's header as indexed storage. That is exactly how `['z' => 9]`
+    /// printed as `i0=13`: entry count 1 as the length, the insertion-order head slot (FNV-1a of
+    /// `"z"` modulo the 16-slot capacity) as element 0, while the hash's persisted string key
+    /// leaked, because an indexed release never frees hash keys.
+    ///
+    /// The second function is the scope control: a variadic with only direct positional call sites
+    /// must keep its specialized `array<int>` storage, so the promotion cannot quietly box every
+    /// variadic in the program.
+    #[test]
+    fn a_descriptor_variadic_is_dynamic_on_every_target() {
+        let source = r#"<?php
+function keepsSpareName(int $a, ...$rest): string {
+    $out = (string) $a;
+    foreach ($rest as $key => $value) {
+        $out .= '|' . (is_string($key) ? 's' : 'i') . $key . '=' . $value;
+    }
+    return $out;
+}
+function positionalOnlyTail(...$rest): int { return count($rest); }
+function spareNamedArray(): array { return [0 => 1, 'z' => 9]; }
+function unpackSpareName(callable $callback): mixed { return $callback(...spareNamedArray()); }
+echo unpackSpareName(keepsSpareName(...)), ':', positionalOnlyTail(1, 2);
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let checked =
+                crate::types::checker::check_types(&program, target).expect("check");
+
+            let descriptor_tail = checked
+                .functions
+                .get("keepsSpareName")
+                .expect("the first-class callable target keeps a signature")
+                .params
+                .last()
+                .expect("the variadic occupies the last parameter slot")
+                .clone();
+            assert_eq!(
+                descriptor_tail.1,
+                crate::types::signatures::descriptor_variadic_container(),
+                "{name}: a descriptor-reachable variadic must read its tail through the \
+                 runtime heap kind, not as indexed array<int> storage",
+            );
+
+            let direct_tail = checked
+                .functions
+                .get("positionalOnlyTail")
+                .expect("the directly called variadic keeps a signature")
+                .params
+                .last()
+                .expect("the variadic occupies the last parameter slot")
+                .clone();
+            assert_eq!(
+                direct_tail.1,
+                PhpType::Array(Box::new(PhpType::Int)),
+                "{name}: a variadic with only positional direct call sites must keep its \
+                 specialized element storage",
+            );
+        }
+    }
+
+    /// A first-class callable may name an include function variant before the final checker pass.
+    ///
+    /// The resolver normally synthesizes the group statement from mutually exclusive includes.
+    /// Building that exact checker input here pins both early group materialization and PHP's
+    /// case-insensitive lookup without requiring an executable multi-file fixture.
+    #[test]
+    fn a_first_class_callable_materializes_a_case_folded_function_variant_group() {
+        let source = r#"<?php
+function variant_tail_left(string $head, ...$rest): string { return $head; }
+function variant_tail_right(string $head, ...$rest): string { return $head; }
+$callback = vArIaNt_TaIl(...);
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let mut program = crate::parser::parse(&tokens).expect("parse");
+        program.push(Stmt::new(
+            StmtKind::FunctionVariantGroup {
+                name: "variant_tail".to_string(),
+                variants: vec![
+                    "variant_tail_left".to_string(),
+                    "variant_tail_right".to_string(),
+                ],
+            },
+            crate::span::Span::dummy(),
+        ));
+
+        let checked = crate::types::checker::check_types(
+            &program,
+            Target::parse("linux-x86_64").expect("supported target"),
+        )
+        .expect("a statically inventoried variant group is a valid first-class callable");
+        let tail = checked
+            .functions
+            .get("variant_tail")
+            .expect("the group signature is materialized during callable resolution")
+            .params
+            .last()
+            .expect("the variadic occupies the last parameter slot");
+        assert_eq!(
+            tail.1,
+            crate::types::signatures::descriptor_variadic_container(),
+            "the group and its variants must use the descriptor-safe tail container",
+        );
     }
 }

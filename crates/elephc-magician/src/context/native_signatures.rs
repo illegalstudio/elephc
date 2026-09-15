@@ -6,6 +6,10 @@
 //!
 //! Key details:
 //! - Parameter names, types, defaults, by-ref flags, variadics, and return types share one shape.
+//! - The explicit `NativeCallableShape` is separate from that per-slot metadata: it states which
+//!   physical slots the PHP source declared, how many of them are mandatory, and whether the
+//!   hidden collector carries the actual argument count. None of that may be re-derived from the
+//!   registered defaults, which are absent whenever a declared default is unrepresentable.
 
 use super::*;
 
@@ -45,6 +49,44 @@ impl ElephcEvalContext {
             .is_none()
     }
 
+    /// Records the explicit PHP signature shape for registered native AOT instance-method metadata.
+    pub fn define_native_method_shape(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        shape: NativeCallableShape,
+    ) -> bool {
+        self.native_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .map(|signature| signature.set_shape(shape))
+            .is_some()
+    }
+
+    /// Records the explicit PHP signature shape for registered native AOT static-method metadata.
+    pub fn define_native_static_method_shape(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        shape: NativeCallableShape,
+    ) -> bool {
+        self.native_static_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .map(|signature| signature.set_shape(shape))
+            .is_some()
+    }
+
+    /// Records the explicit PHP signature shape for registered native AOT constructor metadata.
+    pub fn define_native_constructor_shape(
+        &mut self,
+        class_name: &str,
+        shape: NativeCallableShape,
+    ) -> bool {
+        self.native_constructors
+            .get_mut(&normalize_class_name(class_name))
+            .map(|signature| signature.set_shape(shape))
+            .is_some()
+    }
+
     /// Records one parameter name for registered native AOT instance-method metadata.
     pub fn define_native_method_param(
         &mut self,
@@ -82,6 +124,19 @@ impl ElephcEvalContext {
         self.native_methods
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_param_default(index, default))
+    }
+
+    /// Records a compiler-emitted default helper for an instance method parameter.
+    pub fn define_native_method_compiled_param_default(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+        callback: usize,
+    ) -> bool {
+        self.native_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_compiled_param_default(index, callback))
     }
 
     /// Records whether one native AOT instance-method parameter is by-reference.
@@ -178,6 +233,19 @@ impl ElephcEvalContext {
             .is_some_and(|signature| signature.set_param_default(index, default))
     }
 
+    /// Records a compiler-emitted default helper for a static method parameter.
+    pub fn define_native_static_method_compiled_param_default(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+        callback: usize,
+    ) -> bool {
+        self.native_static_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_compiled_param_default(index, callback))
+    }
+
     /// Records whether one native AOT static-method parameter is by-reference.
     pub fn define_native_static_method_param_by_ref(
         &mut self,
@@ -267,6 +335,18 @@ impl ElephcEvalContext {
         self.native_constructors
             .get_mut(&normalize_class_name(class_name))
             .is_some_and(|signature| signature.set_param_default(index, default))
+    }
+
+    /// Records a compiler-emitted default helper for a constructor parameter.
+    pub fn define_native_constructor_compiled_param_default(
+        &mut self,
+        class_name: &str,
+        index: usize,
+        callback: usize,
+    ) -> bool {
+        self.native_constructors
+            .get_mut(&normalize_class_name(class_name))
+            .is_some_and(|signature| signature.set_compiled_param_default(index, callback))
     }
 
     /// Records whether one native AOT constructor parameter is by-reference.

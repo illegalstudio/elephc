@@ -403,3 +403,24 @@ impl Expr {
         Self::new(ExprKind::Print(Box::new(inner)), Span::dummy())
     }
 }
+
+/// Wraps one spread into the `ExprKind::ArrayLiteralAssoc` pair shape that represents it.
+///
+/// `ArrayLiteralAssoc` is a `Vec<(key, value)>`, so a spread has no pair of its own. It is
+/// carried as a pair whose KEY is the `ExprKind::Spread` and whose value is an inert null
+/// placeholder; `crate::ir_lower::expr::assoc_array_literals` recognises that shape and merges
+/// the source into the hash in place instead of setting a key. Every consumer that walks pairs
+/// generically still sees the spread source through the key expression, so name resolution,
+/// reachability and effect analysis keep reaching it.
+pub fn assoc_spread_entry(spread: Expr) -> (Expr, Expr) {
+    let span = spread.span;
+    (spread, Expr::new(ExprKind::Null, span))
+}
+
+/// Returns the spread source carried by an `ExprKind::ArrayLiteralAssoc` pair, if the pair is one.
+pub fn assoc_spread_source<'a>(key: &'a Expr, value: &Expr) -> Option<&'a Expr> {
+    match (&key.kind, &value.kind) {
+        (ExprKind::Spread(inner), ExprKind::Null) => Some(inner),
+        _ => None,
+    }
+}

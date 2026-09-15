@@ -103,6 +103,67 @@ pub unsafe extern "C" fn __elephc_eval_register_native_abstract_property(
     .unwrap_or(0)
 }
 
+/// Registers one generated native PHP instance method's explicit PHP signature shape.
+///
+/// `visible_regular_param_count` and `required_param_count` describe the SOURCE declaration, and
+/// `shape_flags` carries `NATIVE_SHAPE_FLAG_SOURCE_VARIADIC` and
+/// `NATIVE_SHAPE_FLAG_COLLECTOR_CARRIES_COUNT`. A method bridge is called directly with one
+/// argument per PHYSICAL slot, so this is what tells eval which of those slots PHP declared.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The method key must be readable
+/// for its declared byte length.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_method_shape(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    visible_regular_param_count: u64,
+    required_param_count: u64,
+    shape_flags: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_method_shape_inner(
+            ctx,
+            method_key_ptr,
+            method_key_len,
+            false,
+            visible_regular_param_count,
+            required_param_count,
+            shape_flags,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP static method's explicit PHP signature shape.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The method key must be readable
+/// for its declared byte length.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_static_method_shape(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    visible_regular_param_count: u64,
+    required_param_count: u64,
+    shape_flags: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_method_shape_inner(
+            ctx,
+            method_key_ptr,
+            method_key_len,
+            true,
+            visible_regular_param_count,
+            required_param_count,
+            shape_flags,
+        )
+    })
+    .unwrap_or(0)
+}
+
 /// Registers one generated native PHP method parameter name in an eval context.
 ///
 /// # Safety
@@ -609,6 +670,36 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor(
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe {
         register_native_constructor_inner(ctx, class_name_ptr, class_name_len, param_count)
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP constructor's explicit PHP signature shape.
+///
+/// A constructor bridge is reached exactly like a method bridge, so it needs the same explicit
+/// partition of its physical slots into PHP-declared and compiler-internal ones.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The class name must be readable
+/// for its declared byte length.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_constructor_shape(
+    ctx: *mut ElephcEvalContext,
+    class_name_ptr: *const u8,
+    class_name_len: u64,
+    visible_regular_param_count: u64,
+    required_param_count: u64,
+    shape_flags: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_constructor_shape_inner(
+            ctx,
+            class_name_ptr,
+            class_name_len,
+            visible_regular_param_count,
+            required_param_count,
+            shape_flags,
+        )
     })
     .unwrap_or(0)
 }

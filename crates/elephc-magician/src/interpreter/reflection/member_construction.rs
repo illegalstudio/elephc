@@ -712,12 +712,17 @@ pub(super) fn eval_reflection_aot_method_signature(
 }
 
 /// Builds ReflectionParameter metadata for one registered native AOT signature.
+///
+/// Reflection describes the signature the PHP source declared, so it walks the signature's
+/// PHP-visible slots. The compiler-internal argument-count and collector slots a generated
+/// method bridge physically takes are not parameters and must not appear here.
 pub(super) fn eval_reflection_native_callable_parameters(
     declaring_class_name: &str,
     method_name: &str,
     flags: u64,
     signature: &NativeCallableSignature,
 ) -> Vec<EvalReflectionParameterMetadata> {
+    let visible = signature.visible_param_indexes();
     let names = eval_reflection_native_callable_parameter_names(signature);
     let parameter_count = names.len();
     let parameter_types = eval_reflection_native_callable_parameter_types(signature);
@@ -727,11 +732,13 @@ pub(super) fn eval_reflection_native_callable_parameters(
         .collect::<Vec<_>>();
     let parameter_attributes = vec![Vec::new(); parameter_count];
     let defaults = eval_reflection_native_callable_parameter_defaults(signature);
-    let by_ref_flags = (0..parameter_count)
-        .map(|index| signature.param_by_ref(index))
+    let by_ref_flags = visible
+        .iter()
+        .map(|index| signature.param_by_ref(*index))
         .collect::<Vec<_>>();
-    let variadic_flags = (0..parameter_count)
-        .map(|index| signature.param_variadic(index))
+    let variadic_flags = visible
+        .iter()
+        .map(|index| signature.param_variadic(*index))
         .collect::<Vec<_>>();
     let declaring_function = EvalReflectionDeclaringFunctionMetadata {
         name: method_name.to_ascii_lowercase(),
@@ -759,23 +766,32 @@ pub(super) fn eval_reflection_native_callable_parameters(
 pub(super) fn eval_reflection_native_callable_parameter_types(
     signature: &NativeCallableSignature,
 ) -> Vec<Option<EvalParameterType>> {
-    (0..signature.param_count())
+    signature
+        .visible_param_indexes()
+        .into_iter()
         .map(|index| signature.param_type(index).cloned())
         .collect()
 }
 
 /// Returns parameter names for a registered native callable, filling missing bridge names.
+///
+/// A bridge that registered no names at all still reports `arg0`, `arg1`, ... : that signature
+/// has no hidden slots, so every physical slot is a PHP parameter whose name was simply not
+/// recorded. A hidden slot is never reached here, because it is not PHP-visible.
 pub(super) fn eval_reflection_native_callable_parameter_names(
     signature: &NativeCallableSignature,
 ) -> Vec<String> {
-    (0..signature.param_count())
-        .map(|index| {
+    signature
+        .visible_param_indexes()
+        .into_iter()
+        .enumerate()
+        .map(|(position, index)| {
             signature
                 .param_names()
                 .get(index)
                 .filter(|name| !name.is_empty())
                 .cloned()
-                .unwrap_or_else(|| format!("arg{}", index))
+                .unwrap_or_else(|| format!("arg{}", position))
         })
         .collect()
 }
@@ -784,7 +800,9 @@ pub(super) fn eval_reflection_native_callable_parameter_names(
 pub(super) fn eval_reflection_native_callable_parameter_defaults(
     signature: &NativeCallableSignature,
 ) -> Vec<Option<EvalExpr>> {
-    (0..signature.param_count())
+    signature
+        .visible_param_indexes()
+        .into_iter()
         .map(|index| {
             signature
                 .param_default(index)

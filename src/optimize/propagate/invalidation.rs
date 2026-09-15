@@ -150,7 +150,9 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
             expr_invalidation(value).union(expr_invalidation(default))
         }
         ExprKind::ArrayAccess { array, index } => {
-            expr_invalidation(array).union(expr_invalidation(index))
+            expr_invalidation(array)
+                .union(expr_invalidation(index))
+                .union(top_level_globals_guard(expr_effect(expr)))
         }
         ExprKind::Ternary {
             condition,

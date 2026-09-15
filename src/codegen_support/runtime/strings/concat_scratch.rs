@@ -30,15 +30,6 @@ use crate::codegen_support::runtime::data::ALLOC_OVERFLOW_MSG;
 /// Byte capacity of the shared `_concat_buf` scratch buffer declared in `runtime::data::fixed`.
 pub(crate) const CONCAT_BUF_CAPACITY: usize = 65536;
 
-/// Uniform heap-header kind stamped on a heap-backed `.` operator result.
-///
-/// The `.` operator is the only producer that stamps this kind, and codegen never releases a
-/// `StrConcat` value (`value_is_scratch_string` classifies it as transient), so a live block
-/// carrying this kind is by construction an unowned temporary with at most one consumer.
-/// `__rt_str_persist` uses that to take the block over in place instead of copying it, which
-/// is what keeps `$s .= ...` accumulation loops from leaking one oversized block per append.
-pub(crate) const CONCAT_TEMP_HEAP_KIND: u32 = 7;
-
 /// Emits `__rt_concat_reserve`, `__rt_concat_publish`, `__rt_concat_grow`, and
 /// `__rt_alloc_overflow`.
 ///

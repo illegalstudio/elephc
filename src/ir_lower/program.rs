@@ -16,8 +16,8 @@ use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{
-    validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType, LocalKind, Module,
-    Op, TraitMethodInfo,
+    validate_module, ExternDecl, ExternParamDecl, Function, Immediate, Instruction, IrType,
+    LocalKind, Module, Op, TraitMethodInfo,
 };
 use crate::ir_lower::{builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
@@ -58,6 +58,9 @@ use spl_lowering::*;
 
 pub(super) use eval_aot::all_lowered_functions;
 pub(super) use runtime_features::include_lowered_runtime_features;
+pub(super) use function_declarations::{
+    close_function_global_names_over_calls, collect_function_global_names,
+};
 pub(super) use spl_discovery::{
     class_data_name, dynamic_object_new_metadata_names, php_method_key, string_data_name,
 };
@@ -76,10 +79,18 @@ pub(crate) fn lower(
     source_path: Option<&Path>,
     web: bool,
 ) -> Result<Module, LoweringError> {
+    super::diagnostics::begin_collection();
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;
     let constants = crate::codegen::collect_constants(program, target);
+    let builtin_constants = crate::codegen::collect_constants(&Vec::new(), target);
+    module.user_defined_constants = constants
+        .keys()
+        .filter(|name| !builtin_constants.contains_key(*name))
+        .cloned()
+        .collect();
+    module.user_defined_constants.sort();
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);
     populate_metadata(&mut module, program, check_result);
@@ -105,6 +116,12 @@ pub(crate) fn lower(
         &constants,
         &fiber_return_sigs,
     );
+    function::lower_eval_native_default_helpers(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    );
     lower_literal_eval_aot_functions(&mut module, check_result, &constants, &fiber_return_sigs);
     lower_dynamic_constructor_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
     include_lowered_runtime_features(&mut module);
@@ -122,7 +139,21 @@ pub(crate) fn lower(
         &fiber_return_sigs,
     );
     include_lowered_runtime_features(&mut module);
+    // Applicators are planned from the LOWERED module: their candidate classes and invocation
+    // scopes come from the `RuntimeFnId::CloneWith` sites this program actually contains.
+    super::clone_overrides::lower_clone_override_applicators(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    )?;
     super::effect_refinement::refine_module(&mut module);
+    reserve_eval_subclass_property_storage(&mut module);
+    // A refused shape is reported before validation: the placeholder EIR those sites emit
+    // keeps the module well formed, but the program must not reach codegen regardless.
+    if let Some(error) = super::diagnostics::take_first() {
+        return Err(LoweringError::Unsupported(error));
+    }
     validate_module(&module)?;
     Ok(module)
 }

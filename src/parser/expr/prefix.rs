@@ -16,8 +16,8 @@ use crate::span::Span;
 
 use super::calls::{parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
-    parse_arrow_closure, parse_attributed_closure, parse_closure, parse_match_expr,
-    parse_named_expr, parse_new_object,
+    parse_arrow_closure, parse_attributed_closure, parse_closure, parse_function_call_or_callable,
+    parse_match_expr, parse_named_expr, parse_new_object,
 };
 use super::pratt::parse_expr_bp;
 use super::{parse_args, parse_expr};
@@ -47,7 +47,7 @@ pub(super) fn parse_prefix(
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
         Token::Print => parse_unary(tokens, pos, span, ExprKind::Print, 7),
         Token::Throw => parse_unary(tokens, pos, span, ExprKind::Throw, 0),
-        Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 35),
+        Token::Clone => parse_clone(tokens, pos, span),
         Token::True => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(true)),
         Token::False => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(false)),
         Token::Null => parse_simple(tokens, pos, span, ExprKind::Null),
@@ -343,6 +343,22 @@ fn parse_unary(
     Ok(Expr::new(ctor(Box::new(inner)), span))
 }
 
+/// Parses a `clone` expression. PHP 8.5 makes `clone` a regular function, so a `(` right
+/// after the keyword starts an ordinary call on the function named `clone` (`clone($o)`,
+/// `clone($o, [...])`) or its first-class callable form (`clone(...)`), sharing the general
+/// argument parser. Any other operand keeps the historical unary construct, its binding
+/// power, and its `ExprKind::Clone` AST shape.
+fn parse_clone(tokens: &[SpannedToken], pos: &mut usize, span: Span) -> Result<Expr, CompileError> {
+    if matches!(
+        tokens.get(*pos + 1).map(|(token, _)| token),
+        Some(Token::LParen)
+    ) {
+        *pos += 2;
+        return parse_function_call_or_callable(tokens, pos, span, Name::unqualified("clone"));
+    }
+    parse_unary(tokens, pos, span, ExprKind::Clone, 35)
+}
+
 /// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,
 /// then expects a `Variable` token next. Returns `PreIncrement` or `PreDecrement` with the
 /// variable name. Returns an error if a variable does not follow the operator.
@@ -505,6 +521,7 @@ fn parse_array_literal_with_terminator(
     let mut elems = Vec::new();
     let mut assoc_elems = Vec::new();
     let mut is_assoc = false;
+    let mut saw_spread = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
     let mut auto_key_initialized = false;
@@ -525,9 +542,13 @@ fn parse_array_literal_with_terminator(
             let spread_span = tokens[*pos].1.span;
             *pos += 1;
             let inner = parse_expr(tokens, pos)?;
-            if !is_assoc {
-                elems.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+            let spread = Expr::new(ExprKind::Spread(Box::new(inner)), spread_span);
+            if is_assoc {
+                assoc_elems.push(crate::parser::ast::assoc_spread_entry(spread));
+            } else {
+                elems.push(spread);
             }
+            saw_spread = true;
             first = false;
             continue;
         }
@@ -548,10 +569,23 @@ fn parse_array_literal_with_terminator(
             );
             assoc_elems.push((expr, value));
         } else if is_assoc {
-            let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
-            assoc_elems.push((key, expr));
-            next_auto_key += 1;
-            auto_key_initialized = true;
+            if saw_spread {
+                // A spread already contributed an unknown number of integer keys, so php's next
+                // free key is only known at run time. Appending through a one-element spread
+                // reuses the runtime append the spread entries already go through instead of
+                // baking in a statically wrong key.
+                let span = expr.span;
+                let one = Expr::new(ExprKind::ArrayLiteral(vec![expr]), span);
+                assoc_elems.push(crate::parser::ast::assoc_spread_entry(Expr::new(
+                    ExprKind::Spread(Box::new(one)),
+                    span,
+                )));
+            } else {
+                let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
+                assoc_elems.push((key, expr));
+                next_auto_key += 1;
+                auto_key_initialized = true;
+            }
         } else {
             elems.push(expr);
             next_auto_key += 1;
@@ -631,8 +665,22 @@ fn promote_indexed_array_items_to_assoc(
     assoc_elems: &mut Vec<(Expr, Expr)>,
 ) {
     let mut auto_key = 0i64;
+    let mut saw_spread = false;
     for elem in std::mem::take(elems) {
         if matches!(elem.kind, ExprKind::Spread(_)) {
+            // Keep the spread. Dropping it here is what made `[...$rest, "k" => 1]` and
+            // `["k" => 1, ...$rest]` lose every spread entry.
+            assoc_elems.push(crate::parser::ast::assoc_spread_entry(elem));
+            saw_spread = true;
+            continue;
+        }
+        if saw_spread {
+            let span = elem.span;
+            let one = Expr::new(ExprKind::ArrayLiteral(vec![elem]), span);
+            assoc_elems.push(crate::parser::ast::assoc_spread_entry(Expr::new(
+                ExprKind::Spread(Box::new(one)),
+                span,
+            )));
             continue;
         }
         let key = Expr::new(ExprKind::IntLiteral(auto_key), elem.span);

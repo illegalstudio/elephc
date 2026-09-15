@@ -428,7 +428,7 @@ final class TraitBox {
     assert!(
         instance_method_effects
             .get("Box::missingread")
-            .is_some_and(|effect| effect.has_side_effects && !effect.may_throw)
+            .is_some_and(|effect| effect.has_side_effects && effect.may_throw && effect.writes_globals)
     );
     assert!(
         instance_method_effects

@@ -1289,6 +1289,148 @@ fn web_gc_stats_are_emitted_per_request() {
     }
 }
 
+/// Reloading unchanged and unset typed superglobals must not grow retained storage across requests.
+#[test]
+fn web_eval_superglobal_reload_releases_replaced_owners() {
+    let dir = make_test_dir("web_eval_superglobal_owners");
+    let started = Instant::now();
+    eprintln!("web eval superglobal owners: compiling web and eval fixture");
+    let source = r#"<?php
+$snapshot = $_GET;
+$code = '$_GET = $_GET; // ' . $_GET['token'];
+$rounds = (int) $_GET['rounds'];
+for ($i = 0; $i < $rounds; $i++) { eval($code); }
+echo $_GET['token'], ":", $snapshot['token'], "|";
+$remove = 'unset($_GET); // ' . $snapshot['token'];
+eval($remove);
+unset($snapshot); unset($code); unset($remove);
+echo "cleared";
+"#;
+    let bin = compile_web_with_flags(&dir, source, "app", &["--gc-stats"]);
+    eprintln!("web eval superglobal owners: fixture compiled in {:?}", started.elapsed());
+    let addr = format!("127.0.0.1:{}", free_port());
+    let stderr_path = dir.join("server.stderr");
+    let stderr_file = fs::File::create(&stderr_path).expect("create server stderr capture");
+    let mut child = ServerGuard::new(Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .stderr(Stdio::from(stderr_file))
+        .spawn().expect("spawn eval superglobal server"));
+    wait_until_ready(&addr);
+    for rounds in [1, 2, 4, 8] {
+        let request_started = Instant::now();
+        let response = http_get_with_timeout(&addr, &format!("/?token=owned&rounds={rounds}"), Duration::from_secs(10))
+            .expect("superglobal reload request must complete");
+        assert!(response.ends_with("owned:owned|cleared"), "response: {response:?}");
+        eprintln!(
+            "web eval superglobal owners: rounds={rounds} completed in {:?}",
+            request_started.elapsed(),
+        );
+    }
+    child.kill().expect("stop eval superglobal server");
+    child.wait().expect("reap eval superglobal server");
+    let stderr = fs::read_to_string(stderr_path).expect("read allocation counters");
+    let live = stderr.lines().filter_map(|line| line.strip_prefix("GC: allocs="))
+        .map(|line| {
+            let (allocs, frees) = line.split_once(" frees=").expect("well-formed GC counters");
+            allocs.parse::<i64>().unwrap() - frees.parse::<i64>().unwrap()
+        }).collect::<Vec<_>>();
+    assert_eq!(live.len(), 4, "{stderr}");
+    // Warm up once, then require stable live storage despite increasing reload counts.
+    assert_eq!(live[1], live[2], "{stderr}");
+    assert_eq!(live[2], live[3], "{stderr}");
+}
+
+/// Native and eval handler owners, stacks, and reporting masks do not survive a request.
+#[test]
+fn web_resets_core_handlers_between_requests() {
+    let dir = make_test_dir("web_core_handler_reset");
+    let started = Instant::now();
+    eprintln!("web Core handler reset: compiling web and eval fixture");
+    let src = r#"<?php
+if (isset($_GET['first'])) {
+    $capture = 'old';
+    set_error_handler(function($level, $message) use ($capture) { echo $capture; return true; });
+    set_exception_handler(function($e) use ($capture) { echo $capture; });
+    $source = 'function webEvalError($level, $message) { echo "stale"; return true; }
+function webEvalException($e) { echo "stale"; }
+set_error_handler("webEvalError");
+set_exception_handler("webEvalException");' . ' // ' . $_GET['first'];
+    eval($source);
+    error_reporting(0);
+    echo 'registered';
+    return;
+}
+echo error_reporting() === E_ALL ? 'mask:' : 'bad:';
+echo set_error_handler(null) === null ? 'error:' : 'bad:';
+echo set_exception_handler(null) === null ? 'exception:' : 'bad:';
+restore_error_handler(); restore_error_handler(); restore_error_handler();
+restore_exception_handler(); restore_exception_handler(); restore_exception_handler();
+error_reporting(0);
+trigger_error('new request', E_USER_WARNING);
+echo 'clean';
+"#;
+    let bin = compile_web(&dir, src, "app");
+    eprintln!("web Core handler reset: fixture compiled in {:?}", started.elapsed());
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get_with_timeout(&addr, "/?first=1", Duration::from_secs(10))
+        .expect("handler registration request must complete");
+    let second = http_get_with_timeout(&addr, "/", Duration::from_secs(10))
+        .expect("first handler-reset request must complete");
+    let third = http_get_with_timeout(&addr, "/", Duration::from_secs(10))
+        .expect("second handler-reset request must complete");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("registered"), "first response: {first:?}");
+    for response in [second, third] {
+        assert!(response.ends_with("mask:error:exception:clean"), "response: {response:?}");
+    }
+}
+
+/// Verifies each request starts with default GC controls and no leaked stream lock.
+#[test]
+fn web_resets_gc_state_and_closes_unreachable_resources_between_requests() {
+    let dir = make_test_dir("web_gc_resource_reset");
+    let src = r#"<?php
+class WebGcResourceCycle {
+    public $self = null;
+    public $handle = null;
+}
+$lockPath = __DIR__ . "/request.lock";
+if (isset($_GET["first"])) {
+    gc_disable();
+    $cycle = new WebGcResourceCycle();
+    $cycle->self = $cycle;
+    unset($cycle);
+    gc_collect_cycles();
+
+    $resourceCycle = new WebGcResourceCycle();
+    $resourceCycle->self = $resourceCycle;
+    $resourceCycle->handle = fopen($lockPath, "w+");
+    flock($resourceCycle->handle, LOCK_EX);
+    unset($resourceCycle);
+    $status = gc_status();
+    echo !gc_enabled() && $status["runs"] > 0 ? "dirty" : "bad";
+    return;
+}
+$handle = fopen($lockPath, "r+");
+$locked = flock($handle, LOCK_EX | LOCK_NB);
+$status = gc_status();
+echo gc_enabled() && $status["runs"] === 0 && $status["collected"] === 0 ? "clean:" : "bad:";
+echo $locked ? "unlocked" : "leaked";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/?first=1", &[], "");
+    let second = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("dirty"), "first response: {first:?}");
+    assert!(second.ends_with("clean:unlocked"), "second response: {second:?}");
+}
+
 /// Verifies a request body over --max-body-size is rejected with 413, and a body
 /// under the limit is served normally.
 #[test]

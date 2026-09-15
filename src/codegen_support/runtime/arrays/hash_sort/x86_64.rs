@@ -261,6 +261,11 @@ fn emit_sort_triple(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rdi + 40]");                       // load the per-entry value tag
     emitter.instruction("mov r10, QWORD PTR [rdi + 24]");                       // load the low value payload word
     emitter.instruction("mov rdx, QWORD PTR [rdi + 32]");                       // load the high value payload word
+    emitter.instruction("cmp r11, 11");                                         // does this entry belong to a PHP reference set?
+    emitter.instruction("jne __rt_hsort_triple_value_tagged");                  // ordinary entries already carry a value payload
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // sort the value the reference cell owns, not the cell
+    emitter.instruction("jmp __rt_hsort_triple_value_boxed");                   // the referenced payload is always a boxed Mixed value
+    emitter.label("__rt_hsort_triple_value_tagged");
     emitter.instruction("cmp r11, 7");                                          // test whether the entry holds a boxed Mixed cell
     emitter.instruction("je __rt_hsort_triple_value_boxed");                    // boxed values need unboxing
     emitter.instruction("mov rax, r11");                                        // publish the concrete runtime tag

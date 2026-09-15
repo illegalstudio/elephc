@@ -93,7 +93,10 @@ pub(in crate::interpreter) fn eval_pclose_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_process_pipe_resource_id(handle, values)?;
     match context.stream_resources_mut().pclose(id) {
-        Some(status) => values.int(status),
+        Some(status) => {
+            values.resource_closed(handle)?;
+            values.int(status)
+        }
         None => values.bool_value(false),
     }
 }

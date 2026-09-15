@@ -9,6 +9,30 @@
 
 use super::*;
 
+/// Dynamic strlen releases detached copies while borrowed strings and boxed aliases remain live.
+#[test]
+fn test_strlen_boxed_strings_release_internal_casts() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function boxedLengths(array $items): void {
+    $value = $items["value"];
+    $alias = $value;
+    $length = strlen(...);
+    for ($i = 0; $i < 4; $i++) {
+        echo strlen($value), ":", call_user_func("strlen", $value), ":", $length($value), "|";
+    }
+    unset($value);
+    echo $alias, "|";
+}
+$source = str_repeat("s", 32);
+boxedLengths(["value" => $source]);
+echo strlen($source), ":", $source;
+unset($source);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}{}|32:{}", "32:32:32|".repeat(4), "s".repeat(32), "s".repeat(32)), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies str_replace works correctly inside a foreach associative loop.
 /// Fixture: a map of "hello"→"world", "foo"→"bar" applied to "hello foo".
 #[test]

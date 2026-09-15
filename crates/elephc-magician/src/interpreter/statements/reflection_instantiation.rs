@@ -29,25 +29,39 @@ pub(super) fn eval_reflection_class_new_instance_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let direct_new_instance = method_name.eq_ignore_ascii_case("newInstance");
-    let constructor_args = if direct_new_instance {
-        eval_reflection_constructor_by_value_args(evaluated_args)
-    } else if method_name.eq_ignore_ascii_case("newInstanceArgs") {
-        eval_reflection_class_new_instance_args(evaluated_args, context, values)?
-    } else {
+    if !direct_new_instance && !method_name.eq_ignore_ascii_case("newInstanceArgs") {
         return Ok(None);
-    };
+    }
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
     else {
         return Ok(None);
     };
+    if direct_new_instance {
+        let arguments = eval_reflection_constructor_by_value_args(evaluated_args);
+        return eval_reflection_class_instantiate(&reflected_name, arguments, context, values);
+    }
+    let array = eval_reflection_class_new_instance_args(evaluated_args)?;
+    with_eval_array_call_arguments(array, context, values, |arguments, context, values| {
+        eval_reflection_class_instantiate(&reflected_name, arguments, context, values)?
+            .ok_or(EvalStatus::RuntimeFatal)
+    }).map(Some)
+}
+
+/// Instantiates an already identified reflected class while its caller owns constructor arguments.
+fn eval_reflection_class_instantiate(
+    reflected_name: &str,
+    constructor_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if let Some(message) =
-        eval_reflection_eval_instantiation_error_message(&reflected_name, context)
+        eval_reflection_eval_instantiation_error_message(reflected_name, context)
     {
         return eval_throw_error(&message, context, values);
     }
-    if let Some(class) = context.class(&reflected_name).cloned() {
+    if let Some(class) = context.class(reflected_name).cloned() {
         if let Some((_, constructor)) = context.class_method(class.name(), "__construct") {
             if constructor.visibility() != EvalVisibility::Public {
                 return eval_throw_reflection_exception(
@@ -79,8 +93,8 @@ pub(super) fn eval_reflection_class_new_instance_result(
         });
     }
     let class_name = context
-        .resolve_class_name(&reflected_name)
-        .unwrap_or(reflected_name);
+        .resolve_class_name(reflected_name)
+        .unwrap_or_else(|| reflected_name.to_string());
     if let Some(error) = eval_reflection_aot_class_public_instantiation_error(&class_name, values)?
     {
         return eval_throw_reflection_instantiation_error(error, context, values);
@@ -117,14 +131,12 @@ pub(super) fn eval_reflection_constructor_by_value_args(
         .collect()
 }
 
-/// Expands the single `ReflectionClass::newInstanceArgs()` array argument.
+/// Binds the borrowed array passed to `ReflectionClass::newInstanceArgs()`.
 pub(super) fn eval_reflection_class_new_instance_args(
     evaluated_args: Vec<EvaluatedCallArg>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("args")], evaluated_args)?;
-    eval_array_call_arg_values(args[0], context, values)
+    Ok(args[0])
 }
 
 /// Runs ReflectionClass construction with only public constructor visibility.

@@ -256,12 +256,9 @@ echo ":", $c->value;
 /// after the constructor returns; a caller-stack cell would leave it pointing into a released
 /// frame and read garbage.
 ///
-/// KNOWN GAP, PINNED HONESTLY: the write direction does NOT propagate back
-/// (`$dynamic->value = 7` leaves `$shared` at 42 where PHP updates it to 7), so the dynamic
-/// path binds a copy rather than the caller's slot. That is PRE-EXISTING — the same source
-/// prints `42:42:42:1` at the commit before this task's by-reference work — and unrelated to
-/// the cell lifetime this fixture exists for. The expectation below therefore records
-/// today's behaviour; PHP 8.5 prints `42:42:7:1`.
+/// The binding is bidirectional: writing the promoted property after construction must update
+/// the original caller variable as well. This distinguishes a durable shared reference cell
+/// from a copied value that merely happened to survive the constructor frame.
 #[test]
 fn test_dynamic_new_binds_a_by_ref_promoted_property_to_the_caller_variable() {
     let out = compile_and_run(
@@ -278,11 +275,7 @@ $dynamic->value = 7;
 echo $shared, ":", $eager->value;
 "#,
     );
-    assert_eq!(
-        out, "42:42:42:1",
-        "the promoted property must read the caller's value through a cell that outlived the \
-         constructor call; the third field is the pre-existing write-direction gap (PHP: 7)"
-    );
+    assert_eq!(out, "42:42:7:1");
 }
 
 /// THE DYNAMIC-NEW CELL-LIFETIME PIN. `new $cls($holder->n)` passes a PROPERTY, not a local,

@@ -103,6 +103,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use super::resource_inventory::DEFAULT_CONTEXT_PAYLOAD;
 
 /// Number of slots in `_resource_id_keys` / `_resource_id_vals`.
 ///
@@ -199,6 +200,9 @@ fn emit_resource_id_of_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x13, x14, [sp, #32]");                             // preserve the cursor and slot-index scratch pair
 
     emitter.instruction("tbnz x0, #63, __rt_resource_id_of_closed");            // a negative payload is a closed handle carrying its own id
+    abi::emit_load_int_immediate(emitter, "x9", DEFAULT_CONTEXT_PAYLOAD);
+    emitter.instruction("cmp x0, x9");                                          // is this PHP's implicit default stream-context sentinel?
+    emitter.instruction("b.eq __rt_resource_id_of_context");                    // the default context owns reserved resource id 4
     emitter.instruction(&format!("cmp x0, #{}", STD_STREAM_MAX_PAYLOAD));       // is this one of the standard stream descriptors?
     emitter.instruction("b.hi __rt_resource_id_of_lookup");                     // ordinary resources consult the table
     emitter.instruction("add x0, x0, #1");                                      // STDIN/STDOUT/STDERR render as PHP's fixed 1/2/3
@@ -207,6 +211,10 @@ fn emit_resource_id_of_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_resource_id_of_closed");
     emitter.instruction("neg x0, x0");                                          // recover the id an explicit close preserved in the sentinel
     emitter.instruction("b __rt_resource_id_of_done");                          // closed handles never consult or mint into the table
+
+    emitter.label("__rt_resource_id_of_context");
+    emitter.instruction("mov x0, #4");                                          // PHP reserves id 4 for its implicit default stream context
+    emitter.instruction("b __rt_resource_id_of_done");                          // the synthetic context never enters the payload hash
 
     emitter.label("__rt_resource_id_of_lookup");
     emit_resource_id_hash_aarch64(emitter, "x9", "x0");
@@ -346,6 +354,9 @@ fn emit_resource_id_of_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // a negative payload is a closed handle carrying its own id
     emitter.instruction("js __rt_resource_id_of_closed_x86");                   // recover it directly instead of probing the table
+    abi::emit_load_int_immediate(emitter, "rcx", DEFAULT_CONTEXT_PAYLOAD);
+    emitter.instruction("cmp rax, rcx");                                        // is this PHP's implicit default stream-context sentinel?
+    emitter.instruction("je __rt_resource_id_of_context_x86");                  // the default context owns reserved resource id 4
     emitter.instruction(&format!("cmp rax, {}", STD_STREAM_MAX_PAYLOAD));       // is this one of the standard stream descriptors?
     emitter.instruction("ja __rt_resource_id_of_lookup_x86");                   // ordinary resources consult the table
     emitter.instruction("add rax, 1");                                          // STDIN/STDOUT/STDERR render as PHP's fixed 1/2/3
@@ -354,6 +365,10 @@ fn emit_resource_id_of_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_resource_id_of_closed_x86");
     emitter.instruction("neg rax");                                             // recover the id an explicit close preserved in the sentinel
     emitter.instruction("jmp __rt_resource_id_of_done_x86");                    // closed handles never consult or mint into the table
+
+    emitter.label("__rt_resource_id_of_context_x86");
+    emitter.instruction("mov rax, 4");                                          // PHP reserves id 4 for its implicit default stream context
+    emitter.instruction("jmp __rt_resource_id_of_done_x86");                    // the synthetic context never enters the payload hash
 
     emitter.label("__rt_resource_id_of_lookup_x86");
     emit_resource_id_hash_x86_64(emitter, "rcx", "rax");

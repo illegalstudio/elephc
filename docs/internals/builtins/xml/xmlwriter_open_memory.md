@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_open_memory() — internals"
+title: "xmlwriter_open_memory() - internals"
 description: "Compiler internals for xmlwriter_open_memory(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 946
+  order: 974
 ---
 
-## `xmlwriter_open_memory()` — internals
+## `xmlwriter_open_memory()` - internals
 
 ## Where it lives
 

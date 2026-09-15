@@ -56,9 +56,14 @@ impl ArrayKeySort {
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
+    /// Initializes a builtin Throwable constructor without assuming a compact receiver layout.
+    ThrowableInitialize,
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Borrows a boxed PHP array and returns an independently owned hash for literal unpacking.
+    /// Rejects non-array values without mutating the original cell or its payload.
+    ArrayUnpackToHash,
     /// Promotes an indexed-array payload stored in a boxed Mixed cell to a
     /// Mixed-entry hash and installs the new payload back into that same cell.
     MixedCellPromoteToHash(ArrayKeySort),
@@ -87,12 +92,17 @@ impl RuntimeCallTarget {
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
+            RuntimeCallTarget::ThrowableInitialize => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str, IrType::I64, IrType::Heap(IrHeapKind::Mixed)],
+                result: IrType::Void,
+            }),
             RuntimeCallTarget::ArrayFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
             }),
             RuntimeCallTarget::MixedCellPromoteToHash(_)
-            | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_) => {
+            | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
+            | RuntimeCallTarget::ArrayUnpackToHash => {
                 Some(RuntimeCallSignature::Fixed {
                     parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                     result: IrType::Heap(IrHeapKind::Hash),
@@ -119,7 +129,9 @@ impl RuntimeCallTarget {
     /// Returns the stable backend-neutral spelling used by textual EIR.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
                 "array.mixed_cell_promote_to_hash_ksort"
             }

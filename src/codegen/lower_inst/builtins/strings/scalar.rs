@@ -262,6 +262,57 @@ pub(crate) fn emit_weak_float_result_to_int(
     ctx.emitter.label(&done);
 }
 
+/// Diagnoses the float in the float-result register against PHP's implicit int-coercion rules.
+///
+/// Jumps to `not_representable` for `NaN`, the infinities, and anything outside the PHP int
+/// range, which php-src refuses rather than wrapping. Otherwise it emits PHP 8.5's
+/// `Implicit conversion from float ... to int loses precision` deprecation when truncation is
+/// lossy and falls through, leaving the conversion itself to the caller.
+///
+/// Split out of `emit_weak_float_result_to_int` so the typed-property guard raises its OWN
+/// `TypeError` wording for an unrepresentable float instead of a builtin-argument one, while
+/// the deprecation text, the exactness test, and the scratch frame stay defined once here.
+pub(crate) fn emit_float_result_int_coercion_diagnostics(
+    ctx: &mut FunctionContext<'_>,
+    not_representable: &str,
+) {
+    let invalid = ctx.next_label("float_to_int_diag_invalid");
+    let exact = ctx.next_label("float_to_int_diag_exact");
+    let done = ctx.next_label("float_to_int_diag_done");
+    abi::emit_reserve_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    save_float_result_bits(ctx);
+    super::super::super::mixed_narrowing::emit_float_result_fits_i64_or_jump(ctx, &invalid);
+    abi::emit_store_to_sp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        FLOAT_TO_INT_VALUE_OFFSET,
+    );
+    restore_float_result_bits(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", FLOAT_TO_INT_VALUE_OFFSET);
+            ctx.emitter.instruction("scvtf d1, x10");                           // reconstruct the truncated value for an exactness check
+            ctx.emitter.instruction("fcmp d0, d1");                             // detect fractional precision loss
+            ctx.emitter.instruction(&format!("b.eq {exact}"));                  // integral floats require no deprecation
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", FLOAT_TO_INT_VALUE_OFFSET);
+            ctx.emitter.instruction("cvtsi2sd xmm1, r11");                      // reconstruct the truncated value for an exactness check
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // detect fractional precision loss
+            ctx.emitter.instruction(&format!("jp {invalid}"));                  // keep unordered values out of the equality branch
+            ctx.emitter.instruction(&format!("je {exact}"));                    // integral floats require no deprecation
+        }
+    }
+    emit_float_precision_deprecation(ctx);
+    ctx.emitter.label(&exact);
+    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid);
+    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    abi::emit_jump(ctx.emitter, not_representable);
+    ctx.emitter.label(&done);
+}
+
 /// Converts an explicit float cast while warning for values outside the PHP int range.
 pub(crate) fn emit_explicit_float_result_to_int(ctx: &mut FunctionContext<'_>) {
     emit_nonweak_float_result_to_int(ctx, false, false);
@@ -371,16 +422,16 @@ fn restore_float_result_bits(ctx: &mut FunctionContext<'_>) {
 
 /// Emits PHP's shortest-round-trip precision-loss deprecation for the saved float.
 fn emit_float_precision_deprecation(ctx: &mut FunctionContext<'_>) {
-    emit_static_int_coercion_diagnostic(ctx, "Deprecated: Implicit conversion from float ");
+    emit_static_int_coercion_diagnostic(ctx, "Deprecated: Implicit conversion from float ", false);
     emit_saved_float_diagnostic_value(ctx);
-    emit_static_int_coercion_diagnostic(ctx, " to int loses precision\n");
+    emit_static_int_coercion_diagnostic(ctx, " to int loses precision\n", true);
 }
 
 /// Emits PHP's warning for an explicit float value outside the integer range.
 fn emit_float_not_representable_warning(ctx: &mut FunctionContext<'_>) {
-    emit_static_int_coercion_diagnostic(ctx, "Warning: The float ");
+    emit_static_int_coercion_diagnostic(ctx, "Warning: The float ", false);
     emit_saved_float_diagnostic_value(ctx);
-    emit_static_int_coercion_diagnostic(ctx, " is not representable as an int, cast occurred\n");
+    emit_static_int_coercion_diagnostic(ctx, " is not representable as an int, cast occurred\n", true);
 }
 
 /// Formats the saved float with `__rt_ftoa_repr` and emits it as a diagnostic fragment.
@@ -391,7 +442,7 @@ fn emit_saved_float_diagnostic_value(ctx: &mut FunctionContext<'_>) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the formatted float pointer to the diagnostic helper
         ctx.emitter.instruction("mov rsi, rdx");                                // pass the formatted float length to the diagnostic helper
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
 }
 
 /// Builds the exact weak builtin argument TypeError from the shared builtin contract.
@@ -522,7 +573,7 @@ fn emit_mixed_weak_int(
 }
 
 /// Emits one suppressible static fragment of an implicit integer-coercion diagnostic.
-fn emit_static_int_coercion_diagnostic(ctx: &mut FunctionContext<'_>, message: &str) {
+fn emit_static_int_coercion_diagnostic(ctx: &mut FunctionContext<'_>, message: &str, complete: bool) {
     let (label, len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -534,7 +585,7 @@ fn emit_static_int_coercion_diagnostic(ctx: &mut FunctionContext<'_>, message: &
             abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" });
 }
 
 /// Loads a concrete scalar value as an integer runtime argument.

@@ -328,7 +328,7 @@ fn emit_assoc_string_array(
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", CONTAINER_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", CURSOR_OFFSET);
-            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
             ctx.emitter.instruction("cmp x0, #-1");                             // has insertion-order iteration completed?
             ctx.emitter.instruction(&format!("b.eq {done}"));                   // finish after the terminal cursor
             abi::emit_store_to_sp(ctx.emitter, "x0", CURSOR_OFFSET);
@@ -360,7 +360,7 @@ fn emit_assoc_string_array(
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", CONTAINER_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", CURSOR_OFFSET);
-            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
             ctx.emitter.instruction("cmp rax, -1");                             // has insertion-order iteration completed?
             ctx.emitter.instruction(&format!("je {done}"));                     // finish after the terminal cursor
             abi::emit_store_to_sp(ctx.emitter, "rax", CURSOR_OFFSET);

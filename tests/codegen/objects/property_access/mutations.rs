@@ -635,27 +635,116 @@ var_dump($s->v);
     );
 }
 
-/// Verifies `unset()` of an UNTYPED declared property is refused with a diagnostic that
-/// names that shape, instead of silently leaving a stale value behind.
+/// Verifies an untyped fixed slot carries observable removed state across rendering and cloning.
 ///
-/// PHP genuinely removes such a property: a later read warns `Undefined property` and
-/// answers `null`. elephc gives each declared property a fixed, monomorphically typed slot
-/// (here `Int`), which has no encoding for "removed, and reading as null" — see
-/// `docs/php/classes.md`. A loud compile error beats a wrong value.
+/// A normal read warns and answers null, reassignment clears the marker, and the untouched
+/// property proves renderers skip only the removed slot.
 #[test]
-fn test_unset_untyped_declared_property_is_rejected() {
-    let error = compile_source_expect_backend_error(
+fn test_unset_untyped_declared_property_warns_null_and_can_be_reassigned() {
+    let out = compile_and_run_capture(
         r#"<?php
-class M { public $foo = 1; }
+class M { public $foo = 1; public $keep = 2; }
 $m = new M();
 unset($m->foo);
-echo "ok";
+var_dump(isset($m->foo));
+print_r($m);
+var_dump($m->foo);
+$copy = clone $m;
+var_dump(isset($copy->foo));
+$copy->foo = "again";
+var_dump(isset($copy->foo), $copy->foo);
 "#,
     );
-    assert!(
-        error.contains("An UNTYPED declared property"),
-        "the diagnostic must name the untyped-property shape, got: {}",
-        error
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nM Object\n(\n    [keep] => 2\n)\nNULL\n\
+         bool(false)\nbool(true)\nstring(5) \"again\"\n"
+    );
+    assert_eq!(out.stderr.matches("Undefined property: M::$foo").count(), 1);
+}
+
+/// Verifies a missing untyped boxed slot can converge into a nullable scalar result safely.
+///
+/// This catches stale tag registers when the absent branch materializes null while the present
+/// branch would otherwise materialize a payload and a separate scalar tag.
+#[test]
+fn test_unset_untyped_nullable_slot_materializes_tagged_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Pair { public $value = null; }
+$pair = new Pair();
+$pair->value = 7;
+$name = "value";
+unset($pair->{$name});
+var_dump(isset($pair->{$name}));
+var_dump($pair->{$name});
+$pair->{$name} = null;
+var_dump(isset($pair->{$name}), $pair->{$name});
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nNULL\nbool(false)\nNULL\n"
+    );
+    assert_eq!(
+        out.stderr.matches("Undefined property: Pair::$value").count(),
+        1
+    );
+}
+
+/// Verifies fixed-slot removal is visible before the displaced value's destructor runs.
+///
+/// The destructor reads the absent property, recreates it, or recursively removes it. The outer
+/// unset must not release the old owner twice or overwrite a value installed during reentry.
+#[test]
+fn test_unset_untyped_fixed_slot_commits_before_reentrant_destructor() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReentrantFixedOwner { public $value = null; }
+class ReentrantFixedValue {
+    public static ReentrantFixedOwner $owner;
+    public static int $mode = 0;
+    public function __destruct() {
+        $owner = self::$owner;
+        echo isset($owner->value) ? "present:" : "absent:";
+        if (self::$mode === 1) {
+            var_dump($owner->value);
+        } elseif (self::$mode === 2) {
+            $owner->value = 17;
+        } else {
+            unset($owner->value);
+            echo isset($owner->value) ? "present" : "absent";
+        }
+    }
+}
+$owner = new ReentrantFixedOwner();
+ReentrantFixedValue::$owner = $owner;
+ReentrantFixedValue::$mode = 1;
+$owner->value = new ReentrantFixedValue();
+echo "r:";
+unset($owner->value);
+echo "|w:";
+ReentrantFixedValue::$mode = 2;
+$owner->value = new ReentrantFixedValue();
+unset($owner->value);
+echo $owner->value, "|u:";
+ReentrantFixedValue::$mode = 3;
+$owner->value = new ReentrantFixedValue();
+unset($owner->value);
+echo "|";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "r:absent:NULL\n|w:absent:17|u:absent:absent|"
+    );
+    assert_eq!(
+        out.stderr
+            .matches("Undefined property: ReentrantFixedOwner::$value")
+            .count(),
+        1,
+        "{}",
+        out.stderr
     );
 }
 
@@ -678,6 +767,24 @@ unset($r->p);
     assert!(
         error.contains("unset() of by-reference property R::$p"),
         "the diagnostic must name the by-reference property, got: {}",
+        error
+    );
+}
+
+/// Verifies `unset()` never stamps the removed marker into packed native field storage.
+#[test]
+fn test_unset_packed_property_is_rejected() {
+    let error = compile_source_expect_backend_error(
+        r#"<?php
+packed class Cell { public int $value; }
+buffer<Cell> $cells = buffer_new<Cell>(1);
+unset($cells[0]->value);
+"#,
+    );
+    assert!(
+        error.contains("unset() of packed class field Cell::$value")
+            || error.contains("unset target shape"),
+        "the diagnostic must preserve the packed-field refusal, got: {}",
         error
     );
 }
@@ -780,4 +887,171 @@ echo "unreachable";
         "expected the nested-assignment refusal, got: {}",
         error
     );
+}
+
+/// A declared property written through a `mixed`-typed receiver actually reaches the object.
+///
+/// The Mixed receiver path used to hand EVERY static-name write to the stdClass helper, which
+/// understands stdClass alone and silently dropped the rest. The write was not diagnosed, not
+/// applied, and not visible: the reads below returned the class defaults. Compiled PHP now
+/// dispatches on the receiver's runtime class id and stores into the declared slot, so this
+/// prints what reference PHP prints.
+///
+/// The fixture covers both slot representations that can be reached this way (an `int` slot and
+/// a `string` slot, which owns its payload), a second class declaring the SAME property name so
+/// the dispatch has to discriminate on the class id rather than on the name alone, and an
+/// unrelated stdClass receiver so the dynamic-property fallback is still exercised.
+#[test]
+fn test_declared_property_write_through_a_mixed_receiver_reaches_the_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public int $k = 1;
+    public string $s = "a";
+}
+class Crate {
+    public int $k = 100;
+}
+function pick(int $which): mixed {
+    if ($which === 0) { return new Box(); }
+    if ($which === 1) { return new Crate(); }
+    return new stdClass();
+}
+$b = pick(0);
+$b->k = 4;
+$b->s = "z";
+$c = pick(1);
+$c->k = 7;
+$d = pick(2);
+$d->k = 9;
+echo $b->k . "|" . $b->s . "|" . $c->k . "|" . $d->k;
+"#,
+    );
+    assert_eq!(out, "4|z|7|9");
+}
+
+/// Verifies an ordinary runtime-name property access whose name collides with a STRICT ancestor's
+/// private property addresses a DYNAMIC property, while the declaring scope keeps its own slot.
+///
+/// php 7.4 removed shadow properties, so `P`'s `private int $n` is not in `C`'s by-name table:
+/// measured against php 8.5.10, this fixture prints `false;1/5/1;true;1/6;3` and deprecates the
+/// creation of `C::$zz` and `C::$n` exactly once each. Both values exist side by side afterwards,
+/// the outside runtime-name read answers 5 from the hash while `P::readN()` and the PARENT-scope
+/// runtime-name read `$this->{$key}` both still answer 1 from the private slot.
+///
+/// The backend's runtime-name ladder used to be built from the physical slot table with no scope
+/// input, so `isset()` reported the ancestor's slot, the read returned its value and the write
+/// overwrote it. The `#[AllowDynamicProperties]` child and the stdClass receiver are the controls
+/// for the two storage shapes that were already name-addressable.
+///
+/// The parent-scope probe ECHOES instead of returning on purpose. An inherited method with an
+/// undeclared return type whose inferred type is `mixed` is double-boxed at a SUBCLASS call site,
+/// which prints a raw pointer; that defect is unrelated to property identity (an assoc-array
+/// element read reproduces it), and a declared return type here would hide it rather than leave
+/// it visible for its own fix.
+#[test]
+fn test_runtime_name_write_colliding_with_an_ancestor_private_creates_a_dynamic_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class P {
+    private int $n = 1;
+    public function readN(): int { return $this->n; }
+    public function showDyn(string $key): void { echo $this->{$key}; }
+}
+class C extends P {}
+#[AllowDynamicProperties]
+class Open extends P {}
+$c = new C();
+$key = "n";
+clone($c, ["zz" => 0]);
+echo var_export(isset($c->{$key}), true) . ";";
+$c->{$key} = 5;
+echo $c->readN() . "/" . $c->{$key} . "/";
+$c->showDyn("n");
+echo ";" . var_export(isset($c->{$key}), true) . ";";
+$open = new Open();
+$open->{$key} = 6;
+echo $open->readN() . "/" . $open->{$key} . ";";
+$plain = new stdClass();
+$plain->{$key} = 3;
+echo $plain->{$key};
+"#,
+    );
+    assert_eq!(out.stdout, "false;1/5/1;true;1/6;3");
+    assert_eq!(
+        out.stderr
+            .matches("Creation of dynamic property C::$n is deprecated")
+            .count(),
+        1,
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("Open::$n") && !out.stderr.contains("stdClass::$n"),
+        "an opted-in class and stdClass must not deprecate: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a runtime-name write php REFUSES raises the catchable `Error` instead of storing.
+///
+/// A strict ancestor's private name is invisible and becomes a dynamic property, but a private
+/// property declared by the receiver's OWN class, and a protected one reached from an unrelated
+/// scope, are different answers: php raises `Error` and leaves the storage alone. The runtime-name
+/// ladder used to carry no visibility check at all, so both wrote the physical slot, which is a
+/// private-storage escape that a literal name is refused at compile time for.
+///
+/// Both messages are php 8.5.10's verbatim wording, with no scope suffix, and both readers below
+/// prove the slot still holds its default.
+#[test]
+fn test_runtime_name_write_to_an_inaccessible_property_raises_the_php_error() {
+    let out = compile_and_run(
+        r#"<?php
+class D { private int $n = 1; public function readN(): int { return $this->n; } }
+class Prot { protected int $p = 1; public function readP(): int { return $this->p; } }
+class Outsider { public function poke(Prot $o, string $key): void { $o->{$key} = 9; } }
+$d = new D();
+$key = "n";
+try { $d->{$key} = 5; echo "no throw;"; } catch (Error $e) { echo $e->getMessage() . ";"; }
+echo $d->readN() . ";";
+$p = new Prot();
+try { (new Outsider())->poke($p, "p"); echo "no throw;"; } catch (Error $e) { echo $e->getMessage() . ";"; }
+echo $p->readP();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot access private property D::$n;1;Cannot access protected property Prot::$p;1"
+    );
+}
+
+/// Verifies a runtime-name write selects the private slot the INVOCATION SCOPE owns, not the
+/// receiver's shadowing one.
+///
+/// `Base` and `Child` both declare `private int $p`, so the name addresses two different pieces of
+/// storage. The receiver's own by-name table resolves `p` to the CHILD's slot, so a ladder built
+/// from it wrote the wrong property whenever the scope was `Base`. php selects the scope's slot:
+/// measured against php 8.5.10, this prints `10:2;10:20`.
+#[test]
+fn test_runtime_name_write_selects_the_scope_private_slot_of_a_shadowed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    private int $p = 1;
+    public function readP(): int { return $this->p; }
+    public function pokeChild(Child $o, string $key): void { $o->{$key} = 10; }
+}
+class Child extends Base {
+    private int $p = 2;
+    public function readC(): int { return $this->p; }
+    public function pokeSelf(Child $o, string $key): void { $o->{$key} = 20; }
+}
+$c = new Child();
+(new Base())->pokeChild($c, "p");
+echo $c->readP() . ":" . $c->readC() . ";";
+(new Child())->pokeSelf($c, "p");
+echo $c->readP() . ":" . $c->readC();
+"#,
+    );
+    assert_eq!(out, "10:2;10:20");
 }

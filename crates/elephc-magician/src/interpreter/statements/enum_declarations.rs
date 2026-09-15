@@ -381,11 +381,7 @@ pub(super) fn initialize_eval_static_properties(
             None
         };
         if let Some(value) = value {
-            if let Some(replaced) =
-                context.set_static_property(class.name(), property.name(), value)
-            {
-                values.release(replaced)?;
-            }
+            store_static_property_value(class.name(), property.name(), value, context, values)?;
         }
     }
     Ok(())

@@ -84,6 +84,8 @@ pub enum TypeSpec {
     Str,
     /// PHP `bool`.
     Bool,
+    /// PHP `object`.
+    Object,
     /// PHP `mixed` or a shape refined by a backend-specific checker.
     Mixed,
     /// PHP `array` (element shape left to the backend checker).
@@ -125,6 +127,8 @@ pub enum DefaultSpec {
     Str(&'static str),
     /// `PHP_INT_MAX` target sentinel.
     IntMax,
+    /// Profile-selected `E_ALL` error mask.
+    ErrorAll,
     /// Empty indexed array.
     EmptyArray,
     /// A named global constant used as the default (`IMG_BILINEAR_FIXED`, `E_USER_NOTICE`).

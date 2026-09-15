@@ -37,7 +37,7 @@ class ContractPipelineTests(unittest.TestCase):
         cls.render_by_name = {record["name"]: record for record in registry}
 
     def test_all_non_registry_contract_routes_are_exported(self) -> None:
-        """Keep the constructs, prelude, rewrite, and eval-only routes explicit."""
+        """Keep constructs, preludes, compiler transforms, and rewrites explicit."""
         routes = Counter(
             (record.get("aot") or {}).get("kind")
             for record in self.records
@@ -52,12 +52,13 @@ class ContractPipelineTests(unittest.TestCase):
                     # Four hash_*, the thirty-four PHP-visible curl_* contracts the
                     # canonical `--features curl` docs configuration publishes (see
                     # extract.run_gen_builtins), the fifty-four xml_* / xmlwriter_*
-                    # functions of the xml prelude, and the 289 functions the other
+                    # functions of the xml prelude, and the 288 functions the other
                     # injected preludes declare.
-                    "prelude": 381,
+                    "prelude": 380,
+                    # Calls rewritten from their enclosing lexical function frame.
+                    "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.
                     "name-resolver-rewrite": 54,
-                    "none": 3,
                 }
             ),
         )
@@ -70,6 +71,11 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertEqual(hash_init["aot"]["signature_override_reason"], "prelude-signature-subset")
         self.assertEqual([param["name"] for param in hash_init["aot"]["params"]], ["algo"])
         self.assertEqual(self.by_name["exit"]["params"][0]["default"], 0)
+
+    def test_error_all_default_renders_as_a_php_constant(self) -> None:
+        """Keep the profile-aware error mask symbolic in generated signatures."""
+        default = self.render_by_name["set_error_handler"]["sig"]["params"][1]["default"]
+        self.assertEqual(default, "E_ALL")
 
     def test_getenv_user_signature_preserves_checked_union(self) -> None:
         """Render the PHP union instead of contract-level `mixed`."""
@@ -99,11 +105,13 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertIn("`eval()` (magician interpreter)**: supported", rendered)
 
     def test_prelude_availability_names_the_declaring_prelude(self) -> None:
-        """Two preludes declare PHP-visible builtins; each page must name its own."""
+        """Each PHP-visible prelude route names its actual declaring prelude."""
         rendered = render._availability_section(self.render_by_name["curl_init"])
         self.assertIn("compiler-injected curl prelude", rendered)
         self.assertNotIn("hash prelude", rendered)
         self.assertNotIn("Compiled (AOT)**: not available", rendered)
+        rendered = render._availability_section(self.render_by_name["zend_version"])
+        self.assertIn("compiler-injected version prelude", rendered)
 
     def test_user_renderer_owns_section_spacing_once(self) -> None:
         """Join empty optional sections without accumulating blank-line runs."""

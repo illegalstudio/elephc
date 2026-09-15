@@ -355,7 +355,7 @@ echo $both[0][0];
 }
 
 /// Verifies that an inner array in array_filter output survives unset of the original.
-/// Fixture: rows contain inner array among other elements, filter by a callback that keeps 2-element arrays, unset rows and inner, read filtered result.
+/// The filter keeps the original keys 1 and 2, and its nested owners outlive both source variables.
 /// Regression: ensures array_filter output preserves GC alias for nested inner arrays.
 #[test]
 fn test_gc_array_filter_borrowed_array_survives_unset() {
@@ -367,10 +367,10 @@ $rows = [[1], $inner, [2, 3]];
 $filtered = array_filter($rows, "keep_pair");
 unset($rows);
 unset($inner);
-echo $filtered[0][1] . "|" . $filtered[1][0];
+echo implode(",", array_keys($filtered)), "|", $filtered[1][1], "|", $filtered[2][0];
 "#,
     );
-    assert_eq!(out, "11|2");
+    assert_eq!(out, "1,2|11|2");
 }
 
 /// Verifies that an inner array used as array_fill fill value survives unset of the original.

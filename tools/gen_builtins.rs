@@ -244,6 +244,7 @@ fn default_json(default: DefaultSpec) -> Value {
         DefaultSpec::Float(value) => json!(value),
         DefaultSpec::Str(value) => json!(value),
         DefaultSpec::IntMax => json!("PHP_INT_MAX"),
+        DefaultSpec::ErrorAll => json!("E_ALL"),
         DefaultSpec::EmptyArray => json!([]),
         DefaultSpec::Constant(name) => json!({ "constant": name }),
         DefaultSpec::Expr(source) => json!({ "expr": source }),
@@ -262,6 +263,7 @@ fn type_name(ty: TypeSpec) -> String {
         TypeSpec::Float => "float".to_string(),
         TypeSpec::Str => "string".to_string(),
         TypeSpec::Bool => "bool".to_string(),
+        TypeSpec::Object => "object".to_string(),
         TypeSpec::Mixed => "mixed".to_string(),
         TypeSpec::Void => "void".to_string(),
         // elephc extensions to the neutral spelling. Without these the generated pages would
@@ -315,6 +317,7 @@ fn implementation_name(implementation: BackendImplementation) -> &'static str {
         BackendImplementation::Registry => "registry",
         BackendImplementation::LanguageConstruct => "language-construct",
         BackendImplementation::DedicatedSyntax => "dedicated-syntax",
+        BackendImplementation::CompilerTransform => "compiler-transform",
         BackendImplementation::Prelude => "prelude",
         BackendImplementation::CheckerInjected => "checker-injected",
         BackendImplementation::LanguageIntrinsic => "language-intrinsic",
@@ -328,7 +331,6 @@ fn unsupported_reason_name(reason: UnsupportedReason) -> &'static str {
     match reason {
         UnsupportedReason::InternalCompilerSurface => "internal-compiler-surface",
         UnsupportedReason::EvalImplementationPending => "eval-implementation-pending",
-        UnsupportedReason::EvalOnlyReflection => "eval-only-reflection",
     }
 }
 

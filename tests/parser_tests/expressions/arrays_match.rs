@@ -56,6 +56,27 @@ fn test_parse_mixed_array_preserves_leading_positional_element() {
     assert_eq!(items[0].1.kind, ExprKind::IntLiteral(10));
 }
 
+/// Verifies a spread inside an associative literal parses to the sentinel pair shape every
+/// semantic consumer detects with `parser::ast::assoc_spread_source`: the pair's key IS the
+/// spread and its value is an inert `null` placeholder that carries no meaning of its own.
+#[test]
+fn test_parse_assoc_array_spread_uses_the_null_placeholder_pair_shape() {
+    let stmts = parse_source("<?php $m = [\"a\" => 1, ...$extra];");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("expected Assign");
+    };
+    let ExprKind::ArrayLiteralAssoc(items) = &value.kind else {
+        panic!("expected ArrayLiteralAssoc");
+    };
+    assert_eq!(items.len(), 2);
+    assert!(elephc::parser::ast::assoc_spread_source(&items[0].0, &items[0].1).is_none());
+    let source = elephc::parser::ast::assoc_spread_source(&items[1].0, &items[1].1)
+        .expect("the second entry is a spread");
+    assert_eq!(source.kind, ExprKind::Variable("extra".into()));
+    assert_eq!(items[1].1.kind, ExprKind::Null);
+}
+
 // --- Switch ---
 
 /// Verifies that `<?php $x = match(1) { 1 => "a" };` parses to an `Assign` with a `Match`

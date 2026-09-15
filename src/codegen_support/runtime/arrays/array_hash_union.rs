@@ -114,7 +114,7 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.label("__rt_array_hash_union_right_loop");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the right associative-array pointer
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the right insertion-order iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next right entry in insertion order
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next right entry in insertion order
     emitter.instruction("cmn x0, #1");                                          // did the iterator report the terminal sentinel?
     emitter.instruction("b.eq __rt_array_hash_union_done");                     // finish once every right entry has been considered
     emitter.instruction("str x0, [sp, #24]");                                   // save the next right iterator cursor
@@ -257,7 +257,7 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_hash_union_x86_right_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right associative-array pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the right insertion-order iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next right entry in insertion order
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next right entry in insertion order
     emitter.instruction("cmp rax, -1");                                         // did the iterator report the terminal sentinel?
     emitter.instruction("je __rt_array_hash_union_x86_done");                   // finish once every right entry has been considered
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the next right iterator cursor

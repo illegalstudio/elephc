@@ -1,11 +1,11 @@
 ---
-title: "imagedestroy() — internals"
+title: "imagedestroy() - internals"
 description: "Compiler internals for imagedestroy(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 498
 ---
 
-## `imagedestroy()` — internals
+## `imagedestroy()` - internals
 
 ## Where it lives
 

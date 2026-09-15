@@ -6,10 +6,9 @@
 //!
 //! Key details:
 //! - The golden signature is `first_param_ref(fixed(["array"]))`: exactly 1 argument,
-//!   the `array` param is by-reference. The `ref` marker is mandatory — it is what makes
+//!   the `array` param is by-reference. The `ref` marker is mandatory because it makes
 //!   by-reference mutation lower correctly (ir_lower reads `ref_params` from the registry sig).
-//! - `check` reproduces the legacy rule: `Array(elem)` yields the element type,
-//!   `AssocArray { value, .. }` yields the value type, any other type is an error.
+//! - Concrete arrays expose their element type; declared PHP arrays yield Mixed.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{
@@ -40,12 +39,13 @@ fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
 ///
 /// The `array` argument is re-inferred to drive the return type. Arity (exactly 1) is
 /// pre-validated by the registry. `Array(elem)` yields the element type; `AssocArray`
-/// yields the value type; any other type is a compile error.
+/// yields the value type; boxed PHP array declarations yield Mixed.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match ty {
         PhpType::Array(elem) => Ok(*elem),
         PhpType::AssocArray { value, .. } => Ok(*value),
+        ty if ty.is_php_array() => Ok(PhpType::Mixed),
         _ => Err(CompileError::new(cx.span, "array_shift() argument must be array")),
     }
 }

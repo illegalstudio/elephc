@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_free_result() — internals"
+title: "mysqli_stmt_free_result() - internals"
 description: "Compiler internals for mysqli_stmt_free_result(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 168
 ---
 
-## `mysqli_stmt_free_result()` — internals
+## `mysqli_stmt_free_result()` - internals
 
 ## Where it lives
 

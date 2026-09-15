@@ -10,18 +10,20 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **884 / 2169** (41%), classes **142 / 329** (43%), constants **1094 / 3180** (34%).
+Overall coverage: functions **915 / 2169** (42%), classes **142 / 329** (43%), constants **1097 / 3180** (34%).
 
 ## Coverage by PHP module
 
 Each cell counts the PHP-visible symbols a compiled elephc program has, against the symbols the module exposes in the baseline build. Any compile-time route counts once (registry builtin, injected prelude, name-resolver rewrite); symbols that exist only inside `eval()` are listed separately below. `—` marks a kind the module does not have.
+
+The 62/62 Core inventory claim refers to elephc's own contract inventory, returned by `get_extension_funcs("core")` and enumerated by `CORE_FUNCTION_NAMES`. It covers all 60 functions in the PHP 8.5 Core baseline plus the `die` and `exit` language constructs. The comparison row counts functions only, so its numerator is 60.
 
 | PHP module | Functions | Classes | Constants |
 |---|---|---|---|
 | [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | — |
 | `bz2` | 0 / 10 · 0% | — | — |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | — | 21 / 21 · 100% |
-| `core` | 29 / 62 · 47% | 21 / 40 · 52% | 34 / 89 · 38% |
+| `core` | 60 / 62 · 97% | 21 / 40 · 52% | 37 / 89 · 42% |
 | `ctype` | 4 / 11 · 36% | — | — |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
@@ -87,8 +89,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 
 The counts above are what a compiled program has. Code run through `eval()` sees a different set in these modules (compiled / eval()):
 
-- `core` functions: 29 / 28
-- `core` constants: 34 / 31
+- `core` constants: 37 / 34
 - `exif` functions: 4 / 0
 - `exif` constants: 1 / 0
 - `gd` functions: 83 / 0
@@ -100,8 +101,6 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `standard` functions: 382 / 342
 - `standard` constants: 155 / 134
 - `zend opcache` functions: 8 / 0
-
-3 symbol(s) exist only inside `eval()` and are not counted in the table: `get_called_class()`, `get_class_methods()`, `get_class_vars()`.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 

@@ -715,7 +715,7 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload the iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // x0=cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
     emitter.instruction("str x0, [sp, #32]");                                   // save the next iterator cursor
     emitter.instruction("str x1, [sp, #48]");                                   // save the key ptr (or integer payload)
     emitter.instruction("str x2, [sp, #56]");                                   // save the key len (-1 for integer keys)
@@ -794,7 +794,7 @@ fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reload the iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rax=cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the next iterator cursor
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // save the key ptr (or integer payload)
     emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save the key len (-1 for integer keys)

@@ -1,11 +1,11 @@
 ---
-title: "jdtofrench() — internals"
+title: "jdtofrench() - internals"
 description: "Compiler internals for jdtofrench(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 230
 ---
 
-## `jdtofrench()` — internals
+## `jdtofrench()` - internals
 
 ## Where it lives
 

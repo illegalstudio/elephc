@@ -367,6 +367,7 @@ pub fn emit_array_ptr_value(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x14");                                         // value_tag = the entry's runtime tag
     emitter.instruction("mov x1, x9");                                          // value_lo = the entry's low payload word
     emitter.instruction("mov x2, x13");                                         // value_hi = the entry's high payload word
+    super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_aptr_val_deref_done", "x0", "x1", "x2");
     emitter.instruction("b __rt_mixed_from_value");                             // retain/persist the payload and return the box
     emitter.label("__rt_aptr_val_false");
     emitter.instruction("mov x0, #3");                                          // value_tag = 3 (bool)
@@ -400,6 +401,7 @@ fn emit_array_ptr_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r10 + 40]");                       // rax = value_tag from the hash entry
     emitter.instruction("mov rdi, r8");                                         // value_lo = the entry's low payload word
     emitter.instruction("mov rsi, r9");                                         // value_hi = the entry's high payload word
+    super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_aptr_val_deref_done", "rax", "rdi", "rsi");
     emitter.instruction("jmp __rt_mixed_from_value");                           // retain/persist the payload and return the box
     emitter.label("__rt_aptr_val_false");
     emitter.instruction("xor edi, edi");                                        // value_lo = 0 (false)

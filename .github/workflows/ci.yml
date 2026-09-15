@@ -430,11 +430,18 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # More than 9,000 selected tests exceed a single serial job's 45-minute budget.
+  # Eight partitions keep the slowest hash buckets near ten minutes while each runner
+  # remains serial and bounded.
   non-codegen-tests-macos-aarch64:
-    name: Non-Codegen Tests (macos-aarch64)
+    name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/8)
     needs: build-archive-macos-aarch64
     runs-on: macos-14
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v4
 
@@ -456,14 +463,20 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/8 \
+            --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
   non-codegen-tests-linux-x86_64:
-    name: Non-Codegen Tests (linux-x86_64)
+    name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/8)
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -484,14 +497,20 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/8 \
+            --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
   non-codegen-tests-linux-aarch64:
-    name: Non-Codegen Tests (linux-aarch64)
+    name: Non-Codegen Tests (linux-aarch64 ${{ matrix.shard }}/8)
     needs: build-archive-linux-aarch64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -512,6 +531,8 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/8 \
+            --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
@@ -685,7 +706,7 @@ jobs:
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 1
+            -j 2
 
   codegen-tests-linux-x86_64:
     name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
@@ -756,7 +777,7 @@ jobs:
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 1
+            -j 2
 
   codegen-tests-linux-aarch64:
     name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
@@ -827,7 +848,7 @@ jobs:
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
-            -j 1
+            -j 2
 
   # PDO fixtures all inject the same large standard-library prelude. Running a
   # deterministic shard in one libtest process lets parser/runtime/bridge caches
@@ -1317,8 +1338,9 @@ jobs:
             "${{ matrix.clang_target }}"
 
   # Eval integration tests compile, link, and run full programs while exercising
-  # eval/magician paths, so keep them out of the ordinary codegen shards. Two
-  # workers per shard reduce wall time without increasing the number of test runs.
+  # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
+  # deterministic shard in one libtest process so runtime-object and bridge caches
+  # survive between cases, with two workers preserving bounded parallelism.
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
     needs: build-archive-macos-aarch64
@@ -1343,18 +1365,26 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
+      - name: Extract test archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
       - name: Run eval codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
-          cargo nextest run --profile ci \
-            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
-            --workspace-remap . \
-            -E 'binary(codegen_tests) and test(~codegen::eval)' \
-            --partition hash:${{ matrix.shard }}/16 \
-            --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+          eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$eval_test_binary"
+          bash scripts/ci/run_eval_codegen_shard.sh \
+            "$eval_test_binary" "${{ matrix.shard }}" 16
 
   eval-codegen-tests-linux-x86_64:
     name: Eval Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
@@ -1379,18 +1409,26 @@ jobs:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
 
+      - name: Extract test archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
       - name: Run eval codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
-          cargo nextest run --profile ci \
-            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
-            --workspace-remap . \
-            -E 'binary(codegen_tests) and test(~codegen::eval)' \
-            --partition hash:${{ matrix.shard }}/16 \
-            --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+          eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$eval_test_binary"
+          bash scripts/ci/run_eval_codegen_shard.sh \
+            "$eval_test_binary" "${{ matrix.shard }}" 16
 
   eval-codegen-tests-linux-aarch64:
     name: Eval Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
@@ -1415,18 +1453,26 @@ jobs:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
 
+      - name: Extract test archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
       - name: Run eval codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
-          cargo nextest run --profile ci \
-            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
-            --workspace-remap . \
-            -E 'binary(codegen_tests) and test(~codegen::eval)' \
-            --partition hash:${{ matrix.shard }}/16 \
-            --no-fail-fast --retries 1 --flaky-result pass \
-            -j 2
+          eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$eval_test_binary"
+          bash scripts/ci/run_eval_codegen_shard.sh \
+            "$eval_test_binary" "${{ matrix.shard }}" 16
 
   image-api-sync:
     name: Image API stubs in sync

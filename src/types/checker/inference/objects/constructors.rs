@@ -177,9 +177,33 @@ impl Checker {
                 } else {
                     effective_sig
                 };
+                for (i, arg) in normalized_args.iter().enumerate() {
+                    let persistent_reference = param_to_prop
+                        .get(i)
+                        .is_some_and(|mapped| mapped.is_some())
+                        && effective_sig.ref_params.get(i).copied().unwrap_or(false);
+                    let unstable_reference_source = matches!(arg.kind, ExprKind::ArrayAccess { .. })
+                        || matches!(&arg.kind, ExprKind::Variable(name)
+                            if self.active_ref_params.contains(name)
+                                || self.ref_aliased_locals.contains(name));
+                    if persistent_reference && unstable_reference_source {
+                        let param_name = effective_sig
+                            .params
+                            .get(i)
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or("arg");
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "{} parameter ${} cannot retain managed or already-reference-bound storage in a promoted property",
+                                constructor_label, param_name
+                            ),
+                        ));
+                    }
+                }
                 self.check_user_declared_call(
                     &effective_sig,
-                    &normalized_args,
+                    args,
                     expr.span,
                     env,
                     &constructor_label,
@@ -297,7 +321,7 @@ impl Checker {
         )?;
         self.check_user_declared_call(
             &sig,
-            &normalized_args,
+            args,
             expr.span,
             env,
             &format!("Constructor '{}::__construct'", class_name),

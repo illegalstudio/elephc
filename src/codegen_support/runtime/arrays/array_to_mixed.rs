@@ -35,6 +35,12 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #0]");                                    // save the source indexed-array value_type tag
     emitter.instruction("bl __rt_array_ensure_unique");                         // split shared arrays before rewriting element slots
     emitter.instruction("str x0, [sp, #8]");                                    // save the unique indexed-array pointer
+    emit_branch_if_null_container(
+        emitter,
+        "x0",
+        "x9",
+        "__rt_array_to_mixed_null",
+    );
     emitter.instruction("ldr x9, [x0]");                                        // load the logical array length before the conversion loop
     emitter.instruction("str x9, [sp, #16]");                                   // save the logical length across mixed-box allocations
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize the element index to zero
@@ -102,6 +108,11 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #80");                                     // release the conversion frame
     emitter.instruction("ret");                                                 // return the converted array pointer
 
+    emitter.label("__rt_array_to_mixed_null");
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the frame around an absent container
+    emitter.instruction("add sp, sp, #80");                                     // release conversion slots without touching the sentinel
+    emitter.instruction("ret");                                                 // return the null-like source unchanged
+
     emitter.label("__rt_array_to_mixed_box_owned");
     emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can carry the null sentinel
     emitter.instruction("b.lt __rt_array_to_mixed_box_owned_frame");            // preserve scalar payloads verbatim
@@ -153,6 +164,12 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the source indexed-array value_type tag
     emitter.instruction("call __rt_array_ensure_unique");                       // split shared arrays before rewriting element slots
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the unique indexed-array pointer
+    emit_branch_if_null_container(
+        emitter,
+        "rax",
+        "r10",
+        "__rt_array_to_mixed_x86_null",
+    );
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the logical array length before the conversion loop
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the logical length across mixed-box allocations
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the element index to zero
@@ -215,6 +232,11 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the conversion frame slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the converted array pointer
+
+    emitter.label("__rt_array_to_mixed_x86_null");
+    emitter.instruction("add rsp, 32");                                         // release conversion slots without touching the sentinel
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer for the null-like return
+    emitter.instruction("ret");                                                 // return the null-like source unchanged
 
     emitter.label("__rt_array_to_mixed_x86_box_owned");
     emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can carry the null sentinel

@@ -1,0 +1,698 @@
+//! Purpose:
+//! Lowers class-introspection calls whose results are assembled from resolved AOT metadata.
+//!
+//! Called from:
+//! - `super::function_calls::lower_function_call()` before ordinary registry lowering.
+//!
+//! Key details:
+//! - Direct calls, including literal and dynamic array spreads, accept runtime class-name
+//!   strings; `get_class_methods()` also resolves an object's concrete runtime class.
+//! - A boxed argument of either builtin is tag-checked before its class name is used, so an
+//!   object, an array or a scalar is never coerced into a class-name string.
+//! - The dispatch name is published as one scoped owner record and retired explicitly on both
+//!   the selected-class path and the catchable TypeError path.
+//! - Property defaults are lowered as ordinary EIR expressions and boxed into fresh Mixed cells.
+
+use super::*;
+
+/// Lowers direct class-variable and class-method introspection through AOT metadata dispatch.
+pub(super) fn lower_class_introspection(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let kind = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "get_class_vars" => ClassIntrospectionKind::Variables,
+        "get_class_methods" => ClassIntrospectionKind::Methods,
+        _ => return None,
+    };
+    if let Some(class_name) = class_introspection_argument(args, kind)
+        .and_then(literal_class_argument)
+        .and_then(|requested| resolved_class_name(ctx, &requested))
+    {
+        return Some(materialize_class_introspection(ctx, kind, &class_name, expr));
+    }
+
+    // Consume the shared argument planner for every source form, including an empty
+    // spread followed by a named argument. StaticOnly calls must never fall through
+    // to their intentionally unavailable generic descriptor invoker.
+    let sig = call_signature(ctx, name, false);
+    let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
+    let [argument] = operands.as_slice() else {
+        panic!("checked {name} call did not lower to exactly one operand");
+    };
+    let argument = lowered_value_from_id(ctx, *argument);
+    Some(lower_class_introspection_value(ctx, kind, argument, expr))
+}
+
+/// Resolves an already lowered class name or object and dispatches its AOT metadata projection.
+fn lower_class_introspection_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    kind: ClassIntrospectionKind,
+    argument: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let argument_type = ctx.builder.value_php_type(argument.value).codegen_repr();
+    if matches!(argument_type, PhpType::Mixed | PhpType::Union(_)) {
+        // A boxed argument carries its PHP tag at runtime, so BOTH builtins extract the class
+        // name through the shared validator. Coercing the cell to a string here would turn an
+        // object, an array or an int into a class name instead of raising PHP's TypeError.
+        let name = super::class_introspection_mixed::lower_mixed_class_name(ctx, kind, argument, expr);
+        return lower_dynamic_class_introspection(ctx, kind, name, None, expr);
+    }
+    let object_bound = match &argument_type {
+        PhpType::Object(class) if kind == ClassIntrospectionKind::Methods
+            && ctx.classes.contains_key(class) => Some(class.clone()),
+        _ => None,
+    };
+    let name = if kind == ClassIntrospectionKind::Methods
+        && matches!(argument_type, PhpType::Object(_))
+    {
+        let result_owner = prepublish_call_result(ctx, &PhpType::Str, expr.span);
+        let (argument, argument_owner) = root_owned_call_operand(ctx, argument, expr.span);
+        let target = crate::ir::RuntimeFnId::GetClass;
+        let class_name = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![argument.value],
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(target),
+            )),
+            PhpType::Str,
+            target.effects(),
+            Some(expr.span),
+        );
+        stage_call_result(ctx, result_owner.as_ref(), class_name, expr.span);
+        if let Some(slot) = argument_owner {
+            retire_owned_call_operand(ctx, slot, expr.span);
+        }
+        take_prepublished_call_result(ctx, result_owner, class_name, expr.span)
+    } else {
+        argument
+    };
+    lower_dynamic_class_introspection(ctx, kind, name, object_bound.as_deref(), expr)
+}
+
+/// Identifies the metadata projection produced by one supported introspection builtin.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClassIntrospectionKind {
+    Variables,
+    Methods,
+}
+
+impl ClassIntrospectionKind {
+    /// Returns the PHP parameter name accepted by this builtin.
+    fn parameter_name(self) -> &'static str {
+        match self {
+            Self::Variables => "class",
+            Self::Methods => "object_or_class",
+        }
+    }
+
+    /// Returns whether this builtin also accepts an object and resolves its runtime class.
+    ///
+    /// `get_class_vars()` declares a `string` parameter, so an object tag is invalid for it.
+    pub(super) fn accepts_object(self) -> bool {
+        matches!(self, Self::Methods)
+    }
+
+    /// Returns the TypeError prefix used when a boxed argument carries an unusable runtime tag.
+    ///
+    /// The runtime type name and the trailing `" given"` are appended by the throwing block, so
+    /// both builtins keep their own function and parameter naming in the message.
+    pub(super) fn invalid_argument_message(self) -> &'static str {
+        match self {
+            Self::Variables => "get_class_vars(): Argument #1 ($class) must be of type string, ",
+            Self::Methods => {
+                "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, "
+            }
+        }
+    }
+
+    /// Returns the concrete EIR result type shared by every dispatch branch.
+    fn result_type(self) -> PhpType {
+        match self {
+            Self::Variables => PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            },
+            Self::Methods => PhpType::Array(Box::new(PhpType::Str)),
+        }
+    }
+}
+
+/// Extracts the single positional or correctly named argument from a checked call.
+fn class_introspection_argument<'a>(
+    args: &'a [Expr],
+    kind: ClassIntrospectionKind,
+) -> Option<&'a Expr> {
+    let [argument] = args else {
+        return None;
+    };
+    match &argument.kind {
+        ExprKind::NamedArg { name, value }
+            if php_symbol_key(name) == kind.parameter_name() =>
+        {
+            Some(value)
+        }
+        ExprKind::NamedArg { .. } | ExprKind::Spread(_) => None,
+        _ => Some(argument),
+    }
+}
+
+/// Dispatches a runtime class name across all class-like declarations known to AOT lowering.
+fn lower_dynamic_class_introspection(
+    ctx: &mut LoweringContext<'_, '_>,
+    kind: ClassIntrospectionKind,
+    name: LoweredValue,
+    object_bound: Option<&str>,
+    expr: &Expr,
+) -> LoweredValue {
+    // Dispatch reads the candidate name once per known class. A one-shot OwnedTemp would make
+    // every read look like an ownership transfer and free a runtime-derived name after the first
+    // failed comparison, so keep one ordinary hidden-slot owner for the whole dispatch chain.
+    // That slot is published as one operand-owner record: an ordinary hidden temp is only swept
+    // by frame cleanup, which a same-frame catch never runs, so the record plus the explicit
+    // retirement on each exit is what bounds the name's lifetime to this expression.
+    let name_temp = ctx.declare_hidden_temp(PhpType::Str);
+    store_value_into_temp(ctx, &name_temp, PhpType::Str, name, expr.span);
+    let name_slot = ctx.local_slots[&name_temp];
+    register_owned_call_operand(ctx, name_slot, expr.span);
+    let name_var = Expr::new(ExprKind::Variable(name_temp.clone()), expr.span);
+    let result_type = kind.result_type();
+    let result_temp = ctx.declare_owned_hidden_temp(result_type.clone());
+    let merge = ctx
+        .builder
+        .create_named_block("class.introspection.merge", Vec::new());
+
+    for class_name in class_introspection_candidates(ctx) {
+        // Keep runtime subclass dispatch, but do not duplicate unrelated class inventories
+        // at every typed-object call site. Strings and generic objects remain unrestricted.
+        if object_bound.is_some_and(|bound| !class_extends_class(ctx, &class_name, bound)) {
+            continue;
+        }
+        let match_block = ctx
+            .builder
+            .create_named_block("class.introspection.match", Vec::new());
+        let next_block = ctx
+            .builder
+            .create_named_block("class.introspection.next", Vec::new());
+        let condition = class_name_match_expr(&name_var, &class_name, expr.span);
+        let condition = lower_expr(ctx, &condition);
+        let condition = coerce_to_int_at_span(ctx, condition, Some(expr.span));
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: condition.value,
+            then_target: match_block,
+            then_args: Vec::new(),
+            else_target: next_block,
+            else_args: Vec::new(),
+        });
+
+        ctx.builder.position_at_end(match_block);
+        let value = materialize_class_introspection(ctx, kind, &class_name, expr);
+        store_value_into_temp(ctx, &result_temp, result_type.clone(), value, expr.span);
+        branch_to(ctx, merge);
+        ctx.builder.position_at_end(next_block);
+    }
+
+    lower_invalid_class_introspection_throw(ctx, kind, &name_var, name_slot, expr);
+    ctx.builder.position_at_end(merge);
+    retire_owned_call_operand(ctx, name_slot, expr.span);
+    take_owned_temp(ctx, &result_temp, expr.span)
+}
+
+/// Returns class-like names in deterministic order for runtime-name dispatch.
+fn class_introspection_candidates(ctx: &LoweringContext<'_, '_>) -> Vec<String> {
+    let mut candidates = ctx
+        .classes
+        .keys()
+        .chain(ctx.interfaces.keys())
+        .chain(ctx.enums.keys())
+        .chain(ctx.declared_trait_names.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| php_symbol_key(candidate.trim_start_matches('\\')));
+    candidates.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    candidates
+}
+
+/// Builds a case-insensitive match for both bare and leading-backslash class-name strings.
+fn class_name_match_expr(name_var: &Expr, class_name: &str, span: Span) -> Expr {
+    let bare = class_name.trim_start_matches('\\');
+    let direct = dynamic_new_class_name_match_expr(name_var, bare, true, span);
+    let qualified = dynamic_new_class_name_match_expr(
+        name_var,
+        &format!("\\{}", bare),
+        true,
+        span,
+    );
+    Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(direct),
+            op: BinOp::Or,
+            right: Box::new(qualified),
+        },
+        span,
+    )
+}
+
+/// Materializes the selected class variable or method inventory.
+fn materialize_class_introspection(
+    ctx: &mut LoweringContext<'_, '_>,
+    kind: ClassIntrospectionKind,
+    class_name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    match kind {
+        ClassIntrospectionKind::Variables => materialize_class_vars(ctx, class_name, expr),
+        ClassIntrospectionKind::Methods => materialize_class_methods(ctx, class_name, expr),
+    }
+}
+
+/// Materializes a fresh associative array of class defaults visible in the lexical scope.
+fn materialize_class_vars(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let entries = visible_class_default_entries(ctx, &class_name);
+    let hash_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Mixed),
+    };
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(entries.len() as u32)),
+        hash_ty,
+        Op::HashNew.default_effects(),
+        Some(expr.span),
+    );
+    for entry in entries {
+        let key = lower_string_literal(ctx, &entry.name, expr);
+        let value = match entry.default {
+            Some(default) => {
+                // Visibility was filtered in the caller's scope. Relative constants in a
+                // default instead belong to the property declaration, including inherited slots.
+                let caller_class = ctx.current_class.replace(entry.declaring_class);
+                let value = lower_expr(ctx, &default);
+                ctx.current_class = caller_class;
+                value
+            }
+            None => lower_null(ctx, expr),
+        };
+        let value = box_value_as_mixed(ctx, value, expr.span);
+        ctx.emit_void(
+            Op::HashSet,
+            vec![hash.value, key.value, value.value],
+            None,
+            Op::HashSet.default_effects(),
+            Some(expr.span),
+        );
+    }
+    hash
+}
+
+/// Materializes visible method names from compact data instead of per-method EIR push sequences.
+fn materialize_class_methods(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let names = visible_class_method_names(ctx, class_name);
+    if names.len() > 1 {
+        // PHP identifiers cannot contain NUL. Keep declaration order and spelling in one
+        // literal, then use the typed splitter to create independently owned string slots.
+        // Dynamic dispatch can contain hundreds of classes at each source call site, so
+        // expanding every method into ArrayPush instructions makes the EIR graph needlessly large.
+        let separator = lower_string_literal(ctx, "\0", expr);
+        let encoded = lower_string_literal(ctx, &names.join("\0"), expr);
+        let limit = lower_int_literal(ctx, i64::MAX, expr);
+        let target = crate::ir::RuntimeFnId::Explode;
+        return ctx.emit_value(
+            Op::RuntimeCall,
+            vec![separator.value, encoded.value, limit.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
+            PhpType::Array(Box::new(PhpType::Str)),
+            target.effects(),
+            Some(expr.span),
+        );
+    }
+    // Empty metadata must produce [], not explode's [""]. A singleton is cheaper to
+    // materialize directly than to enter the general splitter.
+    let items = names
+        .into_iter()
+        .map(|method| Expr::new(ExprKind::StringLiteral(method), expr.span))
+        .collect::<Vec<_>>();
+    lower_array_literal_with_expected_type(ctx, &Expr::new(ExprKind::ArrayLiteral(items), expr.span), PhpType::Str)
+}
+
+/// Extracts a literal named class from one already normalized argument expression.
+fn literal_class_argument(argument: &Expr) -> Option<String> {
+    match &argument.kind {
+        ExprKind::StringLiteral(class_name) => {
+            Some(class_name.trim_start_matches('\\').to_string())
+        }
+        ExprKind::ClassConstant { receiver } => match receiver {
+            StaticReceiver::Named(name) => {
+                Some(name.as_str().trim_start_matches('\\').to_string())
+            }
+            StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
+        },
+        _ => None,
+    }
+}
+
+/// Resolves a case-insensitive class-like name to its canonical declaration spelling.
+fn resolved_class_name(ctx: &LoweringContext<'_, '_>, requested: &str) -> Option<String> {
+    let key = php_symbol_key(requested);
+    ctx.classes
+        .keys()
+        .chain(ctx.interfaces.keys())
+        .chain(ctx.enums.keys())
+        .chain(ctx.declared_trait_names.iter())
+        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .cloned()
+}
+
+/// Collects method names visible from the current lexical class.
+fn visible_class_method_names(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+) -> Vec<String> {
+    let mut names = if let Some(info) = ctx.classes.get(class_name) {
+        let mut order = Vec::new();
+        let mut declaration = Some(info);
+        while let Some(declaring) = declaration {
+            order.extend(declaring.method_decls.iter().map(|method| php_symbol_key(&method.name)));
+            declaration = declaring.parent.as_ref().and_then(|parent| ctx.classes.get(parent));
+        }
+        if ctx.enums.contains_key(class_name) {
+            order.extend(["cases", "from", "tryfrom"].map(str::to_string));
+        }
+        // Compiler-injected classes may have signatures without source declarations.
+        // Keep their fallback deterministic without sorting user-declared methods.
+        let mut fallback = info.methods.keys().chain(info.static_methods.keys()).cloned().collect::<Vec<_>>();
+        fallback.sort_unstable();
+        order.extend(fallback);
+        order.iter()
+            .filter(|method| info.methods.contains_key(*method) || info.static_methods.contains_key(*method))
+            .filter(|method| {
+                let declaring = info.method_declaring_classes.get(*method)
+                    .and_then(|class| ctx.classes.get(class)).unwrap_or(info);
+                !declaring.is_property_hook_method(method)
+            })
+            .filter(|method| class_method_visible(ctx, class_name, info, method))
+            .map(|method| class_method_display_name(ctx, class_name, info, method))
+            .collect::<Vec<_>>()
+    } else if let Some(info) = ctx.interfaces.get(class_name) {
+        let mut methods = info.method_decls.iter().map(|method| method.name.clone()).collect::<Vec<_>>();
+        for parent in &info.parents {
+            methods.extend(visible_class_method_names(ctx, parent));
+        }
+        methods.extend(info.method_order.iter().chain(info.static_method_order.iter()).cloned());
+        methods
+    } else if let Some(methods) = ctx
+        .declared_trait_methods
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(class_name))
+        .map(|(_, methods)| methods)
+    {
+        let mut methods = methods.values().collect::<Vec<_>>();
+        methods.sort_by_key(|method| method.declaration_order);
+        methods.into_iter()
+            .filter(|method| property_visible(ctx, class_name, &method.visibility))
+            .filter(|method| !ctx.declared_trait_properties.get(class_name).is_some_and(|properties| {
+                properties.iter().any(|property| property.hooks.matches_accessor(&property.name, &method.name))
+            }))
+            .map(|method| method.name.clone())
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let mut seen = HashSet::new();
+    names.retain(|name| seen.insert(php_symbol_key(name)));
+    names
+}
+
+/// Restores the source spelling of a flattened method-map key from its declaring class.
+fn class_method_display_name(
+    ctx: &LoweringContext<'_, '_>,
+    lookup_class: &str,
+    info: &crate::types::ClassInfo,
+    method: &str,
+) -> String {
+    let declaring_class = info
+        .method_declaring_classes
+        .get(method)
+        .or_else(|| info.static_method_declaring_classes.get(method))
+        .map(String::as_str)
+        .unwrap_or(lookup_class);
+    ctx.classes
+        .get(declaring_class)
+        .into_iter()
+        .flat_map(|declaring| declaring.method_decls.iter())
+        .find(|declaration| php_symbol_key(&declaration.name) == php_symbol_key(method))
+        .map(|declaration| declaration.name.clone())
+        .unwrap_or_else(|| {
+            if ctx.enums.contains_key(lookup_class) && method == "tryfrom" {
+                "tryFrom".to_string()
+            } else {
+                method.to_string()
+            }
+        })
+}
+
+/// Returns whether one class method is visible from the current lexical class.
+fn class_method_visible(
+    ctx: &LoweringContext<'_, '_>,
+    lookup_class: &str,
+    info: &crate::types::ClassInfo,
+    method: &str,
+) -> bool {
+    let (visibility, declaring_class) = if info.methods.contains_key(method) {
+        (
+            info.method_visibilities
+                .get(method)
+                .unwrap_or(&Visibility::Public),
+            info.method_declaring_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(lookup_class),
+        )
+    } else {
+        (
+            info.static_method_visibilities
+                .get(method)
+                .unwrap_or(&Visibility::Public),
+            info.static_method_declaring_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(lookup_class),
+        )
+    };
+    property_visible(ctx, declaring_class, visibility)
+}
+
+/// Throws PHP's catchable TypeError for a runtime string that names no known class-like symbol.
+fn lower_invalid_class_introspection_throw(
+    ctx: &mut LoweringContext<'_, '_>,
+    kind: ClassIntrospectionKind,
+    name_var: &Expr,
+    name_slot: LocalSlotId,
+    expr: &Expr,
+) {
+    let message = match kind {
+        ClassIntrospectionKind::Variables => Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(Expr::new(
+                            ExprKind::StringLiteral(
+                                "get_class_vars(): Argument #1 ($class) must be a valid class name, "
+                                    .to_string(),
+                            ),
+                            expr.span,
+                        )),
+                        op: BinOp::Concat,
+                        right: Box::new(name_var.clone()),
+                    },
+                    expr.span,
+                )),
+                op: BinOp::Concat,
+                right: Box::new(Expr::new(
+                    ExprKind::StringLiteral(" given".to_string()),
+                    expr.span,
+                )),
+            },
+            expr.span,
+        ),
+        ClassIntrospectionKind::Methods => Expr::new(
+            ExprKind::StringLiteral(
+                "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, string given"
+                    .to_string(),
+            ),
+            expr.span,
+        ),
+    };
+    let exception = Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("TypeError"),
+            args: vec![message],
+        },
+        expr.span,
+    );
+    let exception = lower_expr(ctx, &exception);
+    // The message already copied the name, so the dispatch owner can be retired here. Doing it
+    // before the throw is what a same-frame catch needs: it keeps the PHP activation alive, so
+    // no frame cleanup would otherwise release this slot.
+    retire_owned_call_operand(ctx, name_slot, expr.span);
+    ctx.builder.terminate(Terminator::Throw {
+        value: exception.value,
+    });
+}
+
+/// Preserves the lexical owner of a visible property default through metadata projection.
+struct ClassDefaultEntry {
+    name: String,
+    declaring_class: String,
+    default: Option<Expr>,
+}
+
+/// Collects visible instance and static property defaults in physical declaration order.
+fn visible_class_default_entries(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+) -> Vec<ClassDefaultEntry> {
+    if ctx.interfaces.contains_key(class_name) {
+        return Vec::new();
+    }
+    if ctx.enums.contains_key(class_name) && !ctx.classes.contains_key(class_name) {
+        let mut names = vec!["name"];
+        if ctx
+            .enums
+            .get(class_name)
+            .is_some_and(|info| info.backing_type.is_some())
+        {
+            names.push("value");
+        }
+        return names.into_iter().map(|name| ClassDefaultEntry {
+            name: name.to_string(), declaring_class: class_name.to_string(), default: None,
+        }).collect();
+    }
+    let Some(info) = ctx.classes.get(class_name) else {
+        return ctx.declared_trait_properties.get(class_name).into_iter()
+            .flat_map(|properties| {
+                properties.iter().filter(|property| !property.is_static)
+                    .chain(properties.iter().filter(|property| property.is_static))
+            })
+            .filter(|property| property_visible(ctx, class_name, &property.visibility))
+            .filter(|property| !property.hooks.is_virtual())
+            .map(|property| ClassDefaultEntry {
+                name: property.name.clone(), declaring_class: class_name.to_string(),
+                default: property.default.clone(),
+            })
+            .collect();
+    };
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+    for (index, (property, _)) in info.properties.iter().enumerate() {
+        if info.visible_property_index(property) != Some(index)
+            || info.property_is_virtual(property)
+            || !seen.insert(property.clone())
+            || !instance_property_visible(ctx, class_name, info, property)
+        {
+            continue;
+        }
+        entries.push(ClassDefaultEntry {
+            name: property.clone(),
+            declaring_class: info.property_declaring_classes.get(property)
+                .cloned().unwrap_or_else(|| class_name.to_string()),
+            default: info.defaults.get(index).cloned().flatten(),
+        });
+    }
+    for (index, (property, _)) in info.static_properties.iter().enumerate() {
+        if !seen.insert(property.clone()) || !static_property_visible(ctx, class_name, info, property)
+        {
+            continue;
+        }
+        entries.push(ClassDefaultEntry {
+            name: property.clone(),
+            declaring_class: info.static_property_declaring_classes.get(property)
+                .cloned().unwrap_or_else(|| class_name.to_string()),
+            default: info.static_defaults.get(index).cloned().flatten(),
+        });
+    }
+    entries
+}
+
+/// Returns whether an instance property is visible from the current lexical class.
+fn instance_property_visible(
+    ctx: &LoweringContext<'_, '_>,
+    lookup_class: &str,
+    info: &crate::types::ClassInfo,
+    property: &str,
+) -> bool {
+    let declaring = info
+        .property_declaring_classes
+        .get(property)
+        .map(String::as_str)
+        .unwrap_or(lookup_class);
+    let visibility = info
+        .property_visibilities
+        .get(property)
+        .unwrap_or(&Visibility::Public);
+    property_visible(ctx, declaring, visibility)
+}
+
+/// Returns whether a static property is visible from the current lexical class.
+fn static_property_visible(
+    ctx: &LoweringContext<'_, '_>,
+    lookup_class: &str,
+    info: &crate::types::ClassInfo,
+    property: &str,
+) -> bool {
+    let declaring = info
+        .static_property_declaring_classes
+        .get(property)
+        .map(String::as_str)
+        .unwrap_or(lookup_class);
+    let visibility = info
+        .static_property_visibilities
+        .get(property)
+        .unwrap_or(&Visibility::Public);
+    property_visible(ctx, declaring, visibility)
+}
+
+/// Applies PHP property visibility to one reflected default entry.
+fn property_visible(
+    ctx: &LoweringContext<'_, '_>,
+    declaring_class: &str,
+    visibility: &Visibility,
+) -> bool {
+    match visibility {
+        Visibility::Public => true,
+        Visibility::Private => ctx.current_class.as_deref() == Some(declaring_class),
+        Visibility::Protected => ctx.current_class.as_deref().is_some_and(|current| {
+            current == declaring_class
+                || class_is_descendant(ctx, current, declaring_class)
+                || class_is_descendant(ctx, declaring_class, current)
+        }),
+    }
+}
+
+/// Returns whether one resolved class descends from another.
+fn class_is_descendant(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    ancestor: &str,
+) -> bool {
+    let mut current = ctx.classes.get(class_name).and_then(|info| info.parent.as_deref());
+    while let Some(parent) = current {
+        if parent == ancestor {
+            return true;
+        }
+        current = ctx.classes.get(parent).and_then(|info| info.parent.as_deref());
+    }
+    false
+}

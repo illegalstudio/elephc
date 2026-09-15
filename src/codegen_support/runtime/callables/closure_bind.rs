@@ -9,7 +9,7 @@
 //! Key details:
 //! - A closure that uses `$this` carries a first runtime capture named "this"
 //!   (appended by EIR lowering). Class-scope closures may also carry the
-//!   compiler-owned integer `__elephc_called_class_id` capture in slot one.
+//!   compiler-owned integer `CALLED_CLASS_ID_LOCAL` capture in slot one.
 //! - Binding copies the complete 80- or 96-byte runtime descriptor, overwrites
 //!   the captured object with the new receiver, and increfs it so the bound
 //!   descriptor owns its own reference (balanced against descriptor release).
@@ -20,6 +20,10 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::names::CALLED_CLASS_ID_LOCAL;
+
+const CALLED_CLASS_ID_SUFFIX: u32 = u32::from_le_bytes(*b"#gen");
+const CALLED_CLASS_ID_SUFFIX_OFFSET: usize = CALLED_CLASS_ID_LOCAL.len() - size_of::<u32>();
 
 /// Emits the `__rt_closure_bind` runtime helper for the active target.
 ///
@@ -74,7 +78,7 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #1");                                         // does this descriptor omit the hidden capture?
     emitter.instruction("b.eq __rt_closure_bind_shape_valid");                  // the $this-only shape is complete
     emitter.instruction("ldr x12, [x11, #40]");                                 // x12 = second capture name length
-    emitter.instruction("cmp x12, #24");                                        // hidden called-class capture name is 24 bytes
+    emitter.instruction(&format!("cmp x12, #{}", CALLED_CLASS_ID_LOCAL.len())); // require the complete generated called-class capture name
     emitter.instruction("b.ne __rt_closure_bind_unsupported");                  // reject an arbitrary user capture
     emitter.instruction("ldr x12, [x11, #48]");                                 // x12 = second capture type tag
     emitter.instruction("cbnz x12, __rt_closure_bind_unsupported");             // called-class id must use integer tag zero
@@ -92,7 +96,11 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_closure_bind_unsupported");                  // reject a different second capture
     emitter.instruction("ldr x14, [x13, #16]");                                 // load "class_id" from the hidden capture name
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x15", 0x6469_5f73_7361_6c63);
-    emitter.instruction("cmp x14, x15");                                        // does the hidden name end with "class_id"?
+    emitter.instruction("cmp x14, x15");                                        // does the hidden name continue with "class_id"?
+    emitter.instruction("b.ne __rt_closure_bind_unsupported");                  // reject a different second capture
+    emitter.instruction(&format!("ldr w14, [x13, #{}]", CALLED_CLASS_ID_SUFFIX_OFFSET)); // load the generated "#gen" suffix
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x15", i64::from(CALLED_CLASS_ID_SUFFIX));
+    emitter.instruction("cmp w14, w15");                                        // does the hidden name end with "#gen"?
     emitter.instruction("b.ne __rt_closure_bind_unsupported");                  // reject a different second capture
 
     // -- allocate a complete runtime descriptor copy --
@@ -202,7 +210,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rsp+32], 1");                           // does this descriptor omit the hidden capture?
     emitter.instruction("je __rt_closure_bind_shape_valid");                    // the $this-only shape is complete
     emitter.instruction("mov r11, [r10+40]");                                   // r11 = second capture name length
-    emitter.instruction("cmp r11, 24");                                         // hidden called-class capture name is 24 bytes
+    emitter.instruction(&format!("cmp r11, {}", CALLED_CLASS_ID_LOCAL.len()));  // require the complete generated called-class capture name
     emitter.instruction("jne __rt_closure_bind_unsupported");                   // reject an arbitrary user capture
     emitter.instruction("mov r11, [r10+48]");                                   // r11 = second capture type tag
     emitter.instruction("test r11, r11");                                       // called-class id must use integer tag zero
@@ -223,7 +231,10 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_closure_bind_unsupported");                   // reject a different second capture
     emitter.instruction("mov r11, [r10+16]");                                   // load "class_id" from the hidden capture name
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "rax", 0x6469_5f73_7361_6c63);
-    emitter.instruction("cmp r11, rax");                                        // does the hidden name end with "class_id"?
+    emitter.instruction("cmp r11, rax");                                        // does the hidden name continue with "class_id"?
+    emitter.instruction("jne __rt_closure_bind_unsupported");                   // reject a different second capture
+    emitter.instruction(&format!("mov r11d, [r10+{}]", CALLED_CLASS_ID_SUFFIX_OFFSET)); // load the generated "#gen" suffix
+    emitter.instruction(&format!("cmp r11d, {}", CALLED_CLASS_ID_SUFFIX));      // does the hidden name end with "#gen"?
     emitter.instruction("jne __rt_closure_bind_unsupported");                   // reject a different second capture
 
     // -- allocate a complete runtime descriptor copy --
@@ -308,10 +319,18 @@ mod tests {
             assert!(asm.contains("__rt_closure_bind_validate_this:"), "{target:?}: {asm}");
             assert!(asm.contains("__rt_closure_bind_shape_valid:"), "{target:?}: {asm}");
             if target.arch == Arch::X86_64 {
+                assert!(asm.contains(&format!("cmp r11, {}", CALLED_CLASS_ID_LOCAL.len())), "{target:?}: {asm}");
+                assert!(asm.contains(&format!("mov r11d, [r10+{}]", CALLED_CLASS_ID_SUFFIX_OFFSET)), "{target:?}: {asm}");
+                assert!(asm.contains(&format!("cmp r11d, {}", CALLED_CLASS_ID_SUFFIX)), "{target:?}: {asm}");
                 assert!(asm.contains("mov rax, 80"), "{target:?}: {asm}");
                 assert!(asm.contains("mov rax, 96"), "{target:?}: {asm}");
                 assert!(asm.contains("mov rcx, 12"), "{target:?}: {asm}");
             } else {
+                assert!(asm.contains(&format!("cmp x12, #{}", CALLED_CLASS_ID_LOCAL.len())), "{target:?}: {asm}");
+                assert!(asm.contains(&format!("ldr w14, [x13, #{}]", CALLED_CLASS_ID_SUFFIX_OFFSET)), "{target:?}: {asm}");
+                assert!(asm.contains("movz x15, #0x6723"), "{target:?}: {asm}");
+                assert!(asm.contains("movk x15, #0x6e65, lsl #16"), "{target:?}: {asm}");
+                assert!(asm.contains("cmp w14, w15"), "{target:?}: {asm}");
                 assert!(asm.contains("mov x0, #80"), "{target:?}: {asm}");
                 assert!(asm.contains("mov x0, #96"), "{target:?}: {asm}");
                 assert!(

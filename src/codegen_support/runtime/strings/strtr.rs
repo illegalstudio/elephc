@@ -258,7 +258,7 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_strtr_hash_keys");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the pairs hash for the walk
     emitter.instruction("ldr x1, [sp, #40]");                                   // reload the insertion-order cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // x0 = next cursor, x1 = key payload, x2 = key length
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0 = next cursor, x1 = key payload, x2 = key length
     emitter.instruction("cmn x0, #1");                                          // did the iterator signal end-of-walk?
     emitter.instruction("b.eq __rt_strtr_hash_keys_done");                      // the key-length window is complete
     emitter.instruction("str x0, [sp, #40]");                                   // save the next insertion-order cursor
@@ -623,7 +623,7 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_strtr_hash_keys_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the pairs hash for the walk
     emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // reload the insertion-order cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rax = next cursor, rdi = key payload, rdx = key length
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rax = next cursor, rdi = key payload, rdx = key length
     emitter.instruction("cmp rax, -1");                                         // did the iterator signal end-of-walk?
     emitter.instruction("je __rt_strtr_hash_keys_done_x86");                    // the key-length window is complete
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the next insertion-order cursor

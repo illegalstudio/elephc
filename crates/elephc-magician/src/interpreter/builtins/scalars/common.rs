@@ -9,7 +9,7 @@
 //! - Weak float-to-int coercion reports PHP's precision-loss deprecation before casting.
 
 use super::super::super::*;
-use crate::stream_resources::EVAL_RESOURCE_PAYLOAD_BASE;
+use crate::stream_resources::{EVAL_DEFAULT_CONTEXT_PAYLOAD, EVAL_RESOURCE_PAYLOAD_BASE};
 
 /// Returns the standard zlib/PHP CRC-32 checksum for a byte slice.
 pub(in crate::interpreter) fn eval_crc32_bytes(bytes: &[u8]) -> u32 {
@@ -90,11 +90,17 @@ pub(in crate::interpreter) fn eval_resource_type_name(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<&'static str, EvalStatus> {
-    if eval_resource_is_closed(value, context, values)? {
-        Ok("Unknown")
-    } else {
-        Ok("stream")
+    let payload = values.raw_value_word(value)? as i64;
+    if payload == EVAL_DEFAULT_CONTEXT_PAYLOAD {
+        return Ok("stream-context");
     }
+    if eval_resource_is_closed(value, context, values)? {
+        return Ok("Unknown");
+    }
+    Ok(context
+        .stream_resources()
+        .resource_type(payload)
+        .unwrap_or("stream"))
 }
 
 /// Casts one eval value to PHP int and returns the scalar payload.
@@ -115,8 +121,11 @@ pub(in crate::interpreter) fn eval_int_value(
             ))?;
         }
     }
-    let value = values.cast_int(value)?;
-    let bytes = values.string_bytes(value)?;
+    let integer = values.cast_int(value)?;
+    let bytes = values.string_bytes(integer);
+    let released = values.release(integer);
+    let bytes = bytes?;
+    released?;
     std::str::from_utf8(&bytes)
         .map_err(|_| EvalStatus::RuntimeFatal)?
         .parse::<i64>()

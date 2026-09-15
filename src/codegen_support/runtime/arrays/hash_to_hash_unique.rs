@@ -7,6 +7,8 @@
 //!   `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
+//! - Values are read through `__rt_hash_iter_next_value`, so an entry that belongs to a PHP
+//!   reference set contributes the value it references and the result never stores a cell.
 //! - `array_unique($assoc)` used to refuse to compile at all
 //!   (`unsupported EIR backend feature: array_unique for PHP type AssocArray`), which is how an
 //!   ordinary PHP call became a build failure.
@@ -73,7 +75,7 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_h2h_uniq_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // source hash
     emitter.instruction("ldr x1, [sp, #24]");                                   // current cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // x0=cursor, x1/x2=key, x3/x4=value, x5=tag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=cursor, x1/x2=key, x3/x4=value, x5=tag
     emitter.instruction("cmp x0, #-1");                                         // has the walk finished?
     emitter.instruction("b.eq __rt_h2h_uniq_done");                             // walk finished: return the result
     emitter.instruction("str x0, [sp, #24]");                                   // save the resumed cursor
@@ -151,7 +153,7 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
 /// Emits `__rt_hash_to_hash_unique` for x86_64.
 ///
 /// Same frame contents as the ARM64 form, at `[rbp - 8]` … `[rbp - 80]`. The helper ABIs differ
-/// per target and are spelled out rather than mirrored: `__rt_hash_iter_next` takes SysV argument
+/// per target and are spelled out rather than mirrored: `__rt_hash_iter_next_value` takes SysV argument
 /// registers and returns its tuple in `rax`/`rdi`/`rsi`/`rdx`/`rcx`/`r8`, while `__rt_decref_hash`
 /// reads its pointer from `rax`.
 fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
@@ -185,11 +187,11 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_h2h_uniq_loop_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // source hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // current cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rax=cursor, rdi/rdx=key, rcx/r8=value, r9=tag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=cursor, rdi/rdx=key, rcx/r8=value, r9=tag
     emitter.instruction("cmp rax, -1");                                         // has the walk finished?
     emitter.instruction("je __rt_h2h_uniq_done_x");                             // walk finished: return the result
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the resumed cursor
-    // Read off the helper, not deduced from SysV: `__rt_hash_iter_next` returns its tuple in
+    // Read off the helper, not deduced from SysV: `__rt_hash_iter_next_value` returns its tuple in
     // rax/rdi/rdx/rcx/r8/r9, NOT in argument order. Deducing it saved four wrong registers.
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // key pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // key length

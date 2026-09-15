@@ -7,6 +7,13 @@
 //!
 //! Key details:
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+//! - `__rt_hash_set` is the PHP element-assignment entry point. Overwriting an entry that
+//!   carries runtime value tag 11 writes through its managed reference cell: the previous cell
+//!   payload is released and the replacement is published to every alias in the set, so a live
+//!   `&$v` is never detached by `$a[$k] = x`.
+//! - `__rt_hash_set_value` is the bucket-replacing sibling for array-building helpers whose
+//!   destination was cloned from a user array. It detaches a reference entry first, matching
+//!   `zend_hash_update`, so building a new array never mutates the array it was copied from.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -181,6 +188,8 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- update existing entry's value --
     emitter.label("__rt_hash_set_update");
     emitter.instruction("ldr x13, [x12, #40]");                                 // load the overwritten entry's per-entry value_tag
+    emitter.instruction("cmp x13, #11");                                        // does the existing entry belong to a PHP reference set?
+    emitter.instruction("b.eq __rt_hash_set_reference_write");                  // reference entries are written through, never detached
     emitter.instruction("cmp x13, #8");                                         // is the overwritten value null?
     emitter.instruction("b.eq __rt_hash_set_write_value");                      // null has no heap pointer, skip release
     emitter.instruction("cmp x13, #1");                                         // is the overwritten value a string?
@@ -208,6 +217,33 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
     emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
     emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
+    emitter.instruction("b __rt_hash_set_write_value");                         // ordinary released payloads must not fall into reference-cell write-through
+
+    // -- write through an existing PHP reference set instead of replacing the entry --
+    emitter.label("__rt_hash_set_reference_write");
+    emitter.instruction("ldr x13, [sp, #40]");                                  // load the replacement runtime value tag
+    emitter.instruction("cmp x13, #7");                                         // is the replacement already an owned boxed Mixed cell?
+    emitter.instruction("b.eq __rt_hash_set_reference_release");                // an owned box transfers straight into the reference cell
+    emitter.instruction("mov x0, x13");                                         // pass the replacement runtime value tag to the owned-box helper
+    emitter.instruction("ldr x1, [sp, #24]");                                   // pass the replacement low payload word to the owned-box helper
+    emitter.instruction("ldr x2, [sp, #32]");                                   // pass the replacement high payload word to the owned-box helper
+    emitter.instruction("bl __rt_hash_to_mixed_box_owned");                     // box the replacement without adding a retain
+    emitter.instruction("str x0, [sp, #24]");                                   // save the boxed replacement as the new reference payload
+
+    emitter.label("__rt_hash_set_reference_release");
+    emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after the boxing helper
+    emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after the boxing helper
+    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
+    emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
+    emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
+    emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
+    emitter.instruction("ldr x0, [x12, #24]");                                  // load the managed reference cell this entry owns
+    emitter.instruction("str x0, [sp, #56]");                                   // save the cell across the payload release
+    emitter.instruction("bl __rt_reference_cell_value_release");                // release the value the reference set currently holds
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the managed reference cell
+    emitter.instruction("ldr x13, [sp, #24]");                                  // load the boxed replacement payload
+    emitter.instruction("str x13, [x0]");                                       // publish the replacement to every alias in the reference set
+    emitter.instruction("b __rt_hash_set_done");                                // value_lo, value_hi and value_tag keep describing the cell
 
     emitter.label("__rt_hash_set_write_value");
     emitter.instruction("ldr x13, [sp, #24]");                                  // load value_lo
@@ -223,6 +259,56 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    emit_hash_set_value_aarch64(emitter);
+}
+
+/// Emits the ARM64 `__rt_hash_set_value`, the bucket-replacing sibling of `__rt_hash_set`.
+///
+/// Same ABI as `__rt_hash_set`. The difference is the reference rule: this entry point DETACHES
+/// an existing reference entry instead of writing through it, which is what an array-building
+/// helper needs when it populates a destination that was cloned from a user array. The clone
+/// shares its reference cells with the source, so writing through would mutate the source too.
+///
+/// Copy-on-write runs first so the detach can never touch a table another owner still shares,
+/// and the unique table is what the tail call to `__rt_hash_set` then updates.
+fn emit_hash_set_value_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_set_value ---");
+    emitter.label_global("__rt_hash_set_value");
+    emitter.instruction("sub sp, sp, #64");                                     // reserve slots for the forwarded arguments and the unique table
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the detach frame
+    emitter.instruction("str x1, [sp, #0]");                                    // save key_lo across the split and probe
+    emitter.instruction("str x2, [sp, #8]");                                    // save key_hi across the split and probe
+    emitter.instruction("str x3, [sp, #16]");                                   // save value_lo across the split and probe
+    emitter.instruction("str x4, [sp, #24]");                                   // save value_hi across the split and probe
+    emitter.instruction("str x5, [sp, #32]");                                   // save value_tag across the split and probe
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // split a shared table before detaching anything in it
+    emitter.instruction("str x0, [sp, #40]");                                   // save the unique table pointer
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload key_lo for the entry probe
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload key_hi for the entry probe
+    emitter.instruction("bl __rt_hash_get");                                    // x0 = found, x4 = matching entry address
+    emitter.instruction("cbz x0, __rt_hash_set_value_forward");                 // a missing key is an ordinary insert
+    emitter.instruction("ldr x9, [x4, #40]");                                   // load the existing entry's runtime value tag
+    emitter.instruction("cmp x9, #11");                                         // does this entry belong to a PHP reference set?
+    emitter.instruction("b.ne __rt_hash_set_value_forward");                    // ordinary entries need no detach
+    emitter.instruction("ldr x0, [x4, #24]");                                   // load the managed reference cell this entry owns
+    emitter.instruction("str xzr, [x4, #24]");                                  // retire the detached payload before releasing it
+    emitter.instruction("str xzr, [x4, #32]");                                  // reference entries carry no high payload word
+    emitter.instruction("mov x9, #8");                                          // runtime value tag 8 = null
+    emitter.instruction("str x9, [x4, #40]");                                   // the slot reads as null until the replacement lands
+    emitter.instruction("bl __rt_decref_any");                                  // drop this table's ownership of the reference cell
+    emitter.label("__rt_hash_set_value_forward");
+    emitter.instruction("ldr x0, [sp, #40]");                                   // forward the unique table pointer
+    emitter.instruction("ldr x1, [sp, #0]");                                    // forward key_lo
+    emitter.instruction("ldr x2, [sp, #8]");                                    // forward key_hi
+    emitter.instruction("ldr x3, [sp, #16]");                                   // forward value_lo
+    emitter.instruction("ldr x4, [sp, #24]");                                   // forward value_hi
+    emitter.instruction("ldr x5, [sp, #32]");                                   // forward value_tag
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the detach frame
+    emitter.instruction("b __rt_hash_set");                                     // the entry is now ordinary, so the shared path applies
 }
 
 /// Emits the x86_64 Linux implementation of `__rt_hash_set`.
@@ -361,6 +447,8 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_set_update");
     emitter.instruction("mov r13, QWORD PTR [r12 + 40]");                       // load the overwritten entry's runtime value tag before replacing it
+    emitter.instruction("cmp r13, 11");                                         // does the existing entry belong to a PHP reference set?
+    emitter.instruction("je __rt_hash_set_reference_write_x");                  // reference entries are written through, never detached
     emitter.instruction("cmp r13, 8");                                          // check whether the overwritten value is PHP null
     emitter.instruction("je __rt_hash_set_write_value_x");                      // null owns no heap payload and can be overwritten directly
     emitter.instruction("cmp r13, 1");                                          // check whether the overwritten value is an owned string
@@ -387,6 +475,38 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl r12, 6");                                          // convert the probe index into a 64-byte hash-entry offset
     emitter.instruction("add r12, r10");                                        // advance from the hash-table base pointer to the selected entry block
     emitter.instruction("add r12, 40");                                         // skip the fixed hash header to land on the selected entry
+    emitter.instruction("jmp __rt_hash_set_write_value_x");                     // ordinary released payloads must not fall into reference-cell write-through
+
+    emitter.label("__rt_hash_set_reference_write_x");
+    emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag
+    emitter.instruction("cmp r13, 7");                                          // is the replacement already an owned boxed Mixed cell?
+    emitter.instruction("je __rt_hash_set_reference_release_x");                // an owned box transfers straight into the reference cell
+    emitter.instruction("mov rax, r13");                                        // pass the replacement runtime value tag to the owned-box helper
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the replacement low payload word to the owned-box helper
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the replacement high payload word to the owned-box helper
+    emitter.instruction("call __rt_hash_to_mixed_x86_box_owned");               // box the replacement without adding a retain
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the boxed replacement as the new reference payload
+
+    emitter.label("__rt_hash_set_reference_release_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the boxing helper
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index for entry-address reconstruction
+    emitter.instruction("mov r12, r11");                                        // copy the probe index before scaling it into a byte offset
+    emitter.instruction("shl r12, 6");                                          // convert the probe index into a 64-byte hash-entry offset
+    emitter.instruction("add r12, r10");                                        // advance from the hash-table base pointer to the selected entry block
+    emitter.instruction("add r12, 40");                                         // skip the fixed hash header to land on the selected entry
+    emitter.instruction("mov rax, QWORD PTR [r12 + 24]");                       // load the managed reference cell this entry owns
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the cell across the payload release
+    emitter.instruction("call __rt_reference_cell_value_release");              // release the value the reference set currently holds
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the managed reference cell
+    emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // load the boxed replacement payload
+    emitter.instruction("mov QWORD PTR [rax], r13");                            // publish the replacement to every alias in the reference set
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer after a write-through
+    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the write-through path
+    emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the write-through path
+    emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the write-through path
+    emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the write-through path
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
+    emitter.instruction("ret");                                                 // value_lo, value_hi and value_tag keep describing the cell
 
     emitter.label("__rt_hash_set_write_value_x");
     emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // reload the replacement low payload word for the existing key slot
@@ -402,4 +522,46 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the update path
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the insertion caller
     emitter.instruction("ret");                                                 // return to the caller with the existing hash-table pointer in rax
+
+    emit_hash_set_value_linux_x86_64(emitter);
+}
+
+/// Emits the x86_64 `__rt_hash_set_value`, mirroring [`emit_hash_set_value_aarch64`].
+fn emit_hash_set_value_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_set_value ---");
+    emitter.label_global("__rt_hash_set_value");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before the split and probe
+    emitter.instruction("mov rbp, rsp");                                        // establish the detach frame
+    emitter.instruction("sub rsp, 64");                                         // reserve slots for the forwarded arguments and the unique table
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save key_lo across the split and probe
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save key_hi across the split and probe
+    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save value_lo across the split and probe
+    emitter.instruction("mov QWORD PTR [rbp - 32], r8");                        // save value_hi across the split and probe
+    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save value_tag across the split and probe
+    emitter.instruction("call __rt_hash_ensure_unique");                        // split a shared table before detaching anything in it
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the unique table pointer
+    emitter.instruction("mov rdi, rax");                                        // probe the unique table for the destination key
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload key_lo for the entry probe
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload key_hi for the entry probe
+    emitter.instruction("call __rt_hash_get");                                  // rax = found, r8 = matching entry address
+    emitter.instruction("test rax, rax");                                       // did the destination already contain this key?
+    emitter.instruction("jz __rt_hash_set_value_forward_x");                    // a missing key is an ordinary insert
+    emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                         // does this entry belong to a PHP reference set?
+    emitter.instruction("jne __rt_hash_set_value_forward_x");                   // ordinary entries need no detach
+    emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                        // load the managed reference cell this entry owns
+    emitter.instruction("mov QWORD PTR [r8 + 24], 0");                          // retire the detached payload before releasing it
+    emitter.instruction("mov QWORD PTR [r8 + 32], 0");                          // reference entries carry no high payload word
+    emitter.instruction("mov QWORD PTR [r8 + 40], 8");                          // the slot reads as null until the replacement lands
+    emitter.instruction("call __rt_decref_any");                                // drop this table's ownership of the reference cell
+    emitter.label("__rt_hash_set_value_forward_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // forward the unique table pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // forward key_lo
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // forward key_hi
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // forward value_lo
+    emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // forward value_hi
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // forward value_tag
+    emitter.instruction("add rsp, 64");                                         // release the detach frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_hash_set");                                   // the entry is now ordinary, so the shared path applies
 }

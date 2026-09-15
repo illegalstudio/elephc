@@ -153,6 +153,7 @@ pub enum RuntimeFnId {
     Usort,
     CallUserFunc,
     CallUserFuncArray,
+    CloneWith,
     ClassAlias,
     ClassExists,
     ClassImplements,
@@ -398,6 +399,7 @@ pub enum RuntimeFnId {
     Sqrt,
     Tan,
     Tanh,
+    ElephcCloneOverrideReferenceGuard,
     ElephcObjectIsEnum,
     ElephcObjectPropCount,
     ElephcObjectPropName,
@@ -745,6 +747,12 @@ impl RuntimeFnId {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 _ => declared.clone(),
             },
+            RuntimeFnId::ArrayValues if arg_types.first().is_some_and(PhpType::is_php_array) => {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+            RuntimeFnId::ArrayMerge if arg_types.iter().any(PhpType::is_php_array) => {
+                PhpType::php_array()
+            }
             RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
@@ -758,6 +766,9 @@ impl RuntimeFnId {
             // read the pointer as a Mixed cell and crashed. The `$preserve_keys` hash shape needs
             // a compile-time literal, which a dynamic wrapper cannot provide, so it is dropped
             // from the callable ABI by `refine_runtime_callable_wrapper_sig`.
+            RuntimeFnId::ArrayReverse if arg_types.first().is_some_and(PhpType::is_php_array) => {
+                PhpType::php_array()
+            }
             RuntimeFnId::ArrayReverse => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(element @ (PhpType::Array(_) | PhpType::AssocArray { .. })) => element,
                 _ => declared.clone(),
@@ -850,6 +861,12 @@ impl RuntimeFnId {
     pub fn refine_first_class_callable_sig(self, sig: &mut crate::types::FunctionSig) {
         use crate::types::PhpType;
         match self {
+            RuntimeFnId::CloneWith => {
+                // A first-class invocation can carry a runtime Mixed value that must be checked
+                // before any clone is allocated or hook is invoked. Keep the public builtin
+                // contract typed as array while widening only the callable ABI.
+                set_callable_param_type(sig, 1, PhpType::Mixed);
+            }
             RuntimeFnId::Getenv => {
                 // Preserve null in both direct operands and generated callable wrappers.
                 if let Some((_, name_ty)) = sig.params.get_mut(0) {
@@ -860,6 +877,11 @@ impl RuntimeFnId {
                 if let Some((_, callback_ty)) = sig.params.get_mut(1) {
                     *callback_ty = PhpType::Callable;
                 }
+            }
+            RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect => {
+                // Every invocation route receives the same owned hash-capable Mixed cell.
+                // Do not let an FCC wrapper narrow that ABI to a packed Array<Mixed> pointer.
+                sig.return_type = PhpType::php_array();
             }
             RuntimeFnId::ZvalPack => {
                 if let Some((_, value_ty)) = sig.params.get_mut(0) {
@@ -900,6 +922,14 @@ impl RuntimeFnId {
         use crate::types::PhpType;
         match self {
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
+            RuntimeFnId::CloneWith => {
+                set_callable_param_type(sig, 0, PhpType::Mixed);
+                // Dynamic callable arguments reach the runtime before their PHP parameter type
+                // is known. Preserve the value as Mixed so `CloneWith` can raise the catchable
+                // second-argument TypeError before allocating a clone or invoking `__clone`.
+                set_callable_param_type(sig, 1, PhpType::Mixed);
+                sig.return_type = PhpType::Mixed;
+            }
             // `array_reverse()`'s `$preserve_keys` and `array_slice()`'s `$preserve_keys` pick
             // between an indexed array and an integer-keyed hash, so the backend needs them as
             // compile-time literals. A dynamic callable wrapper receives runtime parameters, so
@@ -914,7 +944,8 @@ impl RuntimeFnId {
                 sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
             }
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => {
-                set_callable_param_type(sig, 0, PhpType::Array(Box::new(PhpType::Int)));
+                set_callable_param_type(sig, 0, PhpType::php_array());
+                sig.return_type = PhpType::Mixed;
             }
             RuntimeFnId::Clamp => {
                 set_callable_param_type(sig, 0, PhpType::Int);
@@ -938,6 +969,39 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            // Clone hooks and property hooks can execute arbitrary user code. I/O effects are
+            // attributed to the nested operation that performs them.
+            RuntimeFnId::CloneWith => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
+            RuntimeFnId::ArrayMultisort => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            // Callback results and snapshots can run destructors independently of the callback body.
+            // Keep every observable callback effect, but classify I/O at the nested runtime
+            // boundary that performs it, not at the surrounding array operation.
+            RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayFind | RuntimeFnId::ArrayAny
+            | RuntimeFnId::ArrayAll | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayUdiff
+            | RuntimeFnId::ArrayUintersect | RuntimeFnId::ArrayWalk
+            | RuntimeFnId::ArrayWalkRecursive => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
+            // Unsupported entries can invoke arbitrary warning handlers, including
+            // mutation of globals and destruction of the replaced source array.
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             // Both transfer drivers may invoke arbitrary PHP callbacks. Keep the
             // callback-capable conservative set, then preserve their typed network and
             // blocking distinctions so optimizer and monitoring consumers agree.
@@ -988,6 +1052,22 @@ impl RuntimeFnId {
                     | crate::ir::Effects::ALLOC_HEAP.bits()
                     | crate::ir::Effects::MAY_THROW.bits(),
             ),
+            RuntimeFnId::ArrayMerge | RuntimeFnId::ArrayReverse | RuntimeFnId::ArrayValues => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            // String conversions, flip warnings and cleanup destructors may execute
+            // arbitrary PHP. Discarded calls must retain these observable effects.
+            // I/O inside those callbacks is monitored at its own runtime boundary;
+            // the join itself does not perform a network or blocking operation.
+            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
@@ -996,7 +1076,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayDiffAssoc |
             RuntimeFnId::ArrayDiffKey |
             RuntimeFnId::ArrayFillKeys |
-            RuntimeFnId::ArrayFlip |
             RuntimeFnId::ArrayIntersect |
             RuntimeFnId::ArrayIntersectAssoc |
             RuntimeFnId::ArrayIntersectKey |
@@ -1005,17 +1084,12 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeyFirst |
             RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
-            RuntimeFnId::ArrayMerge |
             RuntimeFnId::ArrayMergeRecursive |
-            RuntimeFnId::ArrayProduct |
             RuntimeFnId::ArrayReplace |
             RuntimeFnId::ArrayReplaceRecursive |
-            RuntimeFnId::ArrayReverse |
             RuntimeFnId::ArraySearch |
             RuntimeFnId::ArraySlice |
-            RuntimeFnId::ArraySum |
             RuntimeFnId::ArrayUnique |
-            RuntimeFnId::ArrayValues |
             RuntimeFnId::Asin |
             RuntimeFnId::Atan |
             // `base64_decode()` only reads the subject's bytes and writes its answer into a
@@ -1053,7 +1127,6 @@ impl RuntimeFnId {
             RuntimeFnId::Htmlspecialchars |
             RuntimeFnId::Hexdec |
             RuntimeFnId::Hypot |
-            RuntimeFnId::Implode |
             RuntimeFnId::InetNtop |
             RuntimeFnId::InetPton |
             RuntimeFnId::Ip2long |
@@ -1148,7 +1221,16 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_GLOBAL.bits()
                     | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
-            RuntimeFnId::GetClass | RuntimeFnId::GetParentClass => {
+            // The clone override guard only reads one hash entry's reference state, and
+            // raises the catchable refusal itself when that entry is still a PHP reference.
+            RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::MAY_THROW.bits(),
+                )
+            }
+            RuntimeFnId::GetClass
+            | RuntimeFnId::GetParentClass => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_HEAP.bits()
                         | crate::ir::Effects::MAY_THROW.bits(),
@@ -1286,18 +1368,15 @@ impl RuntimeFnId {
     pub const fn intrinsic_effects(self) -> crate::ir::Effects {
         use crate::ir::Effects as E;
         match self {
-            RuntimeFnId::ArrayAll
-            | RuntimeFnId::ArrayAny
-            | RuntimeFnId::ArrayFilter
-            | RuntimeFnId::ArrayFind
-            | RuntimeFnId::ArrayMap
-            | RuntimeFnId::ArrayReduce
-            | RuntimeFnId::ArrayWalk
-            | RuntimeFnId::ArrayWalkRecursive
-            | RuntimeFnId::ArrayUdiff
-            | RuntimeFnId::ArrayUintersect => {
+            RuntimeFnId::ArrayMap => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
+            // Carry, predicate-result and snapshot cleanup can invoke destructors independently
+            // of the selected callback's effect summary. Validation may also throw.
+            RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
+            | RuntimeFnId::ArrayAny | RuntimeFnId::ArrayAll
+            | RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect
+            | RuntimeFnId::ArrayWalk | RuntimeFnId::ArrayWalkRecursive => self.effects(),
             RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
             ),
@@ -1563,7 +1642,11 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::ArraySum
+                | RuntimeFnId::ArrayProduct
+                | RuntimeFnId::CloneWith
                 | RuntimeFnId::Gettype
+                | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
         )
     }
@@ -1573,6 +1656,9 @@ impl RuntimeFnId {
         use crate::types::PhpType;
         let source = source.map(PhpType::codegen_repr);
         match self {
+            RuntimeFnId::CloneWith => source.is_none_or(|ty| {
+                matches!(ty, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_))
+            }),
             RuntimeFnId::Abs => source.is_none_or(|ty| {
                 matches!(
                     ty,
@@ -1586,7 +1672,8 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::Gettype => true,
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct
+            | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
@@ -1625,6 +1712,18 @@ impl RuntimeFnId {
             RuntimeFnId::Opendir => Some(ResourceCleanupKind::Directory),
             _ => None,
         }
+    }
+
+    /// Returns whether this operation can add an owned OS handle to the resource inventory.
+    pub const fn produces_resource_inventory_entry(self) -> bool {
+        matches!(
+            self,
+            RuntimeFnId::Fopen
+                | RuntimeFnId::Fsockopen
+                | RuntimeFnId::Opendir
+                | RuntimeFnId::Popen
+                | RuntimeFnId::Tmpfile
+        )
     }
 
     /// Returns whether this operation can publish PHAR bridge helper symbols.
@@ -1706,10 +1805,15 @@ impl RuntimeFnId {
         if matches!(
             self,
             RuntimeFnId::IntvalBase
+                | RuntimeFnId::ArrayAny
+                | RuntimeFnId::ArrayAll
                 | RuntimeFnId::BcComp
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
                 | RuntimeFnId::IconvSetEncoding
+                // The clone override reference guard answers nothing at all: it returns or
+                // throws, so a result temporary would only keep the override array alive.
+                | RuntimeFnId::ElephcCloneOverrideReferenceGuard
         ) {
             return BuiltinResultOwnership::NonHeap;
         }
@@ -1824,6 +1928,8 @@ impl RuntimeFnId {
                 // `ArrayKeys` / `ArrayValues` were already listed here; this was the gap.
                 | RuntimeFnId::ArrayCountValues
                 | RuntimeFnId::ArrayFlip
+                | RuntimeFnId::ArrayFind
+                | RuntimeFnId::ArrayFilter
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap
@@ -1835,11 +1941,18 @@ impl RuntimeFnId {
                 // the box is independently owned and never aliases the receiving array.
                 | RuntimeFnId::ArrayPtrKey
                 | RuntimeFnId::ArrayPtrValue
+                | RuntimeFnId::ArrayProduct
+                | RuntimeFnId::ArrayReduce
                 | RuntimeFnId::ArrayReplace
                 | RuntimeFnId::ArrayReplaceRecursive
                 | RuntimeFnId::ArrayReverse
                 | RuntimeFnId::ArrayShift
                 | RuntimeFnId::ArraySlice
+                | RuntimeFnId::ArraySum
+                // Comparator set operations always allocate a fresh hash-backed result and
+                // retain each selected value independently of both borrowed source operands.
+                | RuntimeFnId::ArrayUdiff
+                | RuntimeFnId::ArrayUintersect
                 | RuntimeFnId::ArrayUnique
                 | RuntimeFnId::ArrayValues
                 // `base64_decode()`'s result is `string|false`, so its lowering boxes BOTH
@@ -1923,6 +2036,10 @@ impl RuntimeFnId {
                 // bucket would keep an owned name temporary — and skip releasing the hash.
                 | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
+                | RuntimeFnId::CloneWith
+                // The join lowerer persists every result before retiring normalized
+                // input values, so destructor reentry cannot overwrite returned bytes.
+                | RuntimeFnId::Implode
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
@@ -1963,6 +2080,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::PrintR
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
+                // `str_repeat()` allocates the repeated bytes independently of its subject.
+                // Marking it as possibly aliasing made closure return analysis conservative,
+                // so callers failed to publish the fresh result before argument cleanup that
+                // can run a throwing destructor.
+                | RuntimeFnId::StrRepeat
                 | RuntimeFnId::StrSplit
                 // Every `str_word_count()` shape allocates its own result: format 0 is a plain
                 // integer, format 1 pushes persisted copies into a brand-new indexed array, and
@@ -2004,6 +2126,13 @@ impl RuntimeFnId {
         } else if matches!(
             self,
             RuntimeFnId::BaseConvert
+                // Type names live in static data, never in the inspected value. A possible
+                // alias would suppress cleanup of boxed array/property read temporaries.
+                | RuntimeFnId::Gettype
+                // Class names come from metadata, including Closure and incomplete-class
+                // literals, not the inspected object's storage or its boxed read cell.
+                | RuntimeFnId::GetClass
+                | RuntimeFnId::GetParentClass
                 // `__rt_chunk_split` always writes into a reservation taken from
                 // `__rt_concat_reserve`, so the split result can never alias the subject or
                 // the separator. The default `MayAliasArguments` bucket kept an owned subject
@@ -2015,7 +2144,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::Decoct
                 | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
-                | RuntimeFnId::Implode
+                // Replacement always writes into a separate concat reservation, even
+                // for an empty search or no match. It never returns an argument view,
+                // but scratch-backed results still need ordinary string persistence.
+                | RuntimeFnId::StrReplace
+                | RuntimeFnId::StrIreplace
         ) {
             BuiltinResultOwnership::Independent
         } else {
@@ -2093,6 +2226,7 @@ impl RuntimeFnId {
             RuntimeFnId::Usort => "usort",
             RuntimeFnId::CallUserFunc => "call_user_func",
             RuntimeFnId::CallUserFuncArray => "call_user_func_array",
+            RuntimeFnId::CloneWith => "clone",
             RuntimeFnId::ClassAlias => "class_alias",
             RuntimeFnId::ClassExists => "class_exists",
             RuntimeFnId::ClassImplements => "class_implements",
@@ -2337,6 +2471,9 @@ impl RuntimeFnId {
             RuntimeFnId::Sqrt => "sqrt",
             RuntimeFnId::Tan => "tan",
             RuntimeFnId::Tanh => "tanh",
+            RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
+                "__elephc_clone_override_reference_guard"
+            }
             RuntimeFnId::ElephcObjectIsEnum => "__elephc_object_is_enum",
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",
@@ -2573,6 +2710,8 @@ impl RuntimeFnId {
 /// Truncates a runtime callable signature while keeping all parameter metadata aligned.
 fn truncate_callable_params(sig: &mut crate::types::FunctionSig, count: usize) {
     sig.params.truncate(count);
+    sig.param_type_exprs.truncate(count);
+    sig.param_attributes.truncate(count);
     sig.defaults.truncate(count);
     sig.ref_params.truncate(count);
     sig.declared_params.truncate(count);

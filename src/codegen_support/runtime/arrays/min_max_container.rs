@@ -360,7 +360,7 @@ fn emit_min_max_str_x86_64(emitter: &mut Emitter) {
 
 /// Emits `__rt_min_max_hash`: reduces a hash-backed associative array's values.
 ///
-/// Walks the table in insertion order through `__rt_hash_iter_next`, normalizing
+/// Walks the table in insertion order through `__rt_hash_iter_next_value`, normalizing
 /// boxed entries (runtime tag 7) with `__rt_mixed_unbox` so values of any type
 /// reach `__rt_php_compare` as a concrete triple. Input and output registers
 /// match `__rt_min_max_mixed`; string payloads stay borrowed from the table.
@@ -391,7 +391,7 @@ pub fn emit_min_max_hash(emitter: &mut Emitter) {
     emitter.label("__rt_mmh_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source hash pointer for the iterator
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the insertion-order cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next entry with cursor x0, payload x3/x4, and tag x5
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next entry with cursor x0, payload x3/x4, and tag x5
     emitter.instruction("cmn x0, #1");                                          // did the iterator return its terminal negative-one cursor?
     emitter.instruction("b.eq __rt_mmh_done");                                  // finish once every entry has been folded in
     emitter.instruction("str x0, [sp, #8]");                                    // preserve the next insertion-order cursor
@@ -463,7 +463,7 @@ fn emit_min_max_hash_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mmh_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source hash pointer for the iterator
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the insertion-order cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next entry with cursor rax, payload rcx/r8, and tag r9
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next entry with cursor rax, payload rcx/r8, and tag r9
     emitter.instruction("cmp rax, -1");                                         // did the iterator return its terminal cursor?
     emitter.instruction("je __rt_mmh_done_x86");                                // finish once every entry has been folded in
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the next insertion-order cursor

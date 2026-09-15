@@ -1,5 +1,5 @@
 <?php
-// Array builtin parity — a tour of the array helpers added in the parity work.
+// Array builtin parity: a tour of the array helpers added in the parity work.
 
 // --- list shape and edge keys ---
 $list = [10, 20, 30];
@@ -9,6 +9,92 @@ echo "is_list(list):  " . (array_is_list($list) ? "true" : "false") . "\n";
 echo "is_list(hash):  " . (array_is_list($hash) ? "true" : "false") . "\n";
 echo "first key:      " . array_key_first($hash) . "\n";
 echo "last key:       " . array_key_last($hash) . "\n";
+
+// --- reversal through PHP array parameters ---
+// PHP array parameters can contain lists or sparse maps without losing their keys.
+function printNewestFirst(array $events, bool $keepIds): void {
+    $reversed = array_reverse($events, preserve_keys: $keepIds);
+    echo implode(", ", array_keys($reversed)), ": ", implode(", ", $reversed), "\n";
+}
+printNewestFirst([10 => "opened", "note" => "reviewed", 40 => "closed"], true);
+printNewestFirst(["opened", "reviewed", "closed"], false);
+
+// --- membership through a reusable PHP array parameter ---
+function eventIsAllowed(string $event, array $allowed): bool {
+    return in_array($event, $allowed, true);
+}
+echo 'allowed: ', eventIsAllowed('reviewed', ['first' => 'opened', 'next' => 'reviewed']) ? 'yes' : 'no', "\n";
+
+// --- remove queue endpoints without changing an earlier value snapshot ---
+function takeQueueEdges(array &$queue): void {
+    echo 'first: ', array_shift($queue), ', last: ', array_pop($queue), "\n";
+}
+$queue = ['opened', 'reviewed', 'closed'];
+$queueSnapshot = $queue;
+takeQueueEdges($queue);
+echo 'remaining: ', implode(', ', $queue), '; snapshot: ', implode(', ', $queueSnapshot), "\n";
+
+// --- prepend to a shared queue through a declared array reference ---
+function prependQueueEvent(array &$queue, string $event): int {
+    return array_unshift($queue, $event);
+}
+echo 'queued: ', prependQueueEvent($queue, 'reopened'), ': ', implode(', ', $queue), "\n";
+
+// A nullable page size distinguishes an open-ended slice from an empty page.
+function eventPage(array $events, ?int $limit = null): array {
+    return array_slice($events, 1, $limit);
+}
+echo 'remaining page: ', implode(', ', eventPage(['opened', 'reviewed', 'closed'])), "\n";
+echo 'empty page: ', count(eventPage(['opened', 'reviewed', 'closed'], 0)), "\n";
+
+// Sorting a declared array parameter leaves the caller's original order intact.
+function sortedEventNames(array $events): array {
+    sort($events);
+    return $events;
+}
+echo 'sorted: ', implode(', ', sortedEventNames($queue)), "\n";
+
+// Build a reverse lookup through a declared PHP array boundary.
+function eventIdsByName(array $events): array {
+    return array_flip($events);
+}
+$eventIds = eventIdsByName([10 => 'opened', 20 => 'reviewed', 30 => 'closed']);
+echo 'reviewed event: ', $eventIds['reviewed'], "\n";
+
+// --- callbacks preserve keys through the same PHP array boundary ---
+function labelEvents(array $events): array {
+    return array_map(fn(mixed $event): string => "event:" . $event, $events);
+}
+echo implode(", ", labelEvents([10 => "opened", "note" => "reviewed"])), "\n";
+
+// Reduction keeps a string carry through a declared PHP array boundary.
+function eventSummary(array $events): mixed {
+    return array_reduce($events, fn($summary, $event) => $summary . " " . $event, "events:");
+}
+echo eventSummary([10 => "opened", "note" => "reviewed"]), "\n";
+echo eventSummary([]), "\n";
+
+// Decimal totals survive declared PHP arrays and numeric-string values.
+function eventCosts(array $amounts): mixed { return array_sum($amounts); }
+echo 'event cost: ', eventCosts(['opened' => 1.5, 'reviewed' => '2.25']), "\n";
+echo 'cost multiplier: ', array_product([1.5, '2']), "\n";
+
+// --- keep captured formatters in a returned PHP array ---
+function eventFormatters(string $prefix): array {
+    return [function(string $event) use ($prefix): string { return $prefix . $event; }];
+}
+$formatters = eventFormatters("audit:");
+$formatter = $formatters[0];
+unset($formatters);
+echo implode(", ", array_map($formatter, ["opened", "reviewed"])), "\n";
+unset($formatter);
+
+// --- merge list entries and named settings through PHP array parameters ---
+function mergeEventSettings(array $defaults, array $overrides): array {
+    return array_merge($defaults, $overrides);
+}
+$settings = mergeEventSettings([10 => "opened", "mode" => "draft"], [30 => "closed", "mode" => "review"]);
+echo "merge: ", implode(", ", array_keys($settings)), ": ", implode(", ", $settings), "\n";
 
 // --- hash set operations (right-wins replace, recursive replace) ---
 $base = ["host" => "localhost", "port" => 80];
@@ -73,3 +159,24 @@ foreach ($keys as $v) { echo $v; }
 echo "\nmultisort vals: ";
 foreach ($vals as $v) { echo $v; }
 echo "\n";
+
+// Declared PHP arrays let a reusable sorter combine numeric priorities and names.
+function sortWorkQueue(array &$priorities, array &$names): void {
+    array_multisort($priorities, $names);
+}
+$priorities = [2, 1, 2];
+$names = ["review", "build", "docs"];
+$originalNames = $names;
+sortWorkQueue($priorities, $names);
+echo "work queue: ", implode(", ", $names), "\n";
+echo "original:   ", implode(", ", $originalNames), "\n";
+
+// A boxed associative array keeps its keys while the callback updates each value.
+function applyPriceDiscount(array &$prices): void {
+    array_walk($prices, function(mixed &$price): void { $price = $price - 5; });
+}
+$prices = ["book" => 20, "lamp" => 35];
+$originalPrices = $prices;
+applyPriceDiscount($prices);
+echo "discounted: ", implode(", ", $prices), "\n";
+echo "original:   ", implode(", ", $originalPrices), "\n";

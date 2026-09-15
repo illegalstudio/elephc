@@ -1,16 +1,16 @@
 ---
-title: "array_reverse() — internals"
+title: "array_reverse() - internals"
 description: "Compiler internals for array_reverse(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 35
 ---
 
-## `array_reverse()` — internals
+## `array_reverse()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_reverse.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_reverse.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
 - **Result ownership**: `fresh`
-- **Effects**: `static (0 declared effects)`
+- **Effects**: `static (5 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`

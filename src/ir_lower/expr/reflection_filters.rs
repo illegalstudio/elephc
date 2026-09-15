@@ -344,16 +344,12 @@ pub(super) fn reflection_method_filter_modifier_bits(
     modifiers
 }
 
-/// Returns whether a property has hook metadata that makes it virtual.
+/// Reads backing-storage metadata instead of treating every hooked property as virtual.
 pub(super) fn reflection_property_filter_is_virtual(
     class_info: &crate::types::ClassInfo,
     property: &str,
 ) -> bool {
-    let get_method = php_symbol_key(&property_hook_get_method(property));
-    let set_method = php_symbol_key(&property_hook_set_method(property));
-    class_info.abstract_property_hooks.contains_key(property)
-        || class_info.methods.contains_key(&get_method)
-        || class_info.methods.contains_key(&set_method)
+    class_info.property_is_virtual(property)
 }
 
 /// Builds the ReflectionProperty modifier bitmask for filter matching.
@@ -397,4 +393,3 @@ pub(super) fn reflection_property_filter_modifier_bits(
     }
     modifiers
 }
-

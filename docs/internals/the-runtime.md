@@ -311,7 +311,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_mixed_sort_require_scalars` | Guard `sort()` / `rsort()` on a runtime-typed (`Array(Mixed)`) array: walks every element first and terminates with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported` for a nested array, object, resource, or boxed callable, so an unsupported container is refused instead of ordered wrongly | `x0` = array | — |
 | `__rt_str_persist` | Copy string from concat_buf to heap (skips .data/heap) | `x1`/`x2` = str | `x1`/`x2` = heap str |
 
-Common copy-producing array/hash routines now also have dedicated `_refcounted` siblings for nested heap-backed payloads. These variants retain borrowed values before pushing or inserting them into freshly allocated arrays/hash tables, covering array literals with spreads plus `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, and `array_fill_keys`.
+Common copy-producing array/hash routines now also have dedicated `_refcounted` siblings for nested heap-backed payloads. These variants retain borrowed values before pushing or inserting them into freshly allocated arrays/hash tables, covering array literals with spreads plus `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_splice`, `array_diff`, `array_intersect`, `array_fill`, `array_combine`, and `array_fill_keys`. Filtering uses the storage-neutral boxed predicate runtime instead, preserving logical keys and PHP value types in an independently owned result.
 
 | Refcounted sibling | What it does |
 |---|---|
@@ -323,7 +323,6 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 | `__rt_array_diff_refcounted` / `__rt_array_intersect_refcounted` | Set-style comparisons that keep nested heap-backed values alive |
 | `__rt_array_combine_refcounted` | Combine key/value arrays into a hash while retaining heap-backed values |
 | `__rt_array_chunk_refcounted` | Split an array into retained heap-backed chunks |
-| `__rt_array_filter_refcounted` | Filter an array of heap-backed elements without dropping borrowed payloads; an optional third argument carries a captured-closure environment |
 | `__rt_array_merge_into_refcounted` | Append one indexed array into another in-place while retaining nested heap-backed elements |
 
 ### Hash table (for associative arrays)
@@ -399,7 +398,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_map_str` | Apply callback to each scalar or string element and return a string array; an optional third argument carries a captured-closure environment |
 | `__rt_array_map_str_owned` | Apply a descriptor-wrapper callback that returns owned strings and transfer those strings directly into the result array |
 | `__rt_array_map_mixed` | Apply a descriptor-backed callback that returns owned boxed Mixed cells and store them directly into a newly allocated result array |
-| `__rt_array_filter` | Filter scalar elements where callback returns truthy; an optional third argument carries a captured-closure environment |
+| `__rt_array_predicate_boxed` | Search (`array_find`/`array_any`/`array_all`) or filter packed/hash arrays through value/key triples and PHP truthiness. Consumes a callback descriptor, borrows the source triple, and returns an owned Mixed result. Filter modes preserve keys; a null descriptor removes empty values. A retained source snapshot and resumable exception boundary protect all helper-owned values. |
 | `__rt_array_reduce` | Reduce an indexed array of 8-byte payload slots to a single value via callback; an optional fourth argument carries a captured-callback environment |
 | `__rt_array_reduce_str` | Reduce an indexed string array's 16-byte `[ptr][len]` slots into one integer accumulator, passing each element to the callback as a pointer/length pair; an optional fourth argument carries a captured-callback environment |
 | `__rt_array_walk` | Call callback on each element (side-effects); an optional third argument carries a captured-callback environment |

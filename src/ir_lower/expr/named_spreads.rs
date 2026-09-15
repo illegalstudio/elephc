@@ -104,14 +104,7 @@ pub(super) fn emit_named_spread_bounds_guard(
     if check.min_len == 0 && check.max_len.is_none() {
         return;
     }
-    let len = ctx.emit_value(
-        Op::ArrayLen,
-        vec![spread],
-        None,
-        PhpType::Int,
-        Op::ArrayLen.default_effects(),
-        Some(span),
-    );
+    let len = lower_spread_length(ctx, spread, span);
     emit_named_spread_min_len_guard(ctx, len.value, check.min_len, span);
     emit_named_spread_max_len_guard(
         ctx,
@@ -219,6 +212,7 @@ pub(super) fn lower_assoc_spread_only_args(
         return None;
     }
     let spread = lower_expr(ctx, inner);
+    let spread = root_evaluated_call_argument(ctx, spread, inner.span);
     let spread_type = ctx.builder.value_php_type(spread.value);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
     store_value_into_temp(ctx, &temp_name, spread_type, spread, arg.span);
@@ -227,7 +221,7 @@ pub(super) fn lower_assoc_spread_only_args(
     for (idx, (param_name, _)) in sig.params.iter().enumerate() {
         let default = sig.defaults.get(idx).and_then(|default| default.as_ref());
         let param_expr = assoc_spread_param_expr(&spread_expr, param_name, default, arg.span);
-        operands.push(lower_expr(ctx, &param_expr).value);
+        operands.push(lower_arg_with_signature(ctx, sig, idx, &param_expr));
     }
     Some(operands)
 }

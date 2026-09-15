@@ -1,16 +1,16 @@
 ---
-title: "ksort() — internals"
+title: "ksort() - internals"
 description: "Compiler internals for ksort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 58
 ---
 
-## `ksort()` — internals
+## `ksort()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/ksort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/ksort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

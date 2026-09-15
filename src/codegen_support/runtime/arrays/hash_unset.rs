@@ -6,12 +6,12 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - Copy-on-write splits the table first (via `__rt_hash_ensure_unique`), then linear-probes
-//!   for the key exactly like `__rt_hash_get`, releasing the owned key/value payloads, marking
-//!   the slot as a tombstone (occupied = 2, so probe chains for other keys stay intact),
-//!   unlinking the entry from the insertion-order chain, and decrementing the live count.
-//! - A missing key (or null/empty table) is a no-op. The (possibly cloned) table pointer is
-//!   returned so the caller can store it back into the array local.
+//! - Callers split and publish the unique table before entry, then this helper probes for
+//!   the key, releases its string storage, unlinks and tombstones the entry, and decrements
+//!   the live count before releasing the value owner.
+//! - Value release can invoke PHP or throw; no table or entry writes occur after that call.
+//! - A missing key (or null/empty table) is a no-op. Callers must not republish the returned
+//!   pointer: a destructor may already have replaced or freed the receiver's table.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -21,13 +21,13 @@ use crate::codegen_support::platform::Arch;
 ///
 /// Removes the entry matching the supplied key from a hash table, releasing its owned key
 /// and value payloads and preserving probe chains (tombstone) and insertion order (chain
-/// unlink). The table is split copy-on-write before mutation so shared arrays are not
-/// corrupted, mirroring `__rt_hash_set`.
+/// unlink). The caller must pass a unique table already installed in its owner storage;
+/// no copy-on-write split or receiver writeback may happen after removal starts.
 ///
 /// Input:  x0 = hash table pointer, x1 = key_lo, x2 = key_hi
 ///         (key_hi = -1 means an integer key with key_lo = value; otherwise a string key
 ///          with key_lo = pointer and key_hi = length)
-/// Output: x0 = the unique (possibly cloned) hash table pointer
+/// Output: x0 = the incoming table pointer, possibly retired by a reentrant destructor
 pub fn emit_hash_unset(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_unset_linux_x86_64(emitter);
@@ -55,8 +55,7 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save key_lo across the COW/hash helper calls
     emitter.instruction("str x2, [sp, #16]");                                   // save key_hi across the COW/hash helper calls
 
-    // -- copy-on-write: split a shared table before mutating it --
-    emitter.instruction("bl __rt_hash_ensure_unique");                          // x0 = unique table (original or cloned)
+    // -- the caller has already published unique storage before any destructor can run --
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique table pointer
     emitter.instruction("ldr x5, [x0, #8]");                                    // load capacity before hashing to avoid divide-by-zero
     emitter.instruction("cbz x5, __rt_hash_unset_done");                        // empty table: nothing to remove
@@ -115,7 +114,7 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #32]");                                  // save updated probe count
     emitter.instruction("b __rt_hash_unset_probe");                             // probe the next slot
 
-    // -- key found: release payloads, tombstone, unlink, decrement count --
+    // -- key found: release the key, unlink the entry, then release its value --
     emitter.label("__rt_hash_unset_found");
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload table pointer (key_eq clobbered registers)
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload matched probe index
@@ -136,29 +135,7 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_hash_unset_after_key");                      // key still shared: keep it alive
     emitter.instruction("bl __rt_heap_free");                                   // last owner: free the persisted key storage
 
-    // -- release the owned value payload based on its runtime tag --
     emitter.label("__rt_hash_unset_after_key");
-    emitter.instruction("ldr x12, [sp, #40]");                                  // reload the matched entry address
-    emitter.instruction("ldr x14, [x12, #40]");                                 // load the value tag
-    emitter.instruction("cmp x14, #8");                                         // null value?
-    emitter.instruction("b.eq __rt_hash_unset_unlink");                         // null owns no heap storage
-    emitter.instruction("cmp x14, #1");                                         // string value?
-    emitter.instruction("b.eq __rt_hash_unset_release_any");                    // strings release through the dispatcher
-    emitter.instruction("cmp x14, #10");                                        // callable descriptor value?
-    emitter.instruction("b.eq __rt_hash_unset_release_callable");               // descriptors use the descriptor helper
-    emitter.instruction("cmp x14, #4");                                         // heap-backed payload (tags 4-7)?
-    emitter.instruction("b.hs __rt_hash_unset_release_any");                    // arrays/hashes/objects/mixed via dispatcher
-    emitter.instruction("b __rt_hash_unset_unlink");                            // scalars/bools/floats own no heap storage
-
-    emitter.label("__rt_hash_unset_release_any");
-    emitter.instruction("ldr x0, [x12, #24]");                                  // load the heap-backed value pointer
-    emitter.instruction("bl __rt_decref_any");                                  // release the value through the uniform dispatcher
-    emitter.instruction("b __rt_hash_unset_unlink");                            // continue to the insertion-order unlink
-
-    emitter.label("__rt_hash_unset_release_callable");
-    emitter.instruction("ldr x0, [x12, #24]");                                  // load the callable descriptor pointer
-    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the callable descriptor
-
     // -- unlink the entry from the insertion-order chain --
     emitter.label("__rt_hash_unset_unlink");
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload the matched entry address
@@ -200,6 +177,26 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
     emitter.instruction("sub x14, x14, #1");                                    // one fewer live entry after removal
     emitter.instruction("str x14, [x5, #0]");                                   // store the decremented count
 
+    // -- detach the retired payload before any PHP destructor can reenter this table --
+    emitter.instruction("ldr x0, [x12, #24]");                                  // take the removed value owner before its tombstone can be reused
+    emitter.instruction("ldr x14, [x12, #40]");                                 // keep the value tag outside the retired entry
+    emitter.instruction("stp xzr, xzr, [x12, #8]");                             // clear the released key pointer and key length
+    emitter.instruction("stp xzr, xzr, [x12, #24]");                            // clear the removed payload words before callback entry
+    emitter.instruction("str xzr, [x12, #40]");                                 // retire the old value tag with its payload
+    emitter.instruction("cmp x14, #8");                                         // null values have no heap owner
+    emitter.instruction("b.eq __rt_hash_unset_done");                           // return with the removal already committed
+    emitter.instruction("cmp x14, #1");                                         // string values release through the uniform dispatcher
+    emitter.instruction("b.eq __rt_hash_unset_release_any");                    // retire the detached string owner
+    emitter.instruction("cmp x14, #10");                                        // callable descriptors require their dedicated release
+    emitter.instruction("b.eq __rt_hash_unset_release_callable");               // retire the detached descriptor owner
+    emitter.instruction("cmp x14, #4");                                         // container and object tags carry heap owners
+    emitter.instruction("b.lo __rt_hash_unset_done");                           // scalar values need no release
+    emitter.label("__rt_hash_unset_release_any");
+    emitter.instruction("bl __rt_decref_any");                                  // release only after the table is consistent for reentrant PHP
+    emitter.instruction("b __rt_hash_unset_done");                              // never rewrite a table that the destructor may have replaced
+    emitter.label("__rt_hash_unset_release_callable");
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // release captures after retiring their table entry
+
     // -- return the unique table pointer --
     emitter.label("__rt_hash_unset_done");
     emitter.instruction("ldr x0, [sp, #0]");                                    // return the unique (possibly cloned) table
@@ -218,9 +215,9 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
 /// Emits the x86_64 Linux variant of `__rt_hash_unset`.
 ///
 /// Uses the SysV ABI: rdi = hash table pointer, rsi = key_lo, rdx = key_hi
-/// (key_hi = -1 means an integer key). Returns the unique (possibly cloned) table in rax.
-/// Mirrors the AArch64 logic: COW split, linear probe like `__rt_hash_get`, payload release,
-/// tombstone, insertion-order unlink, and live-count decrement.
+/// (key_hi = -1 means an integer key). The caller has already split and published the table.
+/// Mirrors the AArch64 logic: linear probe, key release, unlink, tombstone, count decrement,
+/// then detached value release. The returned input pointer is not safe for receiver writeback.
 fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_unset ---");
@@ -241,10 +238,9 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save key_lo across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save key_hi across helper calls
 
-    // -- copy-on-write: split a shared table before mutating it --
-    emitter.instruction("call __rt_hash_ensure_unique");                        // rax = unique table (rdi already = table)
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique table pointer
-    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // load capacity before hashing
+    // -- the caller has already published unique storage before any destructor can run --
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the unique table pointer
+    emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                        // load capacity before hashing
     emitter.instruction("test r11, r11");                                       // empty table?
     emitter.instruction("jz __rt_hash_unset_done");                             // nothing to remove from an empty table
 
@@ -301,7 +297,7 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // persist the updated probe count
     emitter.instruction("jmp __rt_hash_unset_probe");                           // probe the next slot
 
-    // -- key found: release payloads, tombstone, unlink, decrement count --
+    // -- key found: release the key, unlink the entry, then release its value --
     emitter.label("__rt_hash_unset_found");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload table pointer (key_eq clobbered it)
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload matched probe index
@@ -327,29 +323,7 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_hash_unset_after_key");                       // key still shared: keep it alive
     emitter.instruction("call __rt_heap_free");                                 // last owner: free the persisted key (rax = ptr)
 
-    // -- release the owned value payload based on its runtime tag --
     emitter.label("__rt_hash_unset_after_key");
-    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // reload the matched entry address
-    emitter.instruction("mov r9, QWORD PTR [r8 + 40]");                         // load the value tag
-    emitter.instruction("cmp r9, 8");                                           // null value?
-    emitter.instruction("je __rt_hash_unset_unlink");                           // null owns no heap storage
-    emitter.instruction("cmp r9, 1");                                           // string value?
-    emitter.instruction("je __rt_hash_unset_release_any");                      // strings release through the dispatcher
-    emitter.instruction("cmp r9, 10");                                          // callable descriptor value?
-    emitter.instruction("je __rt_hash_unset_release_callable");                 // descriptors use the descriptor helper
-    emitter.instruction("cmp r9, 4");                                           // heap-backed payload (tags 4-7)?
-    emitter.instruction("jae __rt_hash_unset_release_any");                     // arrays/hashes/objects/mixed via dispatcher
-    emitter.instruction("jmp __rt_hash_unset_unlink");                          // scalars/bools/floats own no heap storage
-
-    emitter.label("__rt_hash_unset_release_any");
-    emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                        // load the heap-backed value pointer
-    emitter.instruction("call __rt_decref_any");                                // release the value through the uniform dispatcher
-    emitter.instruction("jmp __rt_hash_unset_unlink");                          // continue to the insertion-order unlink
-
-    emitter.label("__rt_hash_unset_release_callable");
-    emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                        // load the callable descriptor pointer
-    emitter.instruction("call __rt_callable_descriptor_release");               // release the callable descriptor
-
     // -- unlink the entry from the insertion-order chain --
     emitter.label("__rt_hash_unset_unlink");
     emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // reload the matched entry address
@@ -390,6 +364,28 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rax, 1");                                          // one fewer live entry after removal
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store the decremented count
 
+    // -- detach the retired payload before any PHP destructor can reenter this table --
+    emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                        // take the removed value owner before its tombstone can be reused
+    emitter.instruction("mov r9, QWORD PTR [r8 + 40]");                         // keep the value tag outside the retired entry
+    emitter.instruction("mov QWORD PTR [r8 + 8], 0");                           // clear the released key pointer
+    emitter.instruction("mov QWORD PTR [r8 + 16], 0");                          // clear the retired key length
+    emitter.instruction("mov QWORD PTR [r8 + 24], 0");                          // detach the payload before callback entry
+    emitter.instruction("mov QWORD PTR [r8 + 32], 0");                          // clear the payload high word
+    emitter.instruction("mov QWORD PTR [r8 + 40], 0");                          // retire the old value tag with its payload
+    emitter.instruction("cmp r9, 8");                                           // null values have no heap owner
+    emitter.instruction("je __rt_hash_unset_done");                             // return with the removal already committed
+    emitter.instruction("cmp r9, 1");                                           // string values release through the uniform dispatcher
+    emitter.instruction("je __rt_hash_unset_release_any");                      // retire the detached string owner
+    emitter.instruction("cmp r9, 10");                                          // callable descriptors require their dedicated release
+    emitter.instruction("je __rt_hash_unset_release_callable");                 // retire the detached descriptor owner
+    emitter.instruction("cmp r9, 4");                                           // container and object tags carry heap owners
+    emitter.instruction("jb __rt_hash_unset_done");                             // scalar values need no release
+    emitter.label("__rt_hash_unset_release_any");
+    emitter.instruction("call __rt_decref_any");                                // release only after the table is consistent for reentrant PHP
+    emitter.instruction("jmp __rt_hash_unset_done");                            // never rewrite a table that the destructor may have replaced
+    emitter.label("__rt_hash_unset_release_callable");
+    emitter.instruction("call __rt_callable_descriptor_release");               // release captures after retiring their table entry
+
     // -- return the unique table pointer --
     emitter.label("__rt_hash_unset_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unique (possibly cloned) table
@@ -403,4 +399,51 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
+
+    /// All targets detach the entry before callbacks and leave reentrant receiver updates intact.
+    #[test]
+    fn hash_unset_commits_removal_before_releasing_values_on_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_hash_unset(&mut emitter);
+            let asm = emitter.output();
+            assert!(!asm.contains("__rt_hash_ensure_unique"), "{target:?}: {asm}");
+            let unlink = asm.find("__rt_hash_unset_unlink:").unwrap();
+            let tombstone = asm.find("__rt_hash_unset_tombstone:").unwrap();
+            let release = asm.find("__rt_hash_unset_release_any:").unwrap();
+            let (count_write, tag_clear, heap_call, descriptor_call) = match target.arch {
+                Arch::AArch64 => (
+                    "str x14, [x5, #0]", "str xzr, [x12, #40]",
+                    "bl __rt_decref_any", "bl __rt_callable_descriptor_release",
+                ),
+                Arch::X86_64 => (
+                    "mov QWORD PTR [r10], rax", "mov QWORD PTR [r8 + 40], 0",
+                    "call __rt_decref_any", "call __rt_callable_descriptor_release",
+                ),
+            };
+            let count = asm.find(count_write).unwrap();
+            let clear = asm.find(tag_clear).unwrap();
+            assert!(unlink < tombstone && tombstone < count && count < clear && clear < release,
+                "removal must be visible before callbacks on {target:?}: {asm}");
+            assert!(asm.find(heap_call).unwrap() > release, "{target:?}: {asm}");
+            assert!(asm.find(descriptor_call).unwrap() > release, "{target:?}: {asm}");
+            let after_release = &asm[release..];
+            for table_register in ["[x12", "[x5", "[r8", "[r10"] {
+                assert!(!after_release.contains(table_register),
+                    "retired table accessed after callback on {target:?}: {after_release}");
+            }
+        }
+    }
 }

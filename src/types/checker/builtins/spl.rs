@@ -191,9 +191,13 @@ pub(crate) fn iterator_apply_callback_args<'a>(
         }
         _ => {
             let args_ty = checker.infer_type(args_expr, env)?;
-            if matches!(args_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            if args_ty.is_php_array()
+                || matches!(args_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            {
                 Ok(IteratorApplyArgs::Dynamic {
-                    associative: matches!(args_ty, PhpType::AssocArray { .. }),
+                    // A declared array can carry named keys even when its layout is opaque.
+                    associative: args_ty.is_php_array()
+                        || matches!(args_ty, PhpType::AssocArray { .. }),
                 })
             } else {
                 Err(CompileError::new(

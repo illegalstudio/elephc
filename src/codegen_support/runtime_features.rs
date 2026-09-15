@@ -98,6 +98,12 @@ pub struct RuntimeFeatures {
     /// `globfree` and `close`. Those three plus `pclose` were every libc import a trivial program
     /// had apart from the `getrlimit` stack probe.
     pub directory_resource: bool,
+    /// True when native code can push, pop, inspect, or restore a PHP error or exception
+    /// handler registration. The linked-stack helpers are otherwise omitted from the runtime.
+    pub handler_state: bool,
+    /// True when lowered native code can clone an object. The boxed clone adapter is also
+    /// required by the full eval bridge, which exposes the same operation to Magician.
+    pub object_clone: bool,
 }
 
 impl RuntimeFeatures {
@@ -129,6 +135,8 @@ impl RuntimeFeatures {
             | ((self.generator as u64) << 9)
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
+            | ((self.handler_state as u64) << 12)
+            | ((self.object_clone as u64) << 13)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -146,6 +154,8 @@ impl RuntimeFeatures {
             generator: false,
             popen_resource: false,
             directory_resource: false,
+            handler_state: false,
+            object_clone: false,
         }
     }
 
@@ -165,6 +175,8 @@ impl RuntimeFeatures {
             generator: true,
             popen_resource: true,
             directory_resource: true,
+            handler_state: true,
+            object_clone: true,
         }
     }
 }
@@ -915,7 +927,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
 /// - `call_user_func`/`call_user_func_array` whose callback is not a statically resolved
 ///   form (closure / first-class callable / array literal);
 /// - `iterator_apply` whose callback is not a statically resolved form;
-/// - `preg_replace_callback` whose callback is a runtime (non-literal) string candidate;
+/// - `preg_replace_callback`, whose raw match array always crosses a descriptor adapter;
 /// - `new Fiber($cb)` whose callback is not a statically resolved form.
 fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
     match &expr.kind {
@@ -966,9 +978,12 @@ fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
 /// take it second (after the source array, pattern, or iterator).
 fn function_call_needs_descriptor_invoker(name: &str, args: &[Expr]) -> bool {
     let callback = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        // Literal function names also need argument adaptation: a declared PHP `array`
+        // parameter is boxed and cannot receive the regex runtime's raw match array.
+        "preg_replace_callback" => return true,
         "call_user_func" | "call_user_func_array" | "array_map" => args.first(),
         "array_filter" | "array_walk" | "array_walk_recursive" | "array_reduce" | "usort"
-        | "uasort" | "uksort" | "iterator_apply" | "preg_replace_callback" | "array_find"
+        | "uasort" | "uksort" | "iterator_apply" | "array_find"
         | "array_any" | "array_all" => args.get(1),
         "array_udiff" | "array_uintersect" => args.get(2),
         _ => return false,
@@ -1245,6 +1260,14 @@ mod tests {
         );
     }
 
+    /// Literal regex callbacks still need the dispatcher that adapts their declared array parameter.
+    #[test]
+    fn test_runtime_features_include_descriptor_invoker_for_preg_replace_callback_literal() {
+        assert!(features_for(
+            "<?php function replace_match(array $matches): string { return 'x'; } echo preg_replace_callback('/a/', 'replace_match', 'a');"
+        ).descriptor_invoker);
+    }
+
     /// Verifies every static reference form for the custom session-handler API keeps
     /// the runtime callable dispatcher needed by its callback methods.
     #[test]
@@ -1266,18 +1289,8 @@ mod tests {
     #[test]
     fn test_descriptor_invoker_runtime_features_require_elephc_crypto_bridge() {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures {
-            regex: false,
-            mb_strlen: false,
-            phar_archive: false,
             descriptor_invoker: true,
-            eval_bridge: false,
-            eval_scope: false,
-            web: false,
-            pdo_udf: false,
-            fiber: false,
-            generator: false,
-            popen_resource: false,
-            directory_resource: false,
+            ..RuntimeFeatures::none()
         })
         .iter()
         .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));

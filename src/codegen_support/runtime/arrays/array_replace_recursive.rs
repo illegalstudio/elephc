@@ -6,7 +6,10 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - Self-recursive over nested associative arrays; `__rt_hash_set` releases overwritten values, keeping refcounts balanced.
+//! - Self-recursive over nested associative arrays; `__rt_hash_set_value` releases overwritten values, keeping refcounts balanced.
+//! - The result is a clone of the first array, so it shares any reference cell that array holds.
+//!   The bucket-replacing setter detaches such an entry instead of writing through it, which is
+//!   what keeps `array_replace_recursive` from mutating its own input.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -17,7 +20,7 @@ use crate::codegen_support::platform::Arch;
 ///
 /// Clones hash1, then for every hash2 entry: if the key exists in hash1 and both values
 /// are associative arrays (tag 5), recurses and stores the merged sub-array; otherwise the
-/// hash2 value overwrites/appends (right-wins). `__rt_hash_set` releases the previous value
+/// hash2 value overwrites/appends (right-wins). `__rt_hash_set_value` releases the previous value
 /// on overwrite, so the recursively cloned children stay refcount-balanced.
 pub fn emit_array_replace_recursive(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -39,7 +42,7 @@ pub fn emit_array_replace_recursive(emitter: &mut Emitter) {
     emitter.label("__rt_array_replace_recursive_loop");
     emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = hash2 pointer
     emitter.instruction("ldr x1, [sp, #24]");                                   // x1 = current iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // next hash2 entry: x0=cursor,x1=kptr,x2=klen,x3=vlo,x4=vhi,x5=vtag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // next hash2 entry: x0=cursor,x1=kptr,x2=klen,x3=vlo,x4=vhi,x5=vtag
     emitter.instruction("cmn x0, #1");                                          // has iteration reached the end (cursor == -1)?
     emitter.instruction("b.eq __rt_array_replace_recursive_done");              // stop once every hash2 entry is merged
     emitter.instruction("str x0, [sp, #24]");                                   // save the next iterator cursor
@@ -67,7 +70,7 @@ pub fn emit_array_replace_recursive(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #40]");                                   // reload key length
     emitter.instruction("mov x4, #0");                                          // array values use no high word
     emitter.instruction("mov x5, #5");                                          // value tag 5 = associative array
-    emitter.instruction("bl __rt_hash_set");                                    // store the merged sub-array (releases the previous value)
+    emitter.instruction("bl __rt_hash_set_value");                              // store the merged sub-array (releases the previous value)
     emitter.instruction("str x0, [sp, #16]");                                   // update the result pointer after possible reallocation
     emitter.instruction("b __rt_array_replace_recursive_loop");                 // continue with the next hash2 entry
     emitter.label("__rt_array_replace_recursive_over");
@@ -94,7 +97,7 @@ pub fn emit_array_replace_recursive(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #48]");                                   // reload value low word
     emitter.instruction("ldr x4, [sp, #56]");                                   // reload value high word
     emitter.instruction("ldr x5, [sp, #64]");                                   // reload value runtime tag
-    emitter.instruction("bl __rt_hash_set");                                    // overwrite or append the value into the result hash
+    emitter.instruction("bl __rt_hash_set_value");                              // overwrite or append the value into the result hash
     emitter.instruction("str x0, [sp, #16]");                                   // update the result pointer after possible reallocation
     emitter.instruction("b __rt_array_replace_recursive_loop");                 // continue with the next hash2 entry
     emitter.label("__rt_array_replace_recursive_done");
@@ -122,7 +125,7 @@ fn emit_array_replace_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_replace_recursive_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // rdi = hash2 pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // rsi = current iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // next hash2 entry: rax=cursor,rdi=kptr,rdx=klen,rcx=vlo,r8=vhi,r9=vtag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // next hash2 entry: rax=cursor,rdi=kptr,rdx=klen,rcx=vlo,r8=vhi,r9=vtag
     emitter.instruction("cmp rax, -1");                                         // has iteration reached the end?
     emitter.instruction("je __rt_array_replace_recursive_done");                // stop once every hash2 entry is merged
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the next iterator cursor
@@ -151,7 +154,7 @@ fn emit_array_replace_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload key length
     emitter.instruction("xor r8, r8");                                          // array values use no high word
     emitter.instruction("mov r9, 5");                                           // value tag 5 = associative array
-    emitter.instruction("call __rt_hash_set");                                  // store the merged sub-array (releases the previous value)
+    emitter.instruction("call __rt_hash_set_value");                            // store the merged sub-array (releases the previous value)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // update the result pointer after possible reallocation
     emitter.instruction("jmp __rt_array_replace_recursive_loop");               // continue with the next hash2 entry
     emitter.label("__rt_array_replace_recursive_over");
@@ -178,7 +181,7 @@ fn emit_array_replace_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload value low word
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload value high word
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload value runtime tag
-    emitter.instruction("call __rt_hash_set");                                  // overwrite or append the value into the result hash
+    emitter.instruction("call __rt_hash_set_value");                            // overwrite or append the value into the result hash
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // update the result pointer after possible reallocation
     emitter.instruction("jmp __rt_array_replace_recursive_loop");               // continue with the next hash2 entry
     emitter.label("__rt_array_replace_recursive_done");

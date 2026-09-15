@@ -1,5 +1,5 @@
 //! Purpose:
-//! Array filter/map type validation and Mixed result boxing.
+//! Array map type validation and Mixed result boxing.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::arrays`.
@@ -8,181 +8,6 @@
 //! - Preserves callback ABI, target parity, array storage, and ownership contracts.
 
 use super::*;
-
-/// Verifies the aggregate can use the current raw integer-slot runtime helper.
-pub(super) fn require_supported_indexed_array(ty: PhpType, name: &str) -> Result<()> {
-    match ty.codegen_repr() {
-        PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Bool | PhpType::Never) => {
-            Ok(())
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name, other
-        ))),
-    }
-}
-
-/// Returns the indexed-array element type supported by the current filter runtime helpers.
-pub(super) fn array_filter_source_element_type(ty: PhpType) -> Result<PhpType> {
-    match ty.codegen_repr() {
-        PhpType::Array(elem) => {
-            let elem = elem.codegen_repr();
-            if matches!(
-                elem,
-                PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Void | PhpType::Never
-            ) || elem.is_refcounted()
-            {
-                return Ok(elem);
-            }
-            Err(CodegenIrError::unsupported(format!(
-                "array_filter indexed-array element PHP type {:?}",
-                elem
-            )))
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "array_filter for PHP type {:?}",
-            other
-        ))),
-    }
-}
-
-/// Verifies the filtered result preserves the source element type metadata.
-pub(super) fn require_array_filter_result_type(source_elem_ty: &PhpType, result_ty: &PhpType) -> Result<()> {
-    match result_ty {
-        PhpType::Array(elem)
-            if elem.codegen_repr() == source_elem_ty.codegen_repr()
-                || matches!(source_elem_ty, PhpType::Never | PhpType::Void) =>
-        {
-            Ok(())
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "array_filter result PHP type {:?} for source element PHP type {:?}",
-            other, source_elem_ty
-        ))),
-    }
-}
-
-/// Returns true when filtering should preserve/copy refcounted payload slots.
-pub(super) fn array_filter_uses_refcounted_runtime(elem_ty: &PhpType) -> bool {
-    elem_ty.is_refcounted() || matches!(elem_ty.codegen_repr(), PhpType::Str)
-}
-
-/// Loads the optional `array_filter()` mode operand into the runtime helper register.
-pub(super) fn load_array_filter_mode(
-    ctx: &mut FunctionContext<'_>,
-    mode: Option<ValueId>,
-    reg: &str,
-) -> Result<()> {
-    if let Some(mode) = mode {
-        ctx.load_value_to_reg(mode, reg)?;
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, reg, 0);
-    }
-    Ok(())
-}
-
-/// Returns the visible callback argument types for `array_filter()` mode.
-pub(super) fn array_filter_callback_arg_types(
-    ctx: &FunctionContext<'_>,
-    mode: Option<ValueId>,
-    elem_ty: &PhpType,
-) -> Result<Option<Vec<PhpType>>> {
-    match static_array_filter_mode(ctx, mode)? {
-        Some(1) => Ok(Some(vec![elem_ty.codegen_repr(), PhpType::Int])),
-        Some(2) => Ok(Some(vec![PhpType::Int])),
-        Some(_) => Ok(Some(vec![elem_ty.codegen_repr()])),
-        None => Ok(None),
-    }
-}
-
-/// Returns a compile-time `array_filter()` mode when it is visible in EIR.
-pub(super) fn static_array_filter_mode(
-    ctx: &FunctionContext<'_>,
-    mode: Option<ValueId>,
-) -> Result<Option<i64>> {
-    let Some(mode) = mode else {
-        return Ok(Some(0));
-    };
-    array_filter_mode_const_i64(ctx, mode)
-}
-
-/// Returns a visible integer mode from a direct constant or same-block local load.
-pub(super) fn array_filter_mode_const_i64(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<i64>> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { block, index, inst } = value_ref.def else {
-        return Ok(None);
-    };
-    let Some(inst_ref) = ctx.function.instruction(inst) else {
-        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
-    };
-    let inst_ref = if inst_ref.op == Op::LoadLocal {
-        let Some(inst_ref) =
-            array_filter_local_mode_source_instruction(ctx, block, index, inst_ref)?
-        else {
-            return Ok(None);
-        };
-        inst_ref
-    } else {
-        inst_ref
-    };
-    if inst_ref.op != Op::ConstI64 {
-        return Ok(None);
-    }
-    let Some(Immediate::I64(value)) = inst_ref.immediate else {
-        return Err(CodegenIrError::invalid_module(
-            "array_filter mode const_i64 has no immediate",
-        ));
-    };
-    Ok(Some(value))
-}
-
-/// Resolves an `array_filter()` mode local load to the last same-block store before it.
-pub(super) fn array_filter_local_mode_source_instruction<'a>(
-    ctx: &'a FunctionContext<'_>,
-    block: BlockId,
-    load_index: u32,
-    load_inst: &Instruction,
-) -> Result<Option<&'a Instruction>> {
-    let Some(Immediate::LocalSlot(slot)) = load_inst.immediate else {
-        return Err(CodegenIrError::invalid_module(
-            "array_filter mode load_local has no local slot",
-        ));
-    };
-    let block_ref = ctx
-        .function
-        .block(block)
-        .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))?;
-    let mut stored = None;
-    for (index, inst_id) in block_ref.instructions.iter().enumerate() {
-        if index as u32 >= load_index {
-            break;
-        }
-        let inst_ref = ctx
-            .function
-            .instruction(*inst_id)
-            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
-        if inst_ref.op == Op::StoreLocal
-            && matches!(inst_ref.immediate, Some(Immediate::LocalSlot(candidate)) if candidate == slot)
-        {
-            stored = inst_ref.operands.first().copied();
-        }
-    }
-    let Some(stored) = stored else {
-        return Ok(None);
-    };
-    let Some(value_ref) = ctx.function.value(stored) else {
-        return Err(CodegenIrError::missing_entry("value", stored.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(None);
-    };
-    ctx.function
-        .instruction(inst)
-        .map(Some)
-        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))
-}
 
 /// Returns an indexed-array element type compatible with callback runtime helpers.
 pub(super) fn eight_byte_callback_array_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
@@ -239,18 +64,6 @@ pub(super) fn eight_byte_callback_value_type(ty: PhpType, name: &str) -> Result<
     }
 }
 
-/// Boxes the integer runtime result when the EIR builtin result slot is Mixed-like.
-pub(super) fn box_int_result_for_mixed_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
-    if inst.result.is_some()
-        && matches!(
-            inst.result_php_type.codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
-        )
-    {
-        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
-    }
-}
-
 /// Stores the void sentinel, boxing it when the EIR builtin result slot is Mixed-like.
 pub(super) fn store_void_builtin_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     abi::emit_load_int_immediate(
@@ -272,7 +85,7 @@ pub(super) fn store_void_builtin_result(ctx: &mut FunctionContext<'_>, inst: &In
 /// Returns the indexed-array slot type produced by the selected `array_map()` runtime helper.
 pub(super) fn array_map_callback_result_element_type(return_ty: &PhpType) -> Result<PhpType> {
     let return_ty = return_ty.codegen_repr();
-    if matches!(return_ty, PhpType::Int | PhpType::Bool | PhpType::Str) {
+    if matches!(return_ty, PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Mixed) {
         Ok(return_ty)
     } else {
         Err(CodegenIrError::unsupported(format!(
@@ -378,4 +191,3 @@ pub(super) fn box_array_result_for_mixed_builtin(
         );
     }
 }
-

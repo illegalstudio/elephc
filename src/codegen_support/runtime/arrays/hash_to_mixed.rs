@@ -8,6 +8,10 @@
 //! Key details:
 //! - Conversion performs COW first, then transfers each existing entry payload
 //!   into a Mixed box so by-reference foreach can alias a stable pointer slot.
+//! - Entries that already carry runtime value tag 11 own a managed reference cell. They are
+//!   skipped whole, so a repeated by-reference foreach cannot restamp a live reference set.
+//! - The owned-box entry point is shared so `__rt_hash_set` can reuse it when writing a
+//!   non-boxed replacement through an existing reference cell.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -18,6 +22,7 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 /// Converts all entry payloads of an associative array to boxed Mixed cells.
 /// COW is enforced first via `__rt_hash_ensure_unique` so entries can be safely rewritten.
 /// Each entry is stamped with value_type tag 7. The hash header is also stamped with 7.
+/// The input owner is consumed by the COW boundary and the returned hash is its replacement owner.
 /// Dispatches to `emit_hash_to_mixed_linux_x86_64` on x86_64; uses ARM64 otherwise.
 pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -34,6 +39,12 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #80");                                    // establish a stable conversion frame
     emitter.instruction("bl __rt_hash_ensure_unique");                          // split shared hashes before rewriting entry payloads
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique hash pointer
+    emit_branch_if_null_container(
+        emitter,
+        "x0",
+        "x9",
+        "__rt_hash_to_mixed_null",
+    );
     emitter.instruction("str xzr, [sp, #8]");                                   // initialize the insertion-order cursor
 
     emitter.label("__rt_hash_to_mixed_loop");
@@ -47,18 +58,20 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #24]");                                   // save the entry value high payload word
     emitter.instruction("str x5, [sp, #32]");                                   // save the entry runtime value tag
     emitter.instruction("str x6, [sp, #40]");                                   // save the mutable entry value address
+    emitter.instruction("cmp x5, #11");                                         // is this entry already a member of a PHP reference set?
+    emitter.instruction("b.eq __rt_hash_to_mixed_loop");                        // reference entries own a managed cell and must never be restamped
     emitter.instruction("cmp x5, #7");                                          // does this entry already hold a boxed Mixed cell?
-    emitter.instruction("b.eq __rt_hash_to_mixed_entry_ready");                 // already-mixed entries only need metadata normalization
+    emitter.instruction("b.eq __rt_hash_to_mixed_entry_ready");                 // already-mixed entries keep their persistent reference state
     emitter.instruction("mov x0, x5");                                          // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov x1, x3");                                          // pass the entry low payload word to the owned-box helper
     emitter.instruction("mov x2, x4");                                          // pass the entry high payload word to the owned-box helper
     emitter.instruction("bl __rt_hash_to_mixed_box_owned");                     // allocate a Mixed cell that takes over the entry payload
     emitter.instruction("ldr x6, [sp, #40]");                                   // reload the mutable entry value address
     emitter.instruction("str x0, [x6]");                                        // store the boxed Mixed pointer in value_lo
+    emitter.instruction("str xzr, [x6, #8]");                                   // new boxed entries start outside every PHP reference set
 
     emitter.label("__rt_hash_to_mixed_entry_ready");
     emitter.instruction("ldr x6, [sp, #40]");                                   // reload the mutable entry value address
-    emitter.instruction("str xzr, [x6, #8]");                                   // normalize value_hi for boxed Mixed entries
     emitter.instruction("mov x9, #7");                                          // runtime value tag 7 = boxed Mixed
     emitter.instruction("str x9, [x6, #16]");                                   // stamp the entry payload as boxed Mixed
     emitter.instruction("b __rt_hash_to_mixed_loop");                           // continue converting insertion-order entries
@@ -71,7 +84,12 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #96");                                     // release the conversion frame
     emitter.instruction("ret");                                                 // return the converted hash pointer
 
-    emitter.label("__rt_hash_to_mixed_box_owned");
+    emitter.label("__rt_hash_to_mixed_null");
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore the frame around an absent container
+    emitter.instruction("add sp, sp, #96");                                     // release conversion slots without touching the sentinel
+    emitter.instruction("ret");                                                 // return the null-like source unchanged
+
+    emitter.label_shared("__rt_hash_to_mixed_box_owned");
     emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can carry the null sentinel
     emitter.instruction("b.lt __rt_hash_to_mixed_box_owned_frame");             // preserve scalar payloads verbatim
     emitter.instruction("cmp x0, #6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
@@ -120,6 +138,12 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve slots for hash pointer, cursor, payload, and entry address
     emitter.instruction("call __rt_hash_ensure_unique");                        // split shared hashes before rewriting entry payloads
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique hash pointer
+    emit_branch_if_null_container(
+        emitter,
+        "rax",
+        "r10",
+        "__rt_hash_to_mixed_x86_null",
+    );
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // initialize the insertion-order cursor
 
     emitter.label("__rt_hash_to_mixed_x86_loop");
@@ -133,18 +157,20 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r8");                        // save the entry value high payload word
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save the entry runtime value tag
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the mutable entry value address
+    emitter.instruction("cmp r9, 11");                                          // is this entry already a member of a PHP reference set?
+    emitter.instruction("je __rt_hash_to_mixed_x86_loop");                      // reference entries own a managed cell and must never be restamped
     emitter.instruction("cmp r9, 7");                                           // does this entry already hold a boxed Mixed cell?
-    emitter.instruction("je __rt_hash_to_mixed_x86_entry_ready");               // already-mixed entries only need metadata normalization
+    emitter.instruction("je __rt_hash_to_mixed_x86_entry_ready");               // already-mixed entries keep their persistent reference state
     emitter.instruction("mov rax, r9");                                         // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov rdi, rcx");                                        // pass the entry low payload word to the owned-box helper
     emitter.instruction("mov rsi, r8");                                         // pass the entry high payload word to the owned-box helper
     emitter.instruction("call __rt_hash_to_mixed_x86_box_owned");               // allocate a Mixed cell that takes over the entry payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the mutable entry value address
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store the boxed Mixed pointer in value_lo
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // new boxed entries start outside every PHP reference set
 
     emitter.label("__rt_hash_to_mixed_x86_entry_ready");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the mutable entry value address
-    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // normalize value_hi for boxed Mixed entries
     emitter.instruction("mov QWORD PTR [r10 + 16], 7");                         // stamp the entry payload as boxed Mixed
     emitter.instruction("jmp __rt_hash_to_mixed_x86_loop");                     // continue converting insertion-order entries
 
@@ -155,7 +181,12 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the converted hash pointer
 
-    emitter.label("__rt_hash_to_mixed_x86_box_owned");
+    emitter.label("__rt_hash_to_mixed_x86_null");
+    emitter.instruction("add rsp, 64");                                         // release conversion slots without touching the sentinel
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer for the null-like return
+    emitter.instruction("ret");                                                 // return the null-like source unchanged
+
+    emitter.label_shared("__rt_hash_to_mixed_x86_box_owned");
     emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can carry the null sentinel
     emitter.instruction("jl __rt_hash_to_mixed_x86_box_owned_frame");           // preserve scalar payloads verbatim
     emitter.instruction("cmp rax, 6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6

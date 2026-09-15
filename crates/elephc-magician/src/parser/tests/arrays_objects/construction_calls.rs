@@ -101,6 +101,28 @@ fn parse_fragment_accepts_clone_expression_source() {
     );
 }
 
+/// Verifies PHP 8.5 clone calls and first-class callable syntax are not parsed as unary clone.
+#[test]
+fn parse_fragment_accepts_clone_function_and_callable_source() {
+    let call = parse_fragment(br#"return clone($box, ["name" => "B"]);"#)
+        .expect("clone call should parse");
+    assert!(matches!(
+        call.statements(),
+        [EvalStmt::Return(Some(EvalExpr::Call { name, args }))]
+            if name == "clone" && args.len() == 2
+    ));
+
+    let callable = parse_fragment(br#"return clone(...);"#)
+        .expect("clone callable should parse");
+    assert_eq!(
+        callable.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::FunctionCallable {
+            name: "clone".to_string(),
+            fallback_name: None,
+        }))]
+    );
+}
+
 /// Verifies anonymous class expressions parse as executable eval class metadata.
 #[test]
 fn parse_fragment_accepts_anonymous_class_source() {

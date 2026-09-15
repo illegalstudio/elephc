@@ -1477,12 +1477,14 @@ echo implode(',', $o->x);
     assert_eq!(out, "2;2;2,4");
 }
 
-/// Regression for issue #642: the separated container must be published back into the PROPERTY
-/// slot, on every supported target. Publishing is the whole fix — a split whose result is not
+/// Regression for issue #642: the separated container must be published back through the
+/// property's promoted reference cell on every supported target. A split whose result is not
 /// written back leaves the loop iterating a container the property does not own, which is how
 /// the property ended up freed. The assertion is structural: inside the `prop_get_for_write`
-/// block the slot is read, the copy-on-write helper runs, and the result is stored back to that
-/// same slot, in that order. Run under `ELEPHC_TEST_TARGET` to cover the non-host architectures.
+/// block the boxed cell payload is read, its zval is cloned, the old owner is released, the cell
+/// is reloaded after those calls, and the result is stored through it, in that order. Run under
+/// `ELEPHC_TEST_TARGET` to cover the non-host architectures. The declared PHP array property uses
+/// Mixed storage and by-reference iteration intentionally promotes its slot to reference storage.
 #[test]
 fn test_regression_642_prop_get_for_write_publishes_split_into_property_slot() {
     let dir = make_cli_test_dir("elephc_prop_get_for_write_publish");
@@ -1508,16 +1510,17 @@ foreach ($o->x as &$v) { $v = $v * 2; }
         .expect("missing iter_start after prop_get_for_write");
     let body = &body[..end];
 
-    let (slot_load, slot_store) = match target().arch {
-        Arch::AArch64 => ("ldr x0, [x9, #8]", "str x0, [x9, #8]"),
+    let (slot_load, cell_reload, cell_store) = match target().arch {
+        Arch::AArch64 => ("ldr x0, [x9, #8]", "ldr x10, [x9, #8]", "str x0, [x10]"),
         Arch::X86_64 => (
-            "mov rdi, QWORD PTR [r11 + 8]",
-            "mov QWORD PTR [r11 + 8], rax",
+            "mov rax, QWORD PTR [r11 + 8]",
+            "mov r10, QWORD PTR [r11 + 8]",
+            "mov QWORD PTR [r10], rax",
         ),
     };
     let call = match target().arch {
-        Arch::AArch64 => "bl __rt_array_ensure_unique",
-        Arch::X86_64 => "call __rt_array_ensure_unique",
+        Arch::AArch64 => "bl __rt_mixed_clone",
+        Arch::X86_64 => "call __rt_mixed_clone",
     };
     let load_pos = body
         .find(slot_load)
@@ -1525,12 +1528,21 @@ foreach ($o->x as &$v) { $v = $v * 2; }
     let call_pos = body
         .find(call)
         .unwrap_or_else(|| panic!("missing copy-on-write split `{call}` in:\n{body}"));
+    let release_pos = body
+        .find("__rt_decref_mixed")
+        .unwrap_or_else(|| panic!("missing old property zval release in:\n{body}"));
+    let cell_reload_pos = body
+        .find(cell_reload)
+        .unwrap_or_else(|| panic!("missing property cell reload `{cell_reload}` in:\n{body}"));
     let store_pos = body
-        .find(slot_store)
-        .unwrap_or_else(|| panic!("missing slot republish `{slot_store}` in:\n{body}"));
+        .find(cell_store)
+        .unwrap_or_else(|| panic!("missing cell republish `{cell_store}` in:\n{body}"));
     assert!(
-        load_pos < call_pos && call_pos < store_pos,
-        "expected slot load -> split -> slot republish, got:\n{body}"
+        load_pos < call_pos
+            && call_pos < release_pos
+            && release_pos < cell_reload_pos
+            && cell_reload_pos < store_pos,
+        "expected cell payload load -> clone -> old owner release -> cell reload -> republish, got:\n{body}"
     );
 }
 
@@ -1549,9 +1561,10 @@ foreach ($o->x as &$v) { $v = $v * 2; }
 //
 // A NOTE ON THE HEAP ASSERTIONS BELOW. Two of these fixtures sit on top of leaks that exist
 // without any `foreach` at all: a bare `$r = &$o->x;` leaks 4 blocks / 184 bytes, and a bare
-// `$t = $o->undeclared;` through `__get` leaks 4 blocks / 192 bytes. Those tests therefore assert
-// that the by-reference loop adds NOTHING to the heap the same program already leaks without it,
-// which is the property this fix owns and which keeps passing once the unrelated leaks are fixed.
+// `$t = $o->undeclared;` through `__get` leaks 4 blocks / 192 bytes. The magic-get comparison also
+// normalizes both retained arrays through the same by-reference loop. Indexed-to-hash promotion
+// changes the graph's allocation sizes even when it adds no owner, so comparing against a
+// by-value indexed baseline would report representation growth as a leak.
 
 /// Returns the `live_bytes=N` figure from a heap-debug run's stderr.
 ///
@@ -1591,9 +1604,10 @@ foreach ($o->inner->x as &$v) { $v *= 2; echo $v; }
 /// Regression for issue #642: a `__get` magic getter is the same hazard as a get hook — a fresh
 /// object whose only owner is the read — and must be declined for the same reason.
 ///
-/// The `__get` receiver itself leaks without any loop, so this compares against that baseline
-/// instead of asserting a clean heap: what the fix owns is that the by-reference loop adds
-/// nothing on top.
+/// The `__get` receiver itself leaks without any loop, so this compares the unstable chain with
+/// an equivalent by-reference loop through a stable local receiver. Both retained graphs undergo
+/// the required indexed-to-hash promotion; any additional owner introduced by the unstable-chain
+/// fallback still increases its live-byte total.
 #[test]
 fn test_regression_642_by_ref_foreach_property_chain_through_magic_get() {
     let classes = r#"<?php
@@ -1605,9 +1619,10 @@ $o = new Outer();
         "{classes}foreach ($o->inner->x as &$v) {{ $v *= 2; echo $v; }}\n"
     ));
     let baseline = compile_and_run_with_heap_debug(&format!(
-        "{classes}$t = $o->inner;\nforeach ($t->x as $v) {{ echo $v * 2; }}\n"
+        "{classes}$t = $o->inner;\nforeach ($t->x as &$v) {{ echo $v * 2; }}\n"
     ));
     assert_eq!(by_ref.stdout, "24");
+    assert_eq!(baseline.stdout, "24");
     assert_eq!(
         heap_debug_live_bytes(&by_ref.stderr),
         heap_debug_live_bytes(&baseline.stderr),
@@ -1910,10 +1925,9 @@ echo implode(',', C::$x);",
     }
 }
 
-/// Regression for issue #642: the reference-slot split must go THROUGH the ref cell on every
-/// supported target — dereference the cell to reach the container, then publish the separated
-/// container back at the cell's payload rather than into the property slot, which holds the cell
-/// pointer itself. Writing the container over the slot would destroy the reference binding.
+/// Reference-slot writes dereference the managed cell to reach the declared array's Mixed box,
+/// clone that box, release its previous owner and publish the new box through the same cell.
+/// Overwriting the property slot instead would destroy the reference binding (issue #642).
 ///
 /// The assertion is structural so it can be run for a non-host architecture through
 /// `ELEPHC_TEST_TARGET` without an assembler for that target.
@@ -1943,20 +1957,22 @@ foreach ($o->x as &$v) { $v = $v * 2; }
         .expect("missing iter_start after prop_get_for_write");
     let body = &body[..end];
 
-    // Cell pointer out of the slot, container out of the cell, split, container back into the
-    // cell. The slot offset is 8 for the single property; the cell payload sits at offset 0.
-    let steps: [&str; 5] = match target().arch {
+    // The property holds a managed cell, whose payload owns the declared array's Mixed box.
+    // Retiring that old box must precede publication without replacing the cell pointer.
+    let steps: [&str; 6] = match target().arch {
         Arch::AArch64 => [
             "ldr x0, [x9, #8]",
             "ldr x0, [x0]",
-            "bl __rt_array_ensure_unique",
+            "bl __rt_mixed_clone",
+            "bl __rt_decref_mixed",
             "ldr x10, [x9, #8]",
             "str x0, [x10]",
         ],
         Arch::X86_64 => [
-            "mov rdi, QWORD PTR [r11 + 8]",
-            "mov rdi, QWORD PTR [rdi]",
-            "call __rt_array_ensure_unique",
+            "mov rax, QWORD PTR [r11 + 8]",
+            "mov rax, QWORD PTR [rax]",
+            "call __rt_mixed_clone",
+            "call __rt_decref_mixed",
             "mov r10, QWORD PTR [r11 + 8]",
             "mov QWORD PTR [r10], rax",
         ],
@@ -1968,6 +1984,8 @@ foreach ($o->x as &$v) { $v = $v * 2; }
             .unwrap_or_else(|| panic!("missing `{step}` after offset {cursor} in:\n{body}"));
         cursor += found + step.len();
     }
+    assert!(!body.contains("__rt_array_ensure_unique"),
+        "a declared PHP array's Mixed box must not be passed as a raw indexed container:\n{body}");
     assert!(
         !body.contains("str x0, [x9, #8]") && !body.contains("mov QWORD PTR [r11 + 8], rax"),
         "the separated container must never overwrite the ref-cell pointer in the slot:\n{body}"

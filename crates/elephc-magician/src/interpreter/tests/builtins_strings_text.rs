@@ -177,15 +177,22 @@ return function_exists("str_ends_with");"#,
 #[test]
 fn execute_program_dispatches_string_compare_builtins() {
     let program = parse_fragment(
-        br#"echo strcmp("abc", "abc");
+        br#"echo strcmp("a", "z");
 echo ":"; echo strcmp("abc", "abd") < 0 ? "lt" : "bad";
 echo ":"; echo strcasecmp("Hello", "hello");
+echo ":"; echo strncmp("abc", "axc", 1);
+echo ":"; echo strncmp("abc", "axc", 2);
+echo ":"; echo strncasecmp("AbC", "aXc", 1);
+echo ":"; echo strncasecmp("AbC", "aXc", 2);
 echo ":"; echo call_user_func("strcmp", "b", "a") > 0 ? "gt" : "bad";
 echo ":"; echo call_user_func_array("strcasecmp", ["A", "a"]) === 0 ? "ci" : "bad";
+echo ":"; echo call_user_func("strncmp", "z", "a", 1);
+echo ":"; echo call_user_func_array("strncasecmp", ["A", "a", 1]);
 echo ":"; echo hash_equals("abc", "abc") ? "heq" : "bad";
 echo ":"; echo hash_equals("abc", "abcd") ? "bad" : "hlen";
 echo ":"; echo call_user_func("hash_equals", "abc", "abd") ? "bad" : "hneq";
 echo ":"; echo function_exists("strcmp"); echo function_exists("strcasecmp");
+echo function_exists("strncmp"); echo function_exists("strncasecmp");
 return function_exists("hash_equals");"#,
     )
     .expect("parse eval fragment");
@@ -194,8 +201,38 @@ return function_exists("hash_equals");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "0:lt:0:gt:ci:heq:hlen:hneq:11");
+    assert_eq!(
+        values.output,
+        "-25:lt:0:0:-22:0:-22:gt:ci:25:0:heq:hlen:hneq:1111"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies bounded string comparison rejects a negative length with catchable `ValueError`.
+#[test]
+fn execute_program_catches_string_ncompare_negative_length() {
+    let program = parse_fragment(
+        br#"try {
+    strncmp("a", "b", -1);
+} catch (ValueError $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+try {
+    call_user_func("strncasecmp", "a", "b", -2);
+} catch (ValueError $error) {
+    echo "|", $error->getMessage();
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "ValueError:strncmp(): Argument #3 ($length) must be greater than or equal to 0|strncasecmp(): Argument #3 ($length) must be greater than or equal to 0"
+    );
 }
 /// Verifies eval trim-like builtins strip default and explicit byte masks.
 #[test]

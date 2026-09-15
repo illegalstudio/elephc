@@ -28,8 +28,8 @@ use crate::codegen_support::runtime::system::{
 
 use super::alloc::FIBER_GUARD_PAGE_SIZE;
 use super::{
-    FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET, FIBER_SAVED_SP_OFFSET,
-    FIBER_STACK_BASE_OFFSET,
+    FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET,
+    FIBER_OWN_MAGIC_SET_GUARD_OFFSET, FIBER_SAVED_SP_OFFSET, FIBER_STACK_BASE_OFFSET,
 };
 
 /// Call-stack floor for a coroutine stack, measured from the fiber's mmap base.
@@ -57,20 +57,19 @@ const X86_64_INITIAL_FRAME_RIP_OFFSET: i32 = X86_64_SWITCH_SAVE_BYTES;
 /// # Input
 /// - `x0`: target `Fiber*` — NULL switches back to the main thread, non-NULL switches to that fiber.
 /// - Callee-saved registers and floating-point state of the *source* context are saved to the source's stack.
-/// - Global `_fiber_current`, `_exc_handler_top`, and `_exc_call_frame_top` are updated to track the source's
-///   suspended state so exception unwinding and stack-frame cleanup remain correct across switches.
+/// - Global `_fiber_current`, `_exc_handler_top`, `_exc_call_frame_top`, and
+///   `_magic_set_guard_head` track the active execution context across switches.
 ///
 /// # Output
 /// - Control does not return from this function normally. When the current context is later switched back to,
 ///   execution resumes immediately after the `ret` instruction with all state fully restored.
 ///
 /// # Behavior
-/// - When `x0` is NULL: the source's SP, exception chain, and call-frame chain are saved to the main-thread
-///   globals (`_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`), then the
-///   main thread's saved context is restored and execution resumes on the main stack.
+/// - When `x0` is NULL: the source's SP and runtime chain heads are saved to the main-thread
+///   globals, then the main thread's saved context is restored.
 /// - When `x0` is non-NULL: the source's state is persisted into the source `Fiber` object at offsets
-///   `FIBER_SAVED_SP_OFFSET`, `FIBER_OWN_EXC_HEAD_OFFSET`, and `FIBER_OWN_CALL_FRAME_OFFSET`; the target
-///   fiber's saved state is loaded and restored, adopting the target's stack.
+///   including `FIBER_OWN_MAGIC_SET_GUARD_OFFSET`; the target fiber's saved state is loaded
+///   and restored, adopting the target's stack.
 ///
 /// # ABI Notes
 /// - ARM64: saves x19–x28, x29, x30, d8–d15 (160 bytes, 16-aligned) to the source stack, then restores the
@@ -120,6 +119,8 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x12, [x10, #{}]", FIBER_OWN_EXC_HEAD_OFFSET)); // source_fiber->own_exc_head = head
     abi::emit_load_symbol_to_reg(emitter, "x13", "_exc_call_frame_top", 0);     // x13 = current head of the activation-record cleanup chain
     emitter.instruction(&format!("str x13, [x10, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // source_fiber->own_call_frame = head
+    abi::emit_load_symbol_to_reg(emitter, "x14", "_magic_set_guard_head", 0);   // x14 = current stack's magic-set guard chain head
+    emitter.instruction(&format!("str x14, [x10, #{}]", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // keep stack-backed guard nodes with their owning fiber
     emitter.instruction("b __rt_fiber_switch_load_target");                     // skip the main-thread save path
 
     // -- source = main thread: persist its SP, exception chain head, and call-frame chain head into globals --
@@ -129,6 +130,8 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x12", "_fiber_main_saved_exc", 0);  // _fiber_main_saved_exc = main thread handler chain head
     abi::emit_load_symbol_to_reg(emitter, "x13", "_exc_call_frame_top", 0);     // x13 = current head of the activation-record cleanup chain on main
     abi::emit_store_reg_to_symbol(emitter, "x13", "_fiber_main_saved_call_frame", 0); // _fiber_main_saved_call_frame = main thread call-frame chain head
+    abi::emit_load_symbol_to_reg(emitter, "x14", "_magic_set_guard_head", 0);   // x14 = main thread's current magic-set guard chain head
+    abi::emit_store_reg_to_symbol(emitter, "x14", "_fiber_main_saved_magic_set_guard", 0); // retain only main-stack guard nodes in the main context
 
     // -- swap _fiber_current to the target and load its context --
     emitter.label("__rt_fiber_switch_load_target");
@@ -140,6 +143,8 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x12", "_exc_handler_top", 0);       // restore the target fiber's handler chain head globally
     emitter.instruction(&format!("ldr x13, [x0, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // x13 = target fiber's saved activation-record cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "x13", "_exc_call_frame_top", 0);    // restore the target fiber's call-frame chain head globally
+    emitter.instruction(&format!("ldr x14, [x0, #{}]", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // x14 = target fiber's saved magic-set guard chain head
+    abi::emit_store_reg_to_symbol(emitter, "x14", "_magic_set_guard_head", 0);  // expose only guard nodes that live on the target fiber stack
     emit_adopt_fiber_stack_limit_aarch64(emitter);
     emitter.instruction(&format!("ldr x11, [x0, #{}]", FIBER_SAVED_SP_OFFSET)); // x11 = target fiber's saved SP
     emitter.instruction("mov sp, x11");                                         // adopt the target fiber's stack
@@ -151,6 +156,8 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x12", "_exc_handler_top", 0);       // restore the main thread handler chain head globally
     abi::emit_load_symbol_to_reg(emitter, "x13", "_fiber_main_saved_call_frame", 0); // x13 = main thread's saved activation-record cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "x13", "_exc_call_frame_top", 0);    // restore the main thread call-frame chain head globally
+    abi::emit_load_symbol_to_reg(emitter, "x14", "_fiber_main_saved_magic_set_guard", 0); // x14 = main thread's saved magic-set guard chain head
+    abi::emit_store_reg_to_symbol(emitter, "x14", "_magic_set_guard_head", 0);  // detach any suspended fiber's stack-backed guard chain
     abi::emit_load_symbol_to_reg(emitter, "x14", STACK_LIMIT_MAIN_SYMBOL, 0);   // x14 = the OS-thread call-stack floor measured at process start
     abi::emit_store_reg_to_symbol(emitter, "x14", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
     abi::emit_load_symbol_to_reg(emitter, "x11", "_fiber_main_saved_sp", 0);    // x11 = main thread's saved SP
@@ -243,8 +250,8 @@ pub(crate) fn fiber_initial_entry_offset(arch: Arch) -> i32 {
 /// Emits the x86_64 SysV ABI variant of `__rt_fiber_switch`.
 ///
 /// Saves the source context's callee-saved registers (rbx, rbp, r12–r15) and resume address to its own stack,
-/// persists SP and exception/call-frame chain heads into either the source Fiber object or the main-thread
-/// globals, then restores the target context's state and returns into it.
+/// persists SP and runtime chain heads into either the source Fiber object or the main-thread globals,
+/// then restores the target context's state and returns into it.
 ///
 /// # Differences from ARM64
 /// - Saves 6 GPRs (48 bytes) + 1 resume address (8 bytes) = 56-byte frame, excluding the call-return address
@@ -289,6 +296,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", FIBER_OWN_EXC_HEAD_OFFSET)); // source_fiber->own_exc_head = head
     abi::emit_load_symbol_to_reg(emitter, "r11", "_exc_call_frame_top", 0);     // r11 = current head of the activation-record cleanup chain
     emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", FIBER_OWN_CALL_FRAME_OFFSET)); // source_fiber->own_call_frame = head
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_magic_set_guard_head", 0);   // r11 = current stack's magic-set guard chain head
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // keep stack-backed guard nodes with their owning fiber
     emitter.instruction("jmp __rt_fiber_switch_load_target");                   // skip the main-thread save path
 
     // -- source = main thread: persist its SP and exception/call-frame chain heads --
@@ -298,6 +307,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_exc", 0);  // _fiber_main_saved_exc = main thread handler chain head
     abi::emit_load_symbol_to_reg(emitter, "r11", "_exc_call_frame_top", 0);     // r11 = current head of the main-thread cleanup chain
     abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_call_frame", 0); // _fiber_main_saved_call_frame = main thread cleanup chain head
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_magic_set_guard_head", 0);   // r11 = main thread's current magic-set guard chain head
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_magic_set_guard", 0); // retain only main-stack guard nodes in the main context
 
     // -- swap _fiber_current to the target and load its context --
     emitter.label("__rt_fiber_switch_load_target");
@@ -310,6 +321,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_handler_top", 0);       // restore the target fiber's handler chain head globally
     emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", FIBER_OWN_CALL_FRAME_OFFSET)); // r11 = target fiber's cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_call_frame_top", 0);    // restore the target fiber's cleanup chain head globally
+    emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // r11 = target fiber's magic-set guard chain head
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_magic_set_guard_head", 0);  // expose only guard nodes that live on the target fiber stack
     emit_adopt_fiber_stack_limit_x86_64(emitter);
     emitter.instruction(&format!("mov rsp, QWORD PTR [rdi + {}]", FIBER_SAVED_SP_OFFSET)); // adopt the target fiber's saved stack pointer
     emitter.instruction("jmp __rt_fiber_switch_restore");                       // proceed to restore callee-saved registers
@@ -320,6 +333,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_handler_top", 0);       // restore the main thread handler chain head globally
     abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_call_frame", 0); // r11 = main thread's saved cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_call_frame_top", 0);    // restore the main thread cleanup chain head globally
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_magic_set_guard", 0); // r11 = main thread's saved magic-set guard chain head
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_magic_set_guard_head", 0);  // detach any suspended fiber's stack-backed guard chain
     abi::emit_load_symbol_to_reg(emitter, "rax", STACK_LIMIT_MAIN_SYMBOL, 0);   // rax = the OS-thread call-stack floor measured at process start
     abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
     abi::emit_load_symbol_to_reg(emitter, "rsp", "_fiber_main_saved_sp", 0);    // adopt the main thread's saved stack pointer
@@ -333,4 +348,25 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the target frame pointer
     emitter.instruction("pop rbx");                                             // restore the target callee-saved base register
     emitter.instruction("ret");                                                 // resume the target context using its saved return address
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    #[test]
+    fn switches_magic_set_guard_heads_on_both_emitters() {
+        for name in ["macos-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_fiber_switch(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("_magic_set_guard_head"), "{name}");
+            assert!(asm.contains("_fiber_main_saved_magic_set_guard"), "{name}");
+            assert!(
+                asm.contains(&FIBER_OWN_MAGIC_SET_GUARD_OFFSET.to_string()),
+                "{name}"
+            );
+        }
+    }
 }

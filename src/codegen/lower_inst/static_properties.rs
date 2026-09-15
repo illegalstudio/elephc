@@ -1,14 +1,13 @@
 //! Purpose:
-//! Lowers simple static property loads and stores for the Phase 04 EIR backend.
-//! Handles direct named receivers backed by runtime user-data symbols.
+//! Lowers typed static property loads and stores for the EIR backend.
+//! Handles symbol-backed storage, late-static dispatch and eval fallback.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - This slice supports public scalar/string/array/object static properties with
-//!   named, lexical `self`, and lexical `parent` receivers, but not late static
-//!   references or non-indexed array mutation.
+//! - Scalar, string, array, object and inferred callable slots share typed storage helpers.
+//! - Named, lexical `self` and lexical `parent` receivers resolve declaring-class symbols.
 //! - `static::` receivers use native class-id branches for generated classes and
 //!   the eval native-frame override when late static scope points at an eval class.
 //! - Typed static properties use the same high-word uninitialized sentinel as
@@ -24,12 +23,10 @@ use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
 use super::{
-    builtins, expect_data, expect_operand, load_value_to_first_int_arg, property_values,
+    builtins, expect_data, expect_operand, load_value_to_first_int_arg, objects, property_values,
     store_if_result,
 };
 use crate::codegen::{CodegenIrError, Result};
-
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 
 /// Resolved direct static property metadata for symbol-backed storage.
 struct StaticPropertySlot {
@@ -77,6 +74,42 @@ pub(super) fn lower_load_static_property(
         ctx.emitter.label(&done_label);
     }
     Ok(())
+}
+
+/// Lowers an addressable native static-property slot for a synthetic reference local.
+///
+/// By-reference foreach uses the returned process-lifetime address as its relocation origin.
+/// Stores through the alias therefore replace the static property's container pointer directly,
+/// including copy-on-write and hash-growth replacements.
+pub(super) fn lower_load_static_property_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if eval_dynamic_static_property_target(ctx, inst)?.is_some() {
+        return Err(CodegenIrError::unsupported(
+            "reference binding to an eval-defined static property",
+        ));
+    }
+    let slot = resolve_static_property_slot(ctx, inst, true)?;
+    ensure_static_property_type_supported(&slot.php_type, inst)?;
+    if slot.late_bound && ctx.module.required_runtime_features.eval_bridge {
+        return Err(CodegenIrError::unsupported(
+            "reference binding to an eval-overridable late static property",
+        ));
+    }
+    if slot.late_bound && !slot.branches.is_empty() {
+        let class_id_reg = class_id_work_reg(ctx.emitter);
+        if emit_called_class_id_to_reg(ctx, class_id_reg)? {
+            emit_dynamic_static_property_ref_cell_result(ctx, &slot, class_id_reg)?;
+            return store_if_result(ctx, inst);
+        }
+    }
+    if slot.is_declared {
+        emit_uninitialized_static_property_guard(ctx, &slot);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, result_reg, &slot.symbol);
+    store_if_result(ctx, inst)
 }
 
 /// Returns an eval dynamic static-property target when no AOT class owns the receiver.
@@ -337,15 +370,15 @@ fn emit_static_property_initialized_bool(
     abi::emit_load_int_immediate(ctx.emitter, sentinel_reg, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // compare the static property marker against the uninitialized sentinel
                 &format!("cmp {}, {}", marker_reg, sentinel_reg)
-            );                                                                  // compare the static property marker against the uninitialized sentinel
+            );
             ctx.emitter.instruction("cset x0, ne");                             // materialize true when the static property is initialized
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // compare the static property marker against the uninitialized sentinel
                 &format!("cmp {}, {}", marker_reg, sentinel_reg)
-            );                                                                  // compare the static property marker against the uninitialized sentinel
+            );
             ctx.emitter.instruction("setne al");                                // materialize true when the static property is initialized
             ctx.emitter.instruction("movzx rax, al");                           // widen the initialization flag into the integer result register
         }
@@ -357,7 +390,7 @@ fn emit_called_class_id_to_reg(
     ctx: &mut FunctionContext<'_>,
     dest_reg: &str,
 ) -> Result<bool> {
-    let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) else {
+    let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) else {
         return Ok(false);
     };
     let offset = ctx.local_offset(slot)?;
@@ -444,6 +477,42 @@ fn emit_dynamic_load_static_property_result(
     Ok(())
 }
 
+/// Emits the address of the late-bound native static-property slot selected at runtime.
+fn emit_dynamic_static_property_ref_cell_result(
+    ctx: &mut FunctionContext<'_>,
+    slot: &StaticPropertySlot,
+    class_id_reg: &str,
+) -> Result<()> {
+    let done = ctx.next_label("static_prop_ref_cell_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let mut labels = Vec::new();
+    for branch in &slot.branches {
+        let label = ctx.next_label("static_prop_ref_cell_branch");
+        emit_branch_if_class_id_matches(ctx, class_id_reg, branch.class_id, &label);
+        labels.push((label, branch));
+    }
+    if slot.is_declared {
+        emit_uninitialized_static_property_guard(ctx, slot);
+    }
+    abi::emit_symbol_address(ctx.emitter, result_reg, &slot.symbol);
+    abi::emit_jump(ctx.emitter, &done);
+    for (label, branch) in labels {
+        ctx.emitter.label(&label);
+        if branch.private_inaccessible {
+            emit_private_static_property_access_fatal(ctx);
+            continue;
+        }
+        let branch_slot = branch_static_property_slot(ctx, slot, branch);
+        if branch_slot.is_declared {
+            emit_uninitialized_static_property_guard(ctx, &branch_slot);
+        }
+        abi::emit_symbol_address(ctx.emitter, result_reg, &branch_slot.symbol);
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
 /// Emits a late-bound static property store selected by the runtime called-class id.
 fn emit_dynamic_store_static_property_result(
     ctx: &mut FunctionContext<'_>,
@@ -517,15 +586,15 @@ fn emit_branch_if_class_id_matches(
     abi::emit_load_int_immediate(ctx.emitter, compare_reg, class_id as i64);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // compare the called class id to a redeclared static property owner
                 &format!("cmp {}, {}", class_id_reg, compare_reg)
-            );                                                                  // compare the runtime called class id to a redeclared static property owner
+            );
             ctx.emitter.instruction(&format!("b.eq {}", label));                // use this static property slot when the called class id matches
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // compare the called class id to a redeclared static property owner
                 &format!("cmp {}, {}", class_id_reg, compare_reg)
-            );                                                                  // compare the runtime called class id to a redeclared static property owner
+            );
             ctx.emitter.instruction(&format!("je {}", label));                  // use this static property slot when the called class id matches
         }
     }
@@ -691,6 +760,11 @@ fn static_property_is_visible(
 }
 
 /// Verifies that this slice knows how to represent the static property type.
+///
+/// `PhpType::Callable` is accepted for inferred untyped static properties (a property with no
+/// declared type whose method-body writes settle on a closure/first-class callable). This does
+/// not introduce a PHP callable-typed static property syntax; it only lets a settled Callable
+/// slot lower its symbol-backed load/store through the descriptor-aware paths.
 fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Result<()> {
     match php_type {
         PhpType::Bool
@@ -703,6 +777,7 @@ fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction)
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
+        | PhpType::Callable
         | PhpType::Object(_) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
             "{} for static property PHP type {:?}",
@@ -825,73 +900,32 @@ fn load_static_property_store_value_to_result(
         return Ok(());
     }
     if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        if slot_ty.codegen_repr() == PhpType::Str {
+            let string = ctx.next_label("static_store_string_payload");
+            let persist = ctx.next_label("static_store_string_persist");
+            ctx.load_value_to_result(value)?;
+            abi::emit_owned_mixed_string(ctx.emitter, &string, &persist);
+            return Ok(());
+        }
         load_value_to_first_int_arg(ctx, value)?;
         match slot_ty.codegen_repr() {
-            PhpType::Str => {
-                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            }
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
+            // An object slot stores the unboxed object POINTER, retained on its own, so the
+            // adopted cell keeps no owner here. Without this release a declared static object
+            // property leaked one boxed cell and its payload owner per runtime-shaped write.
             PhpType::Object(_) => {
-                property_values::emit_mixed_object_for_property_store(ctx)
+                property_values::emit_mixed_object_for_property_store(ctx);
+                objects::release_adopted_mixed_source(ctx, value, &PhpType::Object(String::new()))?;
             }
             _ => {}
         }
         return Ok(());
     }
     ctx.load_value_to_result(value)?;
-    if matches!(slot_ty.codegen_repr(), PhpType::Int)
-        && matches!(value_ty.codegen_repr(), PhpType::Mixed)
-    {
-        emit_mixed_result_as_int(ctx, value)?;
-        return Ok(());
-    }
     box_static_property_value_if_needed(ctx, slot_ty, &value_ty);
     Ok(())
-}
-
-/// Narrows a loaded Mixed result to int for coercive typed static-property stores.
-fn emit_mixed_result_as_int(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax");                            // move the Mixed pointer into the first SysV argument register
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
-        }
-    }
-    if value_is_owned_mixed_store_temporary(ctx, value)? {
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        ctx.load_value_to_result(value)?;
-        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    }
-    Ok(())
-}
-
-/// Returns true when a Mixed store source is a temporary that must be released after narrowing.
-fn value_is_owned_mixed_store_temporary(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(false);
-    };
-    let Some(inst_ref) = ctx.function.instruction(inst) else {
-        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
-    };
-    Ok(matches!(
-        inst_ref.op,
-        crate::ir::Op::ICheckedAdd
-            | crate::ir::Op::ICheckedSub
-            | crate::ir::Op::ICheckedMul
-            | crate::ir::Op::ICheckedPow
-            | crate::ir::Op::MixedNumericBinop
-            | crate::ir::Op::MixedBox
-    ))
 }
 
 /// Reorders `__rt_mixed_unbox` output into the tagged-scalar result register pair.
@@ -936,15 +970,15 @@ fn emit_uninitialized_static_property_guard(
     abi::emit_load_int_immediate(ctx.emitter, sentinel_reg, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // compare the static property marker against the uninitialized sentinel
                 &format!("cmp {}, {}", marker_reg, sentinel_reg)
-            );                                                                  // compare the static property marker against the uninitialized sentinel
+            );
             ctx.emitter.instruction(&format!("b.ne {}", initialized_label));    // continue the static property read once the slot has been initialized
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // compare the static property marker against the uninitialized sentinel
                 &format!("cmp {}, {}", marker_reg, sentinel_reg)
-            );                                                                  // compare the static property marker against the uninitialized sentinel
+            );
             ctx.emitter.instruction(&format!("jne {}", initialized_label));     // continue the static property read once the slot has been initialized
         }
     }
@@ -1001,18 +1035,18 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
             ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the Error object payload
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // materialize the canonical x86_64 Throwable heap-kind word
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
-            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            );
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at the object header
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);          // materialize static Error message pointer
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static Error message pointer
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // store Error message length
                 &format!("mov QWORD PTR [rax + 16], {}", message_len)
-            );                                                                  // store Error message length
+            );
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null

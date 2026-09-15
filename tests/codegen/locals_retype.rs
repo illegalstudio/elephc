@@ -1097,6 +1097,34 @@ fn test_same_name_same_position_collision_is_a_compile_error() {
     );
 }
 
+/// Reference detachment decisions also reject identical unset positions in different files.
+#[test]
+fn test_reference_detach_same_name_same_position_collision_is_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n$text = 'main' . $argc;\n$read = function() use (&$text): string { return $text; };\nunset($text);\necho $read();\n"),
+            ("lib.php", "<?php\n$text = 'lib' . $argc;\n$read = function() use (&$text): string { return $text; };\necho $read();\nunset($text);\n"),
+        ],
+        "main.php",
+    ).expect("ambiguous reference detachment must not compile");
+    assert!(error.contains("Cannot re-bind $text here"), "{error}");
+    assert!(error.contains("line 5 column 7"), "{error}");
+}
+
+/// A non-detachable body cannot silently erase another file's reference detach authorization.
+#[test]
+fn test_reference_detach_collision_with_typed_binding_is_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n$text = 'main' . $argc;\n$read = function() use (&$text): string { return $text; };\nunset($text);\nprobeDetachCollision($argc);\necho $read();\n"),
+            ("lib.php", "<?php\nfunction probeDetachCollision(int $seed): void {\nstring $text = 'lib' . $seed;\n$read = function() use (&$text): string { return $text; };\nunset($text);\necho $read();\n}\n"),
+        ],
+        "main.php",
+    ).expect("removed reference detach keys must still reject ambiguous source positions");
+    assert!(error.contains("Cannot re-bind $text here"), "{error}");
+    assert!(error.contains("line 5 column 7"), "{error}");
+}
+
 /// A collision that STRIPS another body's mixed-storage decisions is caught too, not just one
 /// that leaves two live keys behind.
 ///
@@ -2454,7 +2482,7 @@ fn test_the_single_case_switch_rewrite_vetoes_itself_on_a_marked_default() {
             std::collections::HashSet::new()
         };
         let ast =
-            elephc::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
+            elephc::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
         let ast = elephc::optimize::prune_constant_control_flow(ast, spans.clone());
         elephc::optimize::normalize_control_flow(ast, spans)
     }
@@ -2770,6 +2798,70 @@ fn test_typed_param_unset_then_rebind_leaves_a_clean_heap() {
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "v7");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Unsetting an incoming reference detaches only the callee's name before a fresh local rebind.
+#[test]
+fn test_unset_detaches_incoming_reference_parameters_and_captures() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rebind_untyped(&$value): string {
+    unset($value);
+    $value = "local";
+    return $value;
+}
+function rebind_typed(string &$value): int {
+    unset($value);
+    $value = 7;
+    return $value;
+}
+$untyped = "caller" . $argc;
+$typed = "typed" . $argc;
+$captured = "outer" . $argc;
+$callback = function () use (&$captured): string {
+    unset($captured);
+    $captured = "inner";
+    return $captured;
+};
+echo rebind_untyped($untyped), "|", $untyped, "|";
+echo rebind_typed($typed), "|", $typed, "|";
+echo $callback(), "|", $captured;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "local|caller1|7|typed1|inner|outer1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A conditional unset selects raw local storage only on the path that detached the caller cell.
+#[test]
+fn test_conditional_unset_of_incoming_reference_uses_runtime_binding_state() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe_rebind(string &$value, bool $detach): void {
+    if ($detach) {
+        unset($value);
+    }
+    $value = "local";
+}
+$detached = "detached" . $argc;
+$attached = "attached" . $argc;
+maybe_rebind($detached, true);
+maybe_rebind($attached, false);
+echo $detached, "|", $attached;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "detached1|local");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",

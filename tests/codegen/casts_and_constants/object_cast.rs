@@ -65,6 +65,22 @@ echo $value->k;
     assert_eq!(out, "v");
 }
 
+/// A declared `array` uses boxed packed-or-associative storage, but both shapes still take the
+/// statically non-object helper and produce a concrete stdClass result.
+#[test]
+fn test_object_cast_of_declared_array_keeps_stdclass_result_type() {
+    let out = compile_and_run(
+        r#"<?php
+function cast_declared_array(array $source): mixed {
+    return ((object) $source)->name;
+}
+
+echo cast_declared_array(['name' => 'typed']);
+"#,
+    );
+    assert_eq!(out, "typed");
+}
+
 /// Every non-array, non-null, non-object source lands on php-src's literal `scalar` property.
 #[test]
 fn test_object_cast_of_scalars_uses_the_scalar_property() {

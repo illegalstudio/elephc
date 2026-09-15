@@ -103,7 +103,7 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
             } => {
                 summaries.functions.insert(
                     name.clone(),
-                    summarize_callable(
+                    summarize_callable_return_alias(
                         params.iter().map(|(name, _, _, _)| name.as_str()),
                         variadic.as_deref(),
                         *by_ref_return,
@@ -133,7 +133,7 @@ fn collect_method_summaries(
 ) {
     for method in methods {
         let summary = if method.has_body {
-            summarize_callable(
+            summarize_callable_return_alias(
                 method.params.iter().map(|(name, _, _, _)| name.as_str()),
                 method.variadic.as_deref(),
                 method.by_ref_return,
@@ -153,7 +153,7 @@ fn collect_method_summaries(
 }
 
 /// Summarizes one function-like body from its parameter names and statements.
-fn summarize_callable<'a>(
+pub(crate) fn summarize_callable_return_alias<'a>(
     params: impl Iterator<Item = &'a str>,
     variadic: Option<&str>,
     by_ref_return: bool,

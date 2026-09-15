@@ -8,10 +8,8 @@
 //!
 //! Key details:
 //! - This is intentionally narrower than full PHP expression lowering: only
-//!   scalar, string, null, indexed-array literals with scalar/string/null
-//!   elements, empty object-typed indexed arrays, and associative-array literals
-//!   (empty, positional, or with constant integer/string keys and scalar/string/null
-//!   values) land here.
+//!   scalar, string, null, and recursively nested indexed/associative array literals
+//!   land here. Constant keys keep the ordinary PHP key normalization rules.
 //! - The declared PHP type selects the storage shape, and slot-shape arms must precede the
 //!   generic `Mixed`/`Union(_)` boxing arms. A null-capable int slot (`?int` under
 //!   `NullRepr::Tagged`) is an inline two-word `{payload, tag}` TaggedScalar, so it takes
@@ -22,11 +20,14 @@ use crate::codegen::{
     abi, emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
     runtime_value_tag,
 };
-use crate::parser::ast::ExprKind;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::context::FunctionContext;
 use super::{CodegenIrError, Result};
+
+#[cfg(test)]
+mod tests;
 
 /// Literal default value that the EIR backend can write directly.
 #[derive(Clone)]
@@ -64,6 +65,11 @@ pub(crate) enum LiteralDefaultValue {
         elem_type: PhpType,
         elements: Vec<LiteralArrayElement>,
     },
+    /// An associative-array literal whose fresh hash owner transfers into a Mixed cell.
+    BoxedAssocArray {
+        value_type: PhpType,
+        entries: Vec<LiteralAssocEntry>,
+    },
 }
 
 /// Literal indexed-array element that can be materialized without evaluating code.
@@ -74,6 +80,14 @@ pub(crate) enum LiteralArrayElement {
     Float(f64),
     Str(String),
     Null,
+    Array {
+        elem_type: PhpType,
+        elements: Vec<LiteralArrayElement>,
+    },
+    AssocArray {
+        value_type: PhpType,
+        entries: Vec<LiteralAssocEntry>,
+    },
 }
 
 /// Literal associative-array key that can be materialized without evaluating code. Positional
@@ -179,6 +193,11 @@ pub(crate) fn literal_default_value(
                 elements,
             })
         }
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::ArrayLiteralAssoc(items)) => {
+            let value_type = PhpType::Mixed;
+            let entries = literal_assoc_entries(context, &value_type, items, op_name)?;
+            Ok(LiteralDefaultValue::BoxedAssocArray { value_type, entries })
+        }
         (PhpType::Void | PhpType::Never, ExprKind::Null) => Ok(LiteralDefaultValue::NullSentinel),
         (PhpType::Void | PhpType::Never, _) => Ok(LiteralDefaultValue::NullSentinel),
         (PhpType::Object(_), ExprKind::Null) => Ok(LiteralDefaultValue::Null),
@@ -208,20 +227,7 @@ pub(crate) fn literal_default_value(
         }
         (PhpType::AssocArray { value, .. }, ExprKind::ArrayLiteralAssoc(items)) => {
             let value_type = value.as_ref().codegen_repr();
-            let entries = items
-                .iter()
-                .map(|(key, value_expr)| {
-                    Ok(LiteralAssocEntry {
-                        key: literal_array_key(context, &key.kind, op_name)?,
-                        value: literal_array_element(
-                            context,
-                            &value_type,
-                            &value_expr.kind,
-                            op_name,
-                        )?,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let entries = literal_assoc_entries(context, &value_type, items, op_name)?;
             Ok(LiteralDefaultValue::AssocArray {
                 value_type,
                 entries,
@@ -289,14 +295,14 @@ pub(crate) fn emit_boxed_float_literal_to_result(ctx: &mut FunctionContext<'_>, 
     abi::emit_symbol_address(ctx.emitter, scratch, &label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the boxed float default through the symbol scratch register
                 &format!("ldr {}, [{}]", float_reg, scratch)
-            );                                                                  // load the boxed float literal default through the symbol scratch register
+            );
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the boxed float default through the symbol scratch register
                 &format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)
-            );                                                                  // load the boxed float literal default through the symbol scratch register
+            );
         }
     }
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
@@ -350,7 +356,7 @@ pub(super) fn emit_array_literal_default_to_result(
     emit_array_literal_allocation(ctx, elem_type, elements.len())?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     for element in elements {
-        let value_type = emit_array_element_value(ctx, element);
+        let value_type = emit_array_element_value(ctx, element)?;
         append_array_literal_element(ctx, elem_type, &value_type)?;
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -374,7 +380,7 @@ pub(crate) fn emit_assoc_array_literal_default_to_result(
             Arch::AArch64 => {
                 materialize_assoc_literal_key_aarch64(ctx, &entry.key);
                 abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-                let actual_value_type = emit_array_element_value(ctx, &entry.value);
+                let actual_value_type = emit_array_element_value(ctx, &entry.value)?;
                 materialize_assoc_literal_value(ctx, value_type, &actual_value_type)?;
                 abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
                 abi::emit_pop_reg(ctx.emitter, "x0");
@@ -387,7 +393,7 @@ pub(crate) fn emit_assoc_array_literal_default_to_result(
             Arch::X86_64 => {
                 materialize_assoc_literal_key_x86_64(ctx, &entry.key);
                 abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
-                let actual_value_type = emit_array_element_value(ctx, &entry.value);
+                let actual_value_type = emit_array_element_value(ctx, &entry.value)?;
                 materialize_assoc_literal_value(ctx, value_type, &actual_value_type)?;
                 abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
                 abi::emit_pop_reg(ctx.emitter, "rdi");
@@ -400,6 +406,22 @@ pub(crate) fn emit_assoc_array_literal_default_to_result(
         }
         abi::emit_call_label(ctx.emitter, "__rt_hash_set");
     }
+    Ok(())
+}
+
+/// Transfers a freshly materialized associative default into its owning Mixed cell.
+pub(crate) fn emit_boxed_assoc_array_literal_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value_type: &PhpType,
+    entries: &[LiteralAssocEntry],
+) -> Result<()> {
+    emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+    crate::codegen::emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Str), value: Box::new(value_type.clone()),
+        },
+    );
     Ok(())
 }
 
@@ -449,6 +471,30 @@ fn literal_array_element(
     expr: &ExprKind,
     op_name: &str,
 ) -> Result<LiteralArrayElement> {
+    if matches!(expr, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
+        let nested_type = match elem_type.codegen_repr() {
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => match expr {
+                ExprKind::ArrayLiteral(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+                _ => PhpType::AssocArray {
+                    key: Box::new(PhpType::Str), value: Box::new(PhpType::Mixed),
+                },
+            },
+            ty @ (PhpType::Array(_) | PhpType::AssocArray { .. }) => ty,
+            _ => return Err(unsupported_literal_default(context, elem_type, op_name)),
+        };
+        return match literal_default_value(context, &nested_type, expr, op_name)? {
+            LiteralDefaultValue::Array { elem_type, elements } => {
+                Ok(LiteralArrayElement::Array { elem_type, elements })
+            }
+            LiteralDefaultValue::AssocArray { value_type, entries } => {
+                Ok(LiteralArrayElement::AssocArray { value_type, entries })
+            }
+            LiteralDefaultValue::EmptyAssocArray { value_type } => {
+                Ok(LiteralArrayElement::AssocArray { value_type, entries: Vec::new() })
+            }
+            _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+        };
+    }
     match elem_type.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => match expr {
             ExprKind::IntLiteral(value) => Ok(LiteralArrayElement::Int(*value)),
@@ -499,6 +545,21 @@ fn literal_array_element(
     }
 }
 
+/// Converts constant hash entries recursively while sharing key coercion with top-level defaults.
+fn literal_assoc_entries(
+    context: &str,
+    value_type: &PhpType,
+    items: &[(Expr, Expr)],
+    op_name: &str,
+) -> Result<Vec<LiteralAssocEntry>> {
+    items.iter().map(|(key, value)| {
+        Ok(LiteralAssocEntry {
+            key: literal_array_key(context, &key.kind, op_name)?,
+            value: literal_array_element(context, value_type, &value.kind, op_name)?,
+        })
+    }).collect()
+}
+
 /// Converts a constant associative-array key expression into a materializable hash key, applying
 /// PHP's literal key coercions: booleans and floats become integer keys, `null` becomes the empty
 /// string key, and numeric strings are normalized to integer keys later at emit time. Unsupported
@@ -541,6 +602,9 @@ fn emit_array_literal_allocation(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter, abi::int_result_reg(ctx.emitter), elem_type,
+    );
     Ok(())
 }
 
@@ -548,8 +612,8 @@ fn emit_array_literal_allocation(
 fn emit_array_element_value(
     ctx: &mut FunctionContext<'_>,
     element: &LiteralArrayElement,
-) -> PhpType {
-    match element {
+) -> Result<PhpType> {
+    Ok(match element {
         LiteralArrayElement::Int(value) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), *value);
             PhpType::Int
@@ -578,7 +642,17 @@ fn emit_array_element_value(
             );
             PhpType::Void
         }
-    }
+        LiteralArrayElement::Array { elem_type, elements } => {
+            emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+            PhpType::Array(Box::new(elem_type.clone()))
+        }
+        LiteralArrayElement::AssocArray { value_type, entries } => {
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str), value: Box::new(value_type.clone()),
+            }
+        }
+    })
 }
 
 /// Appends the current literal element value to the array pointer saved on the stack.
@@ -589,8 +663,15 @@ fn append_array_literal_element(
 ) -> Result<()> {
     match elem_type.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
-            emit_box_current_value_as_mixed(ctx.emitter, &value_type.codegen_repr());
+            if matches!(value_type, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, value_type);
+            } else {
+                emit_box_current_value_as_mixed(ctx.emitter, &value_type.codegen_repr());
+            }
             append_refcounted_array_literal_element(ctx, &PhpType::Mixed);
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            append_refcounted_array_literal_element(ctx, value_type);
         }
         PhpType::Int | PhpType::Bool => append_scalar_array_literal_element(ctx),
         PhpType::Float => append_float_array_literal_element(ctx),
@@ -688,6 +769,20 @@ fn materialize_assoc_literal_value(
     storage_value_type: &PhpType,
     actual_value_type: &PhpType,
 ) -> Result<()> {
+    if matches!(actual_value_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        // Hash insertion consumes the nested literal owner, unlike indexed-array push.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x3, x0");                          // transfer the nested container pointer to hash insertion
+                ctx.emitter.instruction("mov x4, xzr");                         // nested containers do not use a high payload word
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rcx, rax");                        // transfer the nested container pointer to hash insertion
+                ctx.emitter.instruction("xor r8, r8");                          // nested containers do not use a high payload word
+            }
+        }
+        return Ok(());
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => materialize_assoc_literal_value_aarch64(
             ctx,
@@ -863,6 +958,8 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
         | PhpType::Float
         | PhpType::Mixed
         | PhpType::Object(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
         | PhpType::Union(_)
         | PhpType::Iterable
         | PhpType::Void => Ok(8),

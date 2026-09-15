@@ -1,11 +1,11 @@
 ---
-title: "imagecolorallocate() — internals"
+title: "imagecolorallocate() - internals"
 description: "Compiler internals for imagecolorallocate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 464
 ---
 
-## `imagecolorallocate()` — internals
+## `imagecolorallocate()` - internals
 
 ## Where it lives
 

@@ -549,6 +549,20 @@ fn test_get_resource_type_returns_stream() {
     assert_eq!(out, "stream");
 }
 
+/// Verifies compiled PHP keeps stream and stream-filter resources distinct.
+#[test]
+fn test_get_resource_type_returns_stream_filter() {
+    let out = compile_and_run(
+        r#"<?php
+$stream = fopen("php://memory", "r+");
+$filter = stream_filter_append($stream, "string.rot13", STREAM_FILTER_READ);
+echo get_resource_type($stream), "|", get_resource_type($filter), "|";
+var_dump($filter);
+"#,
+    );
+    assert_eq!(out, "stream|stream filter|resource(6) of type (stream filter)\n");
+}
+
 /// Verifies compiled PHP output for get resource id matches display marker.
 #[test]
 fn test_get_resource_id_matches_display_marker() {
@@ -7732,6 +7746,23 @@ echo $f === false ? "closed" : "open";
 "#,
     );
     assert_eq!(out, "P9;closed");
+}
+
+/// Named source order evaluates and roots the params hash before the context expression.
+/// Callback discovery must follow the staged ownership values back to that literal hash.
+#[test]
+fn test_stream_notification_callback_survives_wrapped_named_params() {
+    let out = compile_and_run(
+        r#"<?php
+$ctx = stream_context_set_params(
+    params: ['notification' => function($code) { echo "W" . $code . ";"; }],
+    context: stream_context_create()
+);
+$f = fopen('http://127.0.0.1:1/', 'r');
+echo $f === false ? "closed" : "open";
+"#,
+    );
+    assert_eq!(out, "W9;closed");
 }
 
 /// A userspace wrapper whose `stream_cast()` (vtable slot 10) returns a real

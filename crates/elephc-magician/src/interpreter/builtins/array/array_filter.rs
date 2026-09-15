@@ -112,7 +112,7 @@ fn eval_array_filter_result_from_scope(
         _ => None,
     };
     let mode = match mode {
-        Some(mode) => eval_array_filter_mode_value(mode, values)?,
+        Some(mode) => eval_array_filter_mode_value(mode, context, values)?,
         None => EVAL_ARRAY_FILTER_USE_VALUE,
     };
 
@@ -135,9 +135,10 @@ fn eval_array_filter_result_from_scope(
     Ok(result)
 }
 
-/// Reads and validates the optional `array_filter()` callback mode.
+/// Normalizes legacy modes and raises a catchable ValueError for invalid PHP 8.6 modes.
 pub(in crate::interpreter) fn eval_array_filter_mode_value(
     mode: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
     let mode = eval_int_value(mode, values)?;
@@ -145,7 +146,12 @@ pub(in crate::interpreter) fn eval_array_filter_mode_value(
         EVAL_ARRAY_FILTER_USE_VALUE | EVAL_ARRAY_FILTER_USE_BOTH | EVAL_ARRAY_FILTER_USE_KEY => {
             Ok(mode)
         }
-        _ => Err(EvalStatus::RuntimeFatal),
+        _ if crate::eval_php_profile::eval_php_version_id() < 80600 => Ok(EVAL_ARRAY_FILTER_USE_VALUE),
+        _ => eval_throw_builtin_value_error(
+            "array_filter(): Argument #3 ($mode) must be one of ARRAY_FILTER_USE_VALUE, ARRAY_FILTER_USE_KEY, or ARRAY_FILTER_USE_BOTH",
+            context,
+            values,
+        ),
     }
 }
 

@@ -8,7 +8,7 @@
 //! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
 
 use super::*;
-use crate::ir::ResourceCleanupKind;
+use crate::ir::{CoreBuiltinOp, ResourceCleanupKind, RuntimeFnId};
 
 /// Adds optional runtime features referenced by synthetic or lowered EIR functions.
 pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module) {
@@ -22,6 +22,8 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.eval_scope |= features.eval_scope;
     module.required_runtime_features.popen_resource |= features.popen_resource;
     module.required_runtime_features.directory_resource |= features.directory_resource;
+    module.required_runtime_features.handler_state |= features.handler_state;
+    module.required_runtime_features.object_clone |= features.object_clone;
     // Not derived from the instruction stream like the rest: a Fiber object can only exist if the
     // builtin class was registered, and `types::checker::builtin_class_gate` has already decided
     // that from the program's own text. Reading the answer here is exact, where scanning EIR for
@@ -61,7 +63,25 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                             }
                             Some(ResourceCleanupKind::StreamFd) | None => {}
                         }
+                        features.object_clone |= target == RuntimeFnId::CloneWith;
                     }
+                }
+                Op::CoreBuiltin => {
+                    let operation = match inst.immediate {
+                        Some(Immediate::I64(value)) => CoreBuiltinOp::from_i64(value),
+                        _ => None,
+                    };
+                    features.handler_state |= matches!(
+                        operation,
+                        Some(
+                            CoreBuiltinOp::RestoreErrorHandler
+                                | CoreBuiltinOp::RestoreExceptionHandler
+                                | CoreBuiltinOp::SetErrorHandler
+                                | CoreBuiltinOp::SetExceptionHandler
+                                | CoreBuiltinOp::GetErrorHandler
+                                | CoreBuiltinOp::GetExceptionHandler
+                        )
+                    );
                 }
                 Op::LanguageConstructCall => {
                     if language_construct_call_requires_eval(module, inst) {

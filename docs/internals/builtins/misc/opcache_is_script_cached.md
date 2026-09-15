@@ -1,11 +1,11 @@
 ---
-title: "opcache_is_script_cached() — internals"
+title: "opcache_is_script_cached() - internals"
 description: "Compiler internals for opcache_is_script_cached(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 617
+  order: 640
 ---
 
-## `opcache_is_script_cached()` — internals
+## `opcache_is_script_cached()` - internals
 
 ## Where it lives
 

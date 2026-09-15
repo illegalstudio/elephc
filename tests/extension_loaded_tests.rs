@@ -382,9 +382,21 @@ fn dynamic_argument_reports_unlinked_pdo() {
 #[test]
 fn dynamic_argument_tracks_linked_bridges() {
     let with = make_test_dir("ext_dyn_pdo");
+    let compile_started = std::time::Instant::now();
+    eprintln!("dynamic linked-bridge PDO compile started");
     let bin = compile_with_flags(&with, DYNAMIC_LINKED_BRIDGE_PROBE, "app", &["--with-pdo"]);
+    eprintln!(
+        "dynamic linked-bridge PDO compile completed in {:?}",
+        compile_started.elapsed()
+    );
+    let run_started = std::time::Instant::now();
+    let output = run_binary(&bin);
+    eprintln!(
+        "dynamic linked-bridge PDO run completed in {:?}",
+        run_started.elapsed()
+    );
     assert_eq!(
-        run_binary(&bin),
+        output,
         "json=T curl=F PDO=T pcre=T ",
         "dynamic loop with --with-pdo: PDO flips to loaded, others unchanged"
     );

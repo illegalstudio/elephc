@@ -212,6 +212,15 @@ fn test_error_named_arguments_reject_duplicate_assignment() {
     );
 }
 
+/// CUF forwards target names but still rejects assigning its callback parameter twice.
+#[test]
+fn test_error_named_arguments_cuf_rejects_duplicate_callback() {
+    expect_error(
+        "<?php call_user_func('strlen', callback: 'strlen', string: 'value');",
+        "Builtin 'call_user_func' parameter $callback is already assigned",
+    );
+}
+
 /// Verifies that spread arguments from associative arrays are subject to the same
 /// unknown-parameter checks as regular named arguments.
 #[test]
@@ -540,6 +549,52 @@ fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
         "<?php function bump(?int &$x) { $x = null; } $value = 1; bump($value);",
         "requires a variable with mixed/union/nullable storage when passed by reference",
     );
+}
+
+/// Mixed-local widening does not relabel an existing concrete reference set.
+#[test]
+fn test_error_mixed_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
+    for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
+        expect_error(
+            &format!("<?php function replaceScalar(mixed &$slot): void {{ $slot = 'changed'; }} $value = 1; $alias =& $value; {call}"),
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
+}
+
+/// An untyped reference parameter also uses canonical Mixed storage and cannot relabel aliases.
+#[test]
+fn test_error_untyped_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
+    for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
+        expect_error(
+            &format!("<?php function replaceScalar(&$slot): void {{ $slot = 'changed'; }} $value = 1; $alias =& $value; {call}"),
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
+}
+
+/// Rebinding a managed-entry alias to a concrete scalar cell clears the old boxed provenance.
+#[test]
+fn test_error_mixed_by_ref_rebound_scalar_alias_still_requires_boxed_storage() {
+    expect_error(
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; $scalar = 1; $alias =& $scalar; replaceScalar($alias);",
+        "requires a variable with mixed/union/nullable storage when passed by reference",
+    );
+}
+
+/// Managed provenance created on only one control-flow path cannot authorize the join binding.
+#[test]
+fn test_error_conditional_managed_alias_does_not_relabel_scalar_reference_cell() {
+    for source in [
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $scalar = 1; $alias =& $scalar; if ($argc > 1) { $items = ['k' => new stdClass()]; $alias =& $items['k']; } replaceScalar($alias);",
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; if ($argc > 1) { $scalar = 1; $alias =& $scalar; } replaceScalar($alias);",
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; for ($i = 0; $i < 2; $i++) { replaceScalar($alias); $scalar = 1; $alias =& $scalar; }",
+    ] {
+        expect_error(
+            source,
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
 }
 
 // -- Include/require path expression errors --

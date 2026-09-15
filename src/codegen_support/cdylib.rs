@@ -61,7 +61,7 @@ pub(crate) fn emit_cdylib_exports(
 
     emit_error_helpers(emitter, target);
     for export in exports {
-        if is_string_return_signature(&export.sig) {
+        if is_string_return_signature(&export.source_sig) {
             owned_string::emit_owned_string_export(
                 emitter,
                 target,
@@ -268,6 +268,7 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
         emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
         if lifecycle == "elephc_init" {
             crate::codegen::stack_guard::emit_stack_limit_init_call(emitter);
+            abi::emit_call_label(emitter, "__rt_gc_request_start");
             if heap_debug {
                 abi::emit_enable_heap_debug_flag(emitter);
             }
@@ -339,24 +340,40 @@ mod tests {
 
     /// Builds one single-string-input owned-result export fixture.
     fn string_export() -> ExportedFunction {
+        let source_sig = FunctionSig {
+            params: vec![("input".to_string(), PhpType::Str)],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type: PhpType::Str,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+        };
         ExportedFunction {
             name: "roundtrip".to_string(),
             c_name: "roundtrip".to_string(),
-            sig: FunctionSig {
-                params: vec![("input".to_string(), PhpType::Str)],
-                param_type_exprs: vec![None],
-                param_attributes: vec![Vec::new()],
-                defaults: vec![None],
-                return_type: PhpType::Str,
-                declared_return: true,
-                by_ref_return: false,
-                ref_params: vec![false],
-                declared_params: vec![true],
-                variadic: None,
-                deprecation: None,
-            },
+            source_sig: source_sig.clone(),
+            internal_sig: source_sig,
             span: Span::dummy(),
         }
+    }
+
+    /// Adds the generated physical collector used when unrelated eval or backtrace code exists.
+    fn add_internal_collector(export: &mut ExportedFunction) {
+        export.internal_sig.params.push((
+            crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ));
+        export.internal_sig.param_type_exprs.push(None);
+        export.internal_sig.param_attributes.push(Vec::new());
+        export.internal_sig.defaults.push(None);
+        export.internal_sig.ref_params.push(false);
+        export.internal_sig.declared_params.push(false);
+        export.internal_sig.variadic = Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string());
     }
 
     /// Emits an AArch64 boundary with setjmp, owned copy, and lifecycle exports.
@@ -526,6 +543,59 @@ mod tests {
                 lazy_init < first_output_load,
                 "{target:?} loaded an output address before lazy initialization completed:\n{asm}"
             );
+        }
+    }
+
+    /// Synthesizes and owns the hidden collector without adding a host parameter on any target.
+    #[test]
+    fn emits_internal_hidden_collector_for_all_supported_targets() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let mut export = string_export();
+            add_internal_collector(&mut export);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            let asm = emitter.output();
+            let public_label = if matches!(target.platform, Platform::MacOS) {
+                "_roundtrip:"
+            } else {
+                "roundtrip:"
+            };
+            let boundary = &asm[asm.find(public_label).unwrap()..];
+            let setjmp = boundary.find("setjmp").unwrap();
+            let allocate = boundary.find("__rt_array_new").unwrap();
+            let publish = boundary.find("__rt_cleanup_call_operand_owner").unwrap();
+            let call_body = boundary.find("_fn_roundtrip").unwrap();
+            let detach = boundary[call_body..]
+                .find("_exc_call_frame_top")
+                .map(|offset| offset + call_body)
+                .unwrap();
+            let release = boundary[call_body..]
+                .find("__rt_decref_any")
+                .map(|offset| offset + call_body)
+                .unwrap();
+
+            assert!(setjmp < allocate && allocate < publish && publish < call_body);
+            assert!(call_body < detach && detach < release);
+            assert_eq!(boundary.matches("__rt_array_new").count(), 1);
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(boundary.contains("stur x0, [x29, #-8]"));
+                    assert!(boundary.contains("stur x1, [x29, #-16]"));
+                    assert!(!boundary.contains("stur x4, [x29"));
+                }
+                Arch::X86_64 => {
+                    assert!(boundary.contains("mov QWORD PTR [rbp - 8], rdi"));
+                    assert!(boundary.contains("mov QWORD PTR [rbp - 16], rsi"));
+                    assert!(!boundary.contains("mov QWORD PTR [rbp - 40], r8"));
+                }
+            }
         }
     }
 }

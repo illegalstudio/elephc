@@ -30,6 +30,20 @@ pub(crate) struct EvalRefArgSlot {
 
 const EVAL_REF_ARG_BYTES: usize = 32;
 
+/// Gives each mutable Mixed ref slot an owner only after all fallible argument preparation.
+/// Native assignment consumes this owner, while unchanged slots release it during writeback.
+pub(crate) fn emit_acquire_mixed_ref_args(
+    emitter: &mut Emitter,
+    ref_slots: &[EvalRefArgSlot],
+    argument_temp_bytes: usize,
+) {
+    for slot in ref_slots.iter().filter(|slot| slot.param_ty.codegen_repr() == PhpType::Mixed) {
+        let result = abi::int_result_reg(emitter);
+        abi::emit_load_temporary_stack_slot(emitter, result, argument_temp_bytes + slot.raw_offset);
+        abi::emit_call_label(emitter, "__rt_incref");
+    }
+}
+
 /// Returns true when an eval bridge by-reference parameter can be staged safely.
 pub(crate) fn eval_ref_param_supported(ty: &PhpType) -> bool {
     matches!(
@@ -156,11 +170,16 @@ fn emit_aarch64_write_back_mixed_ref_arg(
     label_prefix: &str,
 ) {
     let done_label = format!("{}_ref_{}_done", label_prefix, slot.param_index);
+    let unchanged_label = format!("{}_ref_{}_unchanged", label_prefix, slot.param_index);
     abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
     abi::emit_load_temporary_stack_slot(emitter, "x10", stack_offset + slot.raw_offset);
     emitter.instruction("cmp x9, x10");                                         // skip writeback when the native call kept the same Mixed cell
-    emitter.instruction(&format!("b.eq {}", done_label));                       // avoid self-copying and releasing the original cell payload
+    emitter.instruction(&format!("b.eq {}", unchanged_label));                  // unchanged slots still own their native activation lease
     emit_aarch64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "x9", "x10");
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&unchanged_label);
+    abi::emit_load_temporary_stack_slot(emitter, "x0", stack_offset + slot.raw_offset);
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
     emitter.label(&done_label);
 }
 
@@ -172,11 +191,16 @@ fn emit_x86_64_write_back_mixed_ref_arg(
     label_prefix: &str,
 ) {
     let done_label = format!("{}_ref_{}_done_x", label_prefix, slot.param_index);
+    let unchanged_label = format!("{}_ref_{}_unchanged_x", label_prefix, slot.param_index);
     abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
     abi::emit_load_temporary_stack_slot(emitter, "r11", stack_offset + slot.raw_offset);
     emitter.instruction("cmp r10, r11");                                        // skip writeback when the native call kept the same Mixed cell
-    emitter.instruction(&format!("je {}", done_label));                         // avoid self-copying and releasing the original cell payload
+    emitter.instruction(&format!("je {}", unchanged_label));                    // unchanged slots still own their native activation lease
     emit_x86_64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "r10", "r11");
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&unchanged_label);
+    abi::emit_load_temporary_stack_slot(emitter, "rax", stack_offset + slot.raw_offset);
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
     emitter.label(&done_label);
 }
 
@@ -702,4 +726,38 @@ fn emit_x86_64_replace_mixed_cell(
     abi::emit_call_label(emitter, "__rt_heap_free");
     emitter.label(&done);
     abi::emit_release_temporary_stack(emitter, 16);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Arch, Target};
+
+    /// Every target acquires only boxed mutable ref slots and balances unchanged writeback.
+    #[test]
+    fn mixed_reference_activation_owners_are_balanced_on_every_target() {
+        let slots = eval_ref_arg_slots(&[PhpType::Mixed, PhpType::Int], &[true, true], false);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_acquire_mixed_ref_args(&mut emitter, &slots, 64);
+            let acquisition = emitter.output();
+            assert_eq!(acquisition.matches("__rt_incref").count(), 1, "{name}");
+            assert!(!acquisition.contains("__rt_heap_alloc"), "{name}");
+            let expected = if target.arch == Arch::AArch64 {
+                "ldr x0, [sp, #96]"
+            } else {
+                "mov rax, QWORD PTR [rsp + 96]"
+            };
+            assert!(acquisition.contains(expected), "{name}: {acquisition}");
+            let mut emitter = Emitter::new(target);
+            match target.arch {
+                Arch::AArch64 => emit_aarch64_write_back_ref_args(&mut emitter, &slots, 0, "refs"),
+                Arch::X86_64 => emit_x86_64_write_back_ref_args(&mut emitter, &slots, 0, "refs"),
+            }
+            let writeback = emitter.output();
+            let unchanged = writeback.find("refs_ref_0_unchanged").unwrap();
+            assert!(writeback[unchanged..].contains("__rt_decref_mixed"), "{name}");
+        }
+    }
 }

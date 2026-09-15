@@ -94,7 +94,7 @@ pub fn emit_zval_pack_array_hash(emitter: &mut Emitter) {
     emitter.label("__rt_zval_pack_array_hash_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the elephc hash pointer
     emitter.instruction("ldr x1, [sp, #56]");                                   // reload the iter cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // x0=next cursor, x1=key_lo, x2=key_hi, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=next cursor, x1=key_lo, x2=key_hi, x3=val_lo, x4=val_hi, x5=val_tag
     emitter.instruction("str x0, [sp, #56]");                                   // save the next cursor for the following iteration
     emitter.instruction("cmp x0, #-1");                                         // is the walk done (-1)?
     emitter.instruction("b.eq __rt_zval_pack_array_hash_loop_done");            // stop once the hash walk is exhausted
@@ -273,7 +273,7 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_zval_pack_array_hash_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the elephc hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // reload the iter cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rax=next cursor, rdi=key_lo, rdx=key_hi, rcx=val_lo, r8=val_hi, r9=val_tag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=next cursor, rdi=key_lo, rdx=key_hi, rcx=val_lo, r8=val_hi, r9=val_tag
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the next cursor for the following iteration
     emitter.instruction("cmp rax, -1");                                         // is the walk done (-1)?
     emitter.instruction("je __rt_zval_pack_array_hash_loop_done");              // stop once the hash walk is exhausted

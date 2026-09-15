@@ -106,7 +106,13 @@ pub(in crate::interpreter) fn eval_iterator_apply_result(
     ) {
         Ok(count) => count,
         Err(EvalStatus::UnsupportedConstruct) => {
-            let iterator = values.method_call(iterator, "getiterator", Vec::new())?;
+            let iterator = eval_native_method_with_positional_values(
+                iterator,
+                "getiterator",
+                Vec::new(),
+                context,
+                values,
+            )?;
             eval_iterator_apply_iterator_object(
                 iterator,
                 callback,
@@ -128,10 +134,22 @@ pub(in crate::interpreter) fn eval_iterator_apply_iterator_object(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    let _ = values.method_call(iterator, "rewind", Vec::new())?;
+    let _ = eval_native_method_with_positional_values(
+        iterator,
+        "rewind",
+        Vec::new(),
+        context,
+        values,
+    )?;
     let mut count = 0_i64;
     loop {
-        let valid = values.method_call(iterator, "valid", Vec::new())?;
+        let valid = eval_native_method_with_positional_values(
+            iterator,
+            "valid",
+            Vec::new(),
+            context,
+            values,
+        )?;
         if !values.truthy(valid)? {
             return Ok(count);
         }
@@ -145,6 +163,12 @@ pub(in crate::interpreter) fn eval_iterator_apply_iterator_object(
         if !values.truthy(result)? {
             return Ok(count);
         }
-        let _ = values.method_call(iterator, "next", Vec::new())?;
+        let _ = eval_native_method_with_positional_values(
+            iterator,
+            "next",
+            Vec::new(),
+            context,
+            values,
+        )?;
     }
 }

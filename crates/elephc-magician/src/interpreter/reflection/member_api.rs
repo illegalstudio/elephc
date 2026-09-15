@@ -179,11 +179,7 @@ pub(in crate::interpreter) fn eval_reflection_property_set_value_result(
                 .declaring_class_name
                 .as_deref()
                 .ok_or(EvalStatus::RuntimeFatal)?;
-            if let Some(replaced) =
-                context.set_static_property(declaring_class, &property_name, value)
-            {
-                values.release(replaced)?;
-            }
+            store_borrowed_static_property(declaring_class, &property_name, value, context, values)?;
         } else {
             let declaring_class = member
                 .declaring_class_name
@@ -508,7 +504,7 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
                 values,
             )
         } else {
-            eval_reflection_aot_instance_property_get_value(
+            eval_reflection_aot_instance_property_get_raw_value(
                 &declaring_class,
                 &property_name,
                 object,
@@ -543,7 +539,7 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
                 values,
             )?;
         } else {
-            eval_reflection_aot_instance_property_set_value(
+            eval_reflection_aot_instance_property_set_raw_value(
                 &declaring_class,
                 &property_name,
                 object,

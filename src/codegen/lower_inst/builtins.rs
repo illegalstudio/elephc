@@ -37,6 +37,7 @@ pub(crate) mod arrays;
 pub(crate) mod bcmath;
 pub(crate) mod buffers;
 pub(crate) mod class_relations;
+pub(crate) mod clone_with;
 pub(crate) mod ctype;
 pub(crate) mod curl;
 pub(crate) mod debug;
@@ -76,7 +77,7 @@ pub(in crate::codegen::lower_inst) use eval_facade::*;
 pub(crate) use function_queries::*;
 pub(crate) use member_queries::*;
 pub(crate) use scalar_metadata::*;
-use shared::*;
+pub(in crate::codegen::lower_inst) use shared::*;
 pub(crate) use type_predicates::*;
 
 const DEFINE_ALREADY_DEFINED_WARNING: &str =

@@ -143,7 +143,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_unser_options_hash_list_loop");
     emitter.instruction("ldr x0, [sp]");                                        // associative source hash
     emitter.instruction("ldr x1, [sp, #16]");                                   // insertion-order iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // return next borrowed value tuple; keys are intentionally ignored
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // return next borrowed value tuple; keys are intentionally ignored
     emitter.instruction("cmp x0, #-1");                                         // exhausted every associative value?
     emitter.instruction("b.eq __rt_unser_options_done");                        // normalized policy is ready
     emitter.instruction("str x0, [sp, #16]");                                   // preserve next iterator cursor

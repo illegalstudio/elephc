@@ -15,7 +15,7 @@ pub(super) fn release_expr_statement_result(
     value: LoweredValue,
     span: Span,
 ) {
-    if ctx.value_is_owning_temporary(value) {
+    if ctx.value_needs_release_after_use(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
 }
@@ -48,7 +48,7 @@ pub(super) fn lower_block(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
     }
 }
 
-/// Emits EIR for `echo`.
+/// Emits output and retires owned reads, including deferred string unboxes from widened slots.
 pub(super) fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
     let value = lower_expr(ctx, expr);
     if ctx.builder.insertion_block_is_terminated() {
@@ -61,8 +61,7 @@ pub(super) fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: S
         Op::EchoValue.default_effects(),
         Some(span),
     );
-    if ctx.value_is_owning_temporary(value) {
+    if ctx.value_needs_release_after_use(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
 }
-

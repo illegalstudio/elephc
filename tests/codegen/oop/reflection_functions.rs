@@ -14,6 +14,40 @@
 
 use super::*;
 
+/// Packed-or-hash storage reflects as one PHP type, with composite type methods called after narrowing.
+#[test]
+fn test_reflection_function_array_storage_has_one_php_type() {
+    let out = compile_and_run(
+        r#"<?php
+function reflectArrayType(array $items): array { return $items; }
+function reflectNullableArrayType(?array $items): ?array { return $items; }
+function reflectUnionArrayType(array|string $items): array|string { return $items; }
+$plain = new ReflectionFunction("reflectArrayType");
+$nullable = new ReflectionFunction("reflectNullableArrayType");
+$union = new ReflectionFunction("reflectUnionArrayType");
+echo get_class($plain->getParameters()[0]->getType()), ":", $plain->getParameters()[0]->getType(),
+    ":", $plain->getReturnType(), "|";
+echo get_class($nullable->getParameters()[0]->getType()), ":", $nullable->getParameters()[0]->getType(),
+    ":", $nullable->getReturnType(), "|";
+$parameterType = $union->getParameters()[0]->getType();
+$returnType = $union->getReturnType();
+echo get_class($parameterType), ":";
+if ($parameterType instanceof ReflectionUnionType) {
+    echo count($parameterType->getTypes());
+} else {
+    echo "not-parameter-union";
+}
+echo ":";
+if ($returnType instanceof ReflectionUnionType) {
+    echo count($returnType->getTypes());
+} else {
+    echo "not-return-union";
+}
+"#,
+    );
+    assert_eq!(out, "ReflectionNamedType:array:array|ReflectionNamedType:?array:?array|ReflectionUnionType:2:2");
+}
+
 /// Verifies AOT `ReflectionFunction` exposes function-abstract predicate metadata.
 #[test]
 fn test_reflection_function_reports_aot_function_abstract_predicates() {

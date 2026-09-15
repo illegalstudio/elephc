@@ -75,6 +75,17 @@ pub(super) fn lower_static_call_user_func(
         "call_user_func" => {
             let callback_expr = args.first()?;
             let callback_args = &args[1..];
+            if callback_args.is_empty() && is_static_get_defined_vars_callback(callback_expr) {
+                return Some(lower_visible_defined_vars(ctx, expr));
+            }
+            if let Some(value) = lower_static_class_introspection_spread_call(
+                ctx,
+                callback_expr,
+                callback_args,
+                expr,
+            ) {
+                return Some(value);
+            }
             let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
             if call_user_func_should_use_descriptor(ctx, callback_expr, callback_args, signature.as_ref()) {
                 return lower_call_user_func_descriptor_invoke(
@@ -103,6 +114,17 @@ pub(super) fn lower_static_call_user_func(
             let [callback_arg, arg_array] = args else {
                 return None;
             };
+            if is_static_get_defined_vars_callback(callback_arg)
+                && static_call_user_func_array_args(arg_array).is_some_and(|args| args.is_empty())
+            {
+                return Some(lower_visible_defined_vars(ctx, expr));
+            }
+            let unpacked = Expr::new(ExprKind::Spread(Box::new(arg_array.clone())), arg_array.span);
+            if let Some(value) = lower_static_class_introspection_spread_call(
+                ctx, callback_arg, &[unpacked], expr,
+            ) {
+                return Some(value);
+            }
             if matches!(arg_array.kind, ExprKind::ArrayLiteralAssoc(_))
                 && static_callable_binding_for_expr(ctx, callback_arg)
                     .is_some_and(|target| matches!(target, StaticCallableBinding::InstanceMethod { .. }))
@@ -127,6 +149,34 @@ pub(super) fn lower_static_call_user_func(
         }
         _ => None,
     }
+}
+
+/// Recognizes the PHP-permitted explicit callback spelling for `get_defined_vars()`.
+fn is_static_get_defined_vars_callback(callback: &Expr) -> bool {
+    let ExprKind::StringLiteral(name) = &callback.kind else {
+        return false;
+    };
+    php_symbol_key(name.trim_start_matches('\\')) == "get_defined_vars"
+}
+
+/// Specializes statically selected class introspection before generic descriptor dispatch.
+fn lower_static_class_introspection_spread_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback_expr: &Expr,
+    callback_args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let callback = static_call_user_func_callback(ctx, callback_expr)?;
+    let StaticCallableBinding::Builtin(function_name) = &callback else {
+        return None;
+    };
+    if !matches!(
+        php_symbol_key(function_name.trim_start_matches('\\')).as_str(),
+        "get_class_vars" | "get_class_methods"
+    ) {
+        return None;
+    }
+    lower_static_callable_call(ctx, callback, callback_args, expr)
 }
 
 /// Lowers unresolved string callbacks after an eval barrier through the eval function table.

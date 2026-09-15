@@ -48,7 +48,7 @@ pub(in crate::codegen) fn ir_function_sig(function: &Function) -> FunctionSig {
         defaults: vec![None; function.params.len()],
         return_type: function.return_php_type.clone(),
         declared_return: false,
-        by_ref_return: false,
+        by_ref_return: function.flags.by_ref_return,
         ref_params: function.params.iter().map(|param| param.by_ref).collect(),
         declared_params: vec![true; function.params.len()],
         variadic: function

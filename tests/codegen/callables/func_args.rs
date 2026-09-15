@@ -16,6 +16,104 @@
 
 use crate::support::*;
 
+/// An AOT function with an optional parameter reports the same frame whether eval or AOT calls it.
+///
+/// Eval-registered natives are bound through the same descriptor container as `call_user_func`,
+/// so an omitted optional must not be counted as a supplied argument on either path.
+#[test]
+fn test_eval_call_matches_direct_call_for_optional_parameter_frames() {
+    let out = compile_and_run(r#"<?php
+function optionalTallyFrame($first, $second = 2) {
+    return func_num_args() . ":" . implode(",", func_get_args());
+}
+echo optionalTallyFrame(1), "|", optionalTallyFrame(1, 5), "|";
+$source = 'echo optionalTallyFrame(1), "|", optionalTallyFrame(1, 5);' . ' // ' . $argc;
+eval($source);
+"#);
+    assert_eq!(out, "1:1|2:1,5|1:1|2:1,5");
+}
+
+/// An eval fragment sees the enclosing AOT frame's PHP variables and none of its hidden locals.
+///
+/// The enclosing function carries every hidden local this pass can mint (the argument collector,
+/// the actual-argument count) plus a parser-generated `foreach` destructuring temporary, and the
+/// fragment proves three separate things about them:
+///
+/// - No name carrying `crate::names::GENERATED_LOCAL_MARKER` reaches the eval scope at all. The
+///   scan is written over `str_contains($name, "#")` rather than a fixed list, so a generated
+///   local added later cannot slip through by not being enumerated here.
+/// - A user variable that merely SPELLS a hidden local's readable stem stays visible. PHP source
+///   can legally declare `$__elephc_func_arg_value`, and hiding on the prefix would erase it.
+/// - Assigning those stems inside the fragment cannot reach the frame's hidden state: the
+///   post-eval reload consults the same inventory as the flush, so `func_num_args()` and
+///   `func_get_args()` still describe the real call after the fragment ran.
+///
+/// `$visible` is written by the fragment and read afterwards, so the test also fails if the
+/// filtering broke ordinary scope synchronization instead of only excluding hidden locals.
+#[test]
+fn test_eval_scope_sync_excludes_hidden_frame_locals_only() {
+    // The fixture greps eval scope names for the `#` marker, so it needs a `r##` raw string:
+    // the `"#` inside `str_contains($name, "#")` would close an `r#` one.
+    let out = compile_and_run(r##"<?php
+function evalScopeFrameProbe($first, $second = 5) {
+    $visible = "before";
+    $__elephc_func_arg_value = "user";
+    foreach ([[1, 2]] as [$left, $right]) { $visible = "pair" . $left . $right; }
+    $probe = 'echo array_key_exists("__elephc_func_args", get_defined_vars()) ? "leak" : "clean";
+        echo array_key_exists("__elephc_func_argc", get_defined_vars()) ? "leak" : "clean";
+        echo array_key_exists("__elephc_func_arg_value", get_defined_vars()) ? "user" : "hidden";
+        $marked = 0;
+        foreach (array_keys(get_defined_vars()) as $name) {
+            if (str_contains($name, "#")) { $marked = $marked + 1; }
+        }
+        echo $marked;
+        $__elephc_func_args = "clobber";
+        $__elephc_func_argc = 99;
+        $visible = "after";';
+    eval($probe . ' // ' . $first);
+    return ":" . $visible . ":" . $__elephc_func_arg_value . ":"
+        . func_num_args() . ":" . implode(",", func_get_args());
+}
+echo evalScopeFrameProbe(1), "|", evalScopeFrameProbe(1, 2, 3);
+"##);
+    assert_eq!(
+        out,
+        "cleancleanuser0:after:user:1:1|cleancleanuser0:after:user:3:1,2,3"
+    );
+}
+
+/// Eval argument frames stay outside PHP variables, including formerly colliding parameter names.
+#[test]
+fn test_eval_func_args_metadata_does_not_shadow_php_variables() {
+    let out = compile_and_run(r#"<?php
+$source = 'function emptyScope() { return count(get_defined_vars()); }
+function namedScope($__elephc_eval_func_args) {
+    echo $__elephc_eval_func_args . ":";
+    echo implode(",", array_keys(call_user_func("get_defined_vars"))) . ":";
+    echo func_get_arg(1) . ":" . func_num_args() . "|";
+}
+function typedTail(int ...$tail) {
+    echo gettype(func_get_arg(0)) . ":" . func_get_arg(0) . "|";
+}
+class FrameNames {
+    public function instanceScope() {
+        echo array_key_exists("__elephc_eval_func_args", get_defined_vars()) ? "bad" : "method";
+    }
+    public static function staticScope() { echo count(get_defined_vars()); }
+}
+echo emptyScope() . "|";
+namedScope(7, "extra");
+typedTail("8");
+$__elephc_eval_func_args = 9;
+$closure = function () use ($__elephc_eval_func_args) { return $__elephc_eval_func_args; };
+echo $closure() . "|";
+(new FrameNames())->instanceScope();
+FrameNames::staticScope();';
+eval($source . " // " . $argc);
+"#);
+    assert_eq!(out, "0|7:__elephc_eval_func_args:extra:2|integer:8|9|method0");
+}
+
 /// Verifies the motivating case: a function that declares no parameters reports how many
 /// arguments the caller actually passed, for zero, one and several arguments.
 #[test]
@@ -131,6 +229,114 @@ var_dump(byref($q), $q);
     );
 }
 
+/// Verifies a source variadic keeps its original positional history and omits named tail entries.
+#[test]
+fn test_func_get_args_in_source_variadic_function() {
+    let out = compile_and_run(
+        r#"<?php
+function snapshot($head, ...$rest) {
+    $head = 8;
+    $rest = [9];
+    echo func_num_args(), "|";
+    var_dump(func_get_args());
+}
+snapshot(1, 2, 3, extra: 4);
+"#,
+    );
+    assert_eq!(
+        out,
+        "3|array(3) {\n  [0]=>\n  int(8)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\n"
+    );
+}
+
+/// Verifies optional parameters distinguish omitted defaults from supplied named values.
+#[test]
+fn test_func_args_with_optional_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function optional_args($a = 10, $b = 20, $c = 30) {
+    $a = 99;
+    echo func_num_args(), ":", implode(",", func_get_args()), ":";
+    try {
+        echo func_get_arg(func_num_args());
+    } catch (ValueError $error) {
+        echo "range";
+    }
+    echo "|";
+}
+optional_args();
+optional_args(1);
+optional_args(b: 2);
+optional_args(c: 3);
+$values = [1, 2];
+optional_args(...$values);
+call_user_func("optional_args", 1, 2);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0::range|1:99:range|2:99,2:range|3:99,20,3:range|2:99,2:range|2:99,2:range|"
+    );
+}
+
+/// Verifies optional and source-variadic parameters share the exact PHP passed count.
+#[test]
+fn test_func_args_with_optional_and_source_variadic_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function optional_variadic($a = 10, $b = 20, ...$rest) {
+    $a = 99;
+    $rest = [88];
+    echo func_num_args(), ":", implode(",", func_get_args()), "|";
+}
+optional_variadic();
+optional_variadic(1);
+optional_variadic(b: 2);
+optional_variadic(1, 2, 3, 4, named: 5);
+$values = [1, 2, 3];
+optional_variadic(...$values);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0:|1:99|2:99,2|4:99,2,3,4|3:99,2,3|"
+    );
+}
+
+/// Verifies optional source variadics keep their hidden count in methods and closures.
+#[test]
+fn test_func_args_with_optional_variadics_in_methods_and_closures() {
+    let out = compile_and_run(
+        r#"<?php
+class OptionalVariadicFrames {
+    public function instance($a = 10, ...$rest): string {
+        $a = 99;
+        $rest = [];
+        return func_num_args() . ":" . implode(",", func_get_args());
+    }
+
+    public static function staticFrame($a = 10, ...$rest): string {
+        $rest = [];
+        return func_num_args() . ":" . implode(",", func_get_args());
+    }
+}
+
+$object = new OptionalVariadicFrames();
+$closure = function ($a = 10, ...$rest): string {
+    $a = 77;
+    $rest = [];
+    return func_num_args() . ":" . implode(",", func_get_args());
+};
+
+echo $object->instance(), "|";
+echo $object->instance(1, 2, named: 3), "|";
+echo OptionalVariadicFrames::staticFrame(a: 4), "|";
+echo $closure(5, 6, named: 7);
+"#,
+    );
+    assert_eq!(out, "0:|2:99,2|1:4|2:77,6");
+}
+
 /// Verifies the constructs inside instance and static methods, which have their own
 /// argument frame.
 #[test]
@@ -181,6 +387,46 @@ echo spread(...[1, 2, 3, 4]), "|", call_user_func('spread', 1, 2);
 "#,
     );
     assert_eq!(out, "4|2");
+}
+
+/// Public descriptor invokers synthesize hidden argument metadata without consuming user slots.
+#[test]
+fn test_func_args_through_public_first_class_and_named_callable_forms() {
+    let out = compile_and_run(
+        r#"<?php
+function optional_frame($a = 10, $b = 20) {
+    return func_num_args() . ":" . implode(",", func_get_args());
+}
+function variadic_frame($a = 10, $b = 20, ...$rest) {
+    return func_num_args() . ":" . implode(",", func_get_args());
+}
+$optional = optional_frame(...);
+$variadic = variadic_frame(...);
+echo $optional(b: 2), "|";
+echo call_user_func($optional, b: 3), "|";
+echo $variadic(b: 4), "|";
+echo call_user_func($variadic, 1, 2, 3, named: 5);
+"#,
+    );
+    assert_eq!(out, "2:10,2|2:10,3|2:10,4|3:1,2,3");
+}
+
+/// Verifies PHP's literal `call_user_func*` special cases inspect the caller's frame.
+#[test]
+fn test_func_args_support_literal_call_user_func_forms() {
+    let out = compile_and_run(
+        r#"<?php
+function inspect_literal_callbacks($first, $second) {
+    echo call_user_func("FUNC_NUM_ARGS"), "|";
+    echo implode(",", call_user_func("func_get_args")), "|";
+    echo call_user_func("func_get_arg", 1), "|";
+    echo call_user_func_array("func_num_args", []), "|";
+    echo call_user_func_array("func_get_arg", [1]);
+}
+inspect_literal_callbacks(7, 8);
+"#,
+    );
+    assert_eq!(out, "2|7,8|8|2|8");
 }
 
 /// Verifies that one introspection construct can be nested inside another: the position
@@ -252,4 +498,96 @@ echo once_only("first", "second");
 "#,
     );
     assert_eq!(out, "first:1");
+}
+
+/// Engine magic-hook callers use source arity even when each body has a physical collector.
+#[test]
+fn test_func_args_method_adapters_cover_magic_property_string_and_destructor_hooks() {
+    let out = compile_and_run(
+        r#"<?php
+class AdaptedMagic {
+    public function __toString(): string { return "str" . func_num_args(); }
+    public function __get(string $name): mixed { return $name . func_num_args(); }
+    public function __set(string $name, mixed $value): void { echo $name, $value, func_num_args(), "|"; }
+    public function __destruct() { echo "drop", func_num_args(); }
+}
+$value = new AdaptedMagic();
+echo $value, "|", $value->missing, "|";
+$value->written = 7;
+"#,
+    );
+    assert_eq!(out, "str0|missing1|written72|drop0");
+}
+
+/// Runtime hook tables and injected interfaces call collector-bearing methods through adapters.
+#[test]
+fn test_func_args_method_adapters_cover_serialization_json_and_countable_hooks() {
+    let out = compile_and_run(
+        r#"<?php
+class AdaptedHooks implements Countable, JsonSerializable {
+    public int $value = 4;
+    public function count(): int { return $this->value + func_num_args(); }
+    public function jsonSerialize(): mixed { return ["json" => func_num_args()]; }
+    public function __serialize(): array { return ["value" => $this->value, "argc" => func_num_args()]; }
+    public function __unserialize(array $data): void { $this->value = $data["value"] + func_num_args(); }
+}
+$item = new AdaptedHooks();
+$mixed = $item;
+echo count($mixed), "|", json_encode($item), "|";
+$copy = unserialize(serialize($item));
+echo $copy->value;
+"#,
+    );
+    assert_eq!(out, "4|{\"json\":0}|5");
+}
+
+/// A call typed against an injected parent uses the source vtable for an adapted override.
+#[test]
+fn test_func_args_source_vtable_dispatches_injected_parent_override() {
+    let out = compile_and_run(
+        r#"<?php
+class AdaptedDate extends DateTime {
+    public function format(string $format): string { return $format . func_num_args(); }
+}
+function renderDate(DateTime $date): string { return $date->format("Y"); }
+echo renderDate(new AdaptedDate());
+"#,
+    );
+    assert_eq!(out, "Y1");
+}
+
+/// Sort callback wrappers enter methods with source arity, including late-static dispatch.
+#[test]
+fn test_func_args_method_adapters_cover_sort_method_callback_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+class AdaptedSortBase {
+    public static function sort(array $values): string {
+        usort($values, static::compare(...));
+        return implode('', $values);
+    }
+    public static function compare(int $left, int $right): int {
+        return func_num_args() === 2 ? $left <=> $right : 0;
+    }
+}
+class AdaptedSortChild extends AdaptedSortBase {
+    public static function compare(int $left, int $right): int {
+        return func_num_args() === 2 ? $right <=> $left : 0;
+    }
+}
+class AdaptedInstanceSort {
+    public function compare(int $left, int $right): int {
+        return func_num_args() === 2 ? $left <=> $right : 0;
+    }
+}
+$direct = [3, 1, 2];
+usort($direct, AdaptedSortBase::compare(...));
+echo implode('', $direct), '|', AdaptedSortChild::sort([3, 1, 2]), '|';
+$instance = [3, 1, 2];
+$sorter = new AdaptedInstanceSort();
+usort($instance, $sorter->compare(...));
+echo implode('', $instance);
+"#,
+    );
+    assert_eq!(out, "123|321|123");
 }

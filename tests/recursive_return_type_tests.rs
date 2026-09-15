@@ -535,7 +535,7 @@ function r(int $x): array {
 }
 print_r(r(0));
 "#,
-        "Function 'r' return type expects Array(Mixed), got Str",
+        "Function 'r' return type expects Union([Array(Mixed), AssocArray { key: Mixed, value: Mixed }]), got Str",
     );
 }
 

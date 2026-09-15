@@ -112,10 +112,9 @@ fn lower_object_cast(
     if matches!(source_type.codegen_repr(), PhpType::Object(_)) {
         return value;
     }
-    let helper = if matches!(
-        source_type.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
+    let helper = if source_type.is_php_array() {
+        crate::object_cast_prelude::CAST_HELPER
+    } else if matches!(source_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         crate::object_cast_prelude::DYNAMIC_CAST_HELPER
     } else {
         crate::object_cast_prelude::CAST_HELPER

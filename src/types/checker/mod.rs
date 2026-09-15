@@ -22,6 +22,8 @@ mod builtin_types;
 mod builtin_user_filter;
 pub(crate) mod builtins;
 mod callables;
+pub(crate) mod clone_override_storage;
+pub(crate) mod scope_dynamic_storage;
 mod driver;
 mod extern_decl;
 mod functions;
@@ -98,6 +100,10 @@ pub(crate) struct Checker {
     /// any statement check, which keeps class/constant/default-value checking on PHP's coercive
     /// rules — the behaviour elephc had before the directive was honoured.
     pub strict_types: bool,
+    /// Whether the checker is validating arguments synthesized by an internal callback site.
+    /// These expressions describe engine-provided values, not caller-owned lvalues, so they
+    /// must not publish reference aliases or boxed write-back metadata.
+    pub internal_callback_binding: bool,
     /// Tracks which undeclared function parameters have already had their type
     /// adopted from a real call site, keyed by (function_name, param_index). The
     /// first such call adopts the actual argument type; later disagreeing calls
@@ -113,6 +119,10 @@ pub(crate) struct Checker {
     pub callable_captures: HashMap<String, Vec<(String, PhpType, bool)>>,
     /// Tracks callable-array targets assigned to variables, keyed by variable name.
     pub callable_array_targets: HashMap<String, CallableTarget>,
+    /// Identifies the assignment that produced each callable-array target fact.
+    pub callable_array_target_versions: HashMap<String, u64>,
+    /// Monotonic source for callable-array target assignment identities.
+    pub next_callable_array_target_version: u64,
     /// Tracks first-class callable targets assigned to variables, keyed by variable name.
     pub first_class_callable_targets: HashMap<String, CallableTarget>,
     /// Tracks `ReflectionClass` locals whose reflected class is statically known.
@@ -171,6 +181,12 @@ pub(crate) struct Checker {
     pub top_level_env: TypeEnv,
     /// Names that are by-ref parameters in the current function/closure scope.
     pub active_ref_params: HashSet<String>,
+    /// Active incoming by-reference parameters and captures whose storage is owned outside this frame.
+    ///
+    /// `active_ref_params` additionally accumulates local `=&` targets while checking the body,
+    /// so it cannot distinguish external storage from a frame-owned alias. This subset follows
+    /// the incoming binding until `unset()` detaches the local name from the external cell.
+    pub active_external_ref_bindings: HashSet<String>,
     /// Names introduced via `global` declarations in the current local scope.
     pub active_globals: HashSet<String>,
     /// Names ANY function-like body in the program declares `global`, collected once before the
@@ -196,6 +212,12 @@ pub(crate) struct Checker {
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because
     /// eval fragments can create caller-scope variables at runtime.
     pub eval_barrier_active: bool,
+    /// Whether any checked `eval()` can select an AOT callable through the runtime registry.
+    ///
+    /// Function resolution can encounter eval while the selected function itself is still in
+    /// flight, so the driver repeats the idempotent variadic-container promotion after all free
+    /// functions have signatures.
+    pub eval_native_callables_reachable: bool,
     /// Types recorded for `return <expr>;` statements at the moment each one was checked,
     /// keyed by the statement node's address in the AST plus its span.
     ///
@@ -244,6 +266,25 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// Classes a two-argument `clone()` in this program can hand an override array to.
+    ///
+    /// Recorded by the `clone` builtin's check hook, and applied to `classes` after checking by
+    /// `clone_override_storage::widen_clone_override_property_storage`: a PHP untyped property is
+    /// `mixed`, so a slot an override can reach must carry runtime-shaped storage rather than the
+    /// narrow type its default happened to infer.
+    pub clone_override_destinations: clone_override_storage::CloneOverrideDestinations,
+    /// Fixed untyped property slots that a reachable `unset()` may remove.
+    ///
+    /// Applied after body checking so the physical slot and every inherited view use boxed
+    /// `Mixed` storage, which can safely represent the post-unset null value.
+    pub property_unset_destinations: clone_override_storage::PropertyUnsetDestinations,
+    /// Classes where a reachable mutation in this program can create a dynamic property.
+    ///
+    /// Recorded by the property-write and `unset` checks, and applied to `classes` after checking
+    /// by `scope_dynamic_storage::reserve_scope_dynamic_property_storage`: a runtime name can miss
+    /// every declared slot, while a strict ancestor's private name becomes a distinct dynamic
+    /// property outside its declaring scope. Both need per-instance hash storage.
+    pub scope_dynamic_mutation_targets: scope_dynamic_storage::ScopeDynamicMutationTargets,
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
     ///
@@ -255,6 +296,12 @@ pub(crate) struct Checker {
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Caller locals converted to canonical boxed storage by a validated by-reference call.
+    /// Scoped call sites keep recursive signature checking from changing another body's env.
+    pub boxed_reference_outputs: HashMap<(String, Span), HashMap<String, PhpType>>,
+    /// Argument sites where the checker authorized widening an ordinary local to a Mixed cell.
+    /// EIR lowering consumes this instead of inferring permission from a broad builtin signature.
+    pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
     /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
@@ -286,6 +333,11 @@ pub(crate) struct Checker {
     /// A reference can escape through a callee, so the alias is permanent for the rest of the
     /// body.
     pub ref_aliased_locals: HashSet<String>,
+    /// Current local bindings that alias a managed container entry whose physical cell payload
+    /// is canonical boxed `Mixed`, even when the checker's logical value type is narrower.
+    pub boxed_ref_aliased_locals: HashSet<String>,
+    /// Per-conditional-group bindings whose entry provenance was invalidated on any path.
+    pub conditional_boxed_ref_invalidations: Vec<HashSet<String>>,
     /// Names declared `static` in the current body. Their storage outlives the call, so the
     /// binding is never killable.
     pub static_local_names: HashSet<String>,
@@ -306,9 +358,14 @@ pub(crate) struct Checker {
     /// the variable in front of it — and two DIFFERENT names at one position are two decisions,
     /// not one. See `CheckResult::local_bind_kill_sites`.
     pub local_bind_kill_sites: HashMap<Span, HashSet<String>>,
+    /// Unconditional reference unsets that may retire a promoted ordinary local's binding.
+    /// These do not relax escaped-reference type checking or ordinary kill eligibility.
+    pub local_ref_detach_sites: HashMap<Span, HashSet<String>>,
+    /// Removed detach keys still participate in cross-file ambiguity checks.
+    pub retired_ref_detach_sites: HashSet<(Span, String)>,
     /// Statement-form assignments the checker re-bound to a fresh binding of an incompatible
     /// type, as span -> the SET of local NAMES re-bound there. Carried in `CheckResult` from here
-    /// so the three decision maps travel together, keyed and shaped the same way.
+    /// so the binding-decision maps travel together, keyed and shaped the same way.
     pub local_retype_sites: HashMap<Span, HashSet<String>>,
     /// AST address of the expression that forms the ENTIRE expression-statement currently being
     /// checked, or `None` outside one.
@@ -333,6 +390,9 @@ pub(crate) struct Checker {
     /// yet") and therefore cannot answer this question: an `unset` above the body's only `eval`
     /// sees no barrier at all. Per-body, like every other field in [`SavedLocalBindingScope`].
     pub body_contains_eval: bool,
+    /// Whether any checked body contains eval. Runtime fragments can write missing names on AOT
+    /// objects even when no equivalent property mutation is visible in the source AST.
+    pub program_contains_eval: bool,
     /// Names of the CURRENT body's locals that the syntactic pre-scan marked as whole-frame boxed
     /// `Mixed` storage, because they are assigned incompatible types across a branch.
     ///
@@ -363,6 +423,9 @@ pub(crate) struct Checker {
     /// on valid PHP. Same-name collisions are still ambiguous and still rejected; see
     /// `retired_mixed_storage_store_sites`.
     pub mixed_storage_store_sites: HashMap<Span, HashSet<String>>,
+    /// True only when every visit to an indexed-read span used native buffer storage.
+    /// Intersecting observations also fails closed when included files share a span.
+    pub buffer_read_observations: HashMap<Span, bool>,
     /// The warnings that BELONG to a local-binding decision, keyed by that decision's
     /// `(span, local name)` instead of being pushed straight into `warnings`.
     ///
@@ -409,6 +472,8 @@ pub(crate) struct SavedLocalBindingScope {
     conditional_depth: u32,
     binding_depth: HashMap<String, u32>,
     ref_aliased: HashSet<String>,
+    boxed_ref_aliased: HashSet<String>,
+    boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
     typed: HashSet<String>,
     mixed_storage: HashSet<String>,
@@ -465,6 +530,21 @@ impl Checker {
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
             && !self.typed_local_names.contains(name)
+    }
+
+    /// Authorizes reference-binding detachment outside conditional flow and name-addressed storage.
+    /// The reference may be frame-owned or incoming from a caller/capture. `unset()` detaches the
+    /// local name in both cases, while the external cell and its value remain owned by that scope.
+    pub(crate) fn local_reference_is_detachable(&self, name: &str) -> bool {
+        !self.body_contains_eval
+            && self.local_conditional_depth == 0
+            && (self.ref_aliased_locals.contains(name)
+                || self.active_external_ref_bindings.contains(name))
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+            && !self.typed_local_names.contains(name)
+            && !self.name_is_seeded_program_storage(name)
+            && !self.top_level_binding_is_program_global(name)
     }
 
     /// True when `name` is bound in a body's INCOMING environment by seeding rather than by
@@ -542,6 +622,10 @@ impl Checker {
             conditional_depth: self.local_conditional_depth,
             binding_depth: std::mem::take(&mut self.local_binding_depth),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
+            boxed_ref_aliased: std::mem::take(&mut self.boxed_ref_aliased_locals),
+            boxed_ref_invalidations: std::mem::take(
+                &mut self.conditional_boxed_ref_invalidations,
+            ),
             statics: std::mem::take(&mut self.static_local_names),
             typed: std::mem::take(&mut self.typed_local_names),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
@@ -567,6 +651,8 @@ impl Checker {
         self.local_conditional_depth = saved.conditional_depth;
         self.local_binding_depth = saved.binding_depth;
         self.ref_aliased_locals = saved.ref_aliased;
+        self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
+        self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
         self.static_local_names = saved.statics;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
@@ -580,13 +666,33 @@ impl Checker {
     /// captures, or reflected class of the binding that is gone — that is how a stale
     /// `$f()` signature would survive an `unset($f)`.
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
+        self.invalidate_boxed_ref_alias_binding(name);
         self.closure_return_types.remove(name);
         self.callable_sigs.remove(name);
         self.callable_captures.remove(name);
         self.callable_array_targets.remove(name);
+        self.mark_callable_array_target_write(name);
         self.first_class_callable_targets.remove(name);
         self.reflection_class_targets.remove(name);
         self.foreach_key_locals.remove(name);
+    }
+
+    /// Ends the current binding's managed-cell provenance and records conditional uncertainty.
+    pub(crate) fn invalidate_boxed_ref_alias_binding(&mut self, name: &str) {
+        self.boxed_ref_aliased_locals.remove(name);
+        for invalidations in &mut self.conditional_boxed_ref_invalidations {
+            invalidations.insert(name.to_string());
+        }
+    }
+
+    /// Records that one local's callable-array target fact was assigned or invalidated.
+    pub(crate) fn mark_callable_array_target_write(&mut self, name: &str) {
+        self.next_callable_array_target_version =
+            self.next_callable_array_target_version.wrapping_add(1);
+        self.callable_array_target_versions.insert(
+            name.to_string(),
+            self.next_callable_array_target_version,
+        );
     }
 
     /// Records that a reference was taken to the storage `expr` names, so the local at the root
@@ -640,6 +746,21 @@ impl Checker {
     pub(crate) fn record_unresolved_callee_argument_aliases(&mut self, args: &[Expr]) {
         for arg in args {
             self.record_reference_alias_root(arg);
+            let mut value = arg;
+            while let ExprKind::NamedArg { value: inner, .. }
+                | ExprKind::ErrorSuppress(inner) = &value.kind
+            {
+                value = inner;
+            }
+            let ExprKind::Variable(name) = &value.kind else {
+                continue;
+            };
+            if value.span.identifies_a_node() {
+                self.boxed_reference_promotion_sites
+                    .entry((self.current_loop_storage_scope.clone(), value.span))
+                    .or_default()
+                    .insert(name.clone());
+            }
         }
     }
 }
@@ -757,6 +878,9 @@ pub fn check_types_with_options(
 
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);
+    clone_override_storage::widen_clone_override_property_storage(&mut checker);
+    clone_override_storage::widen_property_unset_storage(&mut checker);
+    scope_dynamic_storage::reserve_scope_dynamic_property_storage(&mut checker);
     validate_magic_method_contracts(&checker)?;
 
     let mut warnings = crate::types::warnings::collect_warnings(program);
@@ -795,6 +919,8 @@ pub fn check_types_with_options(
     binding_decision_ambiguity::reject_ambiguous_local_binding_decisions(
         program,
         &checker.local_bind_kill_sites,
+        &checker.local_ref_detach_sites,
+        &checker.retired_ref_detach_sites,
         &checker.local_retype_sites,
         &checker.mixed_storage_store_sites,
         &checker.retired_mixed_storage_store_sites,
@@ -820,9 +946,13 @@ pub fn check_types_with_options(
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
+        boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
+        buffer_read_sites: checker.buffer_read_observations.into_iter()
+            .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,
+        local_ref_detach_sites: checker.local_ref_detach_sites,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,
     })

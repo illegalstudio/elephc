@@ -394,6 +394,33 @@ echo ":" . $target->label;
     assert_eq!(out, "4:8:label:old:new");
 }
 
+/// A known reflector with a runtime-shaped receiver must use ReflectionProperty's runtime method
+/// path instead of attaching a physical slot to a boxed Mixed operand.
+#[test]
+fn test_reflection_property_known_target_accepts_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectMixedReceiverTarget {
+    public int $count = 4;
+}
+
+function read_reflected_count(mixed $target): mixed {
+    return (new ReflectionProperty(ReflectMixedReceiverTarget::class, "count"))->getValue($target);
+}
+
+function write_reflected_count(mixed $target): void {
+    (new ReflectionProperty(ReflectMixedReceiverTarget::class, "count"))->setValue($target, 9);
+}
+
+$target = new ReflectMixedReceiverTarget();
+echo read_reflected_count($target);
+write_reflected_count($target);
+echo ":" . $target->count;
+"#,
+    );
+    assert_eq!(out, "4:9");
+}
+
 /// Verifies ReflectionProperty value access bypasses visibility for private
 /// and protected instance properties, matching PHP's Reflection behavior.
 #[test]

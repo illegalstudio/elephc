@@ -97,7 +97,7 @@ pub fn emit_hash_flip(emitter: &mut Emitter) {
     emitter.label("__rt_hash_flip_loop");
     emitter.instruction("mov x0, x19");                                         // x0 = source hash pointer
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = current insertion-order cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next source entry
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next source entry
     emitter.instruction("cmn x0, #1");                                          // did the iterator signal end-of-walk?
     emitter.instruction("b.eq __rt_hash_flip_done");                            // yes - the destination hash is complete
     emitter.instruction("str x0, [sp, #0]");                                    // save the next insertion-order cursor
@@ -226,7 +226,7 @@ fn emit_hash_flip_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_flip_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // rdi = source hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // rsi = current insertion-order cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rax=cursor, rdi=key_ptr, rdx=key_len, rcx=lo, r8=hi, r9=tag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=cursor, rdi=key_ptr, rdx=key_len, rcx=lo, r8=hi, r9=tag
     emitter.instruction("cmp rax, -1");                                         // did the iterator signal end-of-walk?
     emitter.instruction("je __rt_hash_flip_done_x86");                          // yes - the destination hash is complete
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the next insertion-order cursor

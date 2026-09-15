@@ -141,3 +141,37 @@ echo "\n";
 echo "call: ";
 echo $read->call($second);   // 20 — bound to $second for this call only
 echo "\n";
+
+// Callbacks returned inside a PHP array remain directly invokable after extraction.
+function greetingCallbacks(string $prefix): array {
+    return [function(string $name) use ($prefix): string { return $prefix . $name; }];
+}
+$greetings = greetingCallbacks("Hello, ");
+$greet = $greetings[0];
+unset($greetings);
+echo $greet("Elephc"), "\n";
+
+// A copied callback keeps its captures alive after its owning object is released.
+class DeferredGreeting {
+    public $callback;
+
+    public function __construct(string $name) {
+        $this->callback = static fn(): string => "Welcome, " . $name;
+    }
+}
+$deferred = new DeferredGreeting("Elephc");
+$savedGreeting = $deferred->callback;
+unset($deferred);
+echo $savedGreeting(), "\n";
+unset($savedGreeting);
+
+// A captured counter can be reset for each batch without replacing its shared reference cell.
+for ($batch = 0; $batch < 3; $batch++) {
+    $processed = 0;
+    $record = function() use (&$processed): void { $processed++; };
+    $record();
+    $record();
+    echo "Batch ", $batch, ": ", $processed, "\n";
+    unset($record);
+}
+unset($processed);

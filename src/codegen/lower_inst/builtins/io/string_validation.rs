@@ -11,7 +11,7 @@ use super::*;
 
 /// Loads a string SSA value into the target string result registers, coercing
 /// any scalar to its PHP string form. Shared with `system::lower_header`.
-pub(in crate::codegen::lower_inst::builtins) fn load_string_to_result(
+pub(in crate::codegen::lower_inst) fn load_string_to_result(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     context: &str,
@@ -150,4 +150,3 @@ pub(super) fn require_string_array(ty: PhpType, name: &str) -> Result<()> {
         ))),
     }
 }
-

@@ -10,6 +10,7 @@
 //!   offsets, so these C-ABI symbols are emitted into the user assembly.
 //! - Supported slots include public properties plus protected/private
 //!   properties when the active eval class scope satisfies PHP visibility.
+//! - Setters borrow their boxed input; property hashes acquire independent references.
 
 use std::collections::BTreeMap;
 
@@ -24,6 +25,17 @@ use crate::names::join_php_symbol;
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
+mod dynamic_properties;
+mod private_shadow;
+mod replacement;
+mod unset;
+mod unset_boundary;
+use replacement::emit_owned_slot_replacement;
+use dynamic_properties::{
+    emit_dynamic_property_get_fallback, emit_dynamic_property_set_fallback,
+    emit_property_hash_slot_helper,
+};
+
 /// Property slot metadata needed by eval property bridge dispatch.
 #[derive(Clone)]
 struct EvalPropertySlot {
@@ -36,7 +48,13 @@ struct EvalPropertySlot {
     offset: usize,
     ty: PhpType,
     is_declared: bool,
+    is_reference: bool,
     is_hidden_shadow: bool,
+}
+
+/// Returns whether the fixed slot can carry the untyped-property removed marker.
+fn slot_supports_untyped_unset_marker(slot: &EvalPropertySlot) -> bool {
+    !slot.is_declared && !slot.is_reference && slot.ty.codegen_repr() == PhpType::Mixed
 }
 
 /// Emits eval property helpers when any lowered function owns an eval context.
@@ -52,6 +70,9 @@ pub(super) fn emit_eval_property_helpers(
     emit_property_get_helper(module, emitter, data, &slots);
     emit_property_is_initialized_helper(module, emitter, data, &slots);
     emit_property_set_helper(module, emitter, data, &slots);
+    unset::emit_property_unset_helper(module, emitter, data, &slots);
+    emit_property_hash_slot_helper(module, emitter);
+    emit_dynamic_property_exists_helper(module, emitter);
 }
 
 /// Returns true when the EIR module contains a function that can call eval.
@@ -133,8 +154,9 @@ fn collect_class_property_slots(
             property: property.clone(),
             visibility,
             offset: 8 + index * 16,
-            ty: ty.codegen_repr(),
+            ty: super::eval_argument_helpers::bridge_storage_type(ty),
             is_declared: class_info.property_slot_is_declared(index, property),
+            is_reference: class_info.property_slot_is_reference(index, property),
             is_hidden_shadow,
         });
     }
@@ -281,6 +303,92 @@ fn emit_property_set_helper(
     }
 }
 
+/// Emits `__elephc_eval_value_dynamic_property_exists(Mixed*, name, len) -> bool`.
+///
+/// This is intentionally distinct from the object-property iterator. That iterator is a public
+/// projection used by JSON and reflection, while this probe answers only whether the generated
+/// user-class property hash already owns one exact key before Magician considers `__set`.
+fn emit_dynamic_property_exists_helper(module: &Module, emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: dynamic property existence probe ---");
+    label_c_global(
+        module,
+        emitter,
+        "__elephc_eval_value_dynamic_property_exists",
+    );
+    match module.target.arch {
+        Arch::AArch64 => emit_dynamic_property_exists_aarch64(emitter),
+        Arch::X86_64 => emit_dynamic_property_exists_x86_64(emitter),
+    }
+}
+
+/// Emits the ARM64 dynamic-property existence probe.
+fn emit_dynamic_property_exists_aarch64(emitter: &mut Emitter) {
+    let miss = "__elephc_eval_value_dynamic_property_exists_miss";
+    let done = "__elephc_eval_value_dynamic_property_exists_done";
+    emitter.instruction("sub sp, sp, #48");                                     // reserve an aligned frame for the key and saved caller state
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // preserve the requested dynamic-property name
+    emitter.instruction("str x2, [sp, #8]");                                    // preserve the requested name length
+    emitter.instruction(&format!("cbz x0, {miss}"));                            // a null boxed receiver owns no dynamic entry
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the receiver tag and native object payload
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 identifies an object payload
+    emitter.instruction(&format!("b.ne {miss}"));                               // non-object values own no dynamic entry
+    emitter.instruction("mov x0, x1");                                          // pass the raw native object to the layout-specific slot helper
+    abi::emit_call_label(emitter, dynamic_properties::SLOT_HELPER);
+    emitter.instruction(&format!("cbz x0, {miss}"));                            // objects without permitted hash storage cannot contain the key
+    emitter.instruction("ldr x0, [x0]");                                        // load the current per-instance property hash
+    emitter.instruction(&format!("cbz x0, {miss}"));                            // an unallocated hash has no entries
+    emitter.instruction("ldr x1, [sp, #0]");                                    // restore the requested property name for lookup
+    emitter.instruction("ldr x2, [sp, #8]");                                    // restore the requested property-name length
+    abi::emit_call_label(emitter, "__rt_hash_get");
+    emitter.instruction("cmp x4, #0");                                          // use the entry-address result, including false and null values
+    emitter.instruction("cset x0, ne");                                         // return true exactly when the hash contains the key
+    emitter.instruction(&format!("b {done}"));                                  // join the common helper epilogue
+    emitter.label(miss);
+    emitter.instruction("mov x0, xzr");                                         // report that no public dynamic entry exists
+    emitter.label(done);
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #48");                                     // release the temporary helper frame
+    emitter.instruction("ret");                                                 // return the exact-key existence flag
+}
+
+/// Emits the x86_64 dynamic-property existence probe.
+fn emit_dynamic_property_exists_x86_64(emitter: &mut Emitter) {
+    let miss = "__elephc_eval_value_dynamic_property_exists_miss_x";
+    let done = "__elephc_eval_value_dynamic_property_exists_done_x";
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve aligned spills for the requested key
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // preserve the requested dynamic-property name
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the requested name length
+    emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver is null
+    emitter.instruction(&format!("jz {miss}"));                                 // a null boxed receiver owns no dynamic entry
+    emitter.instruction("mov rax, rdi");                                        // pass the boxed receiver through the mixed-unbox ABI
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the receiver tag and native object payload
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 identifies an object payload
+    emitter.instruction(&format!("jne {miss}"));                                // non-object values own no dynamic entry
+    abi::emit_call_label(emitter, dynamic_properties::SLOT_HELPER);
+    emitter.instruction("test rax, rax");                                       // inspect the layout-specific hash-slot address
+    emitter.instruction(&format!("jz {miss}"));                                 // objects without permitted hash storage cannot contain the key
+    emitter.instruction("mov rdi, QWORD PTR [rax]");                            // load the current per-instance property hash
+    emitter.instruction("test rdi, rdi");                                       // check whether a hash was allocated
+    emitter.instruction(&format!("jz {miss}"));                                 // an unallocated hash has no entries
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // restore the requested property name for lookup
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the requested property-name length
+    abi::emit_call_label(emitter, "__rt_hash_get");
+    emitter.instruction("test r8, r8");                                         // use the entry-address result, including false and null values
+    emitter.instruction("setne al");                                            // materialize true when the hash contains the key
+    emitter.instruction("movzx rax, al");                                       // widen the boolean return value to the C ABI word
+    emitter.instruction(&format!("jmp {done}"));                                // join the common helper epilogue
+    emitter.label(miss);
+    emitter.instruction("xor eax, eax");                                        // report that no public dynamic entry exists
+    emitter.label(done);
+    emitter.instruction("leave");                                               // release spills and restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the exact-key existence flag
+}
+
 /// Emits the ARM64 property-get helper body.
 fn emit_property_get_aarch64(
     module: &Module,
@@ -306,9 +414,9 @@ fn emit_property_get_aarch64(
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for property loads
     emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
     emit_aarch64_property_dispatch(module, emitter, data, slots, "get", fail_label);
-    emit_aarch64_stdclass_property_get_fallback(emitter);
+    emit_dynamic_property_get_fallback(emitter, null_label);
     emitter.instruction(&format!("b {}", done_label));                          // return after stdClass fallback get or null result
-    emit_aarch64_get_slot_bodies(module, emitter, slots, done_label);
+    emit_aarch64_get_slot_bodies(module, emitter, data, slots, done_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // report an inaccessible declared property read to Rust
     emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after access failure
@@ -348,9 +456,9 @@ fn emit_property_get_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for property loads
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
     emit_x86_64_property_dispatch(module, emitter, data, slots, "get", fail_label);
-    emit_x86_64_stdclass_property_get_fallback(emitter);
+    emit_dynamic_property_get_fallback(emitter, null_label);
     emitter.instruction(&format!("jmp {}", done_label));                        // return after stdClass fallback get or null result
-    emit_x86_64_get_slot_bodies(module, emitter, slots, done_label);
+    emit_x86_64_get_slot_bodies(module, emitter, data, slots, done_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report an inaccessible declared property read to Rust
     emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after access failure
@@ -458,7 +566,7 @@ fn emit_property_set_aarch64(
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for property stores
     emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
     emit_aarch64_property_dispatch(module, emitter, data, slots, "set", fail_label);
-    emit_aarch64_stdclass_property_set_fallback(module, emitter, fail_label, done_label);
+    emit_dynamic_property_set_fallback(emitter, fail_label, done_label);
     emit_aarch64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, #0");                                          // report a failed eval property write to Rust
@@ -496,7 +604,7 @@ fn emit_property_set_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for property stores
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
     emit_x86_64_property_dispatch(module, emitter, data, slots, "set", fail_label);
-    emit_x86_64_stdclass_property_set_fallback(module, emitter, fail_label, done_label);
+    emit_dynamic_property_set_fallback(emitter, fail_label, done_label);
     emit_x86_64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report a failed eval property write to Rust
@@ -507,80 +615,6 @@ fn emit_property_set_x86_64(
     emitter.instruction("ret");                                                 // return the write-status flag to Rust
 }
 
-/// Emits an ARM64 fallback read for stdClass dynamic properties.
-fn emit_aarch64_stdclass_property_get_fallback(emitter: &mut Emitter) {
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed receiver for the Mixed stdClass getter
-    emitter.instruction("ldr x1, [sp, #0]");                                    // reload requested property-name pointer
-    emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested property-name length
-    emitter.instruction("bl __rt_mixed_property_get");                          // read stdClass dynamic property or return Mixed(null)
-}
-
-/// Emits an x86_64 fallback read for stdClass dynamic properties.
-fn emit_x86_64_stdclass_property_get_fallback(emitter: &mut Emitter) {
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the boxed receiver for the Mixed stdClass getter
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload requested property-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload requested property-name length
-    emitter.instruction("call __rt_mixed_property_get");                        // read stdClass dynamic property or return Mixed(null)
-}
-
-/// Emits an ARM64 fallback write for stdClass dynamic properties.
-fn emit_aarch64_stdclass_property_set_fallback(
-    module: &Module,
-    emitter: &mut Emitter,
-    fail_label: &str,
-    done_label: &str,
-) {
-    let Some(class_id) = stdclass_class_id(module) else {
-        emitter.instruction(&format!("b {}", fail_label));                      // reject writes when stdClass metadata is unavailable
-        return;
-    };
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for stdClass class check
-    emitter.instruction("ldr x9, [x9]");                                        // load the object's runtime class id
-    abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
-    emitter.instruction("cmp x9, x10");                                         // check whether the receiver is stdClass
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // non-stdClass misses remain unsupported eval writes
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed receiver for the Mixed stdClass setter
-    emitter.instruction("ldr x1, [sp, #0]");                                    // reload requested property-name pointer
-    emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested property-name length
-    emitter.instruction("ldr x3, [sp, #24]");                                   // reload the boxed value being assigned
-    emitter.instruction("bl __rt_mixed_property_set");                          // write the stdClass dynamic property
-    emitter.instruction("mov x0, #1");                                          // report a successful eval property write to Rust
-    emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after stdClass write
-}
-
-/// Emits an x86_64 fallback write for stdClass dynamic properties.
-fn emit_x86_64_stdclass_property_set_fallback(
-    module: &Module,
-    emitter: &mut Emitter,
-    fail_label: &str,
-    done_label: &str,
-) {
-    let Some(class_id) = stdclass_class_id(module) else {
-        emitter.instruction(&format!("jmp {}", fail_label));                    // reject writes when stdClass metadata is unavailable
-        return;
-    };
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for stdClass class check
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the object's runtime class id
-    abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
-    emitter.instruction("cmp r11, r10");                                        // check whether the receiver is stdClass
-    emitter.instruction(&format!("jne {}", fail_label));                        // non-stdClass misses remain unsupported eval writes
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the boxed receiver for the Mixed stdClass setter
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload requested property-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload requested property-name length
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the boxed value being assigned
-    emitter.instruction("call __rt_mixed_property_set");                        // write the stdClass dynamic property
-    emitter.instruction("mov rax, 1");                                          // report a successful eval property write to Rust
-    emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after stdClass write
-}
-
-/// Returns the runtime class id for builtin `stdClass` in this module.
-fn stdclass_class_id(module: &Module) -> Option<u64> {
-    module
-        .class_infos
-        .iter()
-        .find(|(class_name, _)| crate::types::checker::builtin_stdclass::is_stdclass(class_name))
-        .map(|(_, class_info)| class_info.class_id)
-}
 
 /// Emits ARM64 class-id and property-name dispatch for helper slot bodies.
 fn emit_aarch64_property_dispatch(
@@ -653,14 +687,21 @@ fn emit_aarch64_property_name_compare(
     let miss_label = slot_access_miss_label(module, slot, mode);
     emitter.instruction(&format!("cbz x0, {}", miss_label));                    // continue property dispatch when names differ
     let scope_ok_label = slot_scope_ok_label(module, slot, mode);
+    let private_shadow_label = format!("{scope_ok_label}_eval_shadow");
     let scope_fail_label = if slot.is_hidden_shadow {
         miss_label.as_str()
+    } else if slot.visibility == Visibility::Private {
+        private_shadow_label.as_str()
     } else {
         fail_label
     };
     emit_aarch64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, scope_fail_label);
     emitter.label(&scope_ok_label);
     emitter.instruction(&format!("b {}", target_label));                        // dispatch after scoped visibility is satisfied
+    if slot.visibility == Visibility::Private && !slot.is_hidden_shadow {
+        emitter.label(&private_shadow_label);
+        private_shadow::emit_separate_property_probe(module, emitter, &miss_label, fail_label);
+    }
     emitter.label(&miss_label);
 }
 
@@ -688,14 +729,21 @@ fn emit_x86_64_property_name_compare(
     let miss_label = slot_access_miss_label(module, slot, mode);
     emitter.instruction(&format!("je {}", miss_label));                         // continue property dispatch when names differ
     let scope_ok_label = slot_scope_ok_label(module, slot, mode);
+    let private_shadow_label = format!("{scope_ok_label}_eval_shadow");
     let scope_fail_label = if slot.is_hidden_shadow {
         miss_label.as_str()
+    } else if slot.visibility == Visibility::Private {
+        private_shadow_label.as_str()
     } else {
         fail_label
     };
     emit_x86_64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, scope_fail_label);
     emitter.label(&scope_ok_label);
     emitter.instruction(&format!("jmp {}", target_label));                      // dispatch after scoped visibility is satisfied
+    if slot.visibility == Visibility::Private && !slot.is_hidden_shadow {
+        emitter.label(&private_shadow_label);
+        private_shadow::emit_separate_property_probe(module, emitter, &miss_label, fail_label);
+    }
     emitter.label(&miss_label);
 }
 
@@ -734,22 +782,22 @@ fn emit_x86_64_property_scope_check(
     fail_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = x86_64_scope_offsets(mode);
-    emitter.instruction(
+    emitter.instruction(                                                        // reload the active eval class-scope pointer
         &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
-    );                                                                          // reload the active eval class-scope pointer
-    emitter.instruction(
+    );
+    emitter.instruction(                                                        // reload the active eval class-scope length
         &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
-    );                                                                          // reload the active eval class-scope length
+    );
     emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
     emitter.instruction(&format!("jz {}", fail_label));                         // reject scoped property access outside a class scope
     for scope_name in &slot.allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(
+        emitter.instruction(                                                    // reload the active eval class-scope pointer
             &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
-        );                                                                      // reload the active eval class-scope pointer
-        emitter.instruction(
+        );
+        emitter.instruction(                                                    // reload the active eval class-scope length
             &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
-        );                                                                      // reload the active eval class-scope length
+        );
         abi::emit_symbol_address(emitter, "rdx", &label);
         abi::emit_load_int_immediate(emitter, "rcx", len as i64);
         emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
@@ -762,18 +810,18 @@ fn emit_x86_64_property_scope_check(
 /// Returns ARM64 stack offsets for the class-scope pointer and length.
 fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "is_initialized" => (32, 40),
+        "get" | "is_initialized" | "unset" => (32, 40),
         "set" => (40, 48),
-        _ => unreachable!("eval property helpers only use get/set/is_initialized modes"),
+        _ => unreachable!("unknown eval property bridge operation"),
     }
 }
 
 /// Returns x86_64 frame offsets for the class-scope pointer and length.
 fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "is_initialized" => (40, 48),
+        "get" | "is_initialized" | "unset" => (40, 48),
         "set" => (48, 56),
-        _ => unreachable!("eval property helpers only use get/set/is_initialized modes"),
+        _ => unreachable!("unknown eval property bridge operation"),
     }
 }
 
@@ -781,12 +829,13 @@ fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
 fn emit_aarch64_get_slot_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalPropertySlot],
     done_label: &str,
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
-        emit_aarch64_uninitialized_property_get_guard(emitter, slot, done_label);
+        emit_aarch64_uninitialized_property_get_guard(module, emitter, data, slot, done_label);
         emit_aarch64_box_property_slot(emitter, slot);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the declared property value
     }
@@ -796,12 +845,13 @@ fn emit_aarch64_get_slot_bodies(
 fn emit_x86_64_get_slot_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalPropertySlot],
     done_label: &str,
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
-        emit_x86_64_uninitialized_property_get_guard(emitter, slot, done_label);
+        emit_x86_64_uninitialized_property_get_guard(module, emitter, data, slot, done_label);
         emit_x86_64_box_property_slot(emitter, slot);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the declared property value
     }
@@ -871,8 +921,8 @@ fn emit_x86_64_set_slot_bodies(
 
 /// Emits an ARM64 boolean for one declared property's initialized state.
 fn emit_aarch64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalPropertySlot) {
-    if !slot.is_declared {
-        emitter.instruction("mov x0, #1");                                      // non-typed declared properties are always initialized
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
+        emitter.instruction("mov x0, #1");                                      // marker-free untyped properties are always initialized
         return;
     }
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the unboxed object pointer
@@ -884,27 +934,29 @@ fn emit_aarch64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalProp
 
 /// Emits an x86_64 boolean for one declared property's initialized state.
 fn emit_x86_64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalPropertySlot) {
-    if !slot.is_declared {
-        emitter.instruction("mov rax, 1");                                      // non-typed declared properties are always initialized
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
+        emitter.instruction("mov rax, 1");                                      // marker-free untyped properties are always initialized
         return;
     }
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
-    emitter.instruction(
+    emitter.instruction(                                                        // load the typed-property initialization marker
         &format!("mov rax, QWORD PTR [r11 + {}]", slot.offset + 8)
-    );                                                                          // load the typed-property initialization marker
+    );
     abi::emit_load_int_immediate(emitter, "r10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rax, r10");                                        // compare the property marker against the uninitialized sentinel
     emitter.instruction("setne al");                                            // materialize true when the instance property is initialized
     emitter.instruction("movzx rax, al");                                       // widen the initialization flag into the return register
 }
 
-/// Emits an ARM64 typed-property guard before boxing an eval bridge property read.
+/// Emits an ARM64 removed-state guard before boxing an eval bridge property read.
 fn emit_aarch64_uninitialized_property_get_guard(
+    module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalPropertySlot,
     done_label: &str,
 ) {
-    if !slot.is_declared {
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
         return;
     }
     let initialized_label = format!(
@@ -916,18 +968,24 @@ fn emit_aarch64_uninitialized_property_get_guard(
     abi::emit_load_int_immediate(emitter, "x12", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x11, x12");                                        // compare the property marker against the uninitialized sentinel
     emitter.instruction(&format!("b.ne {}", initialized_label));                // continue boxing once the instance property is initialized
-    emitter.instruction("mov x0, xzr");                                         // report uninitialized property reads as bridge failures
-    emitter.instruction(&format!("b {}", done_label));                          // return the failure to Rust without boxing storage
+    if slot.is_declared {
+        emitter.instruction("mov x0, xzr");                                     // report typed-uninitialized reads as bridge failures
+    } else {
+        emit_eval_untyped_removed_read(module, emitter, data, slot);
+    }
+    emitter.instruction(&format!("b {}", done_label));                          // return the typed failure or untyped boxed null
     emitter.label(&initialized_label);
 }
 
-/// Emits an x86_64 typed-property guard before boxing an eval bridge property read.
+/// Emits an x86_64 removed-state guard before boxing an eval bridge property read.
 fn emit_x86_64_uninitialized_property_get_guard(
+    module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalPropertySlot,
     done_label: &str,
 ) {
-    if !slot.is_declared {
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
         return;
     }
     let initialized_label = format!(
@@ -935,15 +993,47 @@ fn emit_x86_64_uninitialized_property_get_guard(
         slot_body_label_raw(slot, "get")
     );
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for marker inspection
-    emitter.instruction(
+    emitter.instruction(                                                        // load the typed-property initialization marker
         &format!("mov rax, QWORD PTR [r10 + {}]", slot.offset + 8)
-    );                                                                          // load the typed-property initialization marker
+    );
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rax, r11");                                        // compare the property marker against the uninitialized sentinel
     emitter.instruction(&format!("jne {}", initialized_label));                 // continue boxing once the instance property is initialized
-    emitter.instruction("xor eax, eax");                                        // report uninitialized property reads as bridge failures
-    emitter.instruction(&format!("jmp {}", done_label));                        // return the failure to Rust without boxing storage
+    if slot.is_declared {
+        emitter.instruction("xor eax, eax");                                    // report typed-uninitialized reads as bridge failures
+    } else {
+        emit_eval_untyped_removed_read(module, emitter, data, slot);
+    }
+    emitter.instruction(&format!("jmp {}", done_label));                        // return the typed failure or untyped boxed null
     emitter.label(&initialized_label);
+}
+
+/// Emits PHP's warning and returns an owned boxed null for one removed untyped slot.
+fn emit_eval_untyped_removed_read(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalPropertySlot,
+) {
+    let message = format!(
+        "Warning: Undefined property: {}::${}\n",
+        slot.class_name.trim_start_matches('\\'),
+        slot.property
+    );
+    let (label, len) = data.add_string(message.as_bytes());
+    match module.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x1", &label);
+            abi::emit_load_int_immediate(emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "rdi", &label);
+            abi::emit_load_int_immediate(emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_diag_warning");
+    let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
+    abi::emit_call_label(emitter, &null_symbol);
 }
 
 /// Boxes a property value loaded from an ARM64 object slot into a Mixed cell.
@@ -1008,47 +1098,47 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
     match slot.ty.codegen_repr() {
         PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            emitter.instruction(
+            emitter.instruction(                                                // load the property payload low word
                 &format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)
-            );                                                                  // load the property payload low word
+            );
             emitter.instruction("xor esi, esi");                                // heap/scalar property payloads do not use a high word here
             abi::emit_load_int_immediate(emitter, "rax", runtime_value_tag(&slot.ty) as i64);
             emitter.instruction("call __rt_mixed_from_value");                  // box the property payload as a Mixed cell
         }
         PhpType::Float => {
-            emitter.instruction(
+            emitter.instruction(                                                // load the floating property payload
                 &format!("movsd xmm0, QWORD PTR [r11 + {}]", slot.offset)
-            );                                                                  // load the floating property payload
+            );
             emitter.instruction("movq rdi, xmm0");                              // move float bits into the Mixed low payload word
             emitter.instruction("xor esi, esi");                                // float payloads do not use a high word
             emitter.instruction("mov eax, 2");                                  // runtime tag 2 = float
             emitter.instruction("call __rt_mixed_from_value");                  // box the floating property payload as Mixed
         }
         PhpType::Str => {
-            emitter.instruction(
+            emitter.instruction(                                                // load the string property pointer
                 &format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)
-            );                                                                  // load the string property pointer
-            emitter.instruction(
+            );
+            emitter.instruction(                                                // load the string property length
                 &format!("mov rsi, QWORD PTR [r11 + {}]", slot.offset + 8)
-            );                                                                  // load the string property length
+            );
             emitter.instruction("mov eax, 1");                                  // runtime tag 1 = string
             emitter.instruction("call __rt_mixed_from_value");                  // persist and box the string property payload
         }
         PhpType::TaggedScalar => {
-            emitter.instruction(
+            emitter.instruction(                                                // load the nullable integer property payload
                 &format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)
-            );                                                                  //load the nullable integer property payload
-            emitter.instruction(
+            );
+            emitter.instruction(                                                // load the nullable integer property tag
                 &format!("mov rdx, QWORD PTR [r11 + {}]", slot.offset + 8)
-            );                                                                  //load the nullable integer property tag
+            );
             emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
         }
         PhpType::Mixed | PhpType::Union(_) => {
             let null_label = format!("{}_mixed_null_x", slot_body_label_raw(slot, "get"));
             let done_label = format!("{}_mixed_done_x", slot_body_label_raw(slot, "get"));
-            emitter.instruction(
+            emitter.instruction(                                                // load the stored Mixed property cell
                 &format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)
-            );                                                                  // load the stored Mixed property cell
+            );
             emitter.instruction("test rax, rax");                               // check whether the property storage is initialized
             emitter.instruction(&format!("jz {}", null_label));                 // null property storage reads as PHP null
             emitter.instruction("call __rt_incref");                            // retain the stored Mixed cell for the eval caller
@@ -1073,6 +1163,10 @@ fn emit_aarch64_store_property_slot(
     slot: &EvalPropertySlot,
     fail_label: &str,
 ) {
+    if slot.ty.is_php_array() {
+        emitter.instruction("ldr x0, [sp, #24]");                               // borrow the boxed array assignment before checking its PHP type
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
         PhpType::Bool => {
@@ -1088,9 +1182,7 @@ fn emit_aarch64_store_property_slot(
         PhpType::Str => {
             emitter.instruction("ldr x0, [sp, #24]");                           // reload the boxed eval value for string coercion
             emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval value to a PHP string pair
-            emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
-            emitter.instruction(&format!("str x1, [x9, #{}]", slot.offset));    // store the coerced string pointer into the property slot
-            emitter.instruction(&format!("str x2, [x9, #{}]", slot.offset + 8));// store the coerced string length into the property slot
+            emit_owned_slot_replacement(emitter, slot);
         }
         PhpType::TaggedScalar => emit_aarch64_store_tagged_scalar_property(emitter, slot),
         PhpType::Array(_) => emit_aarch64_store_heap_property_slot(emitter, slot, 4, fail_label),
@@ -1110,11 +1202,7 @@ fn emit_aarch64_store_property_slot(
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("ldr x0, [sp, #24]");                           // reload the boxed eval value being assigned
             emitter.instruction("bl __rt_incref");                              // retain the Mixed cell for property ownership
-            emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
-            emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));    // store the retained Mixed cell into the property slot
-            emitter.instruction(
-                &format!("str xzr, [x9, #{}]", slot.offset + 8)
-            );                                                                  // clear the unused property high word
+            emit_owned_slot_replacement(emitter, slot);
         }
         PhpType::Void => {
             emitter.instruction(&format!("b {}", fail_label));                  // Void slots have no value storage; report the eval write as unsupported
@@ -1131,6 +1219,10 @@ fn emit_x86_64_store_property_slot(
     slot: &EvalPropertySlot,
     fail_label: &str,
 ) {
+    if slot.ty.is_php_array() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                   // borrow the boxed array assignment before checking its PHP type
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
         PhpType::Bool => {
@@ -1140,21 +1232,15 @@ fn emit_x86_64_store_property_slot(
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value for float coercion
             emitter.instruction("call __rt_mixed_cast_float");                  // coerce the eval value to a PHP float
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(
+            emitter.instruction(                                                // store the coerced float into the property slot
                 &format!("movsd QWORD PTR [r11 + {}], xmm0", slot.offset)
-            );                                                                  // store the coerced float into the property slot
+            );
             emit_x86_64_clear_scalar_property_marker(emitter, slot);
         }
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value for string coercion
             emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval value to a PHP string pair
-            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(
-                &format!("mov QWORD PTR [r11 + {}], rax", slot.offset)
-            );                                                                  // store the coerced string pointer into the property slot
-            emitter.instruction(
-                &format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)
-            );                                                                  // store the coerced string length into the property slot
+            emit_owned_slot_replacement(emitter, slot);
         }
         PhpType::TaggedScalar => emit_x86_64_store_tagged_scalar_property(emitter, slot),
         PhpType::Array(_) => emit_x86_64_store_heap_property_slot(emitter, slot, 4, fail_label),
@@ -1174,13 +1260,7 @@ fn emit_x86_64_store_property_slot(
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value being assigned
             emitter.instruction("call __rt_incref");                            // retain the Mixed cell for property ownership
-            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(
-                &format!("mov QWORD PTR [r11 + {}], rax", slot.offset)
-            );                                                                  // store the retained Mixed cell into the property slot
-            emitter.instruction(
-                &format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)
-            );                                                                  // clear the unused property high word
+            emit_owned_slot_replacement(emitter, slot);
         }
         PhpType::Void => {
             emitter.instruction(&format!("jmp {}", fail_label));                // Void slots have no value storage; report the eval write as unsupported
@@ -1246,18 +1326,18 @@ fn emit_x86_64_store_cast_scalar(
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for scalar coercion
     emitter.instruction(&format!("call {}", helper));                           // coerce the eval value to the declared property type
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
-    emitter.instruction(
+    emitter.instruction(                                                        // store the coerced scalar into the property slot
         &format!("mov QWORD PTR [r11 + {}], {}", slot.offset, result_reg)
-    );                                                                          // store the coerced scalar into the property slot
+    );
     emit_x86_64_clear_scalar_property_marker(emitter, slot);
 }
 
 /// Clears an x86_64 one-word scalar typed-property marker after a successful store.
 fn emit_x86_64_clear_scalar_property_marker(emitter: &mut Emitter, slot: &EvalPropertySlot) {
     if slot.is_declared {
-        emitter.instruction(
+        emitter.instruction(                                                    // clear the typed-property initialization marker
             &format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)
-        );                                                                      // clear the typed-property initialization marker
+        );
     }
 }
 
@@ -1275,9 +1355,7 @@ fn emit_aarch64_store_heap_property_slot(
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject heap values with an incompatible ABI shape
     emitter.instruction("mov x0, x1");                                          // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the heap store
-    emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));            // store the retained heap pointer into the property slot
-    emitter.instruction(&format!("str xzr, [x9, #{}]", slot.offset + 8));       // clear the typed-property initialization marker
+    emit_owned_slot_replacement(emitter, slot);
 }
 
 /// Validates and stores a boxed ARM64 eval object into an object property slot.
@@ -1316,11 +1394,7 @@ fn emit_x86_64_store_heap_property_slot(
     emitter.instruction(&format!("jne {}", fail_label));                        // reject heap values with an incompatible ABI shape
     emitter.instruction("mov rax, rdi");                                        // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the heap store
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset));//store the retained heap pointer into the property slot
-    emitter.instruction(
-        &format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)
-    );                                                                          // clear the typed-property initialization marker
+    emit_owned_slot_replacement(emitter, slot);
 }
 
 /// Validates and stores a boxed x86_64 eval object into an object property slot.
@@ -1369,9 +1443,9 @@ fn emit_x86_64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPr
     emitter.label(&done_label);
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset));//store the nullable integer payload into the property slot
-    emitter.instruction(
+    emitter.instruction(                                                        // store the nullable integer tag into the property slot
         &format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)
-    );                                                                          // store the nullable integer tag into the property slot
+    );
 }
 
 /// Groups property slots by class id while preserving sorted class order.

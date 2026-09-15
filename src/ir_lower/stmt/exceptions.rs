@@ -67,7 +67,10 @@ pub(super) fn lower_try_catch(
         Op::TryPushHandler.default_effects(),
         Some(span),
     );
+    let handler_depth = ctx.handler_loop_depths.len();
+    ctx.handler_loop_depths.push(ctx.loop_stack.len());
     lower_block(ctx, try_body);
+    ctx.handler_loop_depths.truncate(handler_depth);
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         branch_to(ctx, after_block);
@@ -132,8 +135,11 @@ pub(super) fn lower_try_catch_finally(
         Op::TryPushHandler.default_effects(),
         Some(span),
     );
+    let handler_depth = ctx.handler_loop_depths.len();
+    ctx.handler_loop_depths.push(ctx.loop_stack.len());
     let depth = push_finally_frame(ctx, finally_body, false, Some((handler_token, span)));
     lower_block(ctx, try_body);
+    ctx.handler_loop_depths.truncate(handler_depth);
     pop_finally_frame_if_active(ctx, depth);
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
@@ -191,9 +197,7 @@ pub(super) fn lower_catch_dispatch(
     }
 
     let current = lower_current_exception(ctx, span);
-    ctx.builder.terminate(Terminator::Throw {
-        value: current.value,
-    });
+    terminate_throw(ctx, current.value);
     after_reachable
 }
 
@@ -229,9 +233,7 @@ pub(super) fn lower_catch_dispatch_with_finally(
     let current = lower_current_exception(ctx, span);
     lower_block(ctx, finally_body);
     if !ctx.builder.insertion_block_is_terminated() {
-        ctx.builder.terminate(Terminator::Throw {
-            value: current.value,
-        });
+        terminate_throw(ctx, current.value);
     }
     after_reachable
 }

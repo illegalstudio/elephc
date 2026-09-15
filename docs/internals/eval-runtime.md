@@ -179,6 +179,26 @@ fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.
 
+Cycle collection uses `__elephc_eval_gc_collect_cycles_v2(Throwable **out)`:
+native exceptions are caught below the Rust activation and returned as an owned
+boxed Throwable. The destructor callback installed through
+`__elephc_eval_install_dynamic_object_destructor_hook_v2` likewise receives a
+Throwable output slot, returning zero for a missing target, one for success,
+or two for an escaping exception. Native code propagates that exception only
+after the callback returns from Rust. These versioned symbols have no legacy
+aliases, so incompatible prebuilt Magician archives fail at link time instead
+of calling a different argument ABI. The eval-context layout version is separate.
+
+The Rust-only `RuntimeCellHandle` records whether an expression borrows a stored
+cell or transfers an owner. Native C-ABI arguments and by-reference slots remain
+raw cell pointers, never the Rust handle structure. Core adapters and scalar
+expression consumers retain borrowed operands before evaluating later operands,
+then release their leases on success and failure. Conditions consume their
+temporary results; assignments transfer an owner and balance replacements even
+when the old and new cell pointers coincide. Class-default collection builders
+also acquire a lease for defaults borrowed from persistent class constants or
+enum cases before inserting and releasing their temporary operands.
+
 Builtin lookup is also shared at the contract boundary. Magician joins its
 implementation hooks to the same `BuiltinId` used by the compiler. For compatible
 boxed-cell operations it dispatches a typed `RuntimeBuiltinId` through

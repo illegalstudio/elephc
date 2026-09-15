@@ -29,13 +29,10 @@ pub(in crate::interpreter) fn eval_fsockopen_declared_call(
     if !(2..=5).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let host = eval_expr(&args[0], context, scope, values)?;
-    let port = eval_expr(&args[1], context, scope, values)?;
-    for arg in &args[2..] {
-        eval_expr(arg, context, scope, values)?;
-    }
-    eval_fsockopen_by_value_ref_warnings("fsockopen", args.len(), values)?;
-    eval_fsockopen_result(host, port, context, values)
+    let args = args.iter().collect::<Vec<_>>();
+    with_eval_operands(&args, context, scope, values, |arguments, context, _, values| {
+        eval_fsockopen_declared_values_result(arguments, context, values)
+    })
 }
 
 /// Evaluates a by-value `fsockopen()` call from already evaluated arguments.
@@ -58,35 +55,36 @@ pub(in crate::interpreter) fn eval_builtin_fsockopen_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["hostname", "port", "error_code", "error_message", "timeout"],
-        &evaluated_args,
-        false,
-    )?;
-    let host = required_evaluated_ref_arg(&bound, 0)?;
-    let port = required_evaluated_ref_arg(&bound, 1)?;
-    let error_code_target = optional_evaluated_ref_arg(&bound, 2)
-        .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
-        .transpose()?;
-    let error_message_target = optional_evaluated_ref_arg(&bound, 3)
-        .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
-        .transpose()?;
-    let (result, error_code, error_message) =
-        eval_fsockopen_with_error_result(host.value, port.value, context, values)?;
-    eval_write_socket_int_output_ref_target(
-        error_code_target.as_ref(),
-        error_code,
-        context,
-        values,
-    )?;
-    eval_write_socket_output_ref_target(
-        error_message_target.as_ref(),
-        Some(error_message),
-        context,
-        values,
-    )?;
-    Ok(result)
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+        let (bound, _) = bind_evaluated_ref_builtin_args(
+            &["hostname", "port", "error_code", "error_message", "timeout"],
+            &evaluated_args,
+            false,
+        )?;
+        let host = required_evaluated_ref_arg(&bound, 0)?;
+        let port = required_evaluated_ref_arg(&bound, 1)?;
+        let error_code_target = optional_evaluated_ref_arg(&bound, 2)
+            .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
+            .transpose()?;
+        let error_message_target = optional_evaluated_ref_arg(&bound, 3)
+            .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
+            .transpose()?;
+        let (result, error_code, error_message) =
+            eval_fsockopen_with_error_result(host.value, port.value, context, values)?;
+        eval_write_socket_int_output_ref_target(
+            error_code_target.as_ref(),
+            error_code,
+            context,
+            values,
+        )?;
+        eval_write_socket_output_ref_target(
+            error_message_target.as_ref(),
+            Some(error_message),
+            context,
+            values,
+        )?;
+        Ok(result)
+    })
 }
 
 /// Opens a connected TCP stream from host and port cells.

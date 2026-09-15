@@ -9,6 +9,91 @@
 
 use super::*;
 
+/// Returns whether an untyped fixed slot can carry the post-`unset()` marker.
+///
+/// Type checking widens only reachable untyped slots to boxed `Mixed`. Packed fields and
+/// reference-cell slots keep their distinct layouts and must never be interpreted this way.
+pub(super) fn slot_supports_untyped_unset_marker(slot: &PropertySlot) -> bool {
+    !slot.is_declared
+        && !slot.is_packed
+        && !slot.is_reference
+        && slot.php_type.codegen_repr() == PhpType::Mixed
+}
+
+/// Result representation one guarded property read must materialize on an absent slot.
+pub(super) enum PropertyReadMissingResult<'a> {
+    /// Match the EIR instruction's declared result registers.
+    Instruction(&'a Instruction),
+    /// Produce an owned boxed `Mixed` cell for runtime-class dispatch.
+    Boxed,
+}
+
+/// Guards one fixed-slot read against both typed-uninitialized and untyped-removed states.
+///
+/// Typed slots retain their catchable `Error`. A removed untyped slot reports PHP's undefined
+/// property warning for a value read, stays silent for a probe, and materializes boxed null. The
+/// returned label must be emitted after the caller's initialized-value materialization so both
+/// branches converge with the same `Mixed` result shape.
+pub(super) fn emit_property_read_state_guard(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    object_reg: &str,
+    mode: PropertyFetchMode,
+    missing_result: PropertyReadMissingResult<'_>,
+) -> Result<Option<String>> {
+    if slot.is_declared {
+        if slot.is_reference {
+            let cell_reg = reference_pointer_reg(ctx, object_reg);
+            abi::emit_load_from_address(ctx.emitter, cell_reg, object_reg, slot.offset);
+            emit_uninitialized_owned_ref_property_guard(ctx, slot, cell_reg);
+        } else {
+            emit_uninitialized_typed_property_guard(ctx, slot, object_reg);
+        }
+        return Ok(None);
+    }
+    if !slot_supports_untyped_unset_marker(slot) {
+        return Ok(None);
+    }
+
+    let initialized_label = ctx.next_label("untyped_prop_present");
+    let done_label = ctx.next_label("untyped_prop_read_done");
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, marker_reg, object_reg, slot.offset + 8);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        sentinel_reg,
+        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the untyped property marker with the removed-state sentinel
+            ctx.emitter
+                .instruction(&format!("b.ne {}", initialized_label)); // read the fixed slot only while the property remains present
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the untyped property marker with the removed-state sentinel
+            ctx.emitter
+                .instruction(&format!("jne {}", initialized_label)); // read the fixed slot only while the property remains present
+        }
+    }
+    if mode.is_read() {
+        emit_undefined_property_warning(ctx, &slot.class_name, &slot.property);
+    }
+    match missing_result {
+        PropertyReadMissingResult::Instruction(inst) => {
+            ensure_dynamic_property_miss_supported(inst)?;
+            emit_dynamic_property_miss_result(ctx, inst);
+        }
+        PropertyReadMissingResult::Boxed => emit_boxed_null(ctx),
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&initialized_label);
+    Ok(Some(done_label))
+}
+
 /// Emits a fatal guard for reads from uninitialized typed properties.
 pub(super) fn emit_uninitialized_typed_property_guard(
     ctx: &mut FunctionContext<'_>,
@@ -42,6 +127,39 @@ pub(super) fn emit_uninitialized_typed_property_guard(
     ctx.emitter.label(&initialized_label);
 }
 
+/// Guards an object-owned reference property whose initialization marker lives in cell[0].
+pub(super) fn emit_uninitialized_owned_ref_property_guard(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    cell_reg: &str,
+) {
+    let initialized_label = ctx.next_label("typed_ref_prop_initialized");
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, marker_reg, cell_reg, 0);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        sentinel_reg,
+        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the owned reference payload against the uninitialized sentinel
+            ctx.emitter
+                .instruction(&format!("b.ne {}", initialized_label)); // continue once the reference property has been initialized
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the owned reference payload against the uninitialized sentinel
+            ctx.emitter
+                .instruction(&format!("jne {}", initialized_label)); // continue once the reference property has been initialized
+        }
+    }
+    emit_uninitialized_typed_property_fatal(ctx, slot);
+    ctx.emitter.label(&initialized_label);
+}
+
 /// Compares a typed instance-property marker with the uninitialized sentinel.
 pub(super) fn emit_typed_property_initialized_bool(
     ctx: &mut FunctionContext<'_>,
@@ -50,7 +168,13 @@ pub(super) fn emit_typed_property_initialized_bool(
 ) {
     let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
     let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_load_from_address(ctx.emitter, marker_reg, object_reg, slot.offset + 8);
+    if slot.is_reference {
+        let cell_reg = reference_pointer_reg(ctx, object_reg);
+        abi::emit_load_from_address(ctx.emitter, cell_reg, object_reg, slot.offset);
+        abi::emit_load_from_address(ctx.emitter, marker_reg, cell_reg, 0);
+    } else {
+        abi::emit_load_from_address(ctx.emitter, marker_reg, object_reg, slot.offset + 8);
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         sentinel_reg,
@@ -58,15 +182,15 @@ pub(super) fn emit_typed_property_initialized_bool(
     );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // compare the property marker against the uninitialized sentinel
                 &format!("cmp {}, {}", marker_reg, sentinel_reg)
-            );                                                                  // compare the property marker against the uninitialized sentinel
+            );
             ctx.emitter.instruction("cset x0, ne");                             // materialize true when the instance property is initialized
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // compare the property marker against the uninitialized sentinel
                 &format!("cmp {}, {}", marker_reg, sentinel_reg)
-            );                                                                  // compare the property marker against the uninitialized sentinel
+            );
             ctx.emitter.instruction("setne al");                                // materialize true when the instance property is initialized
             ctx.emitter.instruction("movzx rax, al");                           // widen the initialization flag into the integer result register
         }
@@ -122,18 +246,18 @@ pub(super) fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
             ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the Error object payload
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
-            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            );
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at the object header
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);          // materialize static Error message pointer
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static Error message pointer
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // store Error message length
                 &format!("mov QWORD PTR [rax + 16], {}", message_len)
-            );                                                                  // store Error message length
+            );
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null

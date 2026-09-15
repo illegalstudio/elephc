@@ -532,3 +532,36 @@ $c(...["b" => 2, "a" => 1]);
     );
     assert_eq!(out, "1|2");
 }
+
+/// Pins a direct call whose unpack source is an associative literal carrying a
+/// nested `...$rest`. The nested source's keys are unknown before the literal is
+/// built, so the static named-argument expansion declines and the call is bound by
+/// the runtime unpack walk instead. The walk must keep source order, evaluate the
+/// nested source exactly once, and still reject an unknown name or a missing
+/// required parameter. Expected output is real `LC_ALL=C php` 8.4 output.
+#[test]
+fn test_direct_call_unpack_with_nested_associative_spread() {
+    let out = compile_and_run(
+        r#"<?php
+function pair($k, $v) { return "$k:$v"; }
+function rest() { echo "r"; return ["v" => 2]; }
+$rest = ["v" => 2];
+echo pair(...["k" => 1, ...$rest]);
+echo "|";
+echo pair(...["k" => 1, ...rest()]);
+echo "|";
+try {
+    echo pair(...["k" => 1, ...["v" => 2, "z" => 3]]);
+} catch (Error $e) {
+    echo get_class($e);
+}
+echo "|";
+try {
+    echo pair(...["k" => 1, ...[]]);
+} catch (ArgumentCountError $e) {
+    echo get_class($e);
+}
+"#,
+    );
+    assert_eq!(out, "1:2|r1:2|Error|ArgumentCountError");
+}

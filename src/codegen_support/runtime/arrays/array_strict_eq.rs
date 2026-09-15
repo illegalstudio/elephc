@@ -191,7 +191,7 @@ fn emit_array_iter_next_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_array_iter_next_hash");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the caller frame before the nested call
     emitter.instruction("mov x29, sp");                                         // establish a minimal frame for the hash iterator call
-    emitter.instruction("bl __rt_hash_iter_next");                              // x0=next, x1=key_ptr, x2=key_len, x3=lo, x4=hi, x5=tag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=next, x1=key_ptr, x2=key_len, x3=lo, x4=hi, x5=tag
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the caller frame after the hash iterator returns
     emitter.instruction("mov x9, x5");                                          // stash the hash value tag before remapping
     emitter.instruction("mov x10, x3");                                         // stash the hash value low word before remapping
@@ -352,7 +352,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_iter_next_hash");
     emitter.instruction("sub rsp, 8");                                          // align the stack to 16 bytes for the SysV call
-    emitter.instruction("call __rt_hash_iter_next");                            // rdi=hash, rsi=cursor -> rax=next, rdi=key_ptr, rdx=key_len, rcx=lo, r8=hi, r9=tag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rdi=hash, rsi=cursor -> rax=next, rdi=key_ptr, rdx=key_len, rcx=lo, r8=hi, r9=tag
     emitter.instruction("add rsp, 8");                                          // restore the stack pointer after the call
     emitter.instruction("mov r10, r8");                                         // value high word from the hash entry
     emitter.instruction("mov r8, r9");                                          // value tag from the hash entry

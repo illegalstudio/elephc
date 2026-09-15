@@ -1,12 +1,13 @@
 //! Purpose:
-//! Emits wrapper functions that adapt interface dispatch entries to concrete method implementations.
-//! Materializes receiver and argument forwarding for interface vtable calls.
+//! Emits wrappers that adapt interface entries to concrete method implementations.
+//! Owns source-to-physical argument forwarding and concrete-to-Mixed return boxing.
 //!
 //! Called from:
 //! - `crate::codegen::finalize_user_asm()` after class metadata collection.
 //!
 //! Key details:
 //! - Wrapper ABI order must match both interface slots and concrete method codegen signatures.
+//! - One wrapper performs both adaptations when a route needs both.
 
 use std::collections::{HashMap, HashSet};
 
@@ -14,12 +15,9 @@ use crate::codegen_support::emit::Emitter;
 use crate::names::{interface_method_wrapper_symbol, method_symbol};
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
-use super::{abi, platform};
-use super::value_boxing::emit_box_current_value_as_mixed;
+use super::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 
-/// Emits return wrappers for interface methods whose implementation returns a concrete type
-/// but the interface signature declares `Mixed`. Wrappers box the concrete return value so the
-/// interface dispatcher can handle heterogeneous return types.
+/// Emits wrappers for interface argument or return ABI differences.
 ///
 /// # Arguments
 /// * `emitter` - Assembly emitter
@@ -31,7 +29,7 @@ pub(crate) fn emit_interface_return_wrappers(
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     emitted_class_names: Option<&HashSet<String>>,
-) {
+) -> Result<(), String> {
     let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes
         .iter()
         .filter(|(class_name, _)| {
@@ -48,8 +46,9 @@ pub(crate) fn emit_interface_return_wrappers(
             class_info,
             interfaces,
             classes,
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// Emits all return wrappers for a single class's interface implementations.
@@ -67,11 +66,11 @@ pub(crate) fn emit_interface_return_wrappers(
 /// * `classes` - Map of all known classes with their method signatures
 fn emit_class_interface_return_wrappers(
     emitter: &mut Emitter,
-    class_name: &str,
+    _class_name: &str,
     class_info: &ClassInfo,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
-) {
+) -> Result<(), String> {
     for interface_name in &class_info.interfaces {
         let Some(interface_info) = interfaces.get(interface_name) else {
             continue;
@@ -86,12 +85,17 @@ fn emit_class_interface_return_wrappers(
             else {
                 continue;
             };
-            if !interface_method_needs_return_wrapper(
+            let Some(interface_sig) = interface_info.methods.get(method_name) else {
+                continue;
+            };
+            let needs_return_wrapper = interface_method_needs_return_wrapper(
                 interface_info,
                 method_name,
                 impl_class,
                 classes,
-            ) {
+            );
+            let abi_plan = source_method_adapters::plan_method_abi(interface_sig, actual_sig)?;
+            if !needs_return_wrapper && abi_plan == MethodAbiPlan::Direct {
                 continue;
             }
 
@@ -102,36 +106,18 @@ fn emit_class_interface_return_wrappers(
             );
             let implementation = method_symbol(impl_class, method_name);
 
-            emitter.raw(".align 2");
-            emitter.label_global(&wrapper);
-            emitter.comment(&format!(
-                "interface return wrapper {} implements {}::{}",
-                class_name, interface_name, method_name
-            ));
-            match emitter.target.arch {
-                platform::Arch::AArch64 => {
-                    emitter.instruction("str x30, [sp, #-16]!");                // preserve the interface dispatch return address across nested calls
-                    abi::emit_call_label(emitter, &implementation);
-                    emit_box_current_value_as_mixed(
-                        emitter,
-                        &actual_sig.return_type.codegen_repr(),
-                    );
-                    emitter.instruction("ldr x30, [sp], #16");                  // restore the interface dispatch return address after boxing
-                    emitter.instruction("ret");                                 // return the normalized mixed value to the interface caller
-                }
-                platform::Arch::X86_64 => {
-                    emitter.instruction("sub rsp, 8");                          // align the SysV stack before the wrapper's nested calls
-                    abi::emit_call_label(emitter, &implementation);
-                    emit_box_current_value_as_mixed(
-                        emitter,
-                        &actual_sig.return_type.codegen_repr(),
-                    );
-                    emitter.instruction("add rsp, 8");                          // release the alignment padding before returning to the caller
-                    emitter.instruction("ret");                                 // return the normalized mixed value to the interface caller
-                }
-            }
+            source_method_adapters::emit_method_adapter(
+                emitter,
+                &wrapper,
+                &implementation,
+                MethodKind::Instance,
+                interface_sig,
+                actual_sig,
+                needs_return_wrapper,
+            )?;
         }
     }
+    Ok(())
 }
 
 /// Returns true if an interface method implementation needs a return wrapper.
@@ -162,5 +148,6 @@ fn interface_method_needs_return_wrapper(
     };
 
     matches!(interface_sig.return_type.codegen_repr(), PhpType::Mixed)
+        && !actual_sig.by_ref_return
         && !matches!(actual_sig.return_type.codegen_repr(), PhpType::Mixed)
 }

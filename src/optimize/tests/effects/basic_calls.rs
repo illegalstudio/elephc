@@ -10,6 +10,127 @@
 
 use super::*;
 
+/// Dynamic spreads retain validation and callback effects; known array literals keep their child effects.
+#[test]
+fn test_effect_analysis_keeps_dynamic_array_spread_observable() {
+    let dynamic = Expr::new(ExprKind::Spread(Box::new(Expr::var("items"))), Span::dummy());
+    let effect = expr_effect(&dynamic);
+    assert!(effect.may_throw && effect.has_side_effects && effect.writes_globals);
+    let literal = Expr::new(
+        ExprKind::Spread(Box::new(Expr::new(
+            ExprKind::ArrayLiteral(vec![Expr::int_lit(1)]), Span::dummy(),
+        ))),
+        Span::dummy(),
+    );
+    assert!(!expr_is_observable(&literal));
+    let tokens = crate::lexer::tokenize(
+        "<?php try { [...$items]; } catch (Error $error) { echo 'caught'; } finally { echo 'done'; }",
+    ).unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    for optimized in [prune_constant_control_flow(program.clone()), eliminate_dead_code(program)] {
+        assert!(optimized.iter().any(|statement| matches!(
+            &statement.kind,
+            StmtKind::Try { catches, finally_body: Some(_), .. } if !catches.is_empty()
+        )), "{optimized:?}");
+    }
+}
+
+/// A key an associative spread can supply is never reported as a statically missing offset.
+///
+/// The spread is carried as a pair whose key IS the spread, so a plain scan over literal keys
+/// skips it and would answer "definitely absent" for a key the source merges in.
+#[test]
+fn test_effect_analysis_keeps_assoc_spread_array_read_unknown() {
+    let spread = crate::parser::ast::assoc_spread_entry(Expr::new(
+        ExprKind::Spread(Box::new(Expr::var("extra"))),
+        Span::dummy(),
+    ));
+    let with_spread = Expr::new(
+        ExprKind::ArrayLiteralAssoc(vec![
+            (Expr::string_lit("a"), Expr::int_lit(1)),
+            spread,
+        ]),
+        Span::dummy(),
+    );
+    let without_spread = Expr::new(
+        ExprKind::ArrayLiteralAssoc(vec![(Expr::string_lit("a"), Expr::int_lit(1))]),
+        Span::dummy(),
+    );
+    assert_eq!(
+        crate::optimize::effects::statically_known_array_read(
+            &with_spread,
+            &Expr::string_lit("b"),
+        ),
+        None,
+    );
+    assert_eq!(
+        crate::optimize::effects::statically_known_array_read(
+            &without_spread,
+            &Expr::string_lit("b"),
+        ),
+        Some(false),
+    );
+    assert_eq!(
+        crate::optimize::effects::statically_known_array_read(
+            &with_spread,
+            &Expr::int_lit(0),
+        ),
+        None,
+    );
+}
+
+/// Reference source calls and implicit target destruction both preserve catch and finally clauses.
+#[test]
+fn test_effect_analysis_preserves_reference_assignment_exception_boundaries() {
+    for assignment in ["$alias = &source();", "$alias = &$value;"] {
+        let source = format!(
+            "<?php try {{ {assignment} }} catch (Exception $error) {{ echo 'caught'; }} finally {{ echo 'done'; }}"
+        );
+        let tokens = crate::lexer::tokenize(&source).unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let StmtKind::Try { try_body, .. } = &program[0].kind else { panic!("expected try fixture"); };
+        let effect = stmt_effect(&try_body[0]);
+        assert!(effect.may_throw && effect.has_side_effects && effect.writes_globals);
+        for optimized in [
+            prune_constant_control_flow(program.clone()),
+            eliminate_dead_code(program),
+        ] {
+            assert!(optimized.iter().any(|statement| matches!(
+                &statement.kind,
+                StmtKind::Try { catches, finally_body: Some(_), .. } if !catches.is_empty()
+            )), "{assignment}: {optimized:?}");
+        }
+    }
+}
+
+/// Destructor callbacks keep collection observable and preserve its catch and finally clauses.
+#[test]
+fn test_effect_analysis_preserves_collection_exception_boundaries() {
+    let expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from("gc_collect_cycles"),
+            args: Vec::new(),
+        },
+        Span::dummy(),
+    );
+    let effect = expr_effect(&expr);
+    assert!(effect.may_throw && effect.has_side_effects && effect.writes_globals);
+
+    let tokens = crate::lexer::tokenize(
+        "<?php try { gc_collect_cycles(); } catch (Exception $error) { echo 'caught'; } finally { echo 'done'; }",
+    ).unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    for optimized in [
+        prune_constant_control_flow(program.clone()),
+        eliminate_dead_code(program),
+    ] {
+        assert!(optimized.iter().any(|statement| matches!(
+            &statement.kind,
+            StmtKind::Try { catches, finally_body: Some(_), .. } if !catches.is_empty()
+        )), "{optimized:?}");
+    }
+}
+
 /// Verifies that `strlen` is classified as a pure call with no side effects,
 /// no exception potential, and no observable behavior.
 #[test]
@@ -68,7 +189,7 @@ fn test_effect_analysis_keeps_unknown_property_and_array_reads_observable() {
     assert!(expr_is_observable(&array));
 }
 
-/// Verifies literal array reads distinguish present offsets from warning-only misses.
+/// Verifies present literal offsets stay pure while missing offsets can invoke error handlers.
 #[test]
 fn test_effect_analysis_refines_literal_array_reads() {
     let array = Expr::new(
@@ -92,8 +213,10 @@ fn test_effect_analysis_refines_literal_array_reads() {
 
     assert!(!expr_is_observable(&present));
     assert!(!expr_effect(&present).may_throw);
+    assert!(!expr_effect(&present).writes_globals);
     assert!(expr_is_observable(&missing));
-    assert!(!expr_effect(&missing).may_throw);
+    assert!(expr_effect(&missing).may_throw);
+    assert!(expr_effect(&missing).writes_globals);
 }
 
 /// Verifies a read-only runtime registry probe no longer inherits the all-effects fallback.

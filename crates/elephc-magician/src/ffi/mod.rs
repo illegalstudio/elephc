@@ -11,14 +11,18 @@
 
 #[cfg(not(test))]
 pub mod callables;
+pub(crate) mod array_references;
 pub mod context;
 pub mod declared_symbols;
 pub(crate) mod dynamic_destructors;
+#[cfg(not(test))]
+mod dynamic_properties;
 pub(crate) mod ob_handlers;
 pub mod execute;
 #[cfg(not(test))]
 pub mod function_calls;
 pub mod native_functions;
+pub mod native_constants;
 pub mod native_methods;
 #[cfg(not(test))]
 pub mod object_construction;
@@ -28,6 +32,7 @@ pub mod scope;
 #[cfg(not(test))]
 pub mod static_members;
 pub mod symbols;
+pub mod inventories;
 pub(crate) mod util;
 
 #[cfg(not(test))]
@@ -38,6 +43,7 @@ pub use execute::*;
 #[cfg(not(test))]
 pub use function_calls::*;
 pub use native_functions::*;
+pub use native_constants::*;
 pub use native_methods::*;
 #[cfg(not(test))]
 pub use object_construction::*;
@@ -47,6 +53,7 @@ pub use scope::*;
 #[cfg(not(test))]
 pub use static_members::*;
 pub use symbols::*;
+pub use inventories::*;
 
 #[cfg(test)]
 mod tests;

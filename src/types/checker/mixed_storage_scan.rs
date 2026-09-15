@@ -162,6 +162,7 @@ impl Checker {
         // retype both consult and which `--strict-locals` does not switch off (the kill is
         // mode-independent). Installed before the early return below for exactly that reason.
         self.body_contains_eval = facts.contains_eval;
+        self.program_contains_eval |= facts.contains_eval;
 
         // This visit RE-DECIDES every assignment site in this body, so a decision a SUPERSEDED
         // walk recorded for one of them is dropped first. The checker walks a body more than

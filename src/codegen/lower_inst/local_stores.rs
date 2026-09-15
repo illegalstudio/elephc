@@ -92,14 +92,14 @@ pub(super) fn store_value_through_ref_cell_slot(
     abi::load_at_offset(ctx.emitter, state_reg, state_offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // select ref-cell storage after a runtime promotion
                 &format!("cbnz {}, {}", state_reg, ref_cell)
-            );                                                                  // select ref-cell storage after a runtime promotion
+            );
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // test the slot's runtime representation flag
                 &format!("test {}, {}", state_reg, state_reg)
-            );                                                                  // test the slot's runtime representation flag
+            );
             ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select ref-cell storage after a runtime promotion
         }
     }
@@ -142,29 +142,182 @@ pub(super) fn lower_alias_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &I
         target_offset,
         abi::tertiary_scratch_reg(ctx.emitter),
     );
-    ctx.mark_promoted_ref_cell(target_slot);
+    ctx.alias_ref_cell_state(target_slot, source_slot)?;
     Ok(())
 }
 
-/// Lowers `BindRefCellPtr`: binds the target local slot as a non-owning reference
-/// alias to a ref-cell pointer value (operand 0). Stores the pointer into the slot and
-/// marks it as a promoted ref cell so later loads/stores dereference it. The local does
-/// not own the cell — the owner is the source object property — so no owner slot is
-/// allocated and no release is emitted at scope exit.
+/// Copies a nullable owned cell into another owner slot, preserving aliases beyond source retirement.
+pub(super) fn lower_retain_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let (source, target) = expect_local_slot_pair(inst)?;
+    let source_offset = ctx.local_offset(source)?;
+    let target_offset = ctx.local_offset(target)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result, source_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::store_at_offset(ctx.emitter, result, target_offset);
+    Ok(())
+}
+
+/// Binds a raw cell pointer, retaining it when an explicit hidden owner slot accompanies the alias.
 pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    let target_slot = expect_local_slot(inst)?;
+    let (target_slot, owner) = match inst.immediate {
+        Some(Immediate::LocalSlot(slot)) => (slot, None),
+        Some(Immediate::LocalSlotPair { first, second }) => (first, Some(second)),
+        _ => return Err(CodegenIrError::invalid_module("bind_ref_cell_ptr requires an alias slot")),
+    };
     let target_offset = ctx.local_offset(target_slot)?;
-    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let pointer_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(value, pointer_reg)?;
+    if let Some(owner) = owner.filter(|_| inst.op == Op::BindRefCellPtr) {
+        let provided = ctx.next_label("bind_ref_cell_ptr_provided");
+        let done = ctx.next_label("bind_ref_cell_ptr_done");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &provided);
+        // An existing-only element lookup uses zero to report a miss. Give the synthetic source
+        // alias its own managed null cell, without inserting anything into the source container,
+        // so the following foreach can warn for null and skip safely.
+        crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
+        abi::emit_push_reg(ctx.emitter, pointer_reg);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            crate::codegen_support::runtime::reference_cells::payload_tag(&PhpType::Mixed),
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
+        let boxed = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_pop_reg(ctx.emitter, boxed);
+        abi::emit_store_to_address(ctx.emitter, boxed, pointer_reg, 0);
+        abi::emit_store_zero_to_address(ctx.emitter, pointer_reg, 8);
+        abi::store_at_offset_scratch(
+            ctx.emitter,
+            pointer_reg,
+            target_offset,
+            abi::tertiary_scratch_reg(ctx.emitter),
+        );
+        abi::store_at_offset(ctx.emitter, pointer_reg, ctx.local_offset(owner)?);
+        abi::emit_jump(ctx.emitter, &done);
+
+        ctx.emitter.label(&provided);
+        abi::store_at_offset_scratch(
+            ctx.emitter,
+            pointer_reg,
+            target_offset,
+            abi::tertiary_scratch_reg(ctx.emitter),
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+        abi::store_at_offset(ctx.emitter, pointer_reg, ctx.local_offset(owner)?);
+        ctx.emitter.label(&done);
+        ctx.mark_promoted_ref_cell(target_slot);
+        return Ok(());
+    }
     abi::store_at_offset_scratch(
         ctx.emitter,
         pointer_reg,
         target_offset,
         abi::tertiary_scratch_reg(ctx.emitter),
     );
+    if let Some(owner) = owner {
+        let owner_offset = ctx.local_offset(owner)?;
+        let entry = if inst.op == Op::AdoptRefCellPtr {
+            "__rt_reference_cell_owner"
+        } else {
+            "__rt_incref"
+        };
+        abi::emit_call_label(ctx.emitter, entry);
+        abi::store_at_offset(ctx.emitter, pointer_reg, owner_offset);
+    }
     ctx.mark_promoted_ref_cell(target_slot);
     Ok(())
+}
+
+/// Snapshots the returned cell address, leases it when it is managed, and retires a superseded lease.
+///
+/// The instruction produces TWO distinct things, and keeping them apart is the whole point:
+///
+/// - Its `Pointer` SSA result is the address selected here, ONCE. The return terminator reads
+///   that snapshot, so a `finally` that rebinds the returned variable and falls through cannot
+///   make the validated address and the returned reference disagree.
+/// - Its `ReturnRefCell` slot is the optional MANAGED lease, used only for cleanup. The
+///   retained replacement is published into it before the superseded lease is retired, because
+///   that retirement can run a throwing payload destructor.
+///
+/// `__rt_reference_cell_owner` answers zero for every address that is not an exact live managed
+/// cell allocation, which includes an array-interior element address relayed into this frame
+/// through a by-reference parameter. Lowering cannot always settle that provenance statically:
+/// the caller's binding may be a branch away, or in another function entirely, so this boundary
+/// fails CLOSED. The single exception is an address that is an EXACT node of the active
+/// unmanaged-borrow chain, which is a live boxed `array_walk()` element the descriptor invoker
+/// copies into an owned `Mixed` immediately after the call, before anything can free the entry.
+/// That case publishes a zero lease and still returns the snapshot; every other zero owner
+/// raises the catchable `__rt_borrowed_reference_return_error` instead of handing the caller a
+/// null or soon-to-be-freed interior pointer.
+pub(super) fn lower_acquire_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let pointer = expect_operand(inst, 0)?;
+    let owner = expect_local_slot(inst)?;
+    let owner_offset = ctx.local_offset(owner)?;
+    let captured = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module("acquire_ref_cell must publish the captured cell address")
+    })?;
+    if !materialize_returned_local_ref_cell(ctx, pointer)? {
+        ctx.load_value_to_reg(pointer, abi::int_result_reg(ctx.emitter))?;
+    }
+    // Publish the selected address before any helper call can replace the result register.
+    ctx.store_int_result_value(captured)?;
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
+    let owned = ctx.next_label("reference_return_owner_present");
+    let publish = ctx.next_label("reference_return_lease_publish");
+    let borrowed = ctx.next_label("reference_return_active_borrow");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &owned);
+    ctx.load_value_to_reg(captured, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &borrowed);
+    abi::emit_call_label(ctx.emitter, "__rt_borrowed_reference_return_error");
+    ctx.emitter.label(&borrowed);
+    // An active element borrow owns no cell, so this frame leases nothing for it.
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &publish);
+    ctx.emitter.label(&owned);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.label(&publish);
+    let previous = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, previous, owner_offset);
+    // Publish the retained replacement before retirement can run a throwing destructor.
+    abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), owner_offset);
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), previous);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+    Ok(())
+}
+
+/// Materializes the ref-cell pointer represented by a `LoadRefCell` value.
+pub(in crate::codegen) fn materialize_returned_local_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    mut value: ValueId,
+) -> Result<bool> {
+    loop {
+        let Some(inst) = instruction_for_value(ctx, value)? else {
+            return Ok(false);
+        };
+        if matches!(inst.op, Op::Acquire | Op::Move | Op::Borrow) {
+            let Some(source) = inst.operands.first().copied() else {
+                return Ok(false);
+            };
+            value = source;
+            continue;
+        }
+        if inst.op != Op::LoadRefCell {
+            return Ok(false);
+        }
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+            return Err(CodegenIrError::invalid_module(
+                "reference return load has no local slot",
+            ));
+        };
+        // A promotion or finally rebind can make the slot's representation path-dependent.
+        // Resolve the address from its runtime state here, before finally executes. The
+        // acquiring boundary then verifies that the selected address has a managed owner.
+        ctx.materialize_local_storage_address(slot, abi::int_result_reg(ctx.emitter))?;
+        return Ok(true);
+    }
 }
 
 /// Releases an owned local ref-cell tracked by a hidden owner slot.
@@ -173,7 +326,7 @@ pub(super) fn lower_release_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: 
     release_local_ref_cell_owner(ctx, owner_slot, &inst.result_php_type)
 }
 
-/// Releases the owned ref-cell pointer in an owner slot and clears that owner.
+/// Clears an owned ref-cell slot before retiring its cell so exception cleanup cannot retry it.
 pub(super) fn release_local_ref_cell_owner(
     ctx: &mut FunctionContext<'_>,
     owner_slot: LocalSlotId,
@@ -185,15 +338,16 @@ pub(super) fn release_local_ref_cell_owner(
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", owner_offset, "x11");
             ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip release when this variable no longer owns a fallback ref-cell
-            abi::emit_release_local_ref_cell(ctx.emitter, "x9", value_ty);
+            abi::emit_reg_move(ctx.emitter, "x0", "x9");
             abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
+            abi::emit_release_local_ref_cell(ctx.emitter, "x0", value_ty);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", owner_offset, "r10");
             ctx.emitter.instruction("test r11, r11");                           // check whether this variable owns a fallback ref-cell
             ctx.emitter.instruction(&format!("je {}", done));                   // skip release when the fallback owner is already clear
-            abi::emit_release_local_ref_cell(ctx.emitter, "r11", value_ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
+            abi::emit_release_local_ref_cell(ctx.emitter, "r11", value_ty);
         }
     }
     ctx.emitter.label(&done);
@@ -211,6 +365,9 @@ pub(super) fn release_local_ref_cell_owner(
 /// decision sound. The slot is either zero (prologue zero-initializes cleanup
 /// locals, and the null-guarded release helpers skip zero) or an owned value
 /// boxed by a previous retaining store, so releasing it is always balanced.
+/// A refcounted retirement is bounded before it propagates a newly produced destructor throw,
+/// preserving the active handler in the SAME PHP frame without re-raising an older exception
+/// whose unwind is already running this code through a `finally` body.
 pub(super) fn lower_release_local_slot(
     ctx: &mut FunctionContext<'_>,
     inst_id: InstId,
@@ -223,11 +380,13 @@ pub(super) fn lower_release_local_slot(
     let ty = ctx.local_php_type(slot)?.codegen_repr();
     let offset = ctx.local_offset(slot)?;
     if ctx.release_local_slot_may_observe_ref_cell(inst_id) {
-        // A merged path can hold either raw storage or a cell pointer. Slots
-        // with a runtime representation flag release only the raw path; slots
-        // that are always cells (notably by-ref params) remain excluded.
+        // A loop back-edge can promote the slot after this store was lowered.
+        // Retire the replaced payload on both runtime representations without
+        // releasing the reference cell that closures and local owners still share.
         if ctx.ref_cell_state_offset(slot).is_some() {
-            super::super::frame::emit_owned_local_cleanup(ctx, slot, offset, &ty);
+            if matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted() {
+                ctx.release_local_before_refcounted_writeback(slot)?;
+            }
         }
         return Ok(());
     }
@@ -235,15 +394,151 @@ pub(super) fn lower_release_local_slot(
         // Owned strings are freed through the validating helper, which skips
         // null/uninitialized slots and non-heap (.rodata) literal pointers.
         PhpType::Str => super::super::frame::emit_main_string_cleanup(ctx, offset),
-        PhpType::Callable => super::super::frame::emit_main_refcounted_cleanup(ctx, offset, &ty),
+        PhpType::Callable => emit_refcounted_local_slot_retirement(ctx, slot, offset, &ty)?,
         other if other.is_refcounted() => {
-            super::super::frame::emit_main_refcounted_cleanup(ctx, offset, &other)
+            emit_refcounted_local_slot_retirement(ctx, slot, offset, &other)?
         }
         // The slot never widened to refcounted storage: nothing can be owned.
         // Lowering normally prunes these, so this arm is only a safety net.
         _ => {}
     }
     Ok(())
+}
+
+/// Clears one local owner, completes its deep release, then propagates only a new destructor throw.
+fn emit_refcounted_local_slot_retirement(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    offset: usize,
+    ty: &PhpType,
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    let done = ctx.next_label("release_local_slot_done");
+    abi::load_at_offset(ctx.emitter, result, offset);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        if mixed_local_slot_is_statically_destructor_free(ctx, slot)? {
+            abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            ctx.emitter.label(&done);
+            return Ok(());
+        }
+        emit_mixed_local_slot_retirement(ctx, &done);
+        return Ok(());
+    }
+    abi::emit_decref_preserving_exception(ctx.emitter, ty);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Returns true when every value stored in a Mixed slot is statically destructor-free.
+fn mixed_local_slot_is_statically_destructor_free(
+    ctx: &FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<bool> {
+    if ctx.module.required_runtime_features.eval_bridge {
+        return Ok(false);
+    }
+    let mut saw_store = false;
+    for inst in &ctx.function.instructions {
+        if inst.op != Op::StoreLocal || inst.immediate != Some(Immediate::LocalSlot(slot)) {
+            continue;
+        }
+        saw_store = true;
+        let Some(value) = inst.operands.first().copied() else {
+            return Ok(false);
+        };
+        if !mixed_value_is_statically_destructor_free(ctx, value, &mut std::collections::HashSet::new())? {
+            return Ok(false);
+        }
+    }
+    Ok(saw_store)
+}
+
+/// Classifies only proven scalar-producing SSA chains, defaulting every opaque Mixed value to unsafe.
+fn mixed_value_is_statically_destructor_free(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    visited: &mut std::collections::HashSet<ValueId>,
+) -> Result<bool> {
+    if !visited.insert(value) {
+        return Ok(false);
+    }
+    let metadata = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    if matches!(
+        metadata.php_type.codegen_repr(),
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::TaggedScalar
+            | PhpType::Pointer(_)
+            | PhpType::Resource(_)
+    ) {
+        return Ok(true);
+    }
+    if !matches!(metadata.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(false);
+    }
+    let Some(inst) = instruction_for_value(ctx, value)? else {
+        return Ok(false);
+    };
+    if matches!(inst.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow) {
+        return Ok(true);
+    }
+    if matches!(inst.op, Op::Acquire | Op::Borrow | Op::Move | Op::Cast | Op::MixedBox) {
+        let Some(source) = inst.operands.first().copied() else {
+            return Ok(false);
+        };
+        return mixed_value_is_statically_destructor_free(ctx, source, visited);
+    }
+    Ok(false)
+}
+
+/// Releases scalar Mixed payloads directly while preserving a bounded destructor path.
+///
+/// Tags 0 through 3 and tag 8 are int, string, float, bool, and null. Their deep release
+/// cannot invoke PHP code, so installing a `setjmp` cleanup boundary on every scalar rebind
+/// only penalizes hot numeric and string loops. Every aggregate, object, nested Mixed,
+/// resource, callable, and future tag keeps the exception-preserving path.
+fn emit_mixed_local_slot_retirement(ctx: &mut FunctionContext<'_>, done: &str) {
+    let result = abi::int_result_reg(ctx.emitter);
+    let tag = abi::secondary_scratch_reg(ctx.emitter);
+    let scalar = ctx.next_label("release_local_slot_scalar_mixed");
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result,
+        tag,
+        done,
+    );
+    abi::emit_load_from_address(ctx.emitter, tag, result, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {tag}, #3"));                 // classify int, string, float, and bool Mixed payloads
+            ctx.emitter.instruction(&format!("b.ls {scalar}"));                 // bypass the throwing-cleanup boundary for scalar tags 0 through 3
+            ctx.emitter.instruction(&format!("cmp {tag}, #8"));                 // classify the canonical null Mixed payload
+            ctx.emitter.instruction(&format!("b.eq {scalar}"));                 // null owns no destructor-capable child
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {tag}, 3"));                  // classify int, string, float, and bool Mixed payloads
+            ctx.emitter.instruction(&format!("jbe {scalar}"));                  // bypass the throwing-cleanup boundary for scalar tags 0 through 3
+            ctx.emitter.instruction(&format!("cmp {tag}, 8"));                  // classify the canonical null Mixed payload
+            ctx.emitter.instruction(&format!("je {scalar}"));                   // null owns no destructor-capable child
+        }
+    }
+    abi::emit_decref_preserving_exception(ctx.emitter, &PhpType::Mixed);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&scalar);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(done);
 }
 
 /// Lowers `unset($local)` by breaking any promoted alias and writing PHP null locally.
@@ -310,7 +605,17 @@ pub(super) fn clear_local_slot_storage(
 }
 
 /// Stores an SSA value through a local ref-cell pointer using the supplied alias type.
-pub(super) fn store_value_to_ref_cell_as(
+pub(in crate::codegen) fn store_value_to_ref_cell_as(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    value: ValueId,
+    target_ty: &PhpType,
+) -> Result<()> {
+    store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty)
+}
+
+/// Writes through a borrowed address or a managed cell whose payload uses the declared shape.
+fn store_value_to_raw_ref_cell_as(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     value: ValueId,
@@ -319,10 +624,29 @@ pub(super) fn store_value_to_ref_cell_as(
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = target_ty.codegen_repr();
     reject_multiword_ref_param_local(&target_ty, "store")?;
-    coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+    if target_ty == PhpType::Mixed
+        && source_ty.codegen_repr() != PhpType::Mixed
+        && ctx.value_can_own_mixed_box_source(value)?
+    {
+        // The EIR acquire belongs to this store, not to an additional retained copy.
+        ctx.emitter.comment("transfer acquired ref-cell payload into Mixed storage");
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+    } else {
+        coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+    }
+    let retires_previous = matches!(target_ty, PhpType::Str | PhpType::Callable)
+        || target_ty.is_refcounted();
+    if retires_previous {
+        abi::emit_push_result_value(ctx.emitter, &target_ty);
+    }
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
+    let old_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    if retires_previous {
+        abi::emit_load_from_address(ctx.emitter, old_reg, pointer_reg, 0);
+        pop_ref_cell_store_value(ctx, &target_ty);
+    }
     match target_ty {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
@@ -358,9 +682,42 @@ pub(super) fn store_value_to_ref_cell_as(
                 pointer_reg,
                 0,
             );
+            if target_ty == PhpType::Mixed {
+                abi::emit_store_zero_to_address(ctx.emitter, pointer_reg, 8);
+            }
+        }
+    }
+    if retires_previous {
+        // Publish before retirement because object/callable cleanup can execute PHP code.
+        // Both raw Mixed aliases and descriptor-7 managed cells store the same boxed pointer.
+        abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), old_reg);
+        if target_ty == PhpType::Str {
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_decref_preserving_exception(ctx.emitter, &target_ty);
+            abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
         }
     }
     Ok(())
+}
+
+/// Restores a staged ref-cell replacement into the target ABI result registers.
+fn pop_ref_cell_store_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        }
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, abi::int_result_reg(ctx.emitter), tag_reg);
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)),
+    }
 }
 
 /// Converts the current result registers to the target shape needed by a ref-cell store.
@@ -397,9 +754,9 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(
+                        ctx.emitter.instruction(                                // save the int result to the placeholder slot above the saved Mixed pointer
                             "mov QWORD PTR [rsp + 16], rax"
-                        );                                                      // save the int result to the placeholder slot above the saved Mixed pointer
+                        );
                     }
                 }
                 // Pop the saved Mixed pointer into result_reg for decref_mixed.
@@ -421,9 +778,9 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the bool result to the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(
+                        ctx.emitter.instruction(                                // save the bool result to the placeholder slot
                             "mov QWORD PTR [rsp + 16], rax"
-                        );                                                      // save the bool result to the placeholder slot
+                        );
                     }
                 }
                 abi::emit_pop_reg(ctx.emitter, result_reg);
@@ -443,9 +800,9 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str d0, [sp, #16]");           // save the float result to the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(
+                        ctx.emitter.instruction(                                // save the float result to the placeholder slot
                             "movsd QWORD PTR [rsp + 16], xmm0"
-                        );                                                      // save the float result to the placeholder slot
+                        );
                     }
                 }
                 abi::emit_pop_reg(ctx.emitter, int_reg); // pop Mixed pointer into int_reg
@@ -477,4 +834,3 @@ pub(super) fn reject_multiword_ref_param_local(ty: &PhpType, action: &str) -> Re
     let _ = (ty, action);
     Ok(())
 }
-

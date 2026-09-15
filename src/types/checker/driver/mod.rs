@@ -394,6 +394,11 @@ pub(super) fn check_types_impl(
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
+    if checker.eval_native_callables_reachable {
+        if let Err(error) = checker.promote_eval_native_variadic_containers() {
+            errors.extend(error.flatten());
+        }
+    }
     // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
     // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
     // into method-checkable units here — their signatures already live in `checker.classes`.

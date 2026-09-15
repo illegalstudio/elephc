@@ -50,6 +50,16 @@ array_walk($items, "show");
 $result = call_user_func("double", 21);
 echo "call_user_func(double, 21) = " . $result . "\n";
 
+// Temporary argument lists are retired even when the callback rejects their arity.
+function invoke_callback_arguments(callable $callback, array $arguments): mixed {
+    return call_user_func_array($callback, $arguments);
+}
+try {
+    invoke_callback_arguments(double(...), []);
+} catch (ArgumentCountError $error) {
+    echo "callback requires an argument\n";
+}
+
 class Formatter {
     public function bracket(string $value): string {
         return "[" . $value . "]";
@@ -59,6 +69,14 @@ class Formatter {
 $formatter = new Formatter();
 $format = $formatter->bracket(...);
 echo "method callable: " . $format("ok") . "\n";
+
+function render_callback(callable $format): void { echo $format("nested") . "\n"; }
+function dispatch_renderer(mixed $renderer, mixed $format): void {
+    $renderer(format: $format);
+}
+echo "callable argument through a descriptor: ";
+dispatch_renderer(render_callback(...), [$formatter, "bracket"]);
+
 $formatted = array_map($format, ["a", "b"]);
 echo "method callable array_map: ";
 foreach ($formatted as $v) { echo $v . " "; }

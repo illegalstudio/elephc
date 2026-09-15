@@ -43,8 +43,8 @@ use crate::codegen_support::runtime_features::RuntimeFeatures;
 ///
 /// NOTHING HERE REACHES THE `elephc_curl` BRIDGE — that was checked, not assumed: none of
 /// these helpers calls a decref/release helper, so none of them can reach
-/// `__rt_mixed_free_deep`'s resource ladder. The three entries that DO reach code outside
-/// the hand-written runtime (`__rt_usort`, `__rt_array_udiff_uintersect`, `__rt_fiber_entry`)
+/// `__rt_mixed_free_deep`'s resource ladder. The two entries that DO reach code outside
+/// the hand-written runtime (`__rt_usort`, `__rt_fiber_entry`)
 /// are called out individually below and are the ones worth fixing first.
 const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     // -- No frame at all: the helper calls without adjusting rsp, so the callee is entered
@@ -56,11 +56,11 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     ("__rt_hash_key_eq", "frameless: calls __rt_str_eq, integer-only assembly"),
     ("__rt_array_rand", "frameless: calls __rt_random_uniform, integer-only assembly"),
     ("__rt_mixed_is_empty", "frameless: calls __rt_mixed_unbox, integer-only assembly"),
-    // __rt_report_uncaught_exception deliberately has NO entry here: it lives in
-    // NOT_STATICALLY_ANALYZABLE (its `and rsp, -16` realigns every call and defeats the
-    // walker), and a second entry in this list would silently absorb a real violation if
-    // the realignment were ever removed — analyze() drops `misaligned` findings for
-    // unanalyzable helpers, so this list must never double-cover one.
+    // The two uncaught-exception helpers deliberately have NO entry here: they live in
+    // NOT_STATICALLY_ANALYZABLE because their `and rsp, -16` instructions realign every
+    // call and defeat the walker. A second entry in this list would silently absorb a real
+    // violation if either realignment were removed because analyze() drops `misaligned`
+    // findings for unanalyzable helpers, so this list must never double-cover one.
     (
         "__rt_incref",
         "frameless: calls __rt_heap_debug_check_live, and only in --heap-debug builds. \
@@ -81,12 +81,6 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     (
         "__rt_heap_alloc",
         "calls __rt_heap_debug_validate_free_list (--heap-debug builds only), integer-only",
-    ),
-    (
-        "__rt_heap_free",
-        "calls __rt_object_handle_release and __rt_heap_debug_validate_free_list, both \
-         integer-only. NOTE this is one frame below __rt_mixed_free_deep, but it is reached \
-         AFTER the resource destructor has already run, never before it",
     ),
     // -- PRIVATE SUBROUTINES sharing the exported helper's `rbp` frame: they take no frame of
     //    their own (they read the caller's `[rbp - N]` spills directly), so the `call` between
@@ -110,26 +104,12 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
         "multi-push frame off by 8: calls __rt_concat_reserve / __rt_wordwrap_cpy_x86_64, \
          integer-only assembly",
     ),
-    (
-        "__rt_array_filter",
-        "multi-push frame off by 8: calls __rt_heap_alloc / __rt_object_handle_acquire, \
-         integer-only assembly",
-    ),
-    (
-        "__rt_array_filter_refcounted",
-        "multi-push frame off by 8: calls __rt_heap_alloc / __rt_object_handle_acquire, \
-         integer-only assembly",
-    ),
-    // -- The three that reach code this runtime did not write. FIX THESE FIRST.
+    // -- The two that reach code this runtime did not write. FIX THESE FIRST.
     (
         "__rt_usort",
         "REACHES NON-RUNTIME CODE: `call r12` is the user's comparator, i.e. COMPILED PHP. \
          It has survived because codegen spills floats with `movsd`/`movq` (alignment-\
          tolerant) rather than `movaps`, which is luck, not design",
-    ),
-    (
-        "__rt_array_udiff_uintersect",
-        "REACHES NON-RUNTIME CODE: same `call r12` user-callback shape as __rt_usort",
     ),
     (
         "__rt_fiber_entry",
@@ -161,7 +141,14 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
         "__rt_report_uncaught_exception",
         "realigns explicitly with `and rsp, -16` before draining the output buffers. The \
          walk tracks rsp as an exact offset from the entry, and a hard realignment has no \
-         such offset — but it is also the one construct that cannot BE misaligned: the \
+         such offset - but it is also the one construct that cannot BE misaligned: the \
+         following `call` runs on a 16-byte boundary by construction, whatever the path in",
+    ),
+    (
+        "__rt_dispatch_uncaught_exception",
+        "realigns explicitly with `and rsp, -16` before invoking the registered handler. The \
+         walk tracks rsp as an exact offset from the entry, and a hard realignment has no \
+         such offset - but it is also the one construct that cannot BE misaligned: the \
          following `call` runs on a 16-byte boundary by construction, whatever the path in",
     ),
     (
@@ -172,10 +159,6 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
     ),
     (
         "__rt_gc_mark_reachable",
-        "shares a tail between the framed body and a frameless early-out",
-    ),
-    (
-        "__rt_gc_collect_cycles",
         "shares a tail between the framed body and a frameless early-out",
     ),
     (

@@ -213,6 +213,12 @@ fn named_property_effects(
 ///
 /// Runtime-computed names still receive a narrower dynamic contract than the opcode-wide
 /// fallback, but retain `may_deopt`, warning, typed-slot throw, and magic-method effects.
+///
+/// `PropertyFetchMode` deliberately does NOT narrow this contract. A probe suppresses php's NATIVE
+/// access and miss diagnostics only: it still reaches `__isset`, `__get` and property hooks, all of
+/// which are user code that can throw or warn. `isset($o->{$k})` on a class whose `__isset` throws
+/// propagates that exception in php 8.5, so claiming a probe cannot throw would let a pass reorder
+/// or drop it across the very effect it owns.
 fn dynamic_property_effects(
     function: &Function,
     instruction: &crate::ir::Instruction,
@@ -239,11 +245,53 @@ fn dynamic_property_effects(
         {
             effects |= Effects::MAY_THROW;
         }
+        // A runtime name can land on any declared slot, so one name this scope may not reach is
+        // enough to make the read raise php's catchable `Error` even when no slot is typed.
+        if class.properties.iter().any(|(name, _)| {
+            property_name_is_inaccessible(function, context, &runtime_class, name)
+        }) {
+            effects |= Effects::MAY_THROW;
+        }
         if class.methods.contains_key("__get") {
             effects |= method_summary_for_class(context, &runtime_class, "__get")?;
         }
     }
     Some(effects)
+}
+
+/// Returns whether php refuses `property` on `class_name` from this function's LEXICAL scope.
+///
+/// `Function::lexical_class` is the same scope the backend's property ladders resolve against.
+fn property_name_is_inaccessible(
+    function: &Function,
+    context: &RefinementContext<'_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    matches!(
+        crate::types::resolve_property_name(
+            context.classes,
+            class_name,
+            property,
+            function.lexical_class.as_deref(),
+        ),
+        crate::types::PropertyNameResolution::Inaccessible(_)
+    )
+}
+
+/// Returns whether php resolves `property` on `class_name` to a DYNAMIC property in this scope.
+fn property_name_is_dynamic(
+    function: &Function,
+    context: &RefinementContext<'_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    crate::types::resolve_property_name(
+        context.classes,
+        class_name,
+        property,
+        function.lexical_class.as_deref(),
+    ) == crate::types::PropertyNameResolution::Dynamic
 }
 
 /// Computes one named property's effects across every concrete receiver implementation.
@@ -257,9 +305,36 @@ fn property_effects_for_value(
     let mut effects = Effects::READS_HEAP;
     for runtime_class in runtime_classes {
         let class = context.classes.get(&runtime_class)?;
-        if let Some((index, (name, _))) = class.visible_property(property) {
+        // `visible_property` still answers for a strict ancestor's private slot, so the two
+        // scope-dependent answers have to be taken before it: php refuses the name from a scope
+        // that may not reach it, and warns `Undefined property` for one it resolves to a dynamic
+        // property that has never been created.
+        let inaccessible =
+            property_name_is_inaccessible(function, context, &runtime_class, property);
+        let dynamic = property_name_is_dynamic(function, context, &runtime_class, property);
+        if inaccessible || dynamic {
+            // PHP consults `__get` before reporting either an access error or an undefined
+            // property warning. The backend follows that order, so effect refinement must keep
+            // the accessor's effects for the same two name-resolution outcomes.
+            if class.methods.contains_key("__get") {
+                effects |= method_summary_for_class(context, &runtime_class, "__get")?;
+            } else if inaccessible {
+                effects |= Effects::MAY_THROW;
+            } else {
+                effects |= Effects::MAY_WARN;
+            }
+            continue;
+        }
+        if let Some((index, (name, property_ty))) = class.visible_property(property) {
             if class.property_slot_is_declared(index, name) {
                 effects |= Effects::MAY_THROW;
+            } else if !class.property_slot_is_reference(index, name)
+                && property_ty.codegen_repr() == PhpType::Mixed
+            {
+                // A reachable `unset()` widens an untyped fixed slot to boxed Mixed and stamps
+                // its high word with the removed-state marker. A later value read reports
+                // `Undefined property`, so effect refinement must not erase MAY_WARN from it.
+                effects |= Effects::MAY_WARN;
             }
             continue;
         }
@@ -414,4 +489,111 @@ fn constant_string<'a>(
 /// Normalizes PHP callable names for case-insensitive summary lookup.
 fn callable_key(name: &str) -> String {
     php_symbol_key(name.trim_start_matches('\\'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::PropertyFetchMode;
+
+    /// Builds a `DynamicPropGet` carrying one fetch mode, or no immediate at all.
+    fn dynamic_prop_get(mode: Option<PropertyFetchMode>) -> crate::ir::Instruction {
+        crate::ir::Instruction {
+            op: Op::DynamicPropGet,
+            operands: Vec::new(),
+            immediate: mode.map(Immediate::PropertyFetchMode),
+            result: None,
+            result_type: crate::ir::IrType::Void,
+            result_php_type: PhpType::Mixed,
+            result_ownership: crate::ir::Ownership::Borrowed,
+            effects: Op::DynamicPropGet.default_effects(),
+            span: None,
+            origin: None,
+        }
+    }
+
+    /// A probe keeps the CONSERVATIVE contract: `PropertyFetchMode` is not an effect narrowing.
+    ///
+    /// php's probes suppress the native access and miss diagnostics, not user code. `isset()`,
+    /// `empty()` and `??` still reach `__isset`, `__get` and property hooks, and php 8.5 propagates
+    /// an exception thrown from `__isset` straight out of `isset()`. A pass that believed a probe
+    /// could not throw could reorder it across that exception or drop it entirely.
+    #[test]
+    fn a_probe_keeps_the_conservative_throw_and_warn_contract() {
+        let probe = dynamic_prop_get(Some(PropertyFetchMode::Probe));
+        assert_eq!(probe.effects, Op::DynamicPropGet.default_effects());
+        assert!(probe
+            .effects
+            .contains(Effects::MAY_THROW | Effects::MAY_WARN));
+    }
+
+    /// Builds a one-value function whose single value carries `php_type`, for the receiver.
+    fn function_with_receiver(php_type: PhpType) -> (Function, ValueId) {
+        let mut function = Function::new(
+            "main".to_string(),
+            crate::ir::IrType::Void,
+            PhpType::Void,
+        );
+        let mut builder = crate::ir::Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let receiver = builder
+            .emit(
+                Op::ConstNull,
+                Vec::new(),
+                None,
+                crate::ir::IrType::Heap(crate::ir::IrHeapKind::Object),
+                php_type,
+                crate::ir::Ownership::Borrowed,
+            )
+            .expect("receiver value");
+        builder.terminate(Terminator::Return { value: None });
+        (function, receiver)
+    }
+
+    /// Type-checks a fixture and hands back its flattened class metadata.
+    fn checked_classes(source: &str) -> HashMap<String, ClassInfo> {
+        let tokens = crate::lexer::tokenize(source).expect("tokenize failed");
+        let program = crate::parser::parse(&tokens).expect("parse failed");
+        crate::types::check_with_target(
+            &program,
+            crate::codegen::platform::Target::detect_host(),
+        )
+        .expect("type check failed")
+        .classes
+    }
+
+    /// The refinement itself must keep a probe's user-code effects, not silence them.
+    ///
+    /// `refined_instruction_effects` REBUILDS the effect set from class metadata, so this pins the
+    /// contract at the exact seam `refine_module` uses: one runtime-name read in each mode against
+    /// the same receiver and the same class. Both must still be able to raise, because both can
+    /// reach `__get` or `__isset` on a class that declares one.
+    #[test]
+    fn refined_effects_keep_both_fetch_modes_able_to_reach_user_code() {
+        let classes = checked_classes(
+            "<?php class D { private int $n = 7; public function readN(): int { return $this->n; } } $d = new D(); echo $d->readN();",
+        );
+        assert!(classes.contains_key("D"), "fixture class must be checked");
+        let (function, receiver) = function_with_receiver(PhpType::Object("D".to_string()));
+        let data = crate::ir::DataPool::default();
+        let summaries = HashMap::new();
+        let context = RefinementContext {
+            data: &data,
+            classes: &classes,
+            summaries: &summaries,
+            has_dynamic_class_barrier: false,
+        };
+        for mode in [PropertyFetchMode::Read, PropertyFetchMode::Probe] {
+            let mut instruction = dynamic_prop_get(Some(mode));
+            instruction.operands = vec![receiver];
+            let effects = refined_instruction_effects(&function, &instruction, &context);
+            assert!(
+                effects.contains(Effects::MAY_THROW),
+                "{mode:?} must stay able to raise: {effects:?}"
+            );
+            assert!(effects.contains(Effects::READS_HEAP), "{mode:?}");
+        }
+    }
 }

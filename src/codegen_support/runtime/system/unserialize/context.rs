@@ -99,6 +99,8 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address across releases
     emitter.instruction("add x29, sp, #32");                                    // establish a stable frame for restoration
     emitter.instruction("str x0, [sp]");                                        // preserve the parsed Mixed result across cleanup
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_detach_data");
+    crate::codegen_support::abi::emit_store_to_sp(emitter, "x0", 16);
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_allowed_list");
     emitter.instruction("ldr x0, [x9]");                                        // load this call's owned allow-list reference
     emitter.instruction("str xzr, [x9]");                                       // unpublish the list before releasing its ownership
@@ -160,7 +162,9 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_context");
     emitter.instruction("str xzr, [x9]");                                       // leave no linked snapshot after top-level completion
     emitter.label("__rt_unserialize_end_return");
-    emitter.instruction("ldr x0, [sp]");                                        // restore the parsed Mixed result for the lowering
+    crate::codegen_support::abi::emit_load_temporary_stack_slot(emitter, "x0", 0);
+    crate::codegen_support::abi::emit_load_temporary_stack_slot(emitter, "x1", 16);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_finish_data");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and return address
     emitter.instruction("add sp, sp, #48");                                     // release the end helper frame
     emitter.instruction("ret");                                                 // return the unchanged parse result
@@ -237,6 +241,8 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for result/context spills
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spills for the result and snapshot pointer
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the parsed Mixed result across cleanup
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_detach_data");
+    crate::codegen_support::abi::store_at_offset(emitter, "rax", 24);
     emitter.instruction("mov rax, QWORD PTR [rip + _unser_allowed_list]");      // load this call's owned allow-list reference
     emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list], 0");        // unpublish the list before releasing its ownership
     emitter.instruction("test rax, rax");                                       // was an allow-list installed for this call?
@@ -283,7 +289,9 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rip + _unser_active], 0");              // mark the unserialize runtime idle
     emitter.instruction("mov QWORD PTR [rip + _unser_context], 0");             // leave no linked snapshot after top-level completion
     emitter.label("__rt_unserialize_end_return_x");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the parsed Mixed result for the lowering
+    crate::codegen_support::abi::load_at_offset(emitter, "rdi", 8);
+    crate::codegen_support::abi::load_at_offset(emitter, "rsi", 24);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_finish_data");
     emitter.instruction("leave");                                               // restore the caller frame and stack
     emitter.instruction("ret");                                                 // return the unchanged parse result
 }

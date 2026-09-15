@@ -229,8 +229,13 @@ pub(super) fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
-        if class_info.visible_property_is_declared(property) {
-            return Some(IssetPropertyAction::Initialized);
+        if let Some((index, (_, property_ty))) = class_info.visible_property(property) {
+            if class_info.property_slot_is_declared(index, property)
+                || (!class_info.property_slot_is_reference(index, property)
+                    && property_ty.codegen_repr() == PhpType::Mixed)
+            {
+                return Some(IssetPropertyAction::Initialized);
+            }
         }
         return Some(IssetPropertyAction::Fallback);
     }

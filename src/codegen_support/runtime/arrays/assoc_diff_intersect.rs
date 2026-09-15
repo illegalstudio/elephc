@@ -43,7 +43,7 @@ pub fn emit_assoc_diff_intersect(emitter: &mut Emitter) {
     emitter.label("__rt_assoc_diff_intersect_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // x0 = hash1 pointer
     emitter.instruction("ldr x1, [sp, #32]");                                   // x1 = current iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // next hash1 entry: x0=cursor,x1=kptr,x2=klen,x3=vlo,x4=vhi,x5=vtag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // next hash1 entry: x0=cursor,x1=kptr,x2=klen,x3=vlo,x4=vhi,x5=vtag
     emitter.instruction("cmn x0, #1");                                          // has iteration reached the end (cursor == -1)?
     emitter.instruction("b.eq __rt_assoc_diff_intersect_done");                 // stop once every hash1 entry has been visited
     emitter.instruction("str x0, [sp, #32]");                                   // save the next iterator cursor
@@ -153,7 +153,7 @@ fn emit_assoc_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_assoc_diff_intersect_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // rdi = hash1 pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // rsi = current iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // next hash1 entry: rax=cursor,rdi=kptr,rdx=klen,rcx=vlo,r8=vhi,r9=vtag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // next hash1 entry: rax=cursor,rdi=kptr,rdx=klen,rcx=vlo,r8=vhi,r9=vtag
     emitter.instruction("cmp rax, -1");                                         // has iteration reached the end?
     emitter.instruction("je __rt_assoc_diff_intersect_done");                   // stop once every hash1 entry has been visited
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the next iterator cursor

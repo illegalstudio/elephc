@@ -1,13 +1,13 @@
 //! Purpose:
 //! Walks EIR basic blocks in function order and delegates instruction/terminator lowering.
-//! Owns function setup for the initial Phase 04 backend path.
+//! Owns native function, method, generator, and program-entry setup.
 //!
 //! Called from:
 //! - `crate::codegen::generate_user_asm_from_ir()`.
 //!
 //! Key details:
-//! - This first backend increment supports straight-line main blocks and reports
-//!   explicit unsupported-feature errors for control flow not lowered yet.
+//! - PHP source ranges end before separately emitted cleanup helpers; generator
+//!   constructors are synthetic, while their bodies carry PHP debug locations.
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
 use std::fmt::Write as _;
@@ -48,7 +48,7 @@ use super::shared_state::SharedCodegenState;
 use super::{CodegenIrError, Result};
 
 
-/// Emits all supported EIR functions and then the process-entry main function.
+/// Emits EIR bodies and the process entry, retaining shared state for deferred helper emission.
 ///
 /// `web` restructures the entry point: the top-level body is emitted as the
 /// C-callable `_elephc_web_handler` and the real entry becomes a stub that calls
@@ -69,7 +69,7 @@ pub(super) fn emit_module(
     regalloc_linear: bool,
     web: bool,
     web_isolation: WebIsolation,
-) -> Result<()> {
+) -> Result<SharedCodegenState> {
     let mut shared = SharedCodegenState::default();
     shared.counters = counters;
     shared.instrument = instrument;
@@ -131,7 +131,7 @@ pub(super) fn emit_module(
     // `Emit::Cdylib`, which returns before the main function is emitted.
     super::enum_singletons::emit_enum_case_materializers(emitter, module, data);
     if emit.is_library() {
-        return Ok(());
+        return Ok(shared);
     }
     let main = module
         .functions
@@ -163,7 +163,7 @@ pub(super) fn emit_module(
     if probe {
         emitter.raw(&format!("{PROBE_TEXT_END_LABEL}:"));
     }
-    Ok(())
+    Ok(shared)
 }
 
 /// Emits the static EIR Fiber wrappers needed for closure callbacks.
@@ -225,7 +225,7 @@ fn emit_user_function(
 ) -> Result<()> {
     let entry_label = user_function_entry_symbol(function);
     let synthetic = function.flags.is_synthetic || is_property_init_thunk(function);
-    emit_fn_marker(emitter, &function.name, &entry_label, synthetic);
+    emit_fn_marker(emitter, &function.name, &entry_label, synthetic || function.flags.is_generator);
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -236,14 +236,14 @@ fn emit_user_function(
             shared,
             regalloc_linear,
         )?;
-        emit_endfn_marker(emitter, &function.name);
         return Ok(());
     }
     let layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
+        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
     );
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
@@ -261,8 +261,8 @@ fn emit_user_function(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     emit_endfn_marker(ctx.emitter, &function.name);
+    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     Ok(())
 }
 
@@ -280,7 +280,8 @@ pub(super) fn emit_synthetic_function_with_label(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
+        false,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -390,7 +391,7 @@ fn emit_class_method(
     regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = class_method_entry_symbol(function)?;
-    emit_fn_marker(emitter, &function.name, &entry_label, function.flags.is_synthetic);
+    emit_fn_marker(emitter, &function.name, &entry_label, function.flags.is_synthetic || function.flags.is_generator);
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -401,14 +402,14 @@ fn emit_class_method(
             shared,
             regalloc_linear,
         )?;
-        emit_endfn_marker(emitter, &function.name);
         return Ok(());
     }
     let layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
+        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -426,8 +427,8 @@ fn emit_class_method(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     emit_endfn_marker(ctx.emitter, &function.name);
+    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     Ok(())
 }
 
@@ -470,6 +471,7 @@ fn emit_generator_function(
         )));
     }
     emit_generator_constructor(emitter, entry_label, &callback_label, &param_types);
+    emit_endfn_marker(emitter, &function.name);
     emit_generator_body(
         module,
         function,
@@ -697,11 +699,14 @@ fn emit_generator_body(
     shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
+    // PHP source locations belong to the body, not to the synthetic coroutine constructor.
+    emit_fn_marker(emitter, &function.name, body_label, function.flags.is_synthetic);
     let layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
+        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
     );
     let epilogue_label = format!("{}_epilogue", body_label);
     let mut ctx = FunctionContext::new(
@@ -719,6 +724,7 @@ fn emit_generator_body(
     frame::emit_function_prologue_with_label(&mut ctx, body_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
+    emit_endfn_marker(ctx.emitter, &function.name);
     frame::emit_exception_cleanup_callback(&mut ctx, body_label);
     Ok(())
 }
@@ -926,7 +932,13 @@ fn emit_main_function(
         emitter.entry_symbol()
     };
     emit_fn_marker(emitter, &function.name, entry_symbol, false);
-    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear, false);
+    let layout = frame::layout_for_function(
+        function,
+        emitter.target,
+        regalloc_linear,
+        false,
+        false,
+    );
     let mut ctx = FunctionContext::new(
         module, function, emitter, data, shared, layout, true, gc_stats, heap_debug, None,
     );
@@ -1151,6 +1163,9 @@ fn emit_static_property_default_value(
         }
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
+        }
+        LiteralDefaultValue::BoxedAssocArray { value_type, entries } => {
+            super::literal_defaults::emit_boxed_assoc_array_literal_to_result(ctx, value_type, entries)?;
         }
         LiteralDefaultValue::BoxedArray {
             elem_type,

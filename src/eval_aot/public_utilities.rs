@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Argument normalization reuses shared call planning and scalar type checks.
+//! - Compiler-generated argument snapshot slots are physical ABI details, not part of the
+//!   source signature used to decide whether a static eval call is eligible.
 
 use super::*;
 
@@ -34,10 +36,19 @@ pub(super) fn const_finite_numeric_expr(expr: &Expr) -> Option<f64> {
 
 /// Checks a user-function signature against the native-only eval call subset.
 pub(crate) fn static_function_signature_supported(signature: &FunctionSig, args: &[Expr]) -> bool {
+    let visible_regular = crate::types::call_args::regular_param_count(signature);
+    let source_variadic = signature
+        .variadic
+        .as_deref()
+        .is_some_and(|name| name != crate::func_args::HIDDEN_ARGS_PARAM);
     if !signature.declared_return
-        || signature.declared_params.iter().any(|declared| !declared)
+        || signature
+            .declared_params
+            .iter()
+            .take(visible_regular)
+            .any(|declared| !declared)
         || signature.ref_params.len() != signature.params.len()
-        || signature.variadic.is_some()
+        || source_variadic
         || !static_function_return_type_supported(&signature.return_type)
     {
         return false;
@@ -45,10 +56,11 @@ pub(crate) fn static_function_signature_supported(signature: &FunctionSig, args:
     let Some(args) = normalize_static_function_args(signature, args) else {
         return false;
     };
-    signature.params.len() == args.len()
+    visible_regular == args.len()
         && signature
             .params
             .iter()
+            .take(visible_regular)
             .zip(signature.ref_params.iter().copied())
             .zip(args.iter())
             .all(|((param, by_ref), arg)| !by_ref && static_function_arg_supported(&param.1, arg))
@@ -79,11 +91,12 @@ pub(super) fn normalize_positional_static_function_args(
     signature: &FunctionSig,
     args: &[Expr],
 ) -> Option<Vec<Expr>> {
-    if args.len() > signature.params.len() {
+    let visible_regular = crate::types::call_args::regular_param_count(signature);
+    if args.len() > visible_regular {
         return None;
     }
     let mut normalized = args.to_vec();
-    for idx in args.len()..signature.params.len() {
+    for idx in args.len()..visible_regular {
         let default = signature.defaults.get(idx)?.clone()?;
         normalized.push(default);
     }
@@ -107,4 +120,53 @@ pub(super) fn static_function_arg_supported(param_ty: &PhpType, arg: &Expr) -> b
             | (PhpType::Float, ExprKind::FloatLiteral(_))
             | (PhpType::Str, ExprKind::StringLiteral(_))
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a scalar function signature with an optional compiler-generated collector.
+    fn scalar_signature(hidden_collector: bool) -> FunctionSig {
+        let mut signature = FunctionSig {
+            params: vec![("value".to_string(), PhpType::Int)],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+        };
+        if hidden_collector {
+            signature.params.push((
+                crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+            ));
+            signature.param_type_exprs.push(None);
+            signature.param_attributes.push(Vec::new());
+            signature.defaults.push(None);
+            signature.ref_params.push(false);
+            signature.declared_params.push(false);
+            signature.variadic = Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string());
+        }
+        signature
+    }
+
+    /// Global backtrace capture must not make an otherwise eligible static eval call fall back.
+    #[test]
+    fn hidden_argument_collector_does_not_change_static_eval_eligibility() {
+        let args = vec![Expr::new(ExprKind::IntLiteral(7), Span::dummy())];
+        assert!(static_function_signature_supported(
+            &scalar_signature(false),
+            &args
+        ));
+        assert!(static_function_signature_supported(
+            &scalar_signature(true),
+            &args
+        ));
+    }
 }

@@ -15,7 +15,7 @@ use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey, NativeCallableDefault,
-    NativeCallableObjectDefaultArg, NativeCallableSignature,
+    NativeCallableObjectDefaultArg, NativeCallableShape, NativeCallableSignature,
 };
 use crate::eval_ir::{
     EvalAttribute, EvalAttributeArg, EvalInterfaceProperty, EvalParameterType,
@@ -46,6 +46,7 @@ const NATIVE_DEFAULT_BOOL: u64 = 1;
 const NATIVE_DEFAULT_INT: u64 = 2;
 const NATIVE_DEFAULT_FLOAT: u64 = 3;
 pub(crate) const NATIVE_DEFAULT_EMPTY_ARRAY: u64 = 4;
+pub(crate) const NATIVE_DEFAULT_COMPILED: u64 = 5;
 const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
 const NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT: u8 = 2;

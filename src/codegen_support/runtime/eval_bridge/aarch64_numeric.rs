@@ -57,15 +57,21 @@ pub(super) fn emit_aarch64_numeric(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boxed sqrt result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_strrev");
-    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while casting and reversing
-    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across helper calls
-    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
-    emitter.instruction("bl __rt_mixed_cast_string");                           // cast the boxed eval argument to a PHP string pair
+    emitter.instruction("sub sp, sp, #32");                                     // reserve the borrowed input across tag inspection
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x0, [sp]");                                        // preserve the source cell for non-string coercion
+    emitter.instruction("bl __rt_mixed_unbox");                                 // borrow the canonical tag and payload without copying strings
+    emitter.instruction("cmp x0, #1");                                          // existing string payloads remain owned by the caller lease
+    emitter.instruction("b.eq __elephc_eval_value_strrev_reverse");             // reverse borrowed bytes without an unowned persisted copy
+    emitter.instruction("ldr x0, [sp]");                                        // reload non-string input for PHP scalar stringification
+    emitter.instruction("bl __rt_mixed_cast_string");                           // non-string arms return borrowed formatting or fixed storage
+    emitter.label("__elephc_eval_value_strrev_reverse");
     emitter.instruction("bl __rt_strrev");                                      // reverse the PHP byte string into concat storage
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the reversed string for Rust
-    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the strrev wrapper frame
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the strrev wrapper frame
     emitter.instruction("ret");                                                 // return the boxed reversed string to Rust
 
     label_c_global(emitter, "__elephc_eval_value_fdiv");

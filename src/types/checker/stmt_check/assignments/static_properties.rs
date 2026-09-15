@@ -76,7 +76,7 @@ pub(super) fn check_static_property_array_push(
 ) -> Result<(), CompileError> {
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
-    if target.dynamic_eval_target {
+    if target.dynamic_eval_target || target.prop_ty.is_php_array() {
         return Ok(());
     }
     let updated_prop_ty = match target.prop_ty {
@@ -143,7 +143,7 @@ pub(super) fn check_static_property_array_assign(
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
-    if target.dynamic_eval_target {
+    if target.dynamic_eval_target || target.prop_ty.is_php_array() {
         let normalized_idx_ty = normalized_array_key_type(index, idx_ty);
         if !is_dynamic_eval_static_property_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));

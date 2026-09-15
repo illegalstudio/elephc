@@ -12,14 +12,14 @@
 
 use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId,
-    MixedNumericOp, Op, Ownership, Terminator, ValueId,
+    MixedNumericOp, Op, Ownership, PropertyFetchMode, Terminator, ValueId,
 };
 use crate::ir_lower::context::{
     value_ir_type, ClosureCapture, LoweredValue, LoweringContext, StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::function;
-use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method, Name};
+use crate::names::{php_symbol_key, property_hook_get_method, Name};
 use crate::parser::ast::{
     is_compound_assignment_self_read, BinOp, CallableTarget, CastType, Expr, ExprKind,
     InstanceOfTarget, MagicConstant, StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
@@ -35,6 +35,7 @@ use std::collections::HashSet;
 mod constants;
 mod nullsafe_chain;
 mod ref_place_args;
+mod boxed_user_sort;
 mod scalar_literals;
 mod numeric_binary;
 mod string_concat;
@@ -50,7 +51,9 @@ mod lazy_isset;
 mod native_isset;
 mod callable_probes;
 mod descriptor_invoke;
+mod call_operand_owners;
 mod descriptor_args;
+mod descriptor_unpack;
 mod static_array_callbacks;
 mod callable_tracking;
 mod callable_resolution;
@@ -59,6 +62,7 @@ mod array_builtin_args;
 mod builtin_special_args;
 mod call_arg_coercion;
 mod positional_spreads;
+mod dynamic_spreads;
 mod named_args;
 mod named_spreads;
 mod variadic_args;
@@ -74,6 +78,10 @@ mod closure_calls;
 mod descriptor_calls;
 mod object_construction;
 mod property_access;
+mod reference_returns;
+use reference_returns::{
+    begin_reference_return_call, finish_reference_return_call, finish_reference_return_value,
+};
 mod property_fetch_for_write;
 mod method_calls;
 mod reflection_class_calls;
@@ -82,6 +90,9 @@ mod reflection_property_calls;
 mod reflection_filters;
 mod reflection_constructors;
 mod reflection_static_properties;
+mod class_introspection;
+mod class_introspection_mixed;
+mod core_introspection;
 mod reflection_new_instance;
 mod nullable_method_calls;
 mod method_metadata;
@@ -105,10 +116,20 @@ use lazy_isset::*;
 use native_isset::*;
 use callable_probes::*;
 use descriptor_invoke::*;
+use call_operand_owners::*;
 use descriptor_args::*;
+use descriptor_unpack::*;
 use static_array_callbacks::*;
 use callable_tracking::*;
 use callable_resolution::*;
+
+/// Resolves the statically known receiver class for sibling statement lowering.
+pub(in crate::ir_lower) fn instance_object_class_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> Option<String> {
+    callable_resolution::instance_callable_object_class(ctx, object)
+}
 use unset::*;
 use array_builtin_args::*;
 use builtin_special_args::*;
@@ -135,6 +156,8 @@ use reflection_property_calls::*;
 use reflection_filters::*;
 use reflection_constructors::*;
 use reflection_static_properties::*;
+use class_introspection::*;
+use core_introspection::*;
 use reflection_new_instance::*;
 use nullable_method_calls::*;
 use method_metadata::*;
@@ -146,6 +169,9 @@ use merge_temps::*;
 
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
+};
+pub(crate) use call_operand_owners::{
+    pin_in_flight_owners, retire_owned_call_operand, root_owned_call_operand, unpin_in_flight_owners,
 };
 pub(crate) use callable_tracking::{
     lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
@@ -167,9 +193,14 @@ pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
 pub(crate) use instanceof_coercions::coerce_to_int_at_span;
 pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use property_access::{
-    lower_ref_assign_array_elem, lower_ref_assign_call, lower_ref_assign_property,
+    lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
+    lower_ref_assign_property, lower_ref_assign_static_property,
+    prepare_scoped_addressable_ref_array_receiver,
 };
-pub(crate) use property_fetch_for_write::lower_by_ref_foreach_property_source;
+pub(crate) use property_fetch_for_write::{
+    by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
+    lower_nested_assignment_property_source,
+};
 pub(crate) use string_concat::string_op_uses_scratch_storage;
 pub(super) use assoc_array_literals::{
     array_access_expr_value_type_for_ir, method_call_expr_type_for_ir,
@@ -182,6 +213,14 @@ pub(super) use static_method_calls::static_method_call_expr_type_for_ir;
 
 /// Lowers an expression and returns its EIR value.
 pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
+    ctx.expression_depth += 1;
+    let value = lower_expr_inner(ctx, expr);
+    ctx.expression_depth -= 1;
+    value
+}
+
+/// Dispatches one expression while its reference-call context remains distinct from nested operands.
+fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
     if let Some(value) = nullsafe_chain::lower(ctx, expr) {
         return value;
     }
@@ -825,7 +864,7 @@ fn array_splice_receiver_local(
     if !ctx.has_local_slot(name) || ctx.is_ref_bound_local(name) {
         return None;
     }
-    if name.starts_with("__eir_place") {
+    if name.starts_with(crate::names::SYNTHETIC_PLACE_LOCAL_STEM) {
         return None;
     }
     Some((name.clone(), receiver.span))

@@ -34,13 +34,13 @@ sidebar:
 ---"""
 
 INTERNALS_TEMPLATE = """---
-title: "{name}() — internals"
+title: "{name}() - internals"
 description: "{short_description}"
 sidebar:
   order: {order}
 ---
 
-## `{name}()` — internals
+## `{name}()` - internals
 
 ## Where it lives
 
@@ -143,7 +143,7 @@ def _return_section(b: dict) -> str:
 
 def _examples_section(b: dict) -> str:
     if not b.get("examples"):
-        return "_No examples yet — check `examples/` and `showcases/` for usage patterns._"
+        return "_No examples yet. Check `examples/` and `showcases/` for usage patterns._"
     blocks = ["**Examples**:"]
     for ex in b["examples"]:
         blocks.append(ex)
@@ -332,7 +332,7 @@ def _availability_section(b: dict) -> str:
         if kind == "registry":
             home = ev.get("home_file") or ""
             lines.append(
-                "- **`eval()` (magician interpreter)**: supported — declarative "
+                "- **`eval()` (magician interpreter)**: supported through a declarative "
                 f"interpreter builtin ([`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home}))."
             )
         elif kind == "date-alias":
@@ -474,7 +474,7 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
     sig_file = sig_file or "src/types/signatures.rs"
     codegen_file = b["lowering"].get("codegen_file")
     codegen_line = b["lowering"].get("codegen_line")
-    codegen_function = b["lowering"].get("codegen_function") or "(none — type-checker only)"
+    codegen_function = b["lowering"].get("codegen_function") or "(none, type-checker only)"
     notes = b["lowering"].get("notes") or []
     helpers = b["lowering"].get("runtime_helpers", [])
 

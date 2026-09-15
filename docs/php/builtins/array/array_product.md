@@ -1,6 +1,6 @@
 ---
 title: "array_product()"
-description: "Calculate the product of values in an array."
+description: "Calculate an integer or float product of array values; an empty array returns integer 1."
 sidebar:
   order: 29
 ---
@@ -8,22 +8,22 @@ sidebar:
 ## array_product()
 
 ```php
-function array_product(array $array): int
+function array_product(array $array): int|float
 ```
 
-Calculate the product of values in an array.
+Calculate an integer or float product of array values; an empty array returns integer 1.
 
 **Parameters**:
 - `$array` (`array`)
 
-**Returns**: `int`
+**Returns**: `int|float`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_product.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_product.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_product.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_product.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

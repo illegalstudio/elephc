@@ -80,7 +80,7 @@ pub(super) fn static_property_type(
         .static_properties
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+        .map(|(_, property_ty)| property_lowering_type(property_ty))
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
@@ -113,7 +113,16 @@ pub(super) fn object_property_type(
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
         .visible_property(property)
-        .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.codegen_repr()))
+        .map(|(_, (_, property_ty))| property_lowering_type(property_ty))
+}
+
+/// Preserves boxed PHP array metadata until statement lowering selects its mutation path.
+fn property_lowering_type(php_type: &PhpType) -> PhpType {
+    if php_type.is_php_array() {
+        php_type.clone()
+    } else {
+        normalize_value_php_type(php_type.codegen_repr())
+    }
 }
 
 /// Returns true when a property type uses concrete indexed-array storage.

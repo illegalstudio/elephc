@@ -192,7 +192,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::phase("codegen");
     let phase_started = Instant::now();
-    let user_asm = match codegen::generate_user_asm_from_ir_with_options(
+    let generated_user_asm = match codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
         gc_stats,
         counters,
@@ -206,17 +206,19 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         web,
         web_isolation,
     ) {
-        Ok(asm) => asm,
+        Ok(output) => output,
         Err(err) => {
             crate::progress::clear();
             eprintln!("EIR backend error: {}", err);
             process::exit(1);
         }
     };
+    runtime_features.handler_state |= generated_user_asm.handler_state;
+    runtime_features.object_clone |= generated_user_asm.object_clone;
     let user_asm = if emit_debug_info {
-        debug_info::inject_line_directives(&user_asm, filename, target.platform)
+        debug_info::inject_line_directives(&generated_user_asm.asm, filename, target.platform)
     } else {
-        user_asm
+        generated_user_asm.asm
     };
     timings.record_since("codegen", phase_started);
 

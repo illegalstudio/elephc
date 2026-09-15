@@ -6,13 +6,16 @@
 //! - `crate::codegen::lower_inst::builtins::arrays::lower_array_values()`.
 //!
 //! Key details:
-//! - Associative arrays are copied in insertion order using `__rt_hash_iter_next`.
+//! - Associative arrays are copied in insertion order using `__rt_hash_iter_next_value`, so a
+//!   reference entry contributes the value it references rather than its reference cell.
 //! - Refcounted payloads are retained before storing them in the result array.
+//! - Boxed PHP arrays inspect their payload shape and preserve the source during normalization.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::context::FunctionContext;
 use crate::codegen::{CodegenIrError, Result};
+use crate::codegen_support::sentinels;
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
@@ -33,11 +36,104 @@ pub(super) fn lower_array_values(ctx: &mut FunctionContext<'_>, inst: &Instructi
             store_if_result(ctx, inst)
         }
         PhpType::AssocArray { value, .. } => lower_assoc_array_values(ctx, inst, array, &value.codegen_repr()),
+        PhpType::Mixed => lower_boxed_array_values(ctx, inst, array),
         other => Err(CodegenIrError::unsupported(format!(
             "array_values for PHP type {:?}",
             other
         ))),
     }
+}
+
+/// Extracts values from a boxed PHP array without changing the source keys or element layout.
+/// Packed conversion consumes a separately retained payload; hash iteration retains each value.
+fn lower_boxed_array_values(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(array)?;
+    emit_loaded_boxed_array_values(
+        ctx,
+        "array_values(): Argument #1 ($array) must be of type array",
+    )?;
+    store_if_result(ctx, inst)
+}
+
+/// Normalizes a borrowed box in the result register into an owned dense Mixed array.
+/// Non-array tags throw the caller-provided diagnostic before any container access.
+pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_boxed_array_values(
+    ctx: &mut FunctionContext<'_>,
+    invalid_message: &str,
+) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let indexed = ctx.next_label("avals_boxed_indexed");
+    let indexed_empty = ctx.next_label("avals_boxed_indexed_empty");
+    let invalid = ctx.next_label("avals_boxed_invalid");
+    let done = ctx.next_label("avals_boxed_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // packed payloads need a normalized Mixed-slot result
+            ctx.emitter.instruction(&format!("b.eq {indexed}"));                // preserve the source while widening packed values
+            ctx.emitter.instruction("cmp x0, #5");                              // hash payloads preserve insertion order during extraction
+            ctx.emitter.instruction(&format!("b.ne {invalid}"));                // reject non-array payloads before reading a container header
+            ctx.emitter.instruction("mov x0, x1");                              // borrow the hash retained by the source Mixed cell
+            lower_assoc_array_values_aarch64(ctx, &PhpType::Mixed)?;
+            ctx.emitter.instruction(&format!("b {done}"));                      // the hash path already produced owned Mixed slots
+            ctx.emitter.label(&indexed);
+            ctx.emitter.instruction("mov x0, x1");                              // borrow the indexed payload from the source Mixed cell
+            sentinels::emit_branch_if_null_container(
+                ctx.emitter,
+                "x0",
+                "x9",
+                &indexed_empty,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // discover the actual scalar, string, or boxed element layout
+            ctx.emitter.instruction("ubfx x1, x1, #8, #7");                     // exclude heap kind and persistent COW metadata from the value tag
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            ctx.emitter.instruction(&format!("b {done}"));                      // transfer the converted array owner to the result
+            ctx.emitter.label(&indexed_empty);
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            emit_indexed_array_value_type_stamp(ctx, "x0", &PhpType::Mixed);
+            ctx.emitter.instruction(&format!("b {done}"));                      // materialize an allocated empty working array for consumers that read its header
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // packed payloads need a normalized Mixed-slot result
+            ctx.emitter.instruction(&format!("je {indexed}"));                  // preserve the source while widening packed values
+            ctx.emitter.instruction("cmp rax, 5");                              // hash payloads preserve insertion order during extraction
+            ctx.emitter.instruction(&format!("jne {invalid}"));                 // reject non-array payloads before reading a container header
+            ctx.emitter.instruction("mov rax, rdi");                            // borrow the hash retained by the source Mixed cell
+            lower_assoc_array_values_x86_64(ctx, &PhpType::Mixed)?;
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // the hash path already produced owned Mixed slots
+            ctx.emitter.label(&indexed);
+            ctx.emitter.instruction("mov rax, rdi");                            // borrow the indexed payload from the source Mixed cell
+            sentinels::emit_branch_if_null_container(
+                ctx.emitter,
+                "rax",
+                "r10",
+                &indexed_empty,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("mov rdi, rax");                            // pass an independent owner to the consuming conversion helper
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // discover the actual scalar, string, or boxed element layout
+            ctx.emitter.instruction("shr rsi, 8");                              // move the indexed value tag into the low bits
+            ctx.emitter.instruction("and rsi, 0x7f");                           // discard persistent COW metadata above the value tag
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // transfer the converted array owner to the result
+            ctx.emitter.label(&indexed_empty);
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            emit_indexed_array_value_type_stamp(ctx, "rax", &PhpType::Mixed);
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // materialize an allocated empty working array for consumers that read its header
+        }
+    }
+    ctx.emitter.label(&invalid);
+    crate::codegen::lower_inst::exceptions::emit_type_error(ctx, invalid_message);
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers `array_values()` for a PHP `array<mixed>` value that may hold indexed or hash storage.
@@ -47,6 +143,14 @@ fn lower_dynamic_mixed_array_values(
     array: ValueId,
 ) -> Result<()> {
     ctx.load_value_to_result(array)?;
+    emit_loaded_dynamic_mixed_array_values(ctx)?;
+    store_if_result(ctx, inst)
+}
+
+/// Retains loaded packed Mixed storage or copies promoted hash values into an owned dense array.
+pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_dynamic_mixed_array_values(
+    ctx: &mut FunctionContext<'_>,
+) -> Result<()> {
     let assoc_label = ctx.next_label("avals_dynamic_assoc");
     let done_label = ctx.next_label("avals_dynamic_done");
     let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
@@ -77,7 +181,7 @@ fn lower_dynamic_mixed_array_values(
         }
     }
     ctx.emitter.label(&done_label);
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Lowers associative-array `array_values()` by copying values into a new indexed array.
@@ -119,7 +223,7 @@ fn lower_assoc_array_values_aarch64(ctx: &mut FunctionContext<'_>, value_ty: &Ph
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("ldr x0, [sp, #32]");                               // load the associative-array hash-table pointer for the next iteration step
     ctx.emitter.instruction("ldr x1, [sp]");                                    // load the current associative-array iterator cursor
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
     ctx.emitter.instruction("cmn x0, #1");                                      // has associative-array iteration reached the done sentinel?
     ctx.emitter.instruction(&format!("b.eq {}", end_label));                    // stop once every associative-array value has been collected
     ctx.emitter.instruction("str x0, [sp]");                                    // save the updated associative-array iterator cursor for the next loop step
@@ -150,7 +254,7 @@ fn lower_assoc_array_values_x86_64(ctx: &mut FunctionContext<'_>, value_ty: &Php
     ctx.emitter.label(&loop_label);
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                   // load the associative-array hash-table pointer for the next iteration step
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                        // load the current associative-array iterator cursor
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
     ctx.emitter.instruction("cmp rax, -1");                                     // has associative-array iteration reached the done sentinel?
     ctx.emitter.instruction(&format!("je {}", end_label));                      // stop once every associative-array value has been collected
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the updated associative-array iterator cursor for the next loop step
@@ -286,9 +390,9 @@ fn emit_append_string_value_x86_64(ctx: &mut FunctionContext<'_>, ptr_reg: &str,
 fn emit_append_word_value_x86_64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // load the result values array pointer from the fixed stack layout
     ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the current result values array length before appending
-    ctx.emitter.instruction(
+    ctx.emitter.instruction(                                                    // store the value payload into the next result values slot
         &format!("mov QWORD PTR [r10 + r11 * 8 + 24], {}", value_reg)
-    );                                                                          // store the value payload into the next result values slot
+    );
     ctx.emitter.instruction("add r11, 1");                                      // increment the result values array length after the append
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // persist the updated result values array length in the header
 }
@@ -319,17 +423,17 @@ fn emit_indexed_array_value_type_stamp(ctx: &mut FunctionContext<'_>, array_reg:
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "r12");
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the packed array kind word from the heap header
                 &format!("mov r10, QWORD PTR [{} - 8]", array_reg)
-            );                                                                  // load the packed array kind word from the heap header
+            );
             ctx.emitter.instruction("mov r12, 0xffffffff000080ff");             // materialize the heap-kind preservation mask without clobbering the array base
             ctx.emitter.instruction("and r10, r12");                            // preserve heap magic plus indexed-array metadata bits
             ctx.emitter.instruction(&format!("mov r12, {}", value_type_tag));   // materialize the runtime array value_type tag
             ctx.emitter.instruction("shl r12, 8");                              // move the value_type tag into the packed kind-word byte lane
             ctx.emitter.instruction("or r10, r12");                             // combine the preserved heap kind with the stamped value_type tag
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // persist the packed array kind word in the heap header
                 &format!("mov QWORD PTR [{} - 8], r10", array_reg)
-            );                                                                  // persist the packed array kind word in the heap header
+            );
             abi::emit_pop_reg(ctx.emitter, "r12");
         }
     }

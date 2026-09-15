@@ -18,6 +18,7 @@ pub enum EvalStatus {
     UnsupportedConstruct,
     AbiMismatch,
     EscapingPcntlCallable,
+    UserFatal,
 }
 
 impl EvalStatus {
@@ -31,6 +32,7 @@ impl EvalStatus {
             Self::UnsupportedConstruct => 4,
             Self::AbiMismatch => 5,
             Self::EscapingPcntlCallable => 6,
+            Self::UserFatal => 7,
         }
     }
 }
@@ -89,5 +91,12 @@ mod tests {
     #[test]
     fn escaping_pcntl_callable_status_code_is_stable() {
         assert_eq!(EvalStatus::EscapingPcntlCallable.code(), 6);
+    }
+
+    /// User errors must not collide with the previously published PCNTL escape status.
+    #[test]
+    fn user_fatal_status_is_distinct_from_pcntl_escape() {
+        assert_eq!(EvalStatus::UserFatal.code(), 7);
+        assert_ne!(EvalStatus::UserFatal.code(), EvalStatus::EscapingPcntlCallable.code());
     }
 }

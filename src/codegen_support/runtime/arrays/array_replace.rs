@@ -16,7 +16,7 @@ use crate::codegen_support::platform::Arch;
 /// Output: x0 = new owned hash pointer (clone of hash1 with hash2 entries inserted)
 ///
 /// hash1 is shallow-cloned (keys re-persisted, child values retained), then every
-/// entry of hash2 is inserted via `__rt_hash_set`, which overwrites matching keys in
+/// entry of hash2 is inserted via `__rt_hash_set_value`, which overwrites matching keys in
 /// place (preserving their position) and appends new keys. Heap and string values from
 /// hash2 are retained for the new owner before insertion.
 pub fn emit_array_replace(emitter: &mut Emitter) {
@@ -38,7 +38,7 @@ pub fn emit_array_replace(emitter: &mut Emitter) {
     emitter.label("__rt_array_replace_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // x0 = hash2 pointer
     emitter.instruction("ldr x1, [sp, #16]");                                   // x1 = current iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // next hash2 entry: x0=cursor,x1=kptr,x2=klen,x3=vlo,x4=vhi,x5=vtag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // next hash2 entry: x0=cursor,x1=kptr,x2=klen,x3=vlo,x4=vhi,x5=vtag
     emitter.instruction("cmn x0, #1");                                          // has iteration reached the end (cursor == -1)?
     emitter.instruction("b.eq __rt_array_replace_done");                        // stop once every hash2 entry has been inserted
     emitter.instruction("str x0, [sp, #16]");                                   // save the next iterator cursor
@@ -69,7 +69,7 @@ pub fn emit_array_replace(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #40]");                                   // reload value low word
     emitter.instruction("ldr x4, [sp, #48]");                                   // reload value high word
     emitter.instruction("ldr x5, [sp, #56]");                                   // reload value runtime tag
-    emitter.instruction("bl __rt_hash_set");                                    // overwrite or append the entry into the result hash
+    emitter.instruction("bl __rt_hash_set_value");                              // overwrite or append the entry into the result hash
     emitter.instruction("str x0, [sp, #8]");                                    // update the result pointer after possible reallocation
     emitter.instruction("b __rt_array_replace_loop");                           // continue with the next hash2 entry
     emitter.label("__rt_array_replace_done");
@@ -96,7 +96,7 @@ fn emit_array_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_replace_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // rdi = hash2 pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // rsi = current iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // next hash2 entry: rax=cursor,rdi=kptr,rdx=klen,rcx=vlo,r8=vhi,r9=vtag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // next hash2 entry: rax=cursor,rdi=kptr,rdx=klen,rcx=vlo,r8=vhi,r9=vtag
     emitter.instruction("cmp rax, -1");                                         // has iteration reached the end?
     emitter.instruction("je __rt_array_replace_done");                          // stop once every hash2 entry has been inserted
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the next iterator cursor
@@ -127,7 +127,7 @@ fn emit_array_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload value low word
     emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload value high word
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload value runtime tag
-    emitter.instruction("call __rt_hash_set");                                  // overwrite or append the entry into the result hash
+    emitter.instruction("call __rt_hash_set_value");                            // overwrite or append the entry into the result hash
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // update the result pointer after possible reallocation
     emitter.instruction("jmp __rt_array_replace_loop");                         // continue with the next hash2 entry
     emitter.label("__rt_array_replace_done");

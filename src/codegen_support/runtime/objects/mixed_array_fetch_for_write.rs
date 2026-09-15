@@ -35,6 +35,8 @@
 //!   stack cells are safe receivers.
 //! - A null/sentinel receiver cell is initialized in place before nested writes,
 //!   keeping the autovivified container attached to the original local/slot.
+//! - Write fetches detach existing child zvals and install typed hash entries before
+//!   returning them, so nested mutations do not bypass COW or modify detached read boxes.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -95,7 +97,8 @@ fn emit_mixed_new_empty_array_cell_aarch64(emitter: &mut Emitter) {
 /// Tag 4 builds a fresh hash from the indexed entries (`__rt_array_to_hash`
 /// retains payloads, `__rt_hash_to_mixed` boxes raw scalar entries), installs
 /// it, and releases the replaced indexed payload once. Tag 5 ensures its hash
-/// is unique and republishes that result in the cell before returning its borrow.
+/// is unique, normalizes raw typed entries to Mixed cells, and republishes that
+/// result in the cell before returning its borrow.
 fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cell_promote_to_hash ---");
@@ -139,9 +142,9 @@ fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
         "x9",
         "__rt_mixed_cell_promote_to_hash_invalid",
     );
-    emitter.instruction("bl __rt_hash_ensure_unique");                          // split a shared child hash while consuming the cell's old owner reference
+    emitter.instruction("bl __rt_hash_to_mixed");                               // COW-split and normalize entries while consuming the cell's old owner
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the Mixed cell clobbered by the COW helper call
-    emitter.instruction("str x0, [x9, #8]");                                    // republish the unique-or-original hash into the child cell
+    emitter.instruction("str x0, [x9, #8]");                                    // republish the unique normalized hash into the child cell
     emitter.instruction("b __rt_mixed_cell_promote_to_hash_done");              // return the borrow from the cell's current hash owner
 
     emitter.label("__rt_mixed_cell_promote_to_hash_invalid");
@@ -162,8 +165,8 @@ fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
 /// Write-context lookup: missing indexed elements (beyond length), null gap
 /// slots, and boxed `Mixed(null)` slots are autovivified as empty arrays
 /// whose cells are installed into the parent storage; missing hash keys are
-/// inserted the same way. Existing non-null cells are returned retained
-/// (STORED, so the following set writes through the parent). Non-container
+/// inserted the same way. Existing non-null child zvals are detached and installed
+/// before returning a retained reference to the writable stored cell. Non-container
 /// receivers fall back to quiet `__rt_mixed_array_get` read semantics. Canonical
 /// or legacy container-shaped null receivers are initialized as indexed arrays
 /// in the original cell before lookup, so nested writes remain attached.
@@ -240,8 +243,20 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x0]");                                       // load the stored cell's payload tag
     emitter.instruction("cmp x11, #8");                                         // does the slot hold a boxed Mixed(null)?
     emitter.instruction("b.eq __rt_mixed_array_gfw_replace_null");              // PHP autovivifies null elements: replace the slot cell
-    emitter.instruction("bl __rt_incref");                                      // retain the STORED cell so the caller owns the returned result
-    emitter.instruction("b __rt_mixed_array_gfw_return");                       // existing elements are returned as-is (set decides compatibility)
+    emitter.instruction("str x0, [sp, #40]");                                   // preserve the replaced slot owner after the bounds check
+    emitter.instruction("bl __rt_mixed_clone");                                 // detach the child zval while preserving resource identity
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the unique parent array after cloning
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the selected slot index
+    emitter.instruction("add x13, x10, #24");                                   // address the parent array's boxed slots
+    emitter.instruction("str x0, [x13, x9, lsl #3]");                           // publish the detached child before releasing the old slot owner
+    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the replaced child cell
+    emitter.instruction("bl __rt_decref_mixed");                                // release only the parent slot's old reference
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the parent array after child cleanup
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the selected slot index after cleanup
+    emitter.instruction("add x13, x10, #24");                                   // address the unique parent's boxed slots again
+    emitter.instruction("ldr x0, [x13, x9, lsl #3]");                           // borrow the installed detached child
+    emitter.instruction("bl __rt_incref");                                      // acquire the caller's write-fetch result owner
+    emitter.instruction("b __rt_mixed_array_gfw_return");                       // return the cell now installed in the unique parent
     emitter.label("__rt_mixed_array_gfw_replace_null");
     emitter.instruction("bl __rt_decref_mixed");                                // drop the slot's reference; aliases keep their own null value
     emitter.label("__rt_mixed_array_gfw_fill_slot");
@@ -304,26 +319,30 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
         "x9",
         "__rt_mixed_array_gfw_autovivify_receiver",
     );
-    emitter.instruction("mov x0, x10");                                         // pass the hash pointer to hash_get
+    emitter.instruction("mov x0, x10");                                         // pass the hash pointer to its COW boundary
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // separate the outer hash before replacing a child cell
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the owning receiver cell after COW
+    emitter.instruction("str x0, [x9, #8]");                                    // republish the unique hash before looking up the child
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the normalized key low word
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the normalized key high word
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
     emitter.instruction("cbz x0, __rt_mixed_array_gfw_assoc_create");           // missing keys autovivify a fresh element
     emitter.instruction("cmp x3, #7");                                          // is the entry already a boxed Mixed cell?
-    emitter.instruction("b.ne __rt_mixed_array_gfw_assoc_box");                 // typed entries keep the plain reader's detached-box behavior
+    emitter.instruction("b.ne __rt_mixed_array_gfw_assoc_box");                 // typed entries must be boxed and installed before mutation
     emitter.instruction("cbz x1, __rt_mixed_array_gfw_assoc_create");           // defensive: boxed entries without a cell are treated as missing
     emitter.instruction("ldr x9, [x1]");                                        // load the stored cell's payload tag
     emitter.instruction("cmp x9, #8");                                          // does the entry hold a boxed Mixed(null)?
     emitter.instruction("b.eq __rt_mixed_array_gfw_assoc_create");              // PHP autovivifies null elements: overwrite (hash_set releases it)
-    emitter.instruction("mov x0, x1");                                          // move the stored cell into the retain register
-    emitter.instruction("bl __rt_incref");                                      // retain the STORED cell so the caller owns the returned result
-    emitter.instruction("b __rt_mixed_array_gfw_return");                       // existing elements are returned as-is (set decides compatibility)
+    emitter.instruction("mov x0, x1");                                          // pass the existing boxed child to value cloning
+    emitter.instruction("bl __rt_mixed_clone");                                 // detach the child zval from copies of the outer hash
+    emitter.instruction("b __rt_mixed_array_gfw_assoc_install");                // publish the detached child through the owning parent boundary
     emitter.label("__rt_mixed_array_gfw_assoc_box");
     emitter.instruction("mov x0, x3");                                          // x0 = value_tag for mixed_from_value (x1/x2 hold the payload)
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the typed entry into a detached Mixed cell (read-path parity)
-    emitter.instruction("b __rt_mixed_array_gfw_return");                       // the following set drops writes through detached boxes
+    emitter.instruction("bl __rt_mixed_from_value");                            // acquire the typed entry payload in a writable Mixed cell
+    emitter.instruction("b __rt_mixed_array_gfw_assoc_install");                // install the box so the following write reaches the parent hash
     emitter.label("__rt_mixed_array_gfw_assoc_create");
     emitter.instruction("bl __rt_mixed_new_empty_array_cell");                  // allocate the autovivified empty-array cell
+    emitter.label("__rt_mixed_array_gfw_assoc_install");
     emitter.instruction("str x0, [sp, #32]");                                   // save the fresh child cell across the hash insertion
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the receiver cell
     emitter.instruction("ldr x0, [x9, #8]");                                    // reload the current hash pointer
@@ -461,10 +480,10 @@ fn emit_mixed_cell_promote_to_hash_x86_64(emitter: &mut Emitter) {
         "r10",
         "__rt_mixed_cell_promote_to_hash_invalid",
     );
-    emitter.instruction("mov rdi, rax");                                        // pass the installed child hash to the SysV COW helper
-    emitter.instruction("call __rt_hash_ensure_unique");                        // split a shared child hash while consuming the cell's old owner reference
+    emitter.instruction("mov rdi, rax");                                        // pass the installed child hash to the Mixed-entry conversion helper
+    emitter.instruction("call __rt_hash_to_mixed");                             // COW-split and normalize entries while consuming the cell's old owner
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the Mixed cell clobbered by the COW helper call
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // republish the unique-or-original hash into the child cell
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // republish the unique normalized hash into the child cell
     emitter.instruction("jmp __rt_mixed_cell_promote_to_hash_done");            // return the borrow from the cell's current hash owner
 
     emitter.label("__rt_mixed_cell_promote_to_hash_invalid");
@@ -554,10 +573,20 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rax]");                            // load the stored cell's payload tag
     emitter.instruction("cmp r11, 8");                                          // does the slot hold a boxed Mixed(null)?
     emitter.instruction("je __rt_mixed_array_gfw_replace_null");                // PHP autovivifies null elements: replace the slot cell
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the replaced slot owner after the bounds check
+    emitter.instruction("call __rt_mixed_clone");                               // detach the child zval while preserving resource identity
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the unique parent array after cloning
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the selected slot index
+    emitter.instruction("mov QWORD PTR [r10 + 24 + r9 * 8], rax");              // publish the detached child before releasing the old slot owner
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the replaced child cell
+    emitter.instruction("call __rt_decref_mixed");                              // release only the parent slot's old reference
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the parent array after child cleanup
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the selected slot index after cleanup
+    emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");              // borrow the installed detached child
     abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("call __rt_incref");                                    // retain the STORED cell so the caller owns the returned result
+    emitter.instruction("call __rt_incref");                                    // acquire the caller's write-fetch result owner
     abi::emit_pop_reg(emitter, "rax");
-    emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // existing elements are returned as-is (set decides compatibility)
+    emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // return the cell now installed in the unique parent
     emitter.label("__rt_mixed_array_gfw_replace_null");
     emitter.instruction("call __rt_decref_mixed");                              // drop the slot's reference; aliases keep their own null value
     emitter.label("__rt_mixed_array_gfw_fill_slot");
@@ -618,30 +647,33 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
         "r11",
         "__rt_mixed_array_gfw_autovivify_receiver",
     );
-    emitter.instruction("mov rdi, r10");                                        // pass the hash pointer to hash_get
+    emitter.instruction("mov rdi, r10");                                        // pass the hash pointer to its COW boundary
+    emitter.instruction("call __rt_hash_ensure_unique");                        // separate the outer hash before replacing a child cell
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning receiver cell after COW
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // republish the unique hash before looking up the child
+    emitter.instruction("mov rdi, rax");                                        // pass the unique hash to key lookup
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the normalized key high word
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=value_lo, rsi=value_hi, rcx=value_tag
     emitter.instruction("test rax, rax");                                       // was the key found?
     emitter.instruction("je __rt_mixed_array_gfw_assoc_create");                // missing keys autovivify a fresh element
     emitter.instruction("cmp rcx, 7");                                          // is the entry already a boxed Mixed cell?
-    emitter.instruction("jne __rt_mixed_array_gfw_assoc_box");                  // typed entries keep the plain reader's detached-box behavior
+    emitter.instruction("jne __rt_mixed_array_gfw_assoc_box");                  // typed entries must be boxed and installed before mutation
     emitter.instruction("test rdi, rdi");                                       // defensive: boxed entries without a cell are treated as missing
     emitter.instruction("je __rt_mixed_array_gfw_assoc_create");                // branch to the autovivify path
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the stored cell's payload tag
     emitter.instruction("cmp r11, 8");                                          // does the entry hold a boxed Mixed(null)?
     emitter.instruction("je __rt_mixed_array_gfw_assoc_create");                // PHP autovivifies null elements: overwrite (hash_set releases it)
-    emitter.instruction("mov rax, rdi");                                        // move the stored cell into the retain register
-    abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("call __rt_incref");                                    // retain the STORED cell so the caller owns the returned result
-    abi::emit_pop_reg(emitter, "rax");
-    emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // existing elements are returned as-is (set decides compatibility)
+    emitter.instruction("mov rax, rdi");                                        // pass the existing boxed child to value cloning
+    emitter.instruction("call __rt_mixed_clone");                               // detach the child zval from copies of the outer hash
+    emitter.instruction("jmp __rt_mixed_array_gfw_assoc_install");              // publish the detached child through the owning parent boundary
     emitter.label("__rt_mixed_array_gfw_assoc_box");
     emitter.instruction("mov rax, rcx");                                        // rax = value_tag for mixed_from_value (rdi/rsi hold the payload)
-    emitter.instruction("call __rt_mixed_from_value");                          // box the typed entry into a detached Mixed cell (read-path parity)
-    emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // the following set drops writes through detached boxes
+    emitter.instruction("call __rt_mixed_from_value");                          // acquire the typed entry payload in a writable Mixed cell
+    emitter.instruction("jmp __rt_mixed_array_gfw_assoc_install");              // install the box so the following write reaches the parent hash
     emitter.label("__rt_mixed_array_gfw_assoc_create");
     emitter.instruction("call __rt_mixed_new_empty_array_cell");                // allocate the autovivified empty-array cell
+    emitter.label("__rt_mixed_array_gfw_assoc_install");
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the fresh child cell across the hash insertion
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell
     emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // reload the current hash pointer
@@ -699,4 +731,49 @@ fn emit_array_ensure_elem_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the container pointer for the local storeback
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every target splits parent hashes and installs detached child cells before nested writes.
+    #[test]
+    fn nested_write_fetches_separate_and_publish_cells_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_mixed_array_fetch_for_write(&mut emitter);
+            let asm = emitter.output();
+            let indexed = asm.split("__rt_mixed_array_gfw_indexed:\n").nth(1).unwrap()
+                .split("__rt_mixed_array_gfw_replace_null:\n").next().unwrap();
+            assert!(indexed.contains("__rt_array_to_mixed"), "{name}");
+            assert!(indexed.contains("__rt_mixed_clone"), "{name}");
+            assert!(indexed.contains("__rt_decref_mixed"), "{name}");
+            let hash = asm.split("__rt_mixed_array_gfw_assoc:\n").nth(1).unwrap()
+                .split("__rt_mixed_array_gfw_assoc_box:\n").next().unwrap();
+            assert!(hash.find("__rt_hash_ensure_unique").unwrap() < hash.find("__rt_hash_get").unwrap(), "{name}");
+            assert!(hash.contains("__rt_mixed_clone"), "{name}");
+            assert!(hash.contains("__rt_mixed_array_gfw_assoc_install"), "{name}");
+            let typed = asm.split("__rt_mixed_array_gfw_assoc_box:\n").nth(1).unwrap()
+                .split("__rt_mixed_array_gfw_assoc_create:\n").next().unwrap();
+            assert!(typed.contains("__rt_mixed_from_value"), "{name}");
+            assert!(typed.contains("__rt_mixed_array_gfw_assoc_install"), "{name}");
+            assert!(!typed.contains("__rt_mixed_array_gfw_return"), "{name}");
+            let promote_hash = asm
+                .split("__rt_mixed_cell_promote_to_hash_hash:\n")
+                .nth(1)
+                .unwrap()
+                .split("__rt_mixed_cell_promote_to_hash_invalid:\n")
+                .next()
+                .unwrap();
+            let normalize = promote_hash.find("__rt_hash_to_mixed").unwrap();
+            let republish = if name == "linux-x86_64" {
+                promote_hash.find("mov QWORD PTR [r10 + 8], rax").unwrap()
+            } else {
+                promote_hash.find("str x0, [x9, #8]").unwrap()
+            };
+            assert!(normalize < republish, "{name}: {promote_hash}");
+        }
+    }
 }

@@ -39,6 +39,10 @@ impl DataId {
 /// Method metadata retained for standalone trait reflection.
 #[derive(Debug, Clone)]
 pub struct TraitMethodInfo {
+    /// PHP-visible source spelling retained alongside the case-insensitive map key.
+    pub name: String,
+    /// Position in the trait's declaration, independent of hash-map iteration order.
+    pub declaration_order: usize,
     pub signature: FunctionSig,
     pub visibility: Visibility,
     pub is_static: bool,
@@ -46,11 +50,35 @@ pub struct TraitMethodInfo {
     pub is_abstract: bool,
 }
 
+/// One generated PHP 8.5 `clone()` property-override applicator.
+///
+/// Each entry names the synthetic EIR function that applies an override array to a clone of
+/// exactly one runtime class, resolved from one profile of PHP invocation scopes. Backend clone
+/// lowering dispatches on the clone's runtime class id and the invocation-site scope id and then
+/// calls `function_name` with `(clone, overrides)`.
+#[derive(Debug, Clone)]
+pub struct CloneOverrideApplicator {
+    /// Dense runtime class id of the cloned object this applicator serves.
+    pub class_id: u64,
+    /// PHP class name matching `class_id`, used for receiver typing in backend call staging.
+    pub class_name: String,
+    /// Dense class ids of the invocation scopes this applicator body is exact for.
+    ///
+    /// Several scopes share one body whenever they resolve every override name identically.
+    pub scope_class_ids: Vec<u64>,
+    /// Whether this body also serves global scope and every scope unrelated to `class_name`.
+    pub is_default_scope: bool,
+    /// EIR function name of the applicator body.
+    pub function_name: String,
+}
+
 /// Complete EIR module for one compile target.
 #[derive(Debug, Clone)]
 pub struct Module {
     pub target: Target,
     pub source_path: Option<String>,
+    /// Canonical PHP source paths compiled into this binary, in include order.
+    pub included_files: Vec<String>,
     /// `--probe` build key, embedded as `_elephc_probe_key` so the probe endpoint
     /// can prove the binary's identity through the HMAC handshake. `None` unless
     /// `--probe` is set.
@@ -77,6 +105,7 @@ pub struct Module {
     pub declared_trait_method_names: HashMap<String, Vec<String>>,
     pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
     pub declared_trait_property_names: HashMap<String, Vec<String>>,
+    pub declared_trait_properties: HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     pub declared_trait_constant_names: HashMap<String, Vec<String>>,
     pub declared_trait_constants: HashMap<String, HashMap<String, crate::parser::ast::Expr>>,
     pub declared_trait_constant_types:
@@ -85,6 +114,8 @@ pub struct Module {
     pub declared_trait_final_constants: HashMap<String, HashSet<String>>,
     /// Prescanned global constant values used by EIR lowering and eval metadata registration.
     pub global_constants: HashMap<String, (ExprKind, PhpType)>,
+    /// User-declared global constant names, separated from the seeded builtin inventory.
+    pub user_defined_constants: Vec<String>,
     pub class_infos: HashMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
     pub enum_infos: HashMap<String, EnumInfo>,
@@ -101,6 +132,8 @@ pub struct Module {
     /// those names, so a non-web read/write must not assume a live Hash
     /// pointer is already there.
     pub web: bool,
+    /// Generated `clone()` property-override applicators, sorted by class id then scope id.
+    pub clone_override_applicators: Vec<CloneOverrideApplicator>,
 }
 
 impl Module {
@@ -109,6 +142,7 @@ impl Module {
         Self {
             target,
             source_path: None,
+            included_files: Vec::new(),
             probe_key: None,
             functions: Vec::new(),
             class_methods: Vec::new(),
@@ -132,12 +166,14 @@ impl Module {
             declared_trait_method_names: HashMap::new(),
             declared_trait_methods: HashMap::new(),
             declared_trait_property_names: HashMap::new(),
+            declared_trait_properties: HashMap::new(),
             declared_trait_constant_names: HashMap::new(),
             declared_trait_constants: HashMap::new(),
             declared_trait_constant_types: HashMap::new(),
             declared_trait_constant_visibilities: HashMap::new(),
             declared_trait_final_constants: HashMap::new(),
             global_constants: HashMap::new(),
+            user_defined_constants: Vec::new(),
             class_infos: HashMap::new(),
             interface_infos: HashMap::new(),
             enum_infos: HashMap::new(),
@@ -147,6 +183,7 @@ impl Module {
             extern_globals: HashMap::new(),
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
+            clone_override_applicators: Vec::new(),
         }
     }
 

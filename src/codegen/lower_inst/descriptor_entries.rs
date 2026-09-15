@@ -17,7 +17,6 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper(
     sig: &FunctionSig,
     dynamic_slot: Option<usize>,
 ) -> Result<String> {
-    let visible_arg_types = descriptor_visible_arg_types(sig);
     let wrapper_label = ctx.next_label("static_late_bound_descriptor_entry");
     let done_label = ctx.next_label("static_late_bound_descriptor_entry_done");
     abi::emit_jump(ctx.emitter, &done_label);
@@ -26,7 +25,7 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper(
         ctx,
         impl_class,
         method_key,
-        &visible_arg_types,
+        sig,
         dynamic_slot,
     );
     ctx.emitter.label(&done_label);
@@ -221,12 +220,13 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper_body(
     ctx: &mut FunctionContext<'_>,
     impl_class: &str,
     method_key: &str,
-    visible_arg_types: &[PhpType],
+    sig: &FunctionSig,
     dynamic_slot: Option<usize>,
 ) {
+    let visible_arg_types = descriptor_visible_arg_types(sig);
     let called_class_ty = PhpType::Int;
-    let incoming_types = descriptor_entry_incoming_types(visible_arg_types, &called_class_ty);
-    let actual_types = descriptor_entry_actual_types(visible_arg_types, &called_class_ty);
+    let incoming_types = descriptor_entry_incoming_types(&visible_arg_types, &called_class_ty);
+    let actual_types = descriptor_entry_actual_types(&visible_arg_types, &called_class_ty);
     let incoming_assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &incoming_types, 0);
     let actual_assignments =
@@ -279,8 +279,59 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper_body(
     if actual_overflow_bytes > 0 {
         abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
     }
+    if sig.return_type.codegen_repr() == PhpType::Str && !sig.by_ref_return {
+        emit_late_static_owned_string_result(
+            ctx, impl_class, method_key, dynamic_slot,
+            descriptor_entry_slot_offset(visible_arg_types.len()),
+        );
+    }
     abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
+}
+
+/// Gives every selected static implementation one owned result without copying an owned string.
+/// Dynamic overrides select their own ownership proof using the saved called-class id.
+fn emit_late_static_owned_string_result(
+    ctx: &mut FunctionContext<'_>,
+    impl_class: &str,
+    method_key: &str,
+    dynamic_slot: Option<usize>,
+    called_class_offset: usize,
+) {
+    use crate::codegen::runtime_callable_invoker::method_returns_owned_string;
+    if dynamic_slot.is_none() {
+        if !method_returns_owned_string(ctx.module, impl_class, method_key, true) {
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+        }
+        return;
+    }
+    let mut owned_classes: Vec<_> = ctx.module.class_infos.iter().filter_map(|(name, info)| {
+        let implementation = info.static_method_impl_classes.get(method_key)
+            .map(String::as_str).unwrap_or(name.as_str());
+        method_returns_owned_string(ctx.module, implementation, method_key, true)
+            .then_some(info.class_id)
+    }).collect();
+    owned_classes.sort_unstable();
+    owned_classes.dedup();
+    ctx.emitter.comment("normalize late-bound static descriptor string ownership");
+    let owned = ctx.next_label("static_descriptor_string_owned");
+    let class_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let expected_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, class_reg, called_class_offset);
+    for class_id in owned_classes {
+        abi::emit_load_int_immediate(ctx.emitter, expected_reg, class_id as i64);
+        ctx.emitter.instruction(&format!("cmp {class_reg}, {expected_reg}"));   // compare the saved called class without overwriting the string pair
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("b.eq {owned}"));              // keep the selected implementation's existing owned string
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("je {owned}"));                // keep the selected implementation's existing owned string
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    ctx.emitter.label(&owned);
 }
 
 /// Loads the concrete called-class id into a descriptor wrapper's outgoing ABI slot.
@@ -360,4 +411,3 @@ pub(super) fn descriptor_entry_stack_offsets(
     }
     (offsets, next_offset)
 }
-

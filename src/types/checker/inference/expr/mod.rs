@@ -9,7 +9,6 @@
 //! - Inference must preserve PHP evaluation errors and avoid treating effectful expressions as pure type facts.
 
 use crate::errors::CompileError;
-use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
@@ -110,22 +109,17 @@ impl Checker {
             .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
     }
 
-    /// Returns the element type of an array literal that contains at least one
-    /// spread of an associative array.
-    ///
-    /// Iterates over `elems`, extracting the value type from each `Spread` that
-    /// wraps an `AssocArray`. All spread value types must agree, otherwise
-    /// `Mixed` is returned. Non-spread elements are ignored.
+    /// Merges ordinary elements and spread values for a literal that may carry string keys.
     fn assoc_spread_literal_value_type(&mut self, elems: &[Expr], env: &TypeEnv) -> PhpType {
         let mut value_ty = PhpType::Never;
         for elem in elems {
-            let ExprKind::Spread(inner) = &elem.kind else {
-                continue;
-            };
-            let next = match self.infer_type(inner, env) {
-                Ok(PhpType::Array(elem)) => *elem,
-                Ok(PhpType::AssocArray { value, .. }) => *value,
-                _ => PhpType::Mixed,
+            let next = match &elem.kind {
+                ExprKind::Spread(inner) => match self.infer_type(inner, env) {
+                    Ok(PhpType::Array(elem)) => *elem,
+                    Ok(PhpType::AssocArray { value, .. }) => *value,
+                    _ => PhpType::Mixed,
+                },
+                _ => self.infer_type(elem, env).unwrap_or(PhpType::Mixed),
             };
             if matches!(value_ty, PhpType::Never) {
                 value_ty = next;
@@ -138,6 +132,24 @@ impl Checker {
         } else {
             value_ty
         }
+    }
+
+    /// Returns the `(key, value)` types one associative-literal spread entry contributes.
+    ///
+    /// The spread merges its SOURCE's own entries into the literal, so an indexed source
+    /// contributes integer keys and a hash source contributes the source's key type. The source is
+    /// inferred exactly once here so its narrowing and diagnostics still happen; a source this
+    /// checker cannot name keeps both slots `Mixed`.
+    fn assoc_spread_entry_types(
+        &mut self,
+        inner: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(PhpType, PhpType), CompileError> {
+        Ok(match self.infer_type(inner, env)?.codegen_repr() {
+            PhpType::Array(elem) => (PhpType::Int, elem.codegen_repr()),
+            PhpType::AssocArray { key, value } => (key.codegen_repr(), value.codegen_repr()),
+            _ => (PhpType::Mixed, PhpType::Mixed),
+        })
     }
 
     /// Returns the return type of the `offsetGet` method for `class_name`,
@@ -174,39 +186,6 @@ impl Checker {
             return Ok(PhpType::Never);
         }
         Ok(ty)
-    }
-}
-
-impl Checker {
-    /// Checks whether the current scope may invoke a class's `__clone` hook.
-    ///
-    /// PHP permits `__clone` to be non-public, but the actual `clone $object`
-    /// expression must obey the hook's visibility when a hook exists.
-    fn check_clone_visibility(&self, class_name: &str, span: Span) -> Result<(), CompileError> {
-        let normalized = class_name.trim_start_matches('\\');
-        let Some(class_info) = self.classes.get(normalized) else {
-            return Ok(());
-        };
-        let key = php_symbol_key("__clone");
-        let Some(visibility) = class_info.method_visibilities.get(&key) else {
-            return Ok(());
-        };
-        let declaring_class = class_info
-            .method_declaring_classes
-            .get(&key)
-            .map(String::as_str)
-            .unwrap_or(normalized);
-        if self.can_access_member(declaring_class, visibility) {
-            return Ok(());
-        }
-        Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot access {} method: {}::__clone",
-                Self::visibility_label(visibility),
-                normalized
-            ),
-        ))
     }
 }
 

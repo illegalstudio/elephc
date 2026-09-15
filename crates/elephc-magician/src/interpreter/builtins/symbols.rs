@@ -18,6 +18,7 @@ mod class_get_attributes;
 mod class_implements;
 mod class_parents;
 mod class_uses;
+mod clone;
 mod dispatch;
 mod empty;
 mod enum_exists;

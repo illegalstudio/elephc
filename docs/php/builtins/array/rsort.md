@@ -1,6 +1,6 @@
 ---
 title: "rsort()"
-description: "Sorts an array in descending order. In compiled (AOT) code, indexed arrays with runtime-typed (`mixed`) elements are accepted when every element is `null`, `bool`, `int`, `float`, or `string`. A non-scalar element (nested array, object, resource, or boxed callable) terminates execution before sorting with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported`. This deliberate restriction does not implement full PHP container ordering."
+description: "Sorts an array in descending order. In compiled (AOT) code, arrays with runtime-typed (`mixed`) elements, including declared PHP array parameters, are accepted when every element is `null`, `bool`, `int`, `float`, or `string`. Keys are reindexed and value copies keep their original order. A non-scalar element (nested array, object, resource, or boxed callable) terminates execution before sorting with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported`. This deliberate restriction does not implement full PHP container ordering."
 sidebar:
   order: 65
 ---
@@ -11,7 +11,7 @@ sidebar:
 function rsort(array $array): bool
 ```
 
-Sorts an array in descending order. In compiled (AOT) code, indexed arrays with runtime-typed (`mixed`) elements are accepted when every element is `null`, `bool`, `int`, `float`, or `string`. A non-scalar element (nested array, object, resource, or boxed callable) terminates execution before sorting with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported`. This deliberate restriction does not implement full PHP container ordering.
+Sorts an array in descending order. In compiled (AOT) code, arrays with runtime-typed (`mixed`) elements, including declared PHP array parameters, are accepted when every element is `null`, `bool`, `int`, `float`, or `string`. Keys are reindexed and value copies keep their original order. A non-scalar element (nested array, object, resource, or boxed callable) terminates execution before sorting with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported`. This deliberate restriction does not implement full PHP container ordering.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
@@ -21,9 +21,9 @@ Sorts an array in descending order. In compiled (AOT) code, indexed arrays with 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/rsort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/rsort.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/rsort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/rsort.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 
