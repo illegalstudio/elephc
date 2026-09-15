@@ -148,6 +148,42 @@ register conventions must match `__rt_mixed_from_value`. Owned boxing paths
 transfer or release references so payloads are never double-freed. `Union(...)`
 and `Iterable` values reuse the same boxed representation.
 
+### Staging a builtin's integer arguments
+
+A builtin whose integer argument may arrive BOXED cannot load its arguments in
+ABI order. Unboxing calls `__rt_mixed_cast_int`, which clobbers every
+caller-saved argument register, so any argument already loaded would be
+destroyed by the unboxing of a later one.
+
+The rule is: resolve every boxed integer argument FIRST, park each on the stack,
+load the remaining arguments into their ABI registers, then pop the parked ones
+back — in reverse staging order, since the stack is LIFO. An argument that is not
+boxed is loaded in place, which keeps the common path identical to a builtin that
+never needed staging at all.
+
+`array_fill()` is the worked example
+(`src/codegen/lower_inst/builtins/arrays/fill_helpers.rs`): `$start` and `$count`
+both go through `stage_boxed_fill_integer` / `settle_fill_integer`, and the
+string fill helper's `(count, ptr, len)` ABI — which puts the count in the FIRST
+argument register rather than the second — is settled the same way.
+
+Which representations need staging:
+
+- `Int` / `Bool` — no. One register, loaded directly.
+- `TaggedScalar` — no. The payload lives in the value's own slot and the null tag
+  in the adjacent one, so loading the slot into an ABI register already yields the
+  integer. A `?int` that is genuinely `null` still reaches the builtin as its
+  sentinel payload rather than PHP's "passing null is deprecated, treated as 0",
+  which is a gap in the tagged-null surface and not in the staging.
+- `Mixed` / `Union` — yes. `resolve_int_operand_to_result` unboxes them through
+  `__rt_mixed_cast_int`, which is the call that forces the ordering.
+
+A local whose value came from checked integer arithmetic is `Mixed`, because the
+product or sum may overflow to float: `$n = $this->w * $this->h` is boxed while a
+literal, a parameter, or the same expression folded at compile time is not. That
+asymmetry is why a missing stage looks like a defect that only happens inside a
+method (issue #502).
+
 ### Callable descriptors and invokers
 
 `PhpType::Callable` stays one pointer wide, but the pointer targets a
