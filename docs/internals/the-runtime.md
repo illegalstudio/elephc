@@ -61,6 +61,39 @@ __rt_throw_current throw the active exception
 __rt_build_argv    build $argv from C strings
 ```
 
+## Extending a routine's ABI without touching its callers
+
+A routine that gains an argument keeps its original label and original ABI, and
+gains a SIBLING that takes the new one. The original sets the defaults and
+branches to it, so the two share one body rather than two that have to be kept
+in step:
+
+```
+__rt_file_put_contents          flags = 0      → __rt_file_put_contents_flagged
+__rt_file_put_contents_maybe_phar              → …_maybe_phar_flagged
+__rt_mkdir                      0777, false    → __rt_mkdir_ex
+```
+
+The reason is that runtime routines have callers inside the runtime, not only
+from lowering. `__rt_file_put_contents` has six: the phar writers and `copy()`,
+two of them TAIL calls. Widening its ABI in place would mean auditing every one
+for a register it has never set, and a tail call that forwards a stale register
+fails silently rather than loudly.
+
+The pairs are what let `file_put_contents()` take PHP's `$flags` and `mkdir()`
+take `$permissions` / `$recursive` while every existing call site emits exactly
+the instructions it did before (issue #506).
+
+Two consequences worth knowing when adding one:
+
+- The entry point must BRANCH to the sibling rather than fall through to it. On
+  macOS the dead-strip pass treats each global label as its own atom, so two
+  globals in one block can be separated by the linker.
+- The sibling's extra argument register must miss everything the body already
+  uses, including registers a nested helper clobbers. `__rt_file_put_contents`
+  takes its flags in `x5` / `r8`, and the phar gate's `r8` is why the flag is
+  read there before the bridge arguments are arranged.
+
 ## Diagnostic routines
 
 **Source:** `src/codegen_support/runtime/diagnostics.rs`
