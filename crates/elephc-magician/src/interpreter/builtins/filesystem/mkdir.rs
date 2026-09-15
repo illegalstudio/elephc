@@ -7,8 +7,13 @@
 //! Key details:
 //! - The one-argument form keeps delegating to the unary path operation helper; the optional
 //!   `$permissions` and `$recursive` take their own path, mirroring the AOT runtime (issue #506).
-//! - `$permissions` is applied after creation rather than through `create_dir`, which has no
-//!   mode argument in `std`.
+//! - `$permissions` goes through `DirBuilderExt::mode`, which hands the mode to `mkdir(2)` so
+//!   the process umask applies exactly as it does in PHP and in the compiled runtime. Setting
+//!   the mode after creation instead would bypass the umask and leave a window at the wider
+//!   permissions.
+//! - Recursive creation builds the PARENTS recursively and the final component on its own, so
+//!   an existing target still reports `false`. `create_dir_all` alone succeeds on an existing
+//!   directory, which is neither PHP's answer nor the compiled runtime's.
 
 eval_builtin! {
     contract: "mkdir",
@@ -18,6 +23,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use super::user_wrapper_path_ops::{eval_user_wrapper_mkdir_result, DEFAULT_MKDIR_PERMISSIONS};
 use crate::stream_wrappers;
 
 /// Dispatches direct eval calls for the `mkdir` filesystem builtin through the area dispatcher.
@@ -81,34 +87,40 @@ fn eval_mkdir_with_options(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(path, values)?;
-    if let Some(result) = eval_user_wrapper_single_path_op_result("mkdir", &path, context, values)? {
+    if let Some(result) = eval_user_wrapper_mkdir_result(&path, mode, recursive, context, values)? {
         return Ok(result);
     }
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);
     };
-    let created = if recursive {
-        std::fs::create_dir_all(&path)
-    } else {
-        std::fs::create_dir(&path)
-    };
-    if created.is_err() {
-        return values.bool_value(false);
+    // Only the FINAL component decides the result, which is why it is always created on its
+    // own: `create_dir_all` succeeds on a directory that already exists, and PHP reports
+    // `false` for that.
+    if recursive {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                let mut parents = std::fs::DirBuilder::new();
+                parents.recursive(true);
+                apply_directory_mode(&mut parents, mode);
+                if parents.create(parent).is_err() {
+                    return values.bool_value(false);
+                }
+            }
+        }
     }
-    apply_directory_mode(&path, mode);
-    values.bool_value(true)
+    let mut builder = std::fs::DirBuilder::new();
+    apply_directory_mode(&mut builder, mode);
+    values.bool_value(builder.create(&path).is_ok())
 }
 
-/// Applies PHP's `$permissions` to a directory that was just created.
+/// Hands PHP's `$permissions` to `mkdir(2)` so the process umask applies, as it does in PHP.
 #[cfg(unix)]
-fn apply_directory_mode(path: &str, mode: i64) {
-    use std::os::unix::fs::PermissionsExt;
-    let Ok(mode) = u32::try_from(mode) else {
-        return;
-    };
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777));
+fn apply_directory_mode(builder: &mut std::fs::DirBuilder, mode: i64) {
+    use std::os::unix::fs::DirBuilderExt;
+    let mode = u32::try_from(mode).unwrap_or(DEFAULT_MKDIR_PERMISSIONS as u32);
+    builder.mode(mode & 0o7777);
 }
 
 /// Non-Unix targets have no POSIX mode to apply.
 #[cfg(not(unix))]
-fn apply_directory_mode(_path: &str, _mode: i64) {}
+fn apply_directory_mode(_builder: &mut std::fs::DirBuilder, _mode: i64) {}

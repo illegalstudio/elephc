@@ -339,7 +339,12 @@ printf("%o\n", fileperms("root/x/y/z") & 0777);
 ///
 /// The two spellings reach different runtime helpers, so both are exercised: a LITERAL path
 /// is known at compile time and skips the phar gate, while a path in a variable goes through
-/// the dynamic `maybe_phar` entry point. `LOCK_EX` alone must still truncate.
+/// the dynamic `maybe_phar` entry point.
+///
+/// The last pair is the one that pins the LOCK_EX ordering. That combination opens WITHOUT
+/// `O_TRUNC` — php-src's `'c'` mode, so a waiting writer cannot have its contents destroyed
+/// before it holds the lock — and truncates once locked. Writing a short line over a longer
+/// one is what catches a missing truncate: the file would keep the tail.
 #[test]
 fn test_file_put_contents_flags() {
     let (out, dir) = compile_and_run_in_dir(
@@ -357,11 +362,14 @@ echo file_get_contents($f);
 file_put_contents("literal.txt", "x\n");
 file_put_contents("literal.txt", "y\n", FILE_APPEND);
 echo file_get_contents("literal.txt");
+file_put_contents($f, "a much longer previous line\n");
+file_put_contents($f, "short\n", LOCK_EX);
+echo file_get_contents($f);
 "#,
     );
     assert_eq!(
         out,
-        "int(2)\nint(2)\nb\nint(4)\nint(4)\nint(6)\none\ntwo\nthree\nint(5)\nlast\nx\ny\n"
+        "int(2)\nint(2)\nb\nint(4)\nint(4)\nint(6)\none\ntwo\nthree\nint(5)\nlast\nx\ny\nshort\n"
     );
     let _ = fs::remove_dir_all(&dir);
 }

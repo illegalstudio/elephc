@@ -473,10 +473,13 @@ pub(super) fn lower_single_path_wrapper_op(
 /// Lowers `mkdir(directory, permissions = 0777, recursive = false)`.
 ///
 /// Both optional arguments reach the runtime, and both reach a registered stream wrapper
-/// through the two argument slots its `mkdir` vtable entry already takes: the mode, and
-/// PHP's `STREAM_MKDIR_RECURSIVE` (1) in the options word. Before this they were hard-coded
-/// to zero and the native helper hard-coded mode 0755, so neither PHP argument existed
-/// (issue #506).
+/// through the two argument slots its `mkdir` vtable entry already takes: the mode, and an
+/// options word carrying PHP's `STREAM_REPORT_ERRORS` (8) plus `STREAM_MKDIR_RECURSIVE` (1)
+/// when requested. Before this they were hard-coded to zero and the native helper hard-coded
+/// mode 0755, so neither PHP argument existed (issue #506).
+///
+/// Measured on PHP 8.5.10 with a userland wrapper: `mkdir("w://d")` calls
+/// `mkdir($path, 511, 8)`, and `mkdir("w://d", 0700, true)` calls `mkdir($path, 448, 9)`.
 pub(super) fn lower_mkdir_wrapper_op(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -552,6 +555,7 @@ fn emit_mkdir_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
                 .instruction(&format!("mov x2, #{}", STREAM_WRAPPER_MKDIR_SLOT)); // pass the wrapper vtable slot
             ctx.emitter.instruction("cmp x4, #0");                              // was recursive creation requested?
             ctx.emitter.instruction("cset x4, ne");                             // STREAM_MKDIR_RECURSIVE is 1
+            ctx.emitter.instruction("orr x4, x4, #8");                          // STREAM_REPORT_ERRORS, which mkdir() always sets
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.label(&after);
             ctx.emitter.instruction("add sp, sp, #32");                         // release the wrapper probe scratch
@@ -581,6 +585,7 @@ fn emit_mkdir_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("test r8, r8");                             // was recursive creation requested?
             ctx.emitter.instruction("setne r8b");                               // STREAM_MKDIR_RECURSIVE is 1
             ctx.emitter.instruction("movzx r8, r8b");                           // widen the flag into the full argument register
+            ctx.emitter.instruction("or r8, 8");                                // STREAM_REPORT_ERRORS, which mkdir() always sets
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.label(&after);
             ctx.emitter.instruction("add rsp, 32");                             // release the wrapper probe scratch

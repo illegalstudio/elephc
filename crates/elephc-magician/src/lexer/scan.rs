@@ -353,30 +353,107 @@ impl<'a> Lexer<'a> {
         ident
     }
 
-    /// Reads an integer or float literal.
+    /// Reads an integer or float literal, in every base PHP writes one in.
+    ///
+    /// This used to read decimal digits only, which made `0700` the integer SEVEN HUNDRED
+    /// instead of 448, and made `0x1F`, `0b101`, `0o17` and `1_000` reject the whole fragment
+    /// as invalid. Both are reachable from a plain `eval('return mkdir($p, 0700, true);')`.
+    ///
+    /// The grammar mirrors the compiler's own `lexer::literals::numbers::scan_number`, which
+    /// is the authority: `0x`/`0X` hex, `0b`/`0B` binary, `0o`/`0O` octal, legacy leading-zero
+    /// octal, `_` separators anywhere between digits, and decimal with an optional fraction
+    /// and exponent. A literal too large for `i64` becomes a float, as it does in PHP.
     fn lex_number(&mut self) -> Result<TokenKind, EvalParseError> {
-        let start = self.pos;
-        while matches!(self.peek_char(), Some('0'..='9')) {
-            self.bump_char();
-        }
-        let mut is_float = false;
-        if self.peek_char() == Some('.') && matches!(self.peek_next_char(), Some('0'..='9')) {
-            is_float = true;
-            self.bump_char();
-            while matches!(self.peek_char(), Some('0'..='9')) {
-                self.bump_char();
+        if self.peek_char() == Some('0') {
+            if let Some(prefix) = self.peek_next_char() {
+                match prefix {
+                    'x' | 'X' => return self.lex_radix_number(16, |c| c.is_ascii_hexdigit()),
+                    'o' | 'O' => {
+                        return self.lex_radix_number(8, |c| c.is_ascii_digit() && c < '8')
+                    }
+                    'b' | 'B' => return self.lex_radix_number(2, |c| c == '0' || c == '1'),
+                    _ => {}
+                }
             }
         }
-        let raw = &self.source[start..self.pos];
-        if is_float {
-            raw.parse::<f64>()
-                .map(TokenKind::Float)
-                .map_err(|_| EvalParseError::InvalidNumber)
-        } else {
-            raw.parse::<i64>()
-                .map(TokenKind::Int)
-                .map_err(|_| EvalParseError::InvalidNumber)
+
+        let mut digits = self.lex_digits(|c| c.is_ascii_digit());
+        if digits.is_empty() {
+            return Err(EvalParseError::InvalidNumber);
         }
+
+        let has_fraction =
+            self.peek_char() == Some('.') && matches!(self.peek_next_char(), Some('0'..='9'));
+        let has_exponent = matches!(self.peek_char(), Some('e') | Some('E'));
+        if has_fraction || has_exponent {
+            if has_fraction {
+                digits.push('.');
+                self.bump_char();
+                digits.push_str(&self.lex_digits(|c| c.is_ascii_digit()));
+            }
+            if matches!(self.peek_char(), Some('e') | Some('E')) {
+                digits.push('e');
+                self.bump_char();
+                if let Some(sign @ ('+' | '-')) = self.peek_char() {
+                    digits.push(sign);
+                    self.bump_char();
+                }
+                digits.push_str(&self.lex_digits(|c| c.is_ascii_digit()));
+            }
+            return digits
+                .parse::<f64>()
+                .map(TokenKind::Float)
+                .map_err(|_| EvalParseError::InvalidNumber);
+        }
+
+        // A leading zero followed by more digits is PHP's legacy octal spelling.
+        if digits.len() > 1 && digits.starts_with('0') {
+            return Ok(eval_radix_int_or_float(&digits[1..], 8));
+        }
+        Ok(match digits.parse::<i64>() {
+            Ok(value) => TokenKind::Int(value),
+            // PHP promotes an integer literal past `PHP_INT_MAX` to a float rather than
+            // rejecting it.
+            Err(_) => TokenKind::Float(digits.parse::<f64>().map_err(|_| {
+                EvalParseError::InvalidNumber
+            })?),
+        })
+    }
+
+    /// Reads the digits of a `0x` / `0o` / `0b` literal, prefix included.
+    fn lex_radix_number(
+        &mut self,
+        radix: u32,
+        is_digit: impl Fn(char) -> bool,
+    ) -> Result<TokenKind, EvalParseError> {
+        self.bump_char();
+        self.bump_char();
+        let digits = self.lex_digits(is_digit);
+        if digits.is_empty() {
+            return Err(EvalParseError::InvalidNumber);
+        }
+        Ok(eval_radix_int_or_float(&digits, radix))
+    }
+
+    /// Reads a run of digits accepted by `is_digit`, dropping PHP's `_` separators.
+    fn lex_digits(&mut self, is_digit: impl Fn(char) -> bool) -> String {
+        let mut digits = String::new();
+        while let Some(ch) = self.peek_char() {
+            if ch == '_' {
+                // A separator is only legal BETWEEN digits, which is what this checks.
+                if digits.is_empty() || !self.peek_next_char().is_some_and(&is_digit) {
+                    break;
+                }
+                self.bump_char();
+                continue;
+            }
+            if !is_digit(ch) {
+                break;
+            }
+            digits.push(ch);
+            self.bump_char();
+        }
+        digits
     }
 
     /// Reads a single-quoted string literal, which never interpolates.
@@ -517,4 +594,23 @@ fn magic_const_token(name: &str, line: i64) -> Option<TokenKind> {
 /// Compares a source identifier to a PHP keyword using ASCII case-insensitive rules.
 fn ident_eq(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected)
+}
+
+/// Converts radix digits to an integer, or to a float when they overflow `i64`.
+///
+/// PHP promotes an over-large literal in any base to a float rather than rejecting it, so the
+/// accumulation mirrors the compiler's `radix_digits_to_float`.
+fn eval_radix_int_or_float(digits: &str, radix: u32) -> TokenKind {
+    if let Ok(value) = i64::from_str_radix(digits, radix) {
+        return TokenKind::Int(value);
+    }
+    let radix_float = f64::from(radix);
+    let mut value = 0.0_f64;
+    for ch in digits.chars() {
+        let digit = ch
+            .to_digit(radix)
+            .expect("scanner only passes digits valid for this radix");
+        value = value * radix_float + f64::from(digit);
+    }
+    TokenKind::Float(value)
 }

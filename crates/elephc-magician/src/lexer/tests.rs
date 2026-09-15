@@ -436,3 +436,57 @@ fn nested_literal_inside_braces_is_captured_verbatim() {
         ]
     );
 }
+
+/// Pins every base PHP writes an integer literal in.
+///
+/// The eval lexer used to read decimal digits only. `0700` therefore tokenized as the integer
+/// SEVEN HUNDRED rather than 448, and `0x1F` / `0b101` / `0o17` / `1_000` made the whole
+/// fragment invalid. A plain `eval('return mkdir($p, 0700, true);')` reached both: the mode
+/// arrived as 700, which `mkdir(2)` then masked into the nonsense permissions `0254`.
+///
+/// Every expectation is the host PHP 8.5.10 value for the same literal.
+#[test]
+fn integer_literals_are_read_in_every_php_base() {
+    assert_eq!(kinds("0700"), vec![TokenKind::Int(448), TokenKind::Eof]);
+    assert_eq!(kinds("0o17"), vec![TokenKind::Int(15), TokenKind::Eof]);
+    assert_eq!(kinds("0O17"), vec![TokenKind::Int(15), TokenKind::Eof]);
+    assert_eq!(kinds("0x1F"), vec![TokenKind::Int(31), TokenKind::Eof]);
+    assert_eq!(kinds("0X1f"), vec![TokenKind::Int(31), TokenKind::Eof]);
+    assert_eq!(kinds("0b101"), vec![TokenKind::Int(5), TokenKind::Eof]);
+    assert_eq!(kinds("0B101"), vec![TokenKind::Int(5), TokenKind::Eof]);
+    assert_eq!(kinds("42"), vec![TokenKind::Int(42), TokenKind::Eof]);
+    assert_eq!(kinds("0"), vec![TokenKind::Int(0), TokenKind::Eof]);
+}
+
+/// Pins PHP's `_` numeric separators, which are legal only BETWEEN digits.
+#[test]
+fn numeric_separators_are_dropped_between_digits() {
+    assert_eq!(kinds("1_000"), vec![TokenKind::Int(1000), TokenKind::Eof]);
+    assert_eq!(kinds("0xFF_FF"), vec![TokenKind::Int(65535), TokenKind::Eof]);
+    assert_eq!(kinds("0b1010_1010"), vec![TokenKind::Int(170), TokenKind::Eof]);
+    assert_eq!(kinds("1_000.5"), vec![TokenKind::Float(1000.5), TokenKind::Eof]);
+}
+
+/// Pins the float spellings, including the exponent the decimal-only scanner never read.
+#[test]
+fn float_literals_keep_their_fraction_and_exponent() {
+    assert_eq!(kinds("1.5"), vec![TokenKind::Float(1.5), TokenKind::Eof]);
+    assert_eq!(kinds("1e3"), vec![TokenKind::Float(1000.0), TokenKind::Eof]);
+    assert_eq!(kinds("1E3"), vec![TokenKind::Float(1000.0), TokenKind::Eof]);
+    assert_eq!(kinds("1.5e-2"), vec![TokenKind::Float(0.015), TokenKind::Eof]);
+    assert_eq!(kinds("2e+2"), vec![TokenKind::Float(200.0), TokenKind::Eof]);
+}
+
+/// An integer literal past `PHP_INT_MAX` becomes a float in PHP rather than an error, in
+/// every base.
+#[test]
+fn oversized_integer_literals_become_floats() {
+    assert_eq!(
+        kinds("9223372036854775808"),
+        vec![TokenKind::Float(9223372036854775808.0), TokenKind::Eof]
+    );
+    assert_eq!(
+        kinds("0xFFFFFFFFFFFFFFFFF"),
+        vec![TokenKind::Float(295147905179352825855.0), TokenKind::Eof]
+    );
+}

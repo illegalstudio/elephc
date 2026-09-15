@@ -8029,3 +8029,41 @@ fclose($f);
     );
     assert_eq!(out, "[abc][def]");
 }
+
+/// Issue #506, raised in review: a stream wrapper's `mkdir()` receives PHP's real `$mode` and
+/// `$options`, not two zeros.
+///
+/// Both trailing arguments used to be hard-coded, so a wrapper could see neither the
+/// requested permissions nor that recursive creation was asked for. Measured against a
+/// userland wrapper on the host PHP 8.5.10:
+///
+/// ```text
+/// mkdir("w://d")                mkdir($path, 511, 8)
+/// mkdir("w://d", 0700)          mkdir($path, 448, 8)
+/// mkdir("w://d", 0700, true)    mkdir($path, 448, 9)
+/// ```
+///
+/// The options word is `STREAM_REPORT_ERRORS` (8), which `mkdir()` always sets, plus
+/// `STREAM_MKDIR_RECURSIVE` (1) when requested — the `8`, not a `0`, is the part that a
+/// hard-coded zero got wrong even for a one-argument call.
+#[test]
+fn test_user_wrapper_mkdir_receives_mode_and_options() {
+    let out = compile_and_run(
+        r#"<?php
+class PathOp {
+    public function mkdir(string $path, int $mode, int $options): bool {
+        echo "M(", $path, ",", $mode, ",", $options, ")";
+        return true;
+    }
+}
+stream_wrapper_register("pathop", "PathOp");
+mkdir("pathop://dir");
+mkdir("pathop://dir", 0700);
+mkdir("pathop://dir", 0700, true);
+"#,
+    );
+    assert_eq!(
+        out,
+        "M(pathop://dir,511,8)M(pathop://dir,448,8)M(pathop://dir,448,9)"
+    );
+}
