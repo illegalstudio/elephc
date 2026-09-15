@@ -490,3 +490,20 @@ fn oversized_integer_literals_become_floats() {
         vec![TokenKind::Float(295147905179352825855.0), TokenKind::Eof]
     );
 }
+
+/// Pins the malformed literals PHP refuses, which the radix support must refuse too.
+///
+/// `078` is the one that mattered: `8` is not an octal digit, so the legacy-octal conversion
+/// reached a `to_digit(8)` that cannot answer and PANICKED the interpreter. PHP reports
+/// "Invalid numeric literal" for all of these, and so does the scanner now.
+#[test]
+fn malformed_numeric_literals_are_refused() {
+    assert_eq!(error("078"), EvalParseError::InvalidNumber);
+    assert_eq!(error("099"), EvalParseError::InvalidNumber);
+    assert_eq!(error("0o78"), EvalParseError::InvalidNumber);
+    assert_eq!(error("0x1G"), EvalParseError::InvalidNumber);
+    assert_eq!(error("0b12"), EvalParseError::InvalidNumber);
+    assert_eq!(error("123abc"), EvalParseError::InvalidNumber);
+    assert_eq!(error("0x"), EvalParseError::InvalidNumber);
+    assert_eq!(error("1e"), EvalParseError::InvalidNumber);
+}

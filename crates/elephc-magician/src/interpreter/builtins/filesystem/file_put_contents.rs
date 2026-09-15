@@ -142,6 +142,9 @@ fn eval_write_with_flags(path: &str, data: &[u8], flags: i64) -> std::io::Result
     if locking {
         lock_exclusive(&file)?;
         if !appending {
+            // A refused truncation is a failed write, not a silent one: writing over a file
+            // that could not be emptied reports a byte count and leaves a stale tail. The
+            // compiled runtime reports it the same way.
             file.set_len(0)?;
         }
     }

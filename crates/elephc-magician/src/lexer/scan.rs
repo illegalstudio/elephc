@@ -400,15 +400,24 @@ impl<'a> Lexer<'a> {
                 }
                 digits.push_str(&self.lex_digits(|c| c.is_ascii_digit()));
             }
+            self.reject_trailing_literal_char()?;
             return digits
                 .parse::<f64>()
                 .map(TokenKind::Float)
                 .map_err(|_| EvalParseError::InvalidNumber);
         }
+        self.reject_trailing_literal_char()?;
 
-        // A leading zero followed by more digits is PHP's legacy octal spelling.
+        // A leading zero followed by more digits is PHP's legacy octal spelling. `8` and `9`
+        // are not octal digits, so `078` is a PHP parse error ("Invalid numeric literal") and
+        // has to be REFUSED here — the conversion below would otherwise reach a `to_digit(8)`
+        // that cannot answer, and panic the interpreter.
         if digits.len() > 1 && digits.starts_with('0') {
-            return Ok(eval_radix_int_or_float(&digits[1..], 8));
+            let octal = &digits[1..];
+            if !octal.chars().all(|ch| ('0'..'8').contains(&ch)) {
+                return Err(EvalParseError::InvalidNumber);
+            }
+            return Ok(eval_radix_int_or_float(octal, 8));
         }
         Ok(match digits.parse::<i64>() {
             Ok(value) => TokenKind::Int(value),
@@ -432,7 +441,21 @@ impl<'a> Lexer<'a> {
         if digits.is_empty() {
             return Err(EvalParseError::InvalidNumber);
         }
+        self.reject_trailing_literal_char()?;
         Ok(eval_radix_int_or_float(&digits, radix))
+    }
+
+    /// Refuses a literal that runs straight into another alphanumeric byte.
+    ///
+    /// `0o78`, `0x1G` and `123abc` are PHP parse errors. Without this the digit scanner would
+    /// simply stop at the offending byte and hand the rest to the next token, turning a
+    /// rejected literal into a silently different program. Mirrors the compiler's own
+    /// `lexer::literals::numbers::validate_no_trailing_alnum`.
+    fn reject_trailing_literal_char(&mut self) -> Result<(), EvalParseError> {
+        match self.peek_char() {
+            Some(ch) if ch.is_alphanumeric() || ch == '_' => Err(EvalParseError::InvalidNumber),
+            _ => Ok(()),
+        }
     }
 
     /// Reads a run of digits accepted by `is_digit`, dropping PHP's `_` separators.

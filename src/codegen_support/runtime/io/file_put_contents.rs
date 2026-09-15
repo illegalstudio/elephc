@@ -29,7 +29,9 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// mode and calls `php_stream_truncate_set_size(stream, 0)` only once locked, because
 /// truncating at open destroys a previous writer's contents while this writer is still
 /// waiting for the lock. A REFUSED lock is a failed write — the descriptor is closed and
-/// `-1` returned — rather than an unlocked write.
+/// `-1` returned — rather than an unlocked write, and so is a refused TRUNCATION: writing
+/// over a file that could not be emptied would report a byte count while leaving a stale
+/// tail behind it.
 ///
 /// # Input (ARM64 calling convention)
 /// - x1/x2: filename string (pointer/length)
@@ -104,6 +106,7 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload fd
     emitter.instruction("mov x1, #0");                                          // truncate to zero, as `'w'` mode would have
     emitter.instruction("bl __rt_ftruncate");                                   // now safe: no other writer holds the lock
+    emitter.instruction("cbz x0, __rt_fpc_lock_failed");                        // a refused truncation would leave a stale tail
     emitter.label("__rt_fpc_write");
 
     // -- write data to file --
@@ -199,6 +202,8 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // pass the fd in the ftruncate helper's input register
     emitter.instruction("xor esi, esi");                                        // truncate to zero, as `'w'` mode would have
     emitter.instruction("call __rt_ftruncate");                                 // now safe: no other writer holds the lock
+    emitter.instruction("test rax, rax");                                       // did the truncation succeed?
+    emitter.instruction("jz __rt_fpc_lock_failed_linux_x86_64");                // a refused truncation would leave a stale tail
     emitter.label("__rt_fpc_write_linux_x86_64");
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the file descriptor as the first libc write() argument
