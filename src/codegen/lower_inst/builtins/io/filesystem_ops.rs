@@ -40,7 +40,7 @@ pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
 /// Lowers `mkdir(path)` through the target-aware runtime helper.
 pub(crate) fn lower_mkdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_single_path_wrapper_op(ctx, inst, "mkdir", "__rt_mkdir", STREAM_WRAPPER_MKDIR_SLOT)
+    lower_mkdir_wrapper_op(ctx, inst)
 }
 
 /// Lowers `rmdir(path)` through the target-aware runtime helper.

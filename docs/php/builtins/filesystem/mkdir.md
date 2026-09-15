@@ -8,13 +8,15 @@ sidebar:
 ## mkdir()
 
 ```php
-function mkdir(string $directory): bool
+function mkdir(string $directory, int $permissions = 511, bool $recursive = false): bool
 ```
 
 Makes a directory.
 
 **Parameters**:
 - `$directory` (`string`)
+- `$permissions` (`int`), default `511`, optional
+- `$recursive` (`bool`), default `false`, optional
 
 **Returns**: `bool`
 

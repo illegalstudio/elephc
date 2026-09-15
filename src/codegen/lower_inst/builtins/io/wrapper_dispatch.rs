@@ -470,6 +470,129 @@ pub(super) fn lower_single_path_wrapper_op(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `mkdir(directory, permissions = 0777, recursive = false)`.
+///
+/// Both optional arguments reach the runtime, and both reach a registered stream wrapper
+/// through the two argument slots its `mkdir` vtable entry already takes: the mode, and an
+/// options word carrying PHP's `STREAM_REPORT_ERRORS` (8) plus `STREAM_MKDIR_RECURSIVE` (1)
+/// when requested. Before this they were hard-coded to zero and the native helper hard-coded
+/// mode 0755, so neither PHP argument existed (issue #506).
+///
+/// Measured on PHP 8.5.10 with a userland wrapper: `mkdir("w://d")` calls
+/// `mkdir($path, 511, 8)`, and `mkdir("w://d", 0700, true)` calls `mkdir($path, 448, 9)`.
+pub(super) fn lower_mkdir_wrapper_op(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count_between(inst, "mkdir", 1, 3)?;
+    let path = expect_operand(inst, 0)?;
+    let permissions = (inst.operands.len() > 1)
+        .then(|| expect_operand(inst, 1))
+        .transpose()?;
+    let recursive = (inst.operands.len() > 2)
+        .then(|| expect_operand(inst, 2))
+        .transpose()?;
+    // The two optional arguments are resolved BEFORE the path: unboxing a `Mixed` calls
+    // `__rt_mixed_cast_int`, which clobbers the argument registers the path would be sitting
+    // in. They are parked on the stack and popped once the path is staged.
+    let (mode_reg, recursive_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rcx", "r8"),
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if let Some(permissions) = permissions {
+        resolve_int_operand_to_result(ctx, permissions, "mkdir permissions")?;
+        abi::emit_push_reg(ctx.emitter, result_reg);
+    }
+    if let Some(recursive) = recursive {
+        resolve_int_operand_to_result(ctx, recursive, "mkdir recursive")?;
+        abi::emit_push_reg(ctx.emitter, result_reg);
+    }
+    load_string_to_result(ctx, path, "mkdir")?;
+    if recursive.is_some() {
+        abi::emit_pop_reg(ctx.emitter, recursive_reg);                          // popped first: staged last
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, recursive_reg, 0);            // PHP's default $recursive, false
+    }
+    if permissions.is_some() {
+        abi::emit_pop_reg(ctx.emitter, mode_reg);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, mode_reg, 0o777);             // PHP's default $permissions, masked by umask
+    }
+    emit_mkdir_wrapper_dispatch(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Emits `mkdir` wrapper dispatch, forwarding the mode and recursive flag to both paths.
+///
+/// The shape mirrors `emit_single_path_wrapper_dispatch`; it exists separately because that
+/// one passes literal zeros for the wrapper's two argument slots and calls a runtime helper
+/// that takes none.
+fn emit_mkdir_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
+    let wrapper = ctx.next_label("mkdir_wrapper");
+    let after = ctx.next_label("mkdir_after");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve scratch across the wrapper probe
+            ctx.emitter.instruction("str x1, [sp, #0]");                        // preserve the path pointer for the chosen helper
+            ctx.emitter.instruction("str x2, [sp, #8]");                        // preserve the path length for the chosen helper
+            ctx.emitter.instruction("str x3, [sp, #16]");                       // preserve the mode across the probe call
+            ctx.emitter.instruction("str x4, [sp, #24]");                       // preserve the recursive flag across the probe call
+            ctx.emitter.instruction("mov x0, x1");                              // pass the path pointer to the wrapper-scheme probe
+            ctx.emitter.instruction("mov x1, x2");                              // pass the path length to the wrapper-scheme probe
+            abi::emit_call_label(ctx.emitter, "__rt_path_is_wrapper");
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // restore the path pointer for the chosen helper
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // restore the path length for the chosen helper
+            ctx.emitter.instruction("ldr x3, [sp, #16]");                       // restore the mode for the chosen helper
+            ctx.emitter.instruction("ldr x4, [sp, #24]");                       // restore the recursive flag for the chosen helper
+            ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper));          // registered wrapper schemes use userspace path-op dispatch
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir_ex");
+            ctx.emitter.instruction(&format!("b {}", after));                   // skip wrapper path-op after the native helper
+            ctx.emitter.label(&wrapper);
+            ctx.emitter.instruction("mov x0, x1");                              // pass the wrapper path pointer
+            ctx.emitter.instruction("mov x1, x2");                              // pass the wrapper path length
+            ctx.emitter
+                .instruction(&format!("mov x2, #{}", STREAM_WRAPPER_MKDIR_SLOT)); // pass the wrapper vtable slot
+            ctx.emitter.instruction("cmp x4, #0");                              // was recursive creation requested?
+            ctx.emitter.instruction("cset x4, ne");                             // STREAM_MKDIR_RECURSIVE is 1
+            ctx.emitter.instruction("orr x4, x4, #8");                          // STREAM_REPORT_ERRORS, which mkdir() always sets
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
+            ctx.emitter.label(&after);
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the wrapper probe scratch
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                             // reserve scratch across the wrapper probe
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the path pointer for the chosen helper
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // preserve the path length for the chosen helper
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rcx");           // preserve the mode across the probe call
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r8");            // preserve the recursive flag across the probe call
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the path pointer to the wrapper-scheme probe
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the path length to the wrapper-scheme probe
+            abi::emit_call_label(ctx.emitter, "__rt_path_is_wrapper");
+            ctx.emitter.instruction("test rax, rax");                           // test whether the path scheme matched a registered wrapper
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the path pointer for the chosen helper
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the path length for the chosen helper
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");           // restore the mode for the chosen helper
+            ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 24]");            // restore the recursive flag for the chosen helper
+            ctx.emitter.instruction(&format!("jnz {}", wrapper));               // registered wrapper schemes use userspace path-op dispatch
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir_ex");
+            ctx.emitter.instruction(&format!("jmp {}", after));                 // skip wrapper path-op after the native helper
+            ctx.emitter.label(&wrapper);
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the wrapper path pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the wrapper path length
+            ctx.emitter
+                .instruction(&format!("mov rdx, {}", STREAM_WRAPPER_MKDIR_SLOT)); // pass the wrapper vtable slot
+            ctx.emitter.instruction("test r8, r8");                             // was recursive creation requested?
+            ctx.emitter.instruction("setne r8b");                               // STREAM_MKDIR_RECURSIVE is 1
+            ctx.emitter.instruction("movzx r8, r8b");                           // widen the flag into the full argument register
+            ctx.emitter.instruction("or r8, 8");                                // STREAM_REPORT_ERRORS, which mkdir() always sets
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
+            ctx.emitter.label(&after);
+            ctx.emitter.instruction("add rsp, 32");                             // release the wrapper probe scratch
+        }
+    }
+}
+
 /// Emits wrapper dispatch for a single-path mutation with native fallback.
 pub(super) fn emit_single_path_wrapper_dispatch(
     ctx: &mut FunctionContext<'_>,

@@ -164,14 +164,24 @@ pub(super) fn lower_file_put_contents_arm64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    flags: Option<ValueId>,
     helper: &str,
 ) -> Result<()> {
+    // `$flags` is resolved FIRST: an unboxing cast clobbers the argument registers, so it
+    // cannot run once the two strings are staged.
+    if let Some(flags) = flags {
+        resolve_int_operand_to_result(ctx, flags, "file_put_contents flags")?;
+        abi::emit_push_reg(ctx.emitter, "x0");
+    }
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     load_string_to_result(ctx, data, "file_put_contents data")?;
     ctx.emitter.instruction("mov x3, x1");                                      // pass the data pointer in the runtime helper's second string slot
     ctx.emitter.instruction("mov x4, x2");                                      // pass the data length in the runtime helper's second string slot
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    if flags.is_some() {
+        abi::emit_pop_reg(ctx.emitter, "x5");                                   // reload the resolved PHP flags as the helper's fifth argument
+    }
     abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
@@ -181,14 +191,24 @@ pub(super) fn lower_file_put_contents_x86_64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    flags: Option<ValueId>,
     helper: &str,
 ) -> Result<()> {
+    // `$flags` is resolved FIRST: an unboxing cast clobbers the argument registers, so it
+    // cannot run once the two strings are staged.
+    if let Some(flags) = flags {
+        resolve_int_operand_to_result(ctx, flags, "file_put_contents flags")?;
+        abi::emit_push_reg(ctx.emitter, "rax");
+    }
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     load_string_to_result(ctx, data, "file_put_contents data")?;
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the data pointer while the filename remains on the temporary stack
     ctx.emitter.instruction("mov rsi, rdx");                                    // pass the data length while the filename remains on the temporary stack
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    if flags.is_some() {
+        abi::emit_pop_reg(ctx.emitter, "r8");                                   // reload the resolved PHP flags as the helper's flags argument
+    }
     abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }

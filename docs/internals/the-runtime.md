@@ -61,6 +61,50 @@ __rt_throw_current throw the active exception
 __rt_build_argv    build $argv from C strings
 ```
 
+## Extending a routine's ABI without touching its callers
+
+A routine that gains an argument keeps its original label and original ABI, and
+gains a SIBLING that takes the new one. The original sets the defaults and
+branches to it, so the two share one body rather than two that have to be kept
+in step:
+
+```
+__rt_file_put_contents          flags = 0      → __rt_file_put_contents_flagged
+__rt_file_put_contents_maybe_phar              → …_maybe_phar_flagged
+__rt_mkdir                      0777, false    → __rt_mkdir_ex
+```
+
+The reason is that runtime routines have callers inside the runtime, not only
+from lowering. Widening an ABI in place would mean auditing every one of them for
+a register it has never set — and a tail call that forwards a stale register
+fails silently rather than loudly. Pairing leaves that audit undone because it is
+unnecessary.
+
+The two labels end up with different caller sets, and which one a site uses says
+which ABI it depends on:
+
+| | callers inside the runtime |
+|---|---|
+| `__rt_file_put_contents` | 4 — the phar archive writer and `copy()`, on each target |
+| `__rt_file_put_contents_flagged` | 2 — the `maybe_phar` plain path on each target, tail-calling with the flags it was handed |
+
+Reading that table the other way is how to tell whether a change to one entry
+point can reach the other's callers.
+
+The pairs are what let `file_put_contents()` take PHP's `$flags` and `mkdir()`
+take `$permissions` / `$recursive` while every existing call site emits exactly
+the instructions it did before (issue #506).
+
+Two consequences worth knowing when adding one:
+
+- The entry point must BRANCH to the sibling rather than fall through to it. On
+  macOS the dead-strip pass treats each global label as its own atom, so two
+  globals in one block can be separated by the linker.
+- The sibling's extra argument register must miss everything the body already
+  uses, including registers a nested helper clobbers. `__rt_file_put_contents`
+  takes its flags in `x5` / `r8`, and the phar gate's `r8` is why the flag is
+  read there before the bridge arguments are arranged.
+
 ## Diagnostic routines
 
 **Source:** `src/codegen_support/runtime/diagnostics.rs`

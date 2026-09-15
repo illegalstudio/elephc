@@ -8,7 +8,7 @@ sidebar:
 ## file_put_contents()
 
 ```php
-function file_put_contents(string $filename, string $data): int
+function file_put_contents(string $filename, string $data, int $flags = 0): int
 ```
 
 Writes data to a file.
@@ -16,6 +16,7 @@ Writes data to a file.
 **Parameters**:
 - `$filename` (`string`)
 - `$data` (`string`)
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `int`
 

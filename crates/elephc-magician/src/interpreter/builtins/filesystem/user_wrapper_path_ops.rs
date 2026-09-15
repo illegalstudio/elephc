@@ -29,14 +29,43 @@ pub(in crate::interpreter) fn eval_user_wrapper_single_path_op_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     match name {
-        "mkdir" => eval_user_wrapper_path_method_result(path, name, context, values, |values| {
-            Ok(vec![values.int(0)?, values.int(0)?])
-        }),
+        "mkdir" => eval_user_wrapper_mkdir_result(path, DEFAULT_MKDIR_PERMISSIONS, false, context, values),
         "rmdir" => eval_user_wrapper_path_method_result(path, name, context, values, |values| {
             Ok(vec![values.int(0)?])
         }),
         _ => Ok(None),
     }
+}
+
+/// PHP's default `mkdir()` `$permissions`, which the wrapper receives verbatim.
+pub(in crate::interpreter) const DEFAULT_MKDIR_PERMISSIONS: i64 = 0o777;
+
+/// PHP's `STREAM_MKDIR_RECURSIVE`, set when `$recursive` is requested.
+const STREAM_MKDIR_RECURSIVE: i64 = 1;
+
+/// PHP's `STREAM_REPORT_ERRORS`, which `mkdir()` sets unconditionally.
+///
+/// Measured on PHP 8.5.10 with a userland wrapper: `mkdir("w://d")` calls
+/// `mkdir($path, 511, 8)` and `mkdir("w://d", 0700, true)` calls `mkdir($path, 448, 9)`.
+const STREAM_REPORT_ERRORS: i64 = 8;
+
+/// Dispatches `mkdir($path, $permissions, $recursive)` to a registered wrapper.
+///
+/// A wrapper's `mkdir` method takes `($path, $mode, $options)`, and both trailing arguments
+/// used to be hard-coded to `0` — so a wrapper saw neither the requested permissions, nor
+/// that recursive creation was asked for, nor the report-errors bit PHP always sets
+/// (issue #506).
+pub(in crate::interpreter) fn eval_user_wrapper_mkdir_result(
+    path: &str,
+    permissions: i64,
+    recursive: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let options = STREAM_REPORT_ERRORS | if recursive { STREAM_MKDIR_RECURSIVE } else { 0 };
+    eval_user_wrapper_path_method_result(path, "mkdir", context, values, |values| {
+        Ok(vec![values.int(permissions)?, values.int(options)?])
+    })
 }
 
 /// Dispatches `rename($from, $to)` using the source path's wrapper scheme.
