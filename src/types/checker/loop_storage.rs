@@ -1,13 +1,16 @@
 //! Purpose:
-//! Computes fixed-point storage contracts for array locals carried around loop back-edges.
+//! Computes fixed-point storage contracts for locals carried around loop back-edges.
 //!
 //! Called from:
 //! - `crate::types::checker::stmt_check::control_flow` before checking a loop body.
 //!
 //! Key details:
 //! - The analysis iterates assignment and array-growth evidence until local types stop changing.
-//! - Only entry array locals whose stable representation needs boxed payloads (or a boxed whole
-//!   value) are reported; ordinary scalar-flow inference remains checker-owned.
+//! - Two entry shapes are reported. Array locals whose stable representation needs boxed payloads
+//!   (or a boxed whole value) get that representation; a local that enters holding `null` and is
+//!   assigned something else inside the body gets boxed `Mixed`, so the header holds both the
+//!   entering null and the value the back edge carries in (issue #562). Ordinary scalar-flow
+//!   inference remains checker-owned.
 //! - EIR lowering consumes the checker-recorded contract instead of repeating expression
 //!   inference, keeping non-literal RHSs and cascading promotions aligned across both layers.
 

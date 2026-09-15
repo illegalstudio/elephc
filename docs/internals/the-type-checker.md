@@ -183,6 +183,56 @@ also record the target depth at entry: `break` or `continue` may target
 loops/switches created inside that `finally`, but jumping out of a `finally`
 block is rejected to match PHP.
 
+### Loop-carried storage contracts
+
+**File:** `src/types/checker/loop_storage.rs`
+
+A loop body is checked **once**, with the environment as it stands at loop
+entry. That is fine for a local the body only reads, and wrong for one the body
+rebinds: the back edge carries the new value back to the top, so the second
+iteration starts holding something the first iteration's types never described.
+
+`loop_carried_storage_types()` runs before the body is checked and closes that
+gap. It collects every value assignment and every array write in the body (plus
+the `for` update clause), then replays them against a copy of the entry
+environment until the types stop changing — a fixed point, so a promotion can
+cascade through intermediate locals and through later iterations. The result is
+a list of *storage contracts*: the representation each affected local must have
+for the whole loop. `stabilize_loop_storage()` installs them into the
+environment, and EIR lowering consumes the recorded contract instead of
+re-inferring, which keeps non-literal right-hand sides aligned across the two
+layers.
+
+Only locals that need an up-front representation are reported. Two entry shapes
+qualify:
+
+- **Array locals** whose stable form needs boxed payloads (`array<int>` that
+  also receives a string becomes `array<mixed>`), or a boxed whole value when
+  the container kind itself varies across the body.
+- **Null locals** — a local that enters holding `null` and is assigned something
+  else inside the body becomes boxed `Mixed`.
+
+The null contract is boxed `Mixed` rather than the fixed point's own join. The
+join of `null` and `int` is already `Mixed`, but the join of `null` and `array`
+is `array` — right for an array-typed entry that is merely growing, wrong here,
+because the **first** read still happens before the assignment and still sees
+null. `Mixed` is the one representation that holds both on every path, and it is
+what keeps a `=== null` guard a real runtime tag test instead of a constant the
+optimizer folds:
+
+```php
+$n = null;
+for ($i = 0; $i < 3; $i++) {
+    if ($n === null) { $n = 0; }   // without the contract: folded always-true
+    $n++;
+    echo $n;                       // ...so this printed 111, not 123
+}
+```
+
+The widening is driven by evidence, not by the entry type alone: a loop that
+never assigns the local leaves it `null`, so a null local a loop only reads is
+untouched (issue #562).
+
 ## Expression type inference
 
 The type checker computes the type of every expression:
