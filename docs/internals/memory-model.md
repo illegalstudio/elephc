@@ -252,9 +252,15 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 - **The buffer can safely reset** without invalidating stored values
 - **Hash table keys** are also persisted to heap (via `str_persist`)
 
+### Outgrowing the buffer
+
+64KB is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.
+
+This is a bounds check, not an optimization. A producer that skips it writes straight past `_concat_buf` into the adjacent BSS globals, which corrupts data silently in a CLI program and faults in a `--web` worker, at a size no `--heap-size` can change — `_concat_buf` is a fixed array. `implode()` was the last one still doing that (issue #515).
+
 ### Implications
 
-- **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in 64KB — plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). For ordinary code this is comfortably within 64KB.
+- **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in 64KB — plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). For ordinary code this is comfortably within 64KB, and a result that does not fit takes the heap fallback above rather than overflowing.
 - **No mutation.** You can't modify a string in place — you always create a new one.
 - **Scratch only.** The buffer is strictly temporary. Anything that needs to survive goes to the heap.
 
