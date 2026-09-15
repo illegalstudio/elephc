@@ -139,7 +139,7 @@ pub(super) fn reflection_method_metadata(
         if let Some(member) =
             reflection_class_method_member(ctx, &reflected_class, info, &method_key)?
         {
-            return Ok(reflection_method_owner_metadata(&method_name, member));
+            return Ok(reflection_method_owner_metadata(member));
         }
     }
     if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
@@ -147,7 +147,7 @@ pub(super) fn reflection_method_metadata(
             if let Some(member) =
                 reflection_interface_method_member(ctx, info, interface_name, &method_key)?
             {
-                return Ok(reflection_method_owner_metadata(&method_name, member));
+                return Ok(reflection_method_owner_metadata(member));
             }
         }
     }
@@ -156,7 +156,7 @@ pub(super) fn reflection_method_metadata(
             if let Some(member) =
                 reflection_trait_method_member(ctx, methods, trait_name, &method_key)?
             {
-                return Ok(reflection_method_owner_metadata(&method_name, member));
+                return Ok(reflection_method_owner_metadata(member));
             }
         }
     }
@@ -164,12 +164,17 @@ pub(super) fn reflection_method_metadata(
 }
 
 /// Builds direct ReflectionMethod constructor metadata from one reflected method member.
+///
+/// The reflected name comes from the MEMBER, not from the constructor's argument. Lookup is
+/// case-insensitive, so `new ReflectionMethod(Box::class, "mAtCh")` finds a method declared
+/// `Match` — and used to report `mAtCh` back, the caller's own lookup text, where PHP reports
+/// the declaration (issue #571). The member carries the declared spelling, which is also what
+/// every listing path now reports, so the two agree by construction.
 pub(super) fn reflection_method_owner_metadata(
-    method_name: &str,
     member: ReflectionListedMember,
 ) -> ReflectionOwnerMetadata {
     ReflectionOwnerMetadata {
-        reflected_name: Some(method_name.to_string()),
+        reflected_name: Some(member.name.clone()),
         attr_names: member.attr_names,
         attr_args: member.attr_args,
         interface_names: Vec::new(),

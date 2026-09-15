@@ -192,7 +192,11 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
                 context,
                 values,
             )? {
-                let member_name = requested_name.to_ascii_lowercase();
+                let member_name = eval_reflection_aot_declared_method_name(
+                    &reflected_name,
+                    &requested_name,
+                    values,
+                )?;
                 return eval_reflection_member_object_result(
                     EVAL_REFLECTION_OWNER_METHOD,
                     &member_name,

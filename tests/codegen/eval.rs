@@ -16482,7 +16482,7 @@ echo ":";
     );
     assert_eq!(
         out.stdout,
-        "basepublic,basestaticpublic,childpublic,childview,parentview:baseprotected,basepublic,basestaticpublic,childprivate,childprotectedstatic,childpublic,childview,parentview:baseprivate,baseprotected,basepublic,basestaticpublic,childprotectedstatic,childpublic,childview,parentview"
+        "basePublic,baseStaticPublic,childPublic,childView,parentView:baseProtected,basePublic,baseStaticPublic,childPrivate,childProtectedStatic,childPublic,childView,parentView:basePrivate,baseProtected,basePublic,baseStaticPublic,childProtectedStatic,childPublic,childView,parentView"
     );
 }
 
@@ -19618,7 +19618,7 @@ echo count($r->getMethods()); echo ":";
 echo get_class_methods("EvalAotOnlyReflectableContract")[0] ?? "none";');
 "#,
     );
-    assert_eq!(out, "H:1:aotlabel");
+    assert_eq!(out, "H:1:aotLabel");
 }
 
 /// Verifies eval interface `#[Override]` can target a generated/AOT parent interface.
@@ -23871,7 +23871,7 @@ echo $aotOwn->getDeclaringClass()->getName();');
     );
     assert_eq!(
         out.stdout,
-        "MiXeDCase:EvalReflectMethodObjectBase:base:childCase:EvalReflectMethodObjectChild:child|aotbase:EvalAotReflectMethodObjectBase:aotchild:EvalAotReflectMethodObjectChild"
+        "MiXeDCase:EvalReflectMethodObjectBase:base:childCase:EvalReflectMethodObjectChild:child|aotBase:EvalAotReflectMethodObjectBase:aotChild:EvalAotReflectMethodObjectChild"
     );
 }
 
@@ -23903,7 +23903,7 @@ echo $aot->invoke(new EvalAotReflectCreateMethodTarget());');
     );
     assert_eq!(
         out.stdout,
-        "EvalReflectCreateMethodTarget:MiXeDCase:ok|EvalAotReflectCreateMethodTarget:aotrun:aot"
+        "EvalReflectCreateMethodTarget:MiXeDCase:ok|EvalAotReflectCreateMethodTarget:aotRun:aot"
     );
 }
 
@@ -23935,7 +23935,7 @@ echo $ref->invoke(new EvalReflectCtorMethodTarget());');
     );
     assert_eq!(
         out.stdout,
-        "EvalAotReflectCtorMethodTarget:aotrun:aot|EvalReflectCtorMethodTarget:MiXeDCase:ok"
+        "EvalAotReflectCtorMethodTarget:aotRun:aot|EvalReflectCtorMethodTarget:MiXeDCase:ok"
     );
 }
 

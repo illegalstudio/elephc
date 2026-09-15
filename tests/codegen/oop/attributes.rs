@@ -3533,7 +3533,7 @@ foreach ($methods as $method) {
 echo "|";
 $traitMethods = (new ReflectionClass(ReflectListedParamTrait::class))->getMethods();
 foreach ($traitMethods as $method) {
-    if ($method->getName() === "traitlisted") {
+    if ($method->getName() === "traitListed") {
         $params = $method->getParameters();
         echo $method->getNumberOfParameters() . "/";
         echo $method->getNumberOfRequiredParameters() . ":";
