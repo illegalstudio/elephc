@@ -377,6 +377,8 @@ Parameters without a type hint start from an `Int` fallback and are specialized 
 
 The same accumulation applies to instance-method and static-method parameters. Closure parameters specialize to the first observed argument type but do not widen to a union, so a closure invoked with incompatible argument types is rejected rather than coerced.
 
+Because that specialization is final, a `null` argument is excluded from it (`specialize_callable_var_sig_from_args`). `Void` is the one type no later call could satisfy, so adopting it would close the parameter to null alone — `$f(null); $f(5);` was rejected with *"parameter $v expects Void, got Int"* where PHP prints `nx` (issue #567). Skipping it also makes the two spellings of the same call agree: for `function ($v = null)`, `$f()` and `$f(null)` pass the same value, and only the second one used to close the parameter.
+
 This information is then used when checking calls to that function.
 
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)

@@ -1281,6 +1281,17 @@ impl Checker {
     /// types and updating `sig.params` entries that are `PhpType::Mixed` with
     /// the inferred type. Stores the updated signature and return type in
     /// `closure_return_types` and `callable_sigs` if anything changed.
+    ///
+    /// A `null` argument is deliberately NOT one of those types. Unlike a function's
+    /// parameters, a closure's specialization is final — it never widens to a union — so the
+    /// type the first call picks is the only one every later call may use. `Void` is the one
+    /// candidate no later call can ever satisfy: `$f(null); $f(5);` became
+    /// *"parameter $v expects Void, got Int"* where PHP prints `nx` (issue #567).
+    ///
+    /// Skipping it also removes an asymmetry between two spellings of the same call. For
+    /// `function ($v = null)`, `$f()` and `$f(null)` pass the same value, and the omitted form
+    /// already left the parameter open for the next call to specialize. This makes the
+    /// explicit form behave identically instead of closing it to null alone.
     fn specialize_callable_var_sig_from_args(
         &mut self,
         var: &str,
@@ -1308,6 +1319,8 @@ impl Checker {
                 && !sig.ref_params.get(param_idx).copied().unwrap_or(false)
                 && sig.params[param_idx].1 == PhpType::Mixed
                 && actual_ty != PhpType::Never
+                // `Void` would close the parameter to null alone; see the doc comment.
+                && actual_ty != PhpType::Void
             {
                 sig.params[param_idx].1 = actual_ty;
                 changed = true;

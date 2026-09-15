@@ -1577,3 +1577,175 @@ var_dump($plain);
          int(9223372036854775807)\nfloat(9.223372036854776E+18)\n"
     );
 }
+
+
+/// Regression for #567: an explicit `null` argument must not close an untyped closure
+/// parameter to null.
+///
+/// A closure's parameter specialization is FINAL — unlike a function's, it never widens to a
+/// union — so the type the first call picks is the only one every later call may use. `Void`
+/// is the one candidate no later call can ever satisfy, and adopting it turned
+///
+/// ```php
+/// $f = function ($v = null) { … };
+/// $f(null);
+/// $f(5);          // error[7:4]: callable $f parameter $v expects Void, got Int
+/// ```
+///
+/// into a compile error where PHP prints `nx`. PHP does not infer parameter types from
+/// earlier calls: `= null` makes the parameter optional, and an untyped parameter keeps
+/// accepting everything.
+///
+/// It also removed an asymmetry between two spellings of the same call — `$f()` and `$f(null)`
+/// pass the same value, and only the second one closed the parameter. Both spellings are in
+/// the fixture, next to each other, for that reason.
+///
+/// The reordered pair (`$f(7)` then `$f(null)`) and the direct-function pair are the controls
+/// the issue asks for: neither had the defect, and both are asserted here so the fix cannot be
+/// a swap of which order is broken.
+///
+/// The arrow-function row is written inline instead of calling `show()`, because a closure
+/// whose body is `return <user function call>;` loses its return type for an unrelated reason
+/// (#1028).
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_explicit_null_call_leaves_an_untyped_closure_parameter_open() {
+    let out = compile_and_run(
+        r#"<?php
+class Tag { public function __construct(public string $name) {} }
+
+function show($v): string
+{
+    if ($v === null) { return "null"; }
+    if (is_array($v)) { return "array(" . count($v) . ")"; }
+    if ($v instanceof Tag) { return "Tag:" . $v->name; }
+    if (is_bool($v)) { return $v ? "true" : "false"; }
+    return gettype($v) . ":" . $v;
+}
+
+$toInt = function ($v = null) { echo show($v), "|"; };
+$toInt(null);
+$toInt(5);
+
+$toStr = function ($v = null) { echo show($v), "|"; };
+$toStr(null);
+$toStr("s");
+
+$toArr = function ($v = null) { echo show($v), "|"; };
+$toArr(null);
+$toArr([1, 2, 3]);
+
+$toObj = function ($v = null) { echo show($v), "|"; };
+$toObj(null);
+$toObj(new Tag("t"));
+
+$toFloat = function ($v = null) { echo show($v), "|"; };
+$toFloat(null);
+$toFloat(1.5);
+
+$toBool = function ($v = null) { echo show($v), "|"; };
+$toBool(null);
+$toBool(true);
+
+$reordered = function ($v = null) { echo show($v), "|"; };
+$reordered(7);
+$reordered(null);
+
+$omitted = function ($v = null) { echo show($v), "|"; };
+$omitted();
+$omitted(9);
+
+$nothing = null;
+$viaVar = function ($v = null) { echo show($v), "|"; };
+$viaVar($nothing);
+$viaVar(11);
+
+$used = function ($v = null) { echo $v === null ? "n" : $v + 1, "|"; };
+$used(null);
+$used(41);
+$used(null);
+
+$pair = function ($a = null, $b = null) { echo show($a), ",", show($b), "|"; };
+$pair(null, null);
+$pair(3, "x");
+
+$middle = function ($a, $b) { echo show($a), ",", show($b), "|"; };
+$middle(1, null);
+$middle(2, "z");
+
+$arrow = fn ($v = null) => $v === null ? "null" : gettype($v) . ":" . $v;
+echo $arrow(null), "|", $arrow(13), "|";
+
+function plain($v = null): void { echo show($v), "|"; }
+plain(null);
+plain(17);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "null|integer:5|",
+            "null|string:s|",
+            "null|array(3)|",
+            "null|Tag:t|",
+            "null|double:1.5|",
+            "null|true|",
+            "integer:7|null|",
+            "null|integer:9|",
+            "null|integer:11|",
+            "n|42|n|",
+            "null,null|integer:3,string:x|",
+            "integer:1,null|integer:2,string:z|",
+            "null|integer:13|",
+            "null|integer:17|",
+        )
+    );
+}
+
+
+/// A `: void` function's result is a `null` argument like any other, and must not fix an
+/// untyped closure parameter either.
+///
+/// PHP has no separate "void value": calling a `void` function yields `null`, and passing it
+/// on is ordinary code that runs. It is included here because the `Void` exclusion above is
+/// written on the TYPE, not on the syntax — `$f(nothing())` and `$f(null)` reach it the same
+/// way, and they must behave the same way, which is what these rows assert rather than assume.
+///
+/// The fourth pair is a `void` call into a parameter that also has a `= null` default: the two
+/// nulls come from different places and still leave the parameter open.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_void_call_argument_leaves_an_untyped_closure_parameter_open() {
+    let out = compile_and_run(
+        r#"<?php
+function nothing(): void {}
+
+$f = function ($x) { var_dump($x); };
+$f(nothing());
+$f(1);
+
+$g = function ($x) { var_dump($x); };
+$g(nothing());
+$g("s");
+
+$h = function ($x) { var_dump($x); };
+$h(nothing());
+$h(nothing());
+
+$k = function ($x = null) { var_dump($x); };
+$k(nothing());
+$k(2.5);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "NULL\nint(1)\n",
+            "NULL\nstring(1) \"s\"\n",
+            "NULL\nNULL\n",
+            "NULL\nfloat(2.5)\n",
+        )
+    );
+}
