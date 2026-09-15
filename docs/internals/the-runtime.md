@@ -75,10 +75,21 @@ __rt_mkdir                      0777, false    → __rt_mkdir_ex
 ```
 
 The reason is that runtime routines have callers inside the runtime, not only
-from lowering. `__rt_file_put_contents` has six: the phar writers and `copy()`,
-two of them TAIL calls. Widening its ABI in place would mean auditing every one
-for a register it has never set, and a tail call that forwards a stale register
-fails silently rather than loudly.
+from lowering. Widening an ABI in place would mean auditing every one of them for
+a register it has never set — and a tail call that forwards a stale register
+fails silently rather than loudly. Pairing leaves that audit undone because it is
+unnecessary.
+
+The two labels end up with different caller sets, and which one a site uses says
+which ABI it depends on:
+
+| | callers inside the runtime |
+|---|---|
+| `__rt_file_put_contents` | 4 — the phar archive writer and `copy()`, on each target |
+| `__rt_file_put_contents_flagged` | 2 — the `maybe_phar` plain path on each target, tail-calling with the flags it was handed |
+
+Reading that table the other way is how to tell whether a change to one entry
+point can reach the other's callers.
 
 The pairs are what let `file_put_contents()` take PHP's `$flags` and `mkdir()`
 take `$permissions` / `$recursive` while every existing call site emits exactly

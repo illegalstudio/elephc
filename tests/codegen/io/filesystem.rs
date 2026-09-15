@@ -373,3 +373,34 @@ echo file_get_contents($f);
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Issue #506, raised in review: the two expanded signatures are reachable by the spellings
+/// PHP accepts for any builtin — case-insensitively, and fully qualified.
+///
+/// AGENTS.md asks for this on every PHP-visible builtin that changes, and it is not a
+/// formality here: the optional arguments are resolved by a lowering that the name resolution
+/// has to reach first, so a signature that only works under one spelling would be a real gap.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_mkdir_and_file_put_contents_optional_arguments_are_case_insensitive() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+var_dump(MKDIR("upper/deep", 0700, true));
+var_dump(is_dir("upper/deep"));
+printf("%o\n", fileperms("upper/deep") & 0777);
+var_dump(\MkDir("qualified", 0755, false));
+
+$f = "log.txt";
+var_dump(FILE_PUT_CONTENTS($f, "one\n"));
+var_dump(\File_Put_Contents($f, "two\n", FILE_APPEND));
+var_dump(file_put_contents($f, "three\n", FILE_APPEND | LOCK_EX));
+echo file_get_contents($f);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\n700\nbool(true)\nint(4)\nint(4)\nint(6)\none\ntwo\nthree\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
