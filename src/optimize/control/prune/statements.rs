@@ -464,7 +464,7 @@ pub(crate) fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
 /// reports their implicit `null` differently, and generators keep it so the generator pipeline
 /// sees the body it validated.
 pub(crate) fn prune_function_body(body: Vec<Stmt>, by_ref_return: bool) -> Vec<Stmt> {
-    let body = prune_block(body);
+    let body = crate::optimize::generator_bodies::rewrite_preserving_yield(body, prune_block);
     if by_ref_return
         || !tail_carries_terminator(&body, TailTerminator::FunctionReturn)
         || crate::types::checker::yield_validation::body_contains_yield(&body)

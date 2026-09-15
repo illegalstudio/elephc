@@ -431,6 +431,25 @@ function items() {
 }
 ```
 
+### Generators whose `yield` is unreachable
+
+A declaration containing `yield` is a generator even when the `yield` can never
+run — PHP decides that from the source, not from what executes. Both ways of
+writing an immediately-complete generator iterate zero times and continue:
+
+```php
+<?php
+function nothing() { return; yield; }         // the idiomatic empty generator
+function disabled() { if (false) { yield 1; } return; }
+
+foreach (nothing() as $v) { echo $v; }        // the body never runs
+echo "done\n";                                 // done
+```
+
+A value returned before the unreachable `yield` is still the generator's return
+value, so `function g() { return 7; yield 1; }` gives `7` from `getReturn()`.
+This holds for functions, methods, static methods and closures alike.
+
 ## How it works at runtime
 
 A `Generator` is a stackful coroutine that reuses the Fiber runtime: the
