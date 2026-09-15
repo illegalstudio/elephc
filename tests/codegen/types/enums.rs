@@ -332,14 +332,20 @@ fn test_enum_from_string_failure_throws_value_error() {
 }
 
 /// Compiles and runs the checked-in `examples/enums/main.php` fixture and asserts stdout includes
-/// user-declared enum output, the `->name`/`->value` case introspection loop, and the builtin
-/// `SortDirection` helper result.
+/// user-declared enum output, the `->name`/`->value` case introspection loop, the builtin
+/// `SortDirection` helper result, and the enum-case property defaults.
+///
+/// The last row is the #566 section: a declared property, a promoted one and a static one all
+/// defaulted to an enum case, plus `=== Level::Low` on the declared one. The identity check is
+/// the part that matters — a default that allocated a fresh object, or stored the case slot
+/// before it was materialized, would still print the right `->name`.
 #[test]
 fn test_example_enums_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enums/main.php"));
     assert_eq!(
         out,
-        "1\n2\n3\nRed=1 Green=2 Blue=3 \nDefault=default Match=match MATCH=upper-match \nDESC"
+        "1\n2\n3\nRed=1 Green=2 Blue=3 \nDefault=default Match=match MATCH=upper-match \nDESC\n\
+         Low High High same"
     );
 }
 
