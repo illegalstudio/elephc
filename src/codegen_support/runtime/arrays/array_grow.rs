@@ -122,7 +122,6 @@ fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve 16-byte-aligned spill slots for the growth bookkeeping and the saved callee-saved registers
     emitter.instruction("mov QWORD PTR [rbp - 40], r12");                       // preserve callee-saved r12 (reused below as the element-size scratch)
     emitter.instruction("mov QWORD PTR [rbp - 48], r13");                       // preserve callee-saved r13 (reused below as the new-capacity scratch)
-    emitter.instruction("mov QWORD PTR [rbp - 56], r14");                       // preserve callee-saved r14 (reused below as the previous-array scratch)
     emitter.instruction("mov QWORD PTR [rbp - 64], r15");                       // preserve callee-saved r15 (reused below as the previous-kind scratch)
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the incoming indexed-array pointer across uniqueness and allocation helper calls
     emitter.instruction("call __rt_array_ensure_unique");                       // split shared indexed arrays before reallocating storage for growth
@@ -141,8 +140,10 @@ fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, r12");                                        // pass the preserved element size so the grown indexed array keeps its slot width
     emitter.instruction("call __rt_array_new");                                 // allocate the grown indexed-array backing storage through the shared allocator helper
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the grown indexed-array pointer across the payload copy and old-storage free helper call
-    emitter.instruction("mov r14, QWORD PTR [rbp - 8]");                        // reload the previous unique indexed-array pointer after the allocator returns
-    emitter.instruction("mov r15, QWORD PTR [r14 - 8]");                        // load the packed heap-kind metadata from the previous indexed-array header
+    // Through r15, not r14: r14 is the reserved runtime-context register, and
+    // the pointer is only needed for the header read on the next line.
+    emitter.instruction("mov r15, QWORD PTR [rbp - 8]");                        // reload the previous unique indexed-array pointer after the allocator returns
+    emitter.instruction("mov r15, QWORD PTR [r15 - 8]");                        // load the packed heap-kind metadata from the previous indexed-array header
     emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // snapshot the freshly allocated grown header so the x86_64 heap marker survives the metadata rewrite
     emitter.instruction("and r11, -65536");                                     // keep the high x86_64 heap-marker bits while clearing the low container-kind payload lane
     emitter.instruction("and r15, 0xffff");                                     // preserve only the stable indexed-array kind, value_type, and copy-on-write metadata bits
@@ -173,7 +174,6 @@ fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return the grown indexed-array pointer after releasing the previous storage
     emitter.instruction("mov r12, QWORD PTR [rbp - 40]");                       // restore the caller's callee-saved r12 before returning
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // restore the caller's callee-saved r13 before returning
-    emitter.instruction("mov r14, QWORD PTR [rbp - 56]");                       // restore the caller's callee-saved r14 before returning
     emitter.instruction("mov r15, QWORD PTR [rbp - 64]");                       // restore the caller's callee-saved r15 before returning
     emitter.instruction("add rsp, 64");                                         // release the indexed-array growth spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the grown indexed array

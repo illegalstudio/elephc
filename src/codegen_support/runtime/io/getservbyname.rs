@@ -292,7 +292,9 @@ fn emit_getservbyname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r9, [rax + rdx]");                                 // r9 = end-of-buffer pointer
     emitter.instruction("mov r12, QWORD PTR [rsp]");                            // r12 = service pointer
     emitter.instruction("mov r13, QWORD PTR [rsp + 8]");                        // r13 = service length
-    emitter.instruction("mov r14, QWORD PTR [rsp + 16]");                       // r14 = protocol pointer
+    // The protocol pointer stays in its spill slot: r14 is the reserved
+    // runtime-context register, and the byte loop below reads the slot through
+    // rdx (rsp does not move between here and it).
     emitter.instruction("mov r15, QWORD PTR [rsp + 24]");                       // r15 = protocol length
 
     // -- iterate over each line --
@@ -431,7 +433,8 @@ fn emit_getservbyname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdi, rcx");                                        // compared every byte?
     emitter.instruction("jae __rt_gsbn_protook");                               // all bytes equal: the protocol matched
     emitter.instruction("movzx eax, BYTE PTR [rsi + rdi]");                     // load a protocol byte
-    emitter.instruction("movzx edx, BYTE PTR [r14 + rdi]");                     // load the matching query-protocol byte
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 16]");                       // reload the query-protocol pointer from its spill slot
+    emitter.instruction("movzx edx, BYTE PTR [rdx + rdi]");                     // load the matching query-protocol byte
     emitter.instruction("cmp al, dl");                                          // do the bytes differ?
     emitter.instruction("jne __rt_gsbn_skipeol");                               // protocol mismatch: skip the line
     emitter.instruction("inc rdi");                                             // advance to the next byte

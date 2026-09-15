@@ -140,7 +140,15 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp-64] eval context.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // fixed frame pointer (rsp moves while records are pushed)
-    emitter.instruction("sub rsp, 64");                                         // reserve the helper locals
+    // 80, not 72: the rbx spill slot added 8 bytes to a frame that was already
+    // aligned, which put every `call` in this body on a stack System V forbids —
+    // and a float conversion reaches snprintf, whose first aligned SSE spill
+    // faults. `__rt_vsprintf` is in the alignment audit's NOT_STATICALLY_ANALYZABLE
+    // list ("two paths reach one instruction with different frames"), so nothing
+    // checked it; the arithmetic is `push rbp` (-8) + this, which must stay
+    // 8 mod 16.
+    emitter.instruction("sub rsp, 80");                                         // reserve the helper locals plus the callee-saved rbx spill slot
+    emitter.instruction("mov QWORD PTR [rbp - 72], rbx");                       // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the format pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the format length
     emitter.instruction("mov QWORD PTR [rbp - 64], rsi");                       // preserve the optional eval context
@@ -163,16 +171,16 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r12");                       // save the slot size
 
     // -- push one 16-byte tagged record per element, in reverse order --
-    emitter.instruction("mov r14, r9");                                         // loop index = count
-    emitter.instruction("dec r14");                                             // = count - 1 (last element first)
-    emitter.instruction("mov QWORD PTR [rbp - 56], r14");                       // save the loop index
+    emitter.instruction("mov rbx, r9");                                         // loop index = count
+    emitter.instruction("dec rbx");                                             // = count - 1 (last element first)
+    emitter.instruction("mov QWORD PTR [rbp - 56], rbx");                       // save the loop index
     emitter.label("__rt_vsprintf_loop_x86");
-    emitter.instruction("mov r14, QWORD PTR [rbp - 56]");                       // current index
-    emitter.instruction("cmp r14, 0");                                          // exhausted the array?
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 56]");                       // current index
+    emitter.instruction("cmp rbx, 0");                                          // exhausted the array?
     emitter.instruction("jl __rt_vsprintf_format_x86");                         // all elements pushed → format
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // slot base
     emitter.instruction("mov r12, QWORD PTR [rbp - 48]");                       // slot size
-    emitter.instruction("mov rax, r14");                                        // index
+    emitter.instruction("mov rax, rbx");                                        // index
     emitter.instruction("imul rax, r12");                                       // index * slot size
     emitter.instruction("add rax, r10");                                        // slot address = base + index * size
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // value_type
@@ -203,9 +211,9 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve one 16-byte tagged record
     emitter.instruction("mov QWORD PTR [rsp], rsi");                            // store the payload word
     emitter.instruction("mov QWORD PTR [rsp + 8], rcx");                        // store the tag/metadata word
-    emitter.instruction("mov r14, QWORD PTR [rbp - 56]");                       // reload the loop index
-    emitter.instruction("dec r14");                                             // step to the previous element
-    emitter.instruction("mov QWORD PTR [rbp - 56], r14");                       // store the loop index
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 56]");                       // reload the loop index
+    emitter.instruction("dec rbx");                                             // step to the previous element
+    emitter.instruction("mov QWORD PTR [rbp - 56], rbx");                       // store the loop index
     emitter.instruction("jmp __rt_vsprintf_loop_x86");                          // push the next record
 
     emitter.label("__rt_vsprintf_empty_x86");
@@ -217,6 +225,7 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // format length
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // forward the optional eval context
     emitter.instruction("call __rt_sprintf");                                   // format; pops the count*16 records, returns rax/rdx
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 72]");                       // restore the caller's callee-saved rbx value
     emitter.instruction("leave");                                               // restore rsp/rbp (records already discarded by __rt_sprintf)
     emitter.instruction("ret");                                                 // return the formatted string (rax/rdx)
 }

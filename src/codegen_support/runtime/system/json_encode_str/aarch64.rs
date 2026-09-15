@@ -57,9 +57,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- numeric raw-copy path --
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // compute the write pointer
     emitter.instruction("str x11, [sp, #16]");                                  // save the output start pointer for the return slice
     emitter.instruction("mov x12, #0");                                         // initialize the copy index
@@ -72,7 +71,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b __rt_json_str_numeric_copy");                        // continue copying
     emitter.label("__rt_json_str_numeric_done");
     emitter.instruction("add x10, x10, x2");                                    // advance the concat-buffer offset by the copied length
-    emitter.instruction("str x10, [x9]");                                       // republish the concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat offset (ctx-relative in ctx mode)
     emitter.instruction("ldr x1, [sp, #16]");                                   // x1 = output start (the copied slice)
     // x2 already holds the source length; reuse it as the result length.
     emitter.instruction("ldr x19, [sp, #56]");                                  // restore the callee-saved register
@@ -83,9 +82,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_str_quoted");
 
     // -- get output position in concat_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // output position
     emitter.instruction("str x11, [sp, #16]");                                  // save output start
     emitter.instruction("str x11, [sp, #24]");                                  // save output write pos
@@ -685,10 +683,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x11, x1");                                     // x2 = total length
 
     // -- update concat_off --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
     emitter.instruction("add x10, x10, x2");                                    // add result length
-    emitter.instruction("str x10, [x9]");                                       // store updated offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat offset (ctx-relative in ctx mode)
 
     // -- tear down and return --
     emitter.instruction("ldr x19, [sp, #56]");                                  // restore the callee-saved register

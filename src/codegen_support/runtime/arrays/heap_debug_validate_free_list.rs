@@ -33,12 +33,10 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
         emitter.comment("--- runtime: heap_debug_validate_free_list ---");
         emitter.label_global("__rt_heap_debug_validate_free_list");
 
-        crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_buf");
-        crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_off");
-        emitter.instruction("mov r10, QWORD PTR [r10]");                        // load the current bump offset to derive the live heap end
+        crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r9");
+        crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r10"); // r10 = current heap offset (ctx-relative in ctx mode)
         emitter.instruction("add r10, r9");                                     // compute the current heap end address from the base plus bump offset
-        crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_free_list");
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the current ordered free-list head
+        crate::codegen_support::runtime::ctx::emit_free_list_head_load(emitter, "r11"); // r11 = current free-list head (ctx-relative in ctx mode)
 
         emitter.label("__rt_heap_debug_validate_free_list_loop");
         emitter.instruction("test r11, r11");                                   // did the ordered free-list walk reach the tail?
@@ -66,7 +64,7 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
         emitter.instruction("jmp __rt_heap_debug_validate_free_list_loop");     // continue validating the ordered free list
 
         emitter.label("__rt_heap_debug_validate_free_list_done");
-        crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_small_bins");
+        crate::codegen_support::runtime::ctx::emit_small_bins_address(emitter, "r11"); // r11 = small-bin head array base (ctx-relative in ctx mode)
         emitter.instruction("xor eax, eax");                                    // start with the <=8-byte small-bin head offset
 
         emitter.label("__rt_heap_debug_validate_small_bins");
@@ -90,8 +88,7 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
         emitter.instruction("mov edi, 64");                                     // set the inclusive upper bound for the <=64-byte class
 
         emitter.label("__rt_heap_debug_validate_small_bin_ready");
-        crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
-        emitter.instruction("mov r8, QWORD PTR [r8]");                          // use the current live heap bytes as a finite traversal budget
+        crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r8"); // r8 = current heap offset (ctx-relative in ctx mode)
 
         emitter.label("__rt_heap_debug_validate_small_bin_loop");
         emitter.instruction("test rdx, rdx");                                   // did this small-bin chain reach its tail?
@@ -140,12 +137,10 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.label_global("__rt_heap_debug_validate_free_list");
 
     // -- load heap bounds and current free-list head --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end address
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_free_list");
-    emitter.instruction("ldr x11, [x11]");                                      // x11 = current free block header
+    crate::codegen_support::runtime::ctx::emit_free_list_head_load(emitter, "x11"); // x11 = current free block header (ctx-relative in ctx mode)
 
     emitter.label("__rt_heap_debug_validate_free_list_loop");
     emitter.instruction("cbz x11, __rt_heap_debug_validate_free_list_done");    // a null head means the free list is currently valid
@@ -178,7 +173,7 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
 
     // -- small segregated bins must also point at valid cached blocks --
     emitter.label("__rt_heap_debug_validate_free_list_done");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_small_bins");
+    crate::codegen_support::runtime::ctx::emit_small_bins_address(emitter, "x11"); // x11 = small-bin head array base (ctx-relative in ctx mode)
     emitter.instruction("mov x12, #0");                                         // start with the <=8-byte bin offset
 
     emitter.label("__rt_heap_debug_validate_small_bins");
@@ -202,8 +197,7 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.instruction("mov x16, #64");                                        // set the inclusive upper bound for the <=64-byte class
 
     emitter.label("__rt_heap_debug_validate_small_bin_ready");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
-    emitter.instruction("ldr x13, [x13]");                                      // x13 = total live heap bytes available to bound the cached chain walk
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x13"); // x13 = current heap offset (ctx-relative in ctx mode)
 
     emitter.label("__rt_heap_debug_validate_small_bin_loop");
     emitter.instruction("cbz x14, __rt_heap_debug_validate_small_bin_next");    // an empty chain means this size class is valid

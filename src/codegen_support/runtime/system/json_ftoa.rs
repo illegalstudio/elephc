@@ -120,9 +120,8 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #0");                                          // is the fractional digit count negative?
     emitter.instruction("b.lt __rt_json_ftoa_intpad");                          // decpt exceeds the significant digits: zero-pad instead
     emitter.instruction("str x9, [sp, #0]");                                    // Apple variadic arg 0: fractional digit count (stack)
-    abi::emit_symbol_address(emitter, "x10", "_concat_off");
-    emitter.instruction("ldr x11, [x10]");                                      // current concat offset
-    abi::emit_symbol_address(emitter, "x12", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x11");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x12");
     emitter.instruction("add x0, x12, x11");                                    // destination = concat_buf + offset
     emitter.instruction("mov x1, #48");                                         // destination size cap
     abi::emit_symbol_address(emitter, "x2", "_fmt_star_f");
@@ -131,12 +130,11 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #0]");                                    // AAPCS64 variadic arg 0: fractional digit count (x3)
     emitter.bl_c("snprintf");                                                   // format the decimal digits (double stays in d0 for AAPCS64)
     emitter.instruction("mov x2, x0");                                          // result length = bytes written
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // original offset (unchanged by snprintf)
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x1, x11, x10");                                    // result pointer = concat_buf + offset
     emitter.instruction("add x10, x10, x2");                                    // advance the cursor past the digits
-    emitter.instruction("str x10, [x9]");                                       // publish the new concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat offset (ctx-relative in ctx mode)
     emitter.instruction("b __rt_json_ftoa_done");                               // finished decimal layout
 
     // -- zero-padded integer form: the shortest digits followed by (E - p) zeros --
@@ -144,9 +142,8 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     // EXACT decimal expansion (39528480211503568) instead of `zend_gcvt`'s shortest
     // round-trip digits padded with zeros (39528480211503570).
     emitter.label("__rt_json_ftoa_intpad");
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // current concat offset
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x12, x11, x10");                                   // cursor = concat_buf + offset
     emitter.instruction("mov x1, x12");                                         // remember the result start pointer
     emitter.instruction("cbz x20, __rt_json_ftoa_intpad_first");                // skip sign when the value is non-negative
@@ -177,17 +174,15 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     emitter.instruction("b __rt_json_ftoa_intpad_zloop");                       // continue padding
     emitter.label("__rt_json_ftoa_intpad_end");
     emitter.instruction("sub x2, x12, x1");                                     // result length = cursor - start
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // original concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
     emitter.instruction("add x10, x10, x2");                                    // advance past the emitted bytes
-    emitter.instruction("str x10, [x9]");                                       // publish the new concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat offset (ctx-relative in ctx mode)
     emitter.instruction("b __rt_json_ftoa_done");                               // finished zero-padded integer layout
 
     // -- exponential form: d.dddde[+-]E with json conventions, byte by byte --
     emitter.label("__rt_json_ftoa_exp");
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // current concat offset
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x12, x11, x10");                                   // cursor = concat_buf + offset
     emitter.instruction("mov x1, x12");                                         // remember the result start pointer
     emitter.instruction("cbz x20, __rt_json_ftoa_exp_first");                   // skip sign when the value is non-negative
@@ -248,10 +243,9 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     emitter.instruction("add w13, w17, #48");                                   // ones digit to ASCII
     emitter.instruction("strb w13, [x12], #1");                                 // emit ones digit
     emitter.instruction("sub x2, x12, x1");                                     // result length = cursor - start
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // original concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
     emitter.instruction("add x10, x10, x2");                                    // advance past the emitted bytes
-    emitter.instruction("str x10, [x9]");                                       // publish the new concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat offset (ctx-relative in ctx mode)
 
     emitter.label("__rt_json_ftoa_done");
     emitter.instruction("ldr x21, [sp, #88]");                                  // restore callee-saved register x21
@@ -281,7 +275,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // save callee-saved rbx (precision counter)
     emitter.instruction("push r12");                                            // save callee-saved r12 (sign flag)
     emitter.instruction("push r13");                                            // save callee-saved r13 (exponent)
-    emitter.instruction("push r14");                                            // save callee-saved r14 (result start pointer)
+    emitter.instruction("push r15");                                            // save callee-saved r15 (result start pointer)
     emitter.instruction("sub rsp, 96");                                         // reserve scratch buffer, saved-double slot, exp char
     emitter.instruction("mov DWORD PTR [rsp + 80], edi");                       // stash exponent char param ('e' json / 'E' serialize)
     emitter.instruction("movsd QWORD PTR [rsp + 64], xmm0");                    // save the input double for re-formatting and compare
@@ -333,8 +327,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rcx, r13");                                        // ... minus E
     emitter.instruction("test rcx, rcx");                                       // is the fractional digit count negative?
     emitter.instruction("js __rt_json_ftoa_intpad_x");                          // decpt exceeds the significant digits: zero-pad instead
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // current concat offset
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // current concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("lea rdi, [r9 + r8]");                                  // destination = concat_buf + offset
     emitter.instruction("mov esi, 48");                                         // destination size cap
     abi::emit_symbol_address(emitter, "rdx", "_fmt_star_f");
@@ -342,19 +336,19 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // one vector register used by the variadic call
     emitter.instruction("call snprintf");                                       // format the decimal digits into concat_buf
     emitter.instruction("mov rdx, rax");                                        // result length = bytes written
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // original offset (unchanged by snprintf)
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // original offset (unchanged by snprintf)
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("lea rax, [r9 + r8]");                                  // result pointer = concat_buf + offset
     emitter.instruction("add r8, rdx");                                         // advance the cursor past the digits
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the new concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r8");             // publish the new concat offset
     emitter.instruction("jmp __rt_json_ftoa_done_x");                           // finished decimal layout
 
     // -- zero-padded integer form: the shortest digits followed by (E - p) zeros --
     emitter.label("__rt_json_ftoa_intpad_x");
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // current concat offset
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // current concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("lea r10, [r9 + r8]");                                  // cursor = concat_buf + offset
-    emitter.instruction("mov r14, r10");                                        // remember the result start pointer
+    emitter.instruction("mov r15, r10");                                        // remember the result start pointer
     emitter.instruction("test r12, r12");                                       // is the value negative?
     emitter.instruction("jz __rt_json_ftoa_intpad_first_x");                    // skip sign when non-negative
     emitter.instruction("mov BYTE PTR [r10], 45");                              // emit '-'
@@ -386,19 +380,19 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("dec rcx");                                             // one fewer trailing zero to emit
     emitter.instruction("jmp __rt_json_ftoa_intpad_zloop_x");                   // continue padding
     emitter.label("__rt_json_ftoa_intpad_end_x");
-    emitter.instruction("mov rax, r14");                                        // result pointer = start
+    emitter.instruction("mov rax, r15");                                        // result pointer = start
     emitter.instruction("mov rdx, r10");                                        // cursor (one past the last byte)
     emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // original concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // original concat offset
     emitter.instruction("add r8, rdx");                                         // advance past the emitted bytes
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the new concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r8");             // publish the new concat offset
     emitter.instruction("jmp __rt_json_ftoa_done_x");                           // finished zero-padded integer layout
 
     emitter.label("__rt_json_ftoa_exp_x");
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // current concat offset
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // current concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("lea r10, [r9 + r8]");                                  // cursor = concat_buf + offset
-    emitter.instruction("mov r14, r10");                                        // remember the result start pointer
+    emitter.instruction("mov r15, r10");                                        // remember the result start pointer
     emitter.instruction("test r12, r12");                                       // is the value negative?
     emitter.instruction("jz __rt_json_ftoa_exp_first_x");                       // skip sign when non-negative
     emitter.instruction("mov BYTE PTR [r10], 45");                              // emit '-'
@@ -469,16 +463,16 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea ecx, [r11 + 48]");                                 // ones digit to ASCII
     emitter.instruction("mov BYTE PTR [r10], cl");                              // emit ones digit
     emitter.instruction("inc r10");                                             // advance the cursor
-    emitter.instruction("mov rax, r14");                                        // result pointer = start
+    emitter.instruction("mov rax, r15");                                        // result pointer = start
     emitter.instruction("mov rdx, r10");                                        // cursor (one past the last byte)
     emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // original concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // original concat offset
     emitter.instruction("add r8, rdx");                                         // advance past the emitted bytes
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the new concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r8");             // publish the new concat offset
 
     emitter.label("__rt_json_ftoa_done_x");
     emitter.instruction("add rsp, 96");                                         // release the scratch frame
-    emitter.instruction("pop r14");                                             // restore callee-saved r14
+    emitter.instruction("pop r15");                                             // restore callee-saved r15
     emitter.instruction("pop r13");                                             // restore callee-saved r13
     emitter.instruction("pop r12");                                             // restore callee-saved r12
     emitter.instruction("pop rbx");                                             // restore callee-saved rbx

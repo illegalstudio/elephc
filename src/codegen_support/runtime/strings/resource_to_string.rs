@@ -46,11 +46,9 @@ pub fn emit_resource_to_string(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address before calling itoa
     emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp]");                                        // preserve the native resource payload while building the output prefix
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer cursor
-    emitter.instruction("str x9, [sp, #8]");                                    // preserve the concat cursor address across the itoa call
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10"); // x10 = current concat-buffer offset (ctx-relative in ctx mode)
     emitter.instruction("str x10, [sp, #16]");                                  // preserve the original concat-buffer offset
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11"); // x11 = concat scratch base (ctx-relative in ctx mode)
     emitter.instruction("add x12, x11, x10");                                   // compute the final output start inside concat_buf
     emitter.instruction("str x12, [sp, #24]");                                  // preserve the final output start across the itoa call
     abi::emit_symbol_address(emitter, "x13", "_resource_id_prefix");
@@ -64,7 +62,7 @@ pub fn emit_resource_to_string(emitter: &mut Emitter) {
     emitter.instruction("b __rt_resource_to_string_prefix_loop");               // continue copying the prefix
     emitter.label("__rt_resource_to_string_prefix_done");
     emitter.instruction("add x10, x10, #13");                                   // move the scratch cursor after the copied prefix
-    emitter.instruction("str x10, [x9]");                                       // let itoa write its temporary digits after the prefix
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // let itoa write its temporary digits after the prefix (ctx-relative in ctx mode)
     emitter.instruction("ldr x0, [sp]");                                        // reload the native resource payload
     abi::emit_call_label(emitter, "__rt_resource_id_of");                       // resolve the payload to its PHP resource id through the registry
     abi::emit_call_label(emitter, "__rt_itoa");                                 // format the display id as temporary decimal digits
@@ -79,11 +77,10 @@ pub fn emit_resource_to_string(emitter: &mut Emitter) {
     emitter.instruction("add x14, x14, #1");                                    // advance to the next digit byte
     emitter.instruction("b __rt_resource_to_string_digit_loop");                // continue copying the display id digits
     emitter.label("__rt_resource_to_string_digit_done");
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the concat cursor address
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the original concat-buffer offset
     emitter.instruction("add x10, x10, #13");                                   // account for the resource prefix bytes
     emitter.instruction("add x10, x10, x2");                                    // account for the formatted display id digits
-    emitter.instruction("str x10, [x9]");                                       // publish the compact final concat-buffer cursor
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the compact final concat-buffer cursor (ctx-relative in ctx mode)
     emitter.instruction("ldr x1, [sp, #24]");                                   // return the final resource string pointer
     emitter.instruction("add x2, x2, #13");                                     // return the final resource string length
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
@@ -102,11 +99,9 @@ fn emit_resource_to_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the helper body
     emitter.instruction("sub rsp, 48");                                         // reserve aligned locals for offsets and output pointers
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the native resource payload while building the output prefix
-    abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer cursor
-    emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // preserve the concat cursor address across the itoa call
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // preserve the original concat-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("lea r11, [r10 + r9]");                                 // compute the final output start inside concat_buf
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // preserve the final output start across the itoa call
     abi::emit_symbol_address(emitter, "rcx", "_resource_id_prefix");
@@ -120,7 +115,7 @@ fn emit_resource_to_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_resource_to_string_prefix_loop_x86");         // continue copying the prefix
     emitter.label("__rt_resource_to_string_prefix_done_x86");
     emitter.instruction("add r9, 13");                                          // move the scratch cursor after the copied prefix
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // let itoa write its temporary digits after the prefix
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");  // let itoa write its temporary digits after the prefix
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the native resource payload
     abi::emit_call_label(emitter, "__rt_resource_id_of");                       // resolve the payload to its PHP resource id through the registry
     abi::emit_call_label(emitter, "__rt_itoa");                                 // format the display id as temporary decimal digits
@@ -135,11 +130,10 @@ fn emit_resource_to_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc rcx");                                             // advance to the next digit byte
     emitter.instruction("jmp __rt_resource_to_string_digit_loop_x86");          // continue copying the display id digits
     emitter.label("__rt_resource_to_string_digit_done_x86");
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the concat cursor address
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the original concat-buffer offset
     emitter.instruction("add r9, 13");                                          // account for the resource prefix bytes
     emitter.instruction("add r9, rdx");                                         // account for the formatted display id digits
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the compact final concat-buffer cursor
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");  // publish the compact final concat-buffer cursor
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return the final resource string pointer
     emitter.instruction("add rdx, 13");                                         // return the final resource string length
     emitter.instruction("add rsp, 48");                                         // release the helper locals

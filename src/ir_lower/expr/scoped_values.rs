@@ -477,4 +477,3 @@ pub(super) fn lower_magic_constant(ctx: &mut LoweringContext<'_, '_>, kind: &Mag
     let value = format!("__{:?}__", kind);
     lower_string_literal(ctx, &value, expr)
 }
-

@@ -69,7 +69,7 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base while nested helpers run
     emitter.instruction("push r12");                                            // preserve callable across heap allocation
     emitter.instruction("push r13");                                            // preserve class_id across heap allocation
-    emitter.instruction("push r14");                                            // preserve the allocated Fiber object pointer
+    emitter.instruction("push rbx");                                            // preserve the allocated Fiber object pointer
     emitter.instruction("push r15");                                            // preserve the generated Fiber wrapper pointer
     emitter.instruction("mov r12, rdi");                                        // r12 = callable descriptor pointer
     emitter.instruction("mov r13, rsi");                                        // r13 = Fiber class_id
@@ -78,14 +78,14 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     // -- allocate the Fiber object payload --
     emitter.instruction(&format!("mov rax, {}", FIBER_OBJECT_SIZE));            // size in bytes for the Fiber object payload
     emitter.instruction("call __rt_heap_alloc");                                // rax = pointer to the object payload
-    emitter.instruction("mov r14, rax");                                        // r14 = Fiber object pointer kept until return
+    emitter.instruction("mov rbx, rax");                                        // rbx = Fiber object pointer kept until return
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
-    emitter.instruction("mov QWORD PTR [r14 - 8], r10");                        // stamp the allocation as an object instance
+    emitter.instruction("mov QWORD PTR [rbx - 8], r10");                        // stamp the allocation as an object instance
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new Fiber object to its PHP object handle (rax still holds it)
-    emitter.instruction("mov QWORD PTR [r14], r13");                            // store the runtime class_id at the object header
+    emitter.instruction("mov QWORD PTR [rbx], r13");                            // store the runtime class_id at the object header
 
     // -- zero-initialise every Fiber field before populating meaningful ones --
-    emitter.instruction("lea r10, [r14 + 8]");                                  // r10 = first runtime-managed Fiber field after class_id
+    emitter.instruction("lea r10, [rbx + 8]");                                  // r10 = first runtime-managed Fiber field after class_id
     emitter.instruction(&format!("mov r11, {}", (FIBER_OBJECT_SIZE - 8) / 8));  // r11 = number of qword fields to clear
     emitter.label("__rt_fiber_construct_zero_object_loop");
     emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the current runtime-managed Fiber qword field
@@ -94,22 +94,22 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_fiber_construct_zero_object_loop");           // continue until every runtime-managed field is zeroed
 
     emitter.instruction(&format!("mov r10, {}", FIBER_START_ARGS_MAX));         // default user_arg_max = full slot count
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r10", FIBER_USER_ARG_MAX_OFFSET)); // user_arg_max stored on the freshly built fiber
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r12", FIBER_CALLABLE_OFFSET)); // callable.lo = descriptor pointer
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r15", FIBER_CALLABLE_WRAPPER_OFFSET)); // callable wrapper = Fiber entry ABI adapter
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], r10", FIBER_USER_ARG_MAX_OFFSET)); // user_arg_max stored on the freshly built fiber
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], r12", FIBER_CALLABLE_OFFSET)); // callable.lo = descriptor pointer
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], r15", FIBER_CALLABLE_WRAPPER_OFFSET)); // callable wrapper = Fiber entry ABI adapter
 
     // -- allocate the per-fiber stack via mmap; alloc returns base/top/total --
     emitter.instruction(&format!("mov edi, {}", FIBER_DEFAULT_STACK_SIZE));     // request the default usable fiber stack size in bytes
     emitter.instruction("call __rt_fiber_alloc_stack");                         // rax = stack_base, rdx = stack_top, rcx = total mapped length
     emitter.instruction("test rax, rax");                                       // did mmap return a real stack mapping?
     emitter.instruction("jz __rt_fiber_construct_stack_failed");                // abort construction before writing a fake frame at NULL
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rax", FIBER_STACK_BASE_OFFSET)); // stack_base = mmap mapping start
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rdx", FIBER_STACK_TOP_OFFSET)); // stack_top = initial SP target
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rcx", FIBER_STACK_SIZE_OFFSET)); // stack_size = total mapped length
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], rax", FIBER_STACK_BASE_OFFSET)); // stack_base = mmap mapping start
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], rdx", FIBER_STACK_TOP_OFFSET)); // stack_top = initial SP target
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], rcx", FIBER_STACK_SIZE_OFFSET)); // stack_size = total mapped length
 
     // -- carve out and zero a fake initial frame at the top of the stack --
     emitter.instruction(&format!("lea r10, [rdx - {}]", initial_frame_bytes));  // r10 = initial saved_sp for the switch restore path
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r10", FIBER_SAVED_SP_OFFSET)); // saved_sp points at the fake switch frame
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], r10", FIBER_SAVED_SP_OFFSET)); // saved_sp points at the fake switch frame
     emitter.instruction("mov r11, r10");                                        // r11 = cursor through the fake frame
     emitter.instruction(&format!("mov rcx, {}", initial_frame_bytes / 8));      // rcx = number of qwords to zero in the fake frame
     emitter.label("__rt_fiber_construct_zero_frame_loop");
@@ -121,10 +121,10 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", initial_entry_offset)); // saved return address = entry trampoline
 
     // -- finish: state = NotStarted and return the new Fiber pointer --
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], {}", FIBER_STATE_OFFSET, FIBER_STATE_NOT_STARTED)); // state = NotStarted
-    emitter.instruction("mov rax, r14");                                        // return the freshly built Fiber pointer
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], {}", FIBER_STATE_OFFSET, FIBER_STATE_NOT_STARTED)); // state = NotStarted
+    emitter.instruction("mov rax, rbx");                                        // return the freshly built Fiber pointer
     emitter.instruction("pop r15");                                             // restore caller's r15
-    emitter.instruction("pop r14");                                             // restore caller's r14
+    emitter.instruction("pop rbx");                                             // restore caller's rbx
     emitter.instruction("pop r13");                                             // restore caller's r13
     emitter.instruction("pop r12");                                             // restore caller's r12
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

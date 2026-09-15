@@ -93,6 +93,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if with_crates.contains("regex") {
         ir_module.required_runtime_features.regex = true;
     }
+    // The ctx-register mode is published into the module's required features BEFORE
+    // user-code codegen runs, so the user Emitter and the main prologue branch on the
+    // same fact the runtime emitter will see below. Unconditional since the flag went:
+    // there is no second arm to select.
+    ir_module.required_runtime_features.ctx_register = true;
     let probe = with_crates.contains("probe");
     if probe {
         // A build that cannot produce a real key does not produce a binary. The
@@ -114,6 +119,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         ir_module.probe_key = Some(key);
     }
     let mut runtime_features = ir_module.required_runtime_features;
+    // Per-context state addressing is how this compiler emits, full stop. The feature
+    // bit stays in the runtime cache key rather than being deleted with the flag: a
+    // developer's cache may still hold legacy objects from before this change, and a key
+    // that stopped distinguishing them would serve one to a ctx build.
+    runtime_features.ctx_register = true;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
     // sole driver of the web runtime feature: it is CLI-driven, not derived from the
     // program, so the runtime cache (keyed on the generated assembly hash) keeps the

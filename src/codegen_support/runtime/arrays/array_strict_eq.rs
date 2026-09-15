@@ -217,7 +217,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("push r12");                                            // preserve callee-saved r12 (left array pointer)
     emitter.instruction("push r13");                                            // preserve callee-saved r13 (right array pointer)
-    emitter.instruction("push r14");                                            // preserve callee-saved r14 (left cursor)
+    emitter.instruction("push rbx");                                            // preserve callee-saved rbx (left cursor)
     emitter.instruction("push r15");                                            // preserve callee-saved r15 (right cursor)
     emitter.instruction("sub rsp, 96");                                         // reserve the Mixed value cells and key/cursor spill slots
 
@@ -230,14 +230,14 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_array_strict_eq_false");                      // reject on count mismatch
     emitter.instruction("test rax, rax");                                       // are both operands empty?
     emitter.instruction("je __rt_array_strict_eq_true");                        // two empty arrays are strictly equal
-    emitter.instruction("xor r14, r14");                                        // r14 = left cursor (fresh walk)
+    emitter.instruction("xor rbx, rbx");                                        // rbx = left cursor (fresh walk)
     emitter.instruction("xor r15, r15");                                        // r15 = right cursor (fresh walk)
 
     // Mixed-cell / spill layout relative to rsp: left cell [rsp+0..23], right cell [rsp+24..47],
     // left key [rsp+48..63], left next cursor [rsp+64], right next cursor [rsp+72].
     emitter.label("__rt_array_strict_eq_loop");
     emitter.instruction("mov rdi, r12");                                        // iterate the left operand
-    emitter.instruction("mov rsi, r14");                                        // from the left cursor
+    emitter.instruction("mov rsi, rbx");                                        // from the left cursor
     emitter.instruction("call __rt_array_iter_next");                           // rax=next, rcx=key_lo, rdx=key_hi, r8=tag, r9=lo, r10=hi
     emitter.instruction("mov QWORD PTR [rsp + 64], rax");                       // spill the left next cursor
     emitter.instruction("mov QWORD PTR [rsp + 48], rcx");                       // spill the left key low word
@@ -268,7 +268,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_strict_eq");                           // deep value comparison (recurses here for nested arrays)
     emitter.instruction("test rax, rax");                                       // did the values differ?
     emitter.instruction("je __rt_array_strict_eq_false");                       // reject on differing values
-    emitter.instruction("mov r14, QWORD PTR [rsp + 64]");                       // advance the left cursor
+    emitter.instruction("mov rbx, QWORD PTR [rsp + 64]");                       // advance the left cursor
     emitter.instruction("mov r15, QWORD PTR [rsp + 72]");                       // advance the right cursor
     emitter.instruction("jmp __rt_array_strict_eq_loop");                       // continue the lock-step walk
 
@@ -287,7 +287,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_strict_eq_done");
     emitter.instruction("add rsp, 96");                                         // release the Mixed value cells and spill slots
     emitter.instruction("pop r15");                                             // restore callee-saved r15
-    emitter.instruction("pop r14");                                             // restore callee-saved r14
+    emitter.instruction("pop rbx");                                             // restore callee-saved rbx
     emitter.instruction("pop r13");                                             // restore callee-saved r13
     emitter.instruction("pop r12");                                             // restore callee-saved r12
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

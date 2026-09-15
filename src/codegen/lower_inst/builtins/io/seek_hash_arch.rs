@@ -70,7 +70,7 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip EOF reset after a failed seek
     ctx.emitter.label(success_label);
     abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("lea r11, [rip + _eof_flags]");                     // materialize the EOF-flag table base
+    abi::emit_symbol_address(ctx.emitter, "r11", "_eof_flags");                 // materialize the EOF-flag table base
     ctx.emitter.instruction("mov BYTE PTR [r11 + r10], 0");                     // clear EOF state for the successfully repositioned stream
     ctx.emitter.instruction("xor eax, eax");                                    // fseek returns 0 after a successful seek
     ctx.emitter.label(done_label);
@@ -144,7 +144,7 @@ pub(super) fn lower_rewind_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip EOF reset after a failed rewind
     ctx.emitter.label(success_label);
     abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("lea r11, [rip + _eof_flags]");                     // materialize the EOF-flag table base
+    abi::emit_symbol_address(ctx.emitter, "r11", "_eof_flags");                 // materialize the EOF-flag table base
     ctx.emitter.instruction("mov BYTE PTR [r11 + r10], 0");                     // clear EOF state after rewinding the stream
     ctx.emitter.instruction("mov rax, 1");                                      // rewind returns true after a successful seek
     ctx.emitter.label(done_label);

@@ -1429,8 +1429,7 @@ fn emit_throw_exception_aarch64(
     emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
     emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
-    abi::emit_symbol_address(emitter, "x9", "_exc_value");
-    emitter.instruction("str x0, [x9]");                                        // publish the active exception object
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the active exception object
     emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
 }
 

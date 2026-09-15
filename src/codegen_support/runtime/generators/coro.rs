@@ -215,9 +215,9 @@ fn emit_gen_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("push r12");                                            // preserve r12 (generator object cache)
     emitter.instruction("push r13");                                            // preserve r13 (parked boxed value)
-    emitter.instruction("push r14");                                            // preserve r14 (parked boxed key)
+    emitter.instruction("push r15");                                            // preserve r15 (parked boxed key)
     emitter.instruction("sub rsp, 8");                                          // keep the stack 16-byte aligned across nested calls
-    emitter.instruction("mov r14, rdi");                                        // r14 = boxed key cell (NULL means auto-increment)
+    emitter.instruction("mov r15, rdi");                                        // r15 = boxed key cell (NULL means auto-increment)
     emitter.instruction("mov r13, rsi");                                        // r13 = boxed yielded value (ownership moving into the generator)
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0); // r12 = the generator coroutine currently running
 
@@ -227,10 +227,10 @@ fn emit_gen_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_mixed");                              // release the previous last_value (NULL is safe)
 
     // -- record the key: explicit cell, or a boxed auto-increment integer --
-    emitter.instruction("test r14, r14");                                       // was an explicit key supplied?
+    emitter.instruction("test r15, r15");                                       // was an explicit key supplied?
     emitter.instruction("jz __rt_gen_suspend_auto_key");                        // branch to the auto-key path when no explicit key was supplied
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_KEY_OFFSET)); // rax = previous last_key occupant
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r14", GEN_LAST_KEY_OFFSET)); // store the explicit yielded key
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r15", GEN_LAST_KEY_OFFSET)); // store the explicit yielded key
     emitter.instruction("call __rt_decref_mixed");                              // release the previous last_key (NULL is safe)
     emitter.instruction("jmp __rt_gen_suspend_yield");                          // skip the auto-key path
 
@@ -254,7 +254,7 @@ fn emit_gen_suspend_x86_64(emitter: &mut Emitter) {
 
     // -- epilogue: rax already holds the resumer-delivered value (owned) --
     emitter.instruction("add rsp, 8");                                          // release the alignment pad
-    emitter.instruction("pop r14");                                             // restore caller's r14
+    emitter.instruction("pop r15");                                             // restore caller's r15
     emitter.instruction("pop r13");                                             // restore caller's r13
     emitter.instruction("pop r12");                                             // restore caller's r12
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

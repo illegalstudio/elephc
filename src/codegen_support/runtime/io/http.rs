@@ -648,14 +648,14 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, 7");                                          // 7 + host_len = required min length
     emitter.instruction("cmp r13, rax");                                        // compare runtime values for the next branch
     emitter.instruction("jl __rt_http_open_check_err_x");                       // buffer too short for same-host URL
-    abi::emit_load_symbol_to_reg(emitter, "r14", "_http_active_host_ptr", 0);   // r14 = active host ptr
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_http_active_host_ptr", 0);    // r8 = active host ptr (caller-saved scratch; rbx belongs to the allocator)
     emitter.instruction("xor rcx, rcx");                                        // host compare index
     emitter.label("__rt_http_open_loc_host_cmp_x");
     emitter.instruction("cmp rcx, r9");                                         // compare runtime values for the next branch
     emitter.instruction("jge __rt_http_open_loc_host_ok_x");                    // branch when comparison is at least target
     emitter.instruction("lea rax, [rcx + 7]");                                  // buf offset = 7 + i
     emitter.instruction("movzx edx, BYTE PTR [r12 + rax]");                     // redirect buf byte
-    emitter.instruction("movzx eax, BYTE PTR [r14 + rcx]");                     // active host byte
+    emitter.instruction("movzx eax, BYTE PTR [r8 + rcx]");                     // active host byte
     emitter.instruction("cmp dl, al");                                          // compare runtime values for the next branch
     emitter.instruction("jne __rt_http_open_check_err_x");                      // host differs → don't follow cross-host
     emitter.instruction("inc rcx");                                             // advance runtime pointer or counter

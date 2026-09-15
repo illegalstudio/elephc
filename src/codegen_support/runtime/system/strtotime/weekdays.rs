@@ -220,43 +220,43 @@ fn emit_weekdays_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r12d, 8");                                         // this ?
     emitter.instruction("je __rt_strtotime_weekdays_this_linux_x86_64");        // modifier is "this"
     // -- last semantics: delta = -((current - target + 7) mod 7); if 0 → -7 --
-    emitter.instruction("mov r14d, r13d");                                      // current
-    emitter.instruction("sub r14d, r11d");                                      // current - target
-    emitter.instruction("add r14d, 7");                                         // + 7 (range [1..13])
-    emitter.instruction("cmp r14d, 7");                                         // need mod 7
+    emitter.instruction("mov r15d, r13d");                                      // current
+    emitter.instruction("sub r15d, r11d");                                      // current - target
+    emitter.instruction("add r15d, 7");                                         // + 7 (range [1..13])
+    emitter.instruction("cmp r15d, 7");                                         // need mod 7
     emitter.instruction("jb __rt_strtotime_weekdays_last_negate_linux_x86_64"); // < 7 → already reduced
-    emitter.instruction("sub r14d, 7");                                         // ≥ 7 → subtract 7
+    emitter.instruction("sub r15d, 7");                                         // ≥ 7 → subtract 7
     emitter.label("__rt_strtotime_weekdays_last_negate_linux_x86_64");
-    emitter.instruction("neg r14d");                                            // negate
-    emitter.instruction("test r14d, r14d");                                     // delta == 0 ?
+    emitter.instruction("neg r15d");                                            // negate
+    emitter.instruction("test r15d, r15d");                                     // delta == 0 ?
     emitter.instruction("jnz __rt_strtotime_weekdays_apply_linux_x86_64");      // no → apply
-    emitter.instruction("mov r14d, -7");                                        // step back a week
+    emitter.instruction("mov r15d, -7");                                        // step back a week
     emitter.instruction("jmp __rt_strtotime_weekdays_apply_linux_x86_64");      // apply
 
     emitter.label("__rt_strtotime_weekdays_next_linux_x86_64");
-    emitter.instruction("mov r14d, r11d");                                      // target
-    emitter.instruction("sub r14d, r13d");                                      // target - current
-    emitter.instruction("add r14d, 7");                                         // + 7 (range [1..13])
-    emitter.instruction("cmp r14d, 7");                                         // need mod 7
+    emitter.instruction("mov r15d, r11d");                                      // target
+    emitter.instruction("sub r15d, r13d");                                      // target - current
+    emitter.instruction("add r15d, 7");                                         // + 7 (range [1..13])
+    emitter.instruction("cmp r15d, 7");                                         // need mod 7
     emitter.instruction("jb __rt_strtotime_weekdays_next_check_linux_x86_64");  // < 7 → already reduced
-    emitter.instruction("sub r14d, 7");                                         // ≥ 7 → subtract 7
+    emitter.instruction("sub r15d, 7");                                         // ≥ 7 → subtract 7
     emitter.label("__rt_strtotime_weekdays_next_check_linux_x86_64");
-    emitter.instruction("test r14d, r14d");                                     // delta == 0 ?
+    emitter.instruction("test r15d, r15d");                                     // delta == 0 ?
     emitter.instruction("jnz __rt_strtotime_weekdays_apply_linux_x86_64");      // no → apply
-    emitter.instruction("mov r14d, 7");                                         // step forward a week
+    emitter.instruction("mov r15d, 7");                                         // step forward a week
     emitter.instruction("jmp __rt_strtotime_weekdays_apply_linux_x86_64");      // apply
 
     emitter.label("__rt_strtotime_weekdays_this_linux_x86_64");
-    emitter.instruction("mov r14d, r11d");                                      // target
-    emitter.instruction("sub r14d, r13d");                                      // target - current
-    emitter.instruction("add r14d, 7");                                         // + 7 (range [1..13])
-    emitter.instruction("cmp r14d, 7");                                         // need mod 7
+    emitter.instruction("mov r15d, r11d");                                      // target
+    emitter.instruction("sub r15d, r13d");                                      // target - current
+    emitter.instruction("add r15d, 7");                                         // + 7 (range [1..13])
+    emitter.instruction("cmp r15d, 7");                                         // need mod 7
     emitter.instruction("jb __rt_strtotime_weekdays_apply_linux_x86_64");       // < 7 → already reduced
-    emitter.instruction("sub r14d, 7");                                         // ≥ 7 → subtract 7
+    emitter.instruction("sub r15d, 7");                                         // ≥ 7 → subtract 7
 
     emitter.label("__rt_strtotime_weekdays_apply_linux_x86_64");
     emitter.instruction("mov eax, DWORD PTR [rsp + 12]");                       // tm_mday
-    emitter.instruction("add eax, r14d");                                       // tm_mday += delta
+    emitter.instruction("add eax, r15d");                                       // tm_mday += delta
     emitter.instruction("mov DWORD PTR [rsp + 12], eax");                       // store
     emitter.instruction("mov rdi, rsp");                                        // rdi = &tm
     emitter.instruction("call __rt_mktime_shifted");                            // → rax = ts

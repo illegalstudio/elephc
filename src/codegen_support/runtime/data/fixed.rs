@@ -55,8 +55,6 @@ use crate::types::checker::builtins::{
 pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
-    out.push_str(&comm_directive("_concat_buf", 65536, target));
-    out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive("_unser_depth", 8, target));
     out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
     out.push_str(&comm_directive("_unser_allowed_mode", 8, target));
@@ -119,38 +117,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".globl _diag_sprintf_object_to_float_suffix\n_diag_sprintf_object_to_float_suffix:\n    .ascii {SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX:?}\n"
     ));
     out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
-    // print_r($value, true) return-mode capture state. _print_r_mode is a flag
-    // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
-    // __rt_stdout_write and __rt_pr_write; _print_r_off tracks the accumulated
-    // byte count; _print_r_buf is the 64 KiB accumulation buffer finalized by
-    // __rt_pr_finish into an owned heap string. Only non-zero during an active
-    // print_r return-mode rendering, so non-print_r output is unaffected.
-    out.push_str(&comm_directive("_print_r_mode", 8, target));
-    out.push_str(&comm_directive("_print_r_off", 8, target));
-    out.push_str(&comm_directive("_print_r_buf", 65536, target));
-    // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
-    // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
-    // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
-    // arrays (heap buffer base pointer, used bytes, capacity) indexed by level-1.
-    // Buffers are heap-allocated by __rt_ob_start, grown by __rt_ob_append, and
-    // written to the terminal sink by __rt_ob_flush_all at process exit.
-    out.push_str(&comm_directive("_ob_level", 8, target));
-    out.push_str(&comm_directive("_ob_ptrs", 512, target));
-    out.push_str(&comm_directive("_ob_lens", 512, target));
-    out.push_str(&comm_directive("_ob_caps", 512, target));
-    // Per-level output-buffer metadata (parallel to _ob_ptrs, indexed by level-1):
-    // the user-handler invocation stub + env word (stub 0 = default handler; env
-    // is a retained callable-descriptor pointer for AOT handlers or a magician
-    // registry id for eval handlers), the persisted handler display name
-    // (ptr/len), the auto-flush chunk size, the ob_start() flags word, and the
-    // started flag (set at the first handler invocation; feeds PHP started bits).
-    out.push_str(&comm_directive("_ob_handler_stubs", 512, target));
-    out.push_str(&comm_directive("_ob_handler_envs", 512, target));
-    out.push_str(&comm_directive("_ob_name_ptrs", 512, target));
-    out.push_str(&comm_directive("_ob_name_lens", 512, target));
-    out.push_str(&comm_directive("_ob_chunk_sizes", 512, target));
-    out.push_str(&comm_directive("_ob_flags", 512, target));
-    out.push_str(&comm_directive("_ob_started", 512, target));
     // _ob_in_handler: non-zero while a user output handler runs. Output produced
     // inside a handler is discarded (PHP behavior) via the __rt_stdout_write and
     // __rt_pr_write branches, and ob_start() inside a handler is a fatal error.
@@ -264,22 +230,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     }
     out.push_str(&comm_directive("_global_argc", 8, target));
     out.push_str(&comm_directive("_global_argv", 8, target));
-    out.push_str(&comm_directive("_exc_handler_top", 8, target));
-    out.push_str(&comm_directive("_exc_call_frame_top", 8, target));
-    out.push_str(&comm_directive("_exc_value", 8, target));
-    out.push_str(&comm_directive("_fiber_current", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));
-    out.push_str(&comm_directive("_fiber_main_saved_call_frame", 8, target));
-    // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
-    // execution context that is running right now: every compiled function prologue does an
-    // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow
-    // when it is below. Zero (the .comm default) disables the guard, so a program that never
-    // runs __rt_stack_limit_init keeps the pre-guard behavior. _stack_limit_main remembers
-    // the OS-thread floor so __rt_fiber_switch can restore it when control leaves a fiber
-    // stack; while a fiber runs, _stack_limit holds that fiber's own floor instead.
-    out.push_str(&comm_directive("_stack_limit", 8, target));
-    out.push_str(&comm_directive("_stack_limit_main", 8, target));
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
     // elephc_probe_route_fn: a function-pointer slot the sampling probe fills at init
     // (with elephc_probe_set_route) and the --web bridge reads to tag samples by route.
@@ -379,9 +329,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         target,
     ));
     out.push_str(&comm_directive("_heap_buf", heap_size, target));
-    out.push_str(&comm_directive("_heap_off", 8, target));
-    out.push_str(&comm_directive("_heap_free_list", 8, target));
-    out.push_str(&comm_directive("_heap_small_bins", 32, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
     // Generation-safe buffer descriptor registry. Public Buffer values are
@@ -437,7 +384,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8,
         target,
     ));
-    out.push_str(&comm_directive("_gc_collecting", 8, target));
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
     out.push_str(&comm_directive("_json_last_error", 8, target));
     out.push_str(&comm_directive("_json_active_flags", 8, target));
@@ -734,24 +680,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
     out.push_str(".globl _fiber_msg_switch_signal\n_fiber_msg_switch_signal:\n    .ascii \"Cannot switch fibers in current execution context\"\n");
     out.push_str(&emit_builtin_callable_data(target));
-    out.push_str(&comm_directive("_gc_allocs", 8, target));
-    out.push_str(&comm_directive("_gc_frees", 8, target));
-    out.push_str(&comm_directive("_gc_live", 8, target));
-    out.push_str(&comm_directive("_gc_peak", 8, target));
-    out.push_str(&comm_directive("_cstr_buf", 4096, target));
-    out.push_str(&comm_directive("_cstr_buf2", 4096, target));
-    out.push_str(&comm_directive("_eof_flags", 256, target));
-    out.push_str(&comm_directive("_popen_files", 2048, target));
-    out.push_str(&comm_directive("_dir_handles", 2048, target));
-    // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
-    // a heap-allocated glob_state struct (pathv ptr + pathc + index + the
-    // libc glob_t whose lifetime globfree() needs at closedir time). The
-    // readdir/closedir/rewinddir helpers probe this table first; a non-zero
-    // entry routes them through the glob iterator instead of the libc DIR*.
-    out.push_str(&comm_directive("_glob_handles", 2048, target));
-    out.push_str(&comm_directive("_stream_read_filters", 256, target));
-    out.push_str(&comm_directive("_stream_write_filters", 256, target));
-    out.push_str(&comm_directive("_stream_filter_buf", 65536, target));
     // 64KB scratch used by length-growing stream filters (convert.base64-encode,
     // convert.quoted-printable-encode). The filter encodes into the scratch and
     // then memcpy()s back into the caller's buffer, capping input at 49152 bytes
@@ -764,10 +692,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_phar_zlib_inflate_fn", 8, target));
     out.push_str(&comm_directive("_phar_zlib_inflate_end_fn", 8, target));
     out.push_str(".globl _zlib_version\n_zlib_version:\n    .asciz \"1\"\n");
-    // bzip2.compress write-filter state: per-fd bz_stream pointer table
-    // (_bzstream_handles, indexed by fd) plus the indirect fn-pointer slots the
-    // shared runtime calls through so non-bzip2 programs never link -lbz2.
-    out.push_str(&comm_directive("_bzstream_handles", 2048, target));
     out.push_str(&comm_directive("_bz2_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_bz2_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_bz2_decompress_fn", 8, target));
@@ -1464,6 +1388,35 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&system::emit_strtotime_data());
     out.push_str(&system::emit_pcntl_data());
     out.push_str(&emit_php_uname_data());
+    // Per-context state block for the ctx-register spike: one instance, emitted
+    // after the legacy globals so both addressing modes coexist during A/B.
+    //
+    // `.comm`, like every other runtime global — NOT `.space` inside `.data`.
+    // The block is 64 KiB of zeroes and `.data` is written to the image, so the
+    // first version made every ctx binary ~66 KB larger than its legacy twin
+    // (70 KB -> 136 KB for a small program). A common symbol lands in the
+    // zero-filled section instead, which is also where `_heap_buf` puts its
+    // whole 8 MiB arena.
+    out.push_str(&comm_directive(
+        "_rt_ctx",
+        crate::codegen_support::runtime::ctx::CTX_SIZE,
+        target,
+    ));
+    // The pool `__rt_ctx_acquire` hands out from, plus one state word per slot.
+    // Common symbols like the rest: about 1.7 MiB of zeroes that never reach the
+    // image. Slot 0 is not the main context — `_rt_ctx` stays its own block, so a
+    // binary that never spawns pays only the BSS reservation.
+    out.push_str(&comm_directive(
+        "_rt_ctx_pool",
+        crate::codegen_support::runtime::ctx::CTX_SIZE
+            * crate::codegen_support::runtime::ctx::CTX_POOL_SLOTS,
+        target,
+    ));
+    out.push_str(&comm_directive(
+        "_rt_ctx_state",
+        8 * crate::codegen_support::runtime::ctx::CTX_POOL_SLOTS,
+        target,
+    ));
 
     out
 }
@@ -1578,17 +1531,18 @@ mod tests {
         }
     }
 
-    /// Pins the symbol whose under-alignment broke linux-aarch64 linking, so a future
-    /// hand-written `.comm` for it cannot regress past the sweep above.
+    /// An eight-byte `.comm` carries alignment 8 on ELF, so a 64-bit load of it cannot
+    /// hit `relocation truncated to fit`.
+    ///
+    /// The symbol this pinned was `_stack_limit`, whose under-alignment once broke every
+    /// linux-aarch64 link. It is per-context now and no longer declared here, so the test
+    /// follows the RULE rather than the symbol: `_unser_depth` is the same shape, and the
+    /// sweep above covers the rest.
     #[test]
-    fn test_stack_limit_is_eight_byte_aligned_on_elf() {
-        let asm = emit_runtime_data_fixed(
-            8_388_608,
-            Target::new(Platform::Linux, Arch::AArch64),
-        );
+    fn test_eight_byte_comms_are_eight_byte_aligned_on_elf() {
+        let asm = emit_runtime_data_fixed(8_388_608, Target::new(Platform::Linux, Arch::AArch64));
 
-        assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
-        assert!(asm.contains(".comm _stack_limit_main, 8, 8\n"));
+        assert!(asm.contains(".comm _unser_depth, 8, 8\n"), "{asm}");
     }
 
     /// The function-pointer slots a *Rust* bridge crate resolves must be spelled with the

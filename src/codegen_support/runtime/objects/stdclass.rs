@@ -139,16 +139,15 @@ fn emit_json_encode_stdclass_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_encode_stdclass_empty");
     // Emit the literal "{}" into _concat_buf at the current offset and
     // return (ptr, len) for the active string-result ABI.
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // x10 = current concat-buffer offset
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x12, x11, x10");                                   // x12 = output write pointer for this encoder call
     emitter.instruction("mov w13, #123");                                       // ASCII '{'
     emitter.instruction("strb w13, [x12]");                                     // write '{' at the output position
     emitter.instruction("mov w13, #125");                                       // ASCII '}'
     emitter.instruction("strb w13, [x12, #1]");                                 // write '}' immediately after '{'
     emitter.instruction("add x10, x10, #2");                                    // advance the concat-buffer offset by the two emitted bytes
-    emitter.instruction("str x10, [x9]");                                       // persist the new offset for any subsequent encoder
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // persist the new offset for any subsequent encoder (ctx-relative in ctx mode)
     emitter.instruction("mov x1, x12");                                         // result string pointer
     emitter.instruction("mov x2, #2");                                          // result string length
     emitter.instruction("ret");                                                 // return (ptr, len) to the caller via the ABI string registers
@@ -433,13 +432,13 @@ fn emit_json_encode_stdclass_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_json_encode_assoc");                          // non-empty → defer to the assoc encoder
 
     // Empty hash: emit "{}" into _concat_buf and return (rax, rdx).
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // r10 = current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // r11 = base of the concat buffer
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");             // r10 = current concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");                    // r11 = base of the concat buffer
     emitter.instruction("add r11, r10");                                        // r11 = output write pointer for this encoder call
     emitter.instruction("mov BYTE PTR [r11], 123");                             // write '{' at the output position
     emitter.instruction("mov BYTE PTR [r11 + 1], 125");                         // write '}' immediately after '{'
     emitter.instruction("add r10, 2");                                          // advance the concat-buffer offset by the two emitted bytes
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // persist the new offset for any subsequent encoder
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r10");            // persist the new offset for any subsequent encoder
     emitter.instruction("mov rax, r11");                                        // result string pointer in the leading x86_64 string register
     emitter.instruction("mov rdx, 2");                                          // result string length in the paired x86_64 string register
     emitter.instruction("ret");                                                 // return (ptr, len) to the caller via the ABI string registers

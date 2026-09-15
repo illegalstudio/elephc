@@ -254,6 +254,12 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.entry_label();
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    // The ctx-register mode installs the per-context state pointer (x28/r14)
+    // before any state read or write runs: concat base capture, heap helpers,
+    // and the runtime's ctx-gated emitters all address state relative to it.
+    ctx.emitter
+        .comment("install the per-context runtime state pointer");
+    abi::emit_call_label(ctx.emitter, "__rt_ctx_init");
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     ctx.emitter.comment("save argc/argv to globals");
@@ -443,7 +449,7 @@ fn retain_owned_parameter_local(emitter: &mut Emitter, offset: usize, ty: &PhpTy
 /// Captures the caller-visible concat-buffer offset as this frame's reset base.
 fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(ctx.emitter, scratch);
     abi::store_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
 }
 

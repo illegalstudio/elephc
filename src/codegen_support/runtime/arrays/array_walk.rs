@@ -87,10 +87,10 @@ fn emit_array_walk_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved source array and source length
     emitter.instruction("push r12");                                            // preserve the callback address register because the walk loop calls through it repeatedly
     emitter.instruction("push r13");                                            // preserve the source-index register because the loop keeps it live across callback invocations
-    emitter.instruction("push r14");                                            // preserve the optional callback environment pointer across callback invocations
+    emitter.instruction("push r15");                                            // preserve the optional callback environment pointer across callback invocations
     emitter.instruction("sub rsp, 24");                                         // reserve local slots for the source array pointer and source length
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the walk loop
-    emitter.instruction("mov r14, rdx");                                        // keep the optional callback environment pointer across every callback invocation
+    emitter.instruction("mov r15, rdx");                                        // keep the optional callback environment pointer across every callback invocation
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the source array pointer so the loop can reload it after callback calls
     emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the array header
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the source array length for loop termination checks
@@ -101,9 +101,9 @@ fn emit_array_walk_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_array_walk_done");                            // finish walking once every source element has been passed to the callback
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the source array pointer after the previous callback invocation
     emitter.instruction("mov rdi, QWORD PTR [r10 + r13 * 8 + 24]");             // load the current source element into the first SysV integer argument register
-    emitter.instruction("test r14, r14");                                       // check whether this runtime call carries a callback capture environment
+    emitter.instruction("test r15, r15");                                       // check whether this runtime call carries a callback capture environment
     emitter.instruction("jz __rt_array_walk_call_linux_x86_64");                // keep legacy one-argument callback ABI when no environment is present
-    emitter.instruction("mov rsi, r14");                                        // pass capture environment as the wrapper's second argument
+    emitter.instruction("mov rsi, r15");                                        // pass capture environment as the wrapper's second argument
     emitter.label("__rt_array_walk_call_linux_x86_64");
     emitter.instruction("call r12");                                            // invoke the user callback with the current source element and ignore the scalar return value
     emitter.instruction("add r13, 1");                                          // advance the source index after visiting the current element
@@ -111,7 +111,7 @@ fn emit_array_walk_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_walk_done");
     emitter.instruction("add rsp, 24");                                         // release the walk local bookkeeping slots before restoring callee-saved registers
-    emitter.instruction("pop r14");                                             // restore the caller callback-environment callee-saved register
+    emitter.instruction("pop r15");                                             // restore the caller callback-environment callee-saved register
     emitter.instruction("pop r13");                                             // restore the caller source-index callee-saved register
     emitter.instruction("pop r12");                                             // restore the caller callback callee-saved register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning void

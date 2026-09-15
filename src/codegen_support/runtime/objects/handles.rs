@@ -104,7 +104,7 @@ fn emit_object_handle_acquire_arm64(emitter: &mut Emitter) {
     emitter.instruction("str x15, [sp, #48]");                                  // preserve the fresh-handle increment scratch
 
     emitter.instruction("cbz x0, __rt_object_handle_acquire_done");             // a null allocation carries no identity
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("subs x10, x0, x9");                                    // x10 = payload offset from the heap base
     emitter.instruction("b.lo __rt_object_handle_acquire_done");                // reject pointers that do not belong to the managed heap
     emitter.instruction("lsr x10, x10, #4");                                    // x10 = 16-byte granule index of this block
@@ -147,11 +147,10 @@ fn emit_object_handle_of_arm64(emitter: &mut Emitter) {
     emitter.label_global("__rt_object_handle_of");
 
     emitter.instruction("cbz x0, __rt_object_handle_of_zero");                  // null objects have no handle
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the pointer below the managed heap?
     emitter.instruction("b.lo __rt_object_handle_of_zero");                     // static and foreign pointers carry no handle
-    abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current heap bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap bump offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the live heap end
     emitter.instruction("cmp x0, x10");                                         // is the pointer at or beyond the live heap end?
     emitter.instruction("b.hs __rt_object_handle_of_zero");                     // pointers past the live heap carry no handle
@@ -182,7 +181,7 @@ fn emit_object_handle_release_arm64(emitter: &mut Emitter) {
     emitter.instruction("stp x13, x14, [sp, #32]");                             // preserve the table-address and handle scratch pair
 
     emitter.instruction("cbz x0, __rt_object_handle_release_done");             // null payloads never held a handle
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("subs x10, x0, x9");                                    // x10 = payload offset from the heap base
     emitter.instruction("b.lo __rt_object_handle_release_done");                // pointers below the heap never held a handle
     emitter.instruction("lsr x10, x10, #4");                                    // x10 = 16-byte granule index of this block
@@ -224,7 +223,7 @@ fn emit_object_handle_acquire_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // is this a null allocation?
     emitter.instruction("jz __rt_object_handle_acquire_done");                  // a null allocation carries no identity
-    abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r11");
     emitter.instruction("cmp rax, r11");                                        // is the pointer below the managed heap?
     emitter.instruction("jb __rt_object_handle_acquire_done");                  // reject pointers that do not belong to the managed heap
     emitter.instruction("mov rdx, rax");                                        // copy the payload pointer before deriving its granule
@@ -273,11 +272,10 @@ fn emit_object_handle_of_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // is the candidate pointer null?
     emitter.instruction("jz __rt_object_handle_of_zero");                       // null objects have no handle
-    abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("cmp rax, r10");                                        // is the pointer below the managed heap?
     emitter.instruction("jb __rt_object_handle_of_zero");                       // static and foreign pointers carry no handle
-    abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current heap bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add r11, r10");                                        // compute the live heap end
     emitter.instruction("cmp rax, r11");                                        // is the pointer at or beyond the live heap end?
     emitter.instruction("jae __rt_object_handle_of_zero");                      // pointers past the live heap carry no handle
@@ -311,7 +309,7 @@ fn emit_object_handle_release_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // is the released payload pointer null?
     emitter.instruction("jz __rt_object_handle_release_done");                  // null payloads never held a handle
-    abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r11");
     emitter.instruction("cmp rax, r11");                                        // is the pointer below the managed heap?
     emitter.instruction("jb __rt_object_handle_release_done");                  // pointers below the heap never held a handle
     emitter.instruction("mov rdx, rax");                                        // copy the payload pointer before deriving its granule
@@ -360,12 +358,11 @@ fn emit_spl_object_hash_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     emitter.instruction("bl __rt_object_handle_of");                            // x0 = this object's PHP handle
-    abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // x8 = current scratch-buffer offset
-    abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // x9 = write cursor for the 32 hash bytes
     emitter.instruction("add x10, x8, #32");                                    // reserve exactly 32 scratch bytes
-    emitter.instruction("str x10, [x6]");                                       // publish the advanced scratch offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the advanced scratch offset (ctx-relative in ctx mode)
 
     emitter.instruction("mov x11, #15");                                        // start at the most significant of the 16 nibbles
     emitter.label("__rt_spl_object_hash_nibble");
@@ -412,14 +409,13 @@ fn emit_spl_object_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 8");                                          // restore the SysV 16-byte call alignment the odd push broke
 
     emitter.instruction("call __rt_object_handle_of");                          // rax = this object's PHP handle
-    abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // r9 = current scratch-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("mov rbx, r10");                                        // rbx = write cursor for the 32 hash bytes
     emitter.instruction("add rbx, r9");                                         // advance the cursor to the reserved scratch slot
     emitter.instruction("mov r11, r9");                                         // copy the offset before reserving space
     emitter.instruction("add r11, 32");                                         // reserve exactly 32 scratch bytes
-    emitter.instruction("mov QWORD PTR [r8], r11");                             // publish the advanced scratch offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r11"); // publish the advanced scratch offset
 
     emitter.instruction("mov r8, 15");                                          // start at the most significant of the 16 nibbles
     emitter.label("__rt_spl_object_hash_nibble");
@@ -447,7 +443,7 @@ fn emit_spl_object_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r8, 1");                                           // count the padding byte
     emitter.instruction("jnz __rt_spl_object_hash_pad");                        // keep padding to the full 32 bytes
 
-    abi::emit_symbol_address(emitter, "rax", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "rax");
     emitter.instruction("add rax, r9");                                         // rax = pointer to the first hash byte
     emitter.instruction("mov rdx, 32");                                         // rdx = PHP's fixed spl_object_hash length
     emitter.instruction("add rsp, 8");                                          // release the alignment pad

@@ -540,10 +540,14 @@ fn class_id_work_reg(emitter: &crate::codegen::emit::Emitter) -> &'static str {
 }
 
 /// Returns the scratch register used for class-id branch comparisons.
+///
+/// NOT r14 on x86_64: that is the reserved runtime-context register in
+/// `--rt-ctx` builds, and this is compiled user code, which reads per-context
+/// state through it.
 fn class_id_compare_reg(emitter: &crate::codegen::emit::Emitter) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => "x14",
-        Arch::X86_64 => "r14",
+        Arch::X86_64 => "r15",
     }
 }
 
@@ -991,8 +995,7 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
-            abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");             // materialize the active exception cell
-            ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
+            abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);  // publish the active exception object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
         }
         Arch::X86_64 => {

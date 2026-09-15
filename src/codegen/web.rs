@@ -118,21 +118,23 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     abi::emit_return(emitter);
 }
 
-/// Resets the PHP heap arena to a pristine bump-only state: `_heap_off = 0`, an empty
-/// ordered free list, and empty small-bin caches. Emitted as the final step of the
-/// per-request `__rt_web_reset`, so the whole arena is reclaimed at once after every
-/// refcounted per-request value has already been released above. Valid only under
-/// `--web` full-reset semantics — nothing in the PHP arena legitimately survives a
-/// request; Rust-side state (the PDO persistent-connection pool, bridge result cells)
-/// lives outside `_heap_buf` and is unaffected.
+/// Resets the PHP heap arena to a pristine bump-only state: heap offset zero, an
+/// empty ordered free list, and empty small-bin caches. Emitted as the final
+/// step of the per-request `__rt_web_reset`, so the whole arena is reclaimed at
+/// once after every refcounted per-request value has already been released
+/// above. Valid only under `--web` full-reset semantics — nothing in the PHP
+/// arena legitimately survives a request; Rust-side state (the PDO
+/// persistent-connection pool, bridge result cells) lives outside `_heap_buf`
+/// and is unaffected.
+///
+/// The reset itself is delegated to `ctx::emit_heap_arena_reset_state` so the
+/// writes target the per-context fields in ctx-register mode and the legacy
+/// globals otherwise — a legacy-symbol write under ctx would silently miss the
+/// live allocator state (the same partial-routing hazard the spike documented
+/// for the free path).
 fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
-    abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 8);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 16);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 24);
+    crate::codegen_support::runtime::ctx::emit_heap_arena_reset_state(emitter);
 }
 
 /// Resets one function static local: skips uninitialized slots, releases any
@@ -261,7 +263,7 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
 /// correct base; the handler then captures this fresh base for its frame.
 fn emit_concat_offset_reset(emitter: &mut Emitter) {
     emitter.comment("reset the concat-buffer write offset for the next request");
-    abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
 }
 
 /// Returns `(storage_symbol, php_type)` for every refcounted static class

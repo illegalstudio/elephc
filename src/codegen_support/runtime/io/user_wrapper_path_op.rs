@@ -218,8 +218,7 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [r12]");                            // stored protocol pointer
     emitter.instruction("test r13, r13");                                       // is this slot empty?
     emitter.instruction("jz __rt_uwpo_slot_next_x86");                          // skip empty slots
-    emitter.instruction("mov r14, QWORD PTR [r12 + 8]");                        // stored protocol length
-    emitter.instruction("cmp r14, r9");                                         // does the stored length match the scheme length?
+    emitter.instruction("cmp QWORD PTR [r12 + 8], r9");                    // does the stored protocol length match the scheme length? (memory operand: r14 is the reserved ctx register)
     emitter.instruction("jne __rt_uwpo_slot_next_x86");                         // length mismatch — try the next slot
     emitter.instruction("xor r15, r15");                                        // byte compare index
     emitter.label("__rt_uwpo_bytes_x86");
@@ -481,8 +480,7 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [r12]");                            // stored protocol pointer
     emitter.instruction("test r13, r13");                                       // is this slot empty?
     emitter.instruction("jz __rt_uwrn_slot_next_x86");                          // skip empty slots
-    emitter.instruction("mov r14, QWORD PTR [r12 + 8]");                        // stored protocol length
-    emitter.instruction("cmp r14, r9");                                         // does the stored length match the scheme length?
+    emitter.instruction("cmp QWORD PTR [r12 + 8], r9");                    // does the stored protocol length match the scheme length? (memory operand: r14 is the reserved ctx register)
     emitter.instruction("jne __rt_uwrn_slot_next_x86");                         // length mismatch — try the next slot
     emitter.instruction("xor r15, r15");                                        // byte compare index
     emitter.label("__rt_uwrn_bytes_x86");

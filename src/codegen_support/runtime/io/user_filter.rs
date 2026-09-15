@@ -733,11 +733,11 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
         emitter.instruction("mov r12, QWORD PTR [r11]");                        // class_id
         abi::emit_symbol_address(emitter, "r13", "_user_filter_vtable_ptrs");   // load runtime data address
         emitter.instruction("mov r13, QWORD PTR [r13 + r12 * 8]");              // vtable
-        emitter.instruction("mov r14, QWORD PTR [r13 + 16]");                   // slot 2 = onClose
-        emitter.instruction("test r14, r14");                                   // check whether the runtime value is zero
+        emitter.instruction("mov r15, QWORD PTR [r13 + 16]");                   // slot 2 = onClose
+        emitter.instruction("test r15, r15");                                   // check whether the runtime value is zero
         emitter.instruction(&format!("jz {}", no_method));                      // branch when the checked value is zero or equal
         emitter.instruction("mov rdi, r11");                                    // $this
-        emitter.instruction("call r14");                                        // call external helper
+        emitter.instruction("call r15");                                        // call external helper
         emitter.label(&no_method);
         // Clear the slot.
         emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // prepare SysV call argument

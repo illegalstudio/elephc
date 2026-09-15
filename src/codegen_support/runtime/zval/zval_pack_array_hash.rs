@@ -216,7 +216,8 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     // -- set up the frame and stash the elephc hash pointer --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 112");                                        // reserve hash/count/nTableSize/nTableMask/base/arData/bucket_idx/cursor/key_lo/key_hi/zval/nIndex/h/key slots
+    emitter.instruction("sub rsp, 128");                                        // reserve hash/count/nTableSize/nTableMask/base/arData/bucket_idx/cursor/key_lo/key_hi/zval/nIndex/h/key slots plus the callee-saved rbx spill
+    emitter.instruction("mov QWORD PTR [rbp - 120], rbx");                      // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the elephc hash pointer
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // count = hash header[0] (live entry count)
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the count (= nNumOfElements)
@@ -322,20 +323,20 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, QWORD PTR [rbp - 56]");                       // reload bucket_idx
     emitter.instruction("mov r13, r12");                                        // copy bucket_idx for the stride
     emitter.instruction("shl r13, 5");                                          // bucket_idx * 32 bytes per Bucket
-    emitter.instruction("lea r14, [r11 + r13]");                                // r14 = bucket address
+    emitter.instruction("lea rbx, [r11 + r13]");                                // rbx = bucket address
 
     // -- copy the 16-byte child zval into the bucket value slot --
     emitter.instruction("mov r15, QWORD PTR [rbp - 88]");                       // reload the child zval pointer
     emitter.instruction("mov rcx, QWORD PTR [r15]");                            // load the child zval value
-    emitter.instruction("mov QWORD PTR [r14], rcx");                            // store the value into bucket.val@0
+    emitter.instruction("mov QWORD PTR [rbx], rcx");                            // store the value into bucket.val@0
     emitter.instruction("mov rcx, QWORD PTR [r15 + 8]");                        // load the child zval type_info + u2
-    emitter.instruction("mov QWORD PTR [r14 + 8], rcx");                        // store type_info + u2 into bucket@8
+    emitter.instruction("mov QWORD PTR [rbx + 8], rcx");                        // store type_info + u2 into bucket@8
 
     // -- set bucket.h@16 and bucket.key@24 --
     emitter.instruction("mov rcx, QWORD PTR [rbp - 104]");                      // reload h
-    emitter.instruction("mov QWORD PTR [r14 + 16], rcx");                       // bucket.h = h
+    emitter.instruction("mov QWORD PTR [rbx + 16], rcx");                       // bucket.h = h
     emitter.instruction("mov rcx, QWORD PTR [rbp - 112]");                      // reload the key pointer
-    emitter.instruction("mov QWORD PTR [r14 + 24], rcx");                       // bucket.key = zend_string or NULL
+    emitter.instruction("mov QWORD PTR [rbx + 24], rcx");                       // bucket.key = zend_string or NULL
 
     // -- Z_NEXT chain: bucket.u2@12 = arHash[nIndex], then arHash[nIndex] = bucket_idx --
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload arData
@@ -343,13 +344,13 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, r12");                                        // copy nIndex for the stride
     emitter.instruction("shl r13, 2");                                          // nIndex * 4 bytes per hash index slot
     emitter.instruction("mov ecx, DWORD PTR [r11 + r13]");                      // ecx = arHash[nIndex] (the old chain head, 32-bit)
-    emitter.instruction("mov DWORD PTR [r14 + 12], ecx");                       // bucket.u2@12 (Z_NEXT) = old chain head
+    emitter.instruction("mov DWORD PTR [rbx + 12], ecx");                       // bucket.u2@12 (Z_NEXT) = old chain head
     emitter.instruction("mov r12, QWORD PTR [rbp - 56]");                       // reload bucket_idx
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload arData
     emitter.instruction("mov r13, QWORD PTR [rbp - 96]");                       // reload nIndex
-    emitter.instruction("mov r14, r13");                                        // copy nIndex for the stride
-    emitter.instruction("shl r14, 2");                                          // nIndex * 4 bytes per hash index slot
-    emitter.instruction("mov DWORD PTR [r11 + r14], r12d");                     // arHash[nIndex] = bucket_idx (HT_IDX_TO_HASH on 64-bit)
+    emitter.instruction("mov rbx, r13");                                        // copy nIndex for the stride
+    emitter.instruction("shl rbx, 2");                                          // nIndex * 4 bytes per hash index slot
+    emitter.instruction("mov DWORD PTR [r11 + rbx], r12d");                     // arHash[nIndex] = bucket_idx (HT_IDX_TO_HASH on 64-bit)
 
     // -- release the temporary child zval block (ownership transfers to the bucket) --
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the child zval pointer
@@ -380,7 +381,8 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // nNextFreeElement = 0 at offset 40 (64-bit)
     emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // pDestructor = NULL
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // return the HashTable pointer
-    emitter.instruction("add rsp, 112");                                        // release the local slots
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 120]");                      // restore the caller's callee-saved rbx value
+    emitter.instruction("add rsp, 128");                                        // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the zend_array pointer in rax
 }

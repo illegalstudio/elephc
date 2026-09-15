@@ -142,16 +142,16 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved source pointer and cloned array pointer
     emitter.instruction("push r12");                                            // preserve r12 because the clone helper uses it for the source length across nested helper calls
     emitter.instruction("push r13");                                            // preserve r13 because the clone helper uses it for the source capacity across nested helper calls
-    emitter.instruction("push r14");                                            // preserve r14 because the clone helper uses it for the source element size across nested helper calls
+    emitter.instruction("push rbx");                                            // preserve rbx because the clone helper uses it for the source element size across nested helper calls
     emitter.instruction("push r15");                                            // preserve r15 because the clone helper uses it for the packed heap-kind metadata across nested helper calls
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots below the saved callee-saved registers
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // preserve the source indexed-array pointer across the clone helper control flow
     emitter.instruction("mov r12, QWORD PTR [rdi]");                            // load the source indexed-array logical length before allocating the clone
     emitter.instruction("mov r13, QWORD PTR [rdi + 8]");                        // load the source indexed-array capacity before allocating the clone
-    emitter.instruction("mov r14, QWORD PTR [rdi + 16]");                       // load the source indexed-array element size so the clone keeps the same slot width
+    emitter.instruction("mov rbx, QWORD PTR [rdi + 16]");                       // load the source indexed-array element size so the clone keeps the same slot width
     emitter.instruction("mov r15, QWORD PTR [rdi - 8]");                        // load the packed heap-kind metadata from the source indexed-array header
     emitter.instruction("mov rdi, r13");                                        // pass the source indexed-array capacity to the shared array allocator helper
-    emitter.instruction("mov rsi, r14");                                        // pass the source indexed-array element size to the shared array allocator helper
+    emitter.instruction("mov rsi, rbx");                                        // pass the source indexed-array element size to the shared array allocator helper
     emitter.instruction("call __rt_array_new");                                 // allocate a fresh indexed-array backing store for the clone
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the cloned indexed-array pointer across payload copy and ownership fixups
     emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // snapshot the freshly allocated clone header so the x86_64 heap marker survives the metadata rewrite
@@ -164,7 +164,7 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rsi + 24]");                                 // advance to the source indexed-array payload base
     emitter.instruction("lea rdi, [rax + 24]");                                 // advance to the cloned indexed-array payload base
     emitter.instruction("mov rcx, r12");                                        // seed the payload byte-count computation from the source logical length
-    emitter.instruction("imul rcx, r14");                                       // compute the number of live payload bytes that must be copied into the clone
+    emitter.instruction("imul rcx, rbx");                                       // compute the number of live payload bytes that must be copied into the clone
     emitter.label("__rt_array_clone_shallow_copy");
     emitter.instruction("test rcx, rcx");                                       // have we copied every live payload byte into the cloned indexed-array storage?
     emitter.instruction("je __rt_array_clone_shallow_fixup");                   // stop the payload copy loop once the live payload region is exhausted
@@ -231,7 +231,7 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return the cloned indexed-array pointer in the x86_64 integer result register
     emitter.instruction("add rsp, 32");                                         // release the spill slots used below the saved callee-saved registers
     emitter.instruction("pop r15");                                             // restore r15 after using it for packed heap-kind metadata across nested helper calls
-    emitter.instruction("pop r14");                                             // restore r14 after using it for the indexed-array element size across nested helper calls
+    emitter.instruction("pop rbx");                                             // restore rbx after using it for the indexed-array element size across nested helper calls
     emitter.instruction("pop r13");                                             // restore r13 after using it for the indexed-array capacity across nested helper calls
     emitter.instruction("pop r12");                                             // restore r12 after using it for the indexed-array logical length across nested helper calls
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the cloned indexed array
