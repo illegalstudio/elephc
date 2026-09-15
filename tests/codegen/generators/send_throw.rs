@@ -258,3 +258,80 @@ echo $g->getReturn();
     );
     assert_eq!(out, "10|10|null|12");
 }
+
+/// Regression for issue #338: `Generator::send()` on a **fresh** generator must start it,
+/// deliver the payload to the first suspended `yield`, and return the NEXT yielded value —
+/// not the first one.
+///
+/// Every other `send()` fixture in this file calls `rewind()` or `current()` first, so the
+/// generator is already running by the time the payload arrives and the implicit-start path
+/// is never taken. That is why the reported shape went uncovered: `echo $g->send('x')`
+/// printed `A`, the value the generator was suspended ON, instead of resuming past it.
+///
+/// Measured against PHP 8.5.10; the PHP 8.4.20 output recorded on the issue agrees.
+#[test]
+fn test_generator_send_on_a_fresh_generator_starts_it_and_returns_the_next_yield() {
+    // The issue's own reproduction: `send()` is the first call on the generator.
+    let out = compile_and_run(
+        r#"<?php
+function gen() {
+    $x = yield 10;
+    echo "|$x|";
+}
+$g = gen();
+echo $g->send(99);
+"#,
+    );
+    assert_eq!(out, "|99|");
+
+    // The richer follow-up case, where a second `yield` gives `send()` something to return.
+    let out = compile_and_run(
+        r#"<?php
+function gen() {
+    $x = yield 'A';
+    echo '|' . $x;
+    yield 'B';
+}
+$g = gen();
+echo $g->send('x');
+"#,
+    );
+    assert_eq!(out, "|xB");
+}
+
+/// Issue #338, the states around it: a fresh `send()` whose body runs to completion returns
+/// `null` and leaves the generator invalid, and a chain of fresh sends threads each payload
+/// into the yield it was suspended on, all the way to `getReturn()`.
+///
+/// The first half is what separates "started and resumed" from "started and handed back the
+/// first yield": only a generator that really ran past its single `yield` can be done.
+#[test]
+fn test_generator_fresh_send_completes_and_chains() {
+    let out = compile_and_run(
+        r#"<?php
+function gen() {
+    $x = yield 'only';
+    echo "got:$x";
+}
+$g = gen();
+var_dump($g->send('z'));
+var_dump($g->valid());
+"#,
+    );
+    assert_eq!(out, "got:zNULL\nbool(false)\n");
+
+    let out = compile_and_run(
+        r#"<?php
+function gen() {
+    $first = yield 'f';
+    $second = yield $first . '-mid';
+    return $second . '-end';
+}
+$g = gen();
+echo $g->send('one'), ",";
+echo $g->send('two'), ",";
+echo $g->getReturn();
+"#,
+    );
+    assert_eq!(out, "one-mid,,two-end");
+}
