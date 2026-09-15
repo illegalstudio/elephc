@@ -408,8 +408,13 @@ fn test_error_unexpected_token_in_stmt() {
 /// Verifies the error diagnostic for missing function name.
 #[test]
 fn test_error_missing_function_name() {
-    // A `function` keyword without a following name produces "Expected function name".
-    expect_error("<?php function () { }", "Expected function name");
+    // `function () { }` is NOT a nameless declaration -- it is a closure EXPRESSION, and PHP
+    // parses it as one, then complains about the missing statement terminator
+    // ("unexpected end of file" on 8.5.10). elephc now says the same thing.
+    expect_error("<?php function () { }", "Expected ';'");
+    // A genuinely malformed declaration -- a name that is not an identifier -- still reports
+    // the missing name, which is the case this test was reaching for.
+    expect_error("<?php function 123() { }", "Expected function name");
 }
 
 /// Verifies the error diagnostic for missing function paren.
@@ -710,5 +715,110 @@ fn test_error_declaring_the_object_cast_helper() {
 fn test_declaring_the_object_cast_helper_without_a_cast_is_accepted() {
     expect_no_error(
         "<?php function __elephc_cast_object(mixed $v): int { return 1; } echo __elephc_cast_object(2);",
+    );
+}
+
+/// Issue #476: the `for` clause parser now delegates to the general statement parser, which
+/// buys every assignment form for free — and would also accept a DECLARATION, which PHP's
+/// clause grammar does not.
+///
+/// Measured on PHP 8.5.10: `for (function f() {}; false; ) {}` is
+/// `syntax error, unexpected identifier "f", expecting "("` — php-src reads `function` as the
+/// start of a CLOSURE there, so a named declaration cannot appear. It was rejected here
+/// before the delegation too, and has to stay rejected.
+#[test]
+fn test_error_for_clause_rejects_non_expression_statements() {
+    // A named declaration. php-src reads `function` in an expression position as the start of
+    // a CLOSURE, so the name is what makes this invalid there:
+    // `syntax error, unexpected identifier "f", expecting "("` on 8.5.10.
+    expect_error(
+        "<?php for (function f() {}; false; ) {} echo 1;",
+        "Only expressions are allowed in a for clause",
+    );
+    // `echo` is a statement, not an expression, and PHP rejects it in a clause too:
+    // `syntax error, unexpected token "echo", expecting ";"`. A deny-list of declarations
+    // alone let this through.
+    expect_error(
+        "<?php for (echo \"x\"; false; ) {} echo 1;",
+        "Only expressions are allowed in a for clause",
+    );
+}
+
+/// Issue #476 review follow-up: `include` / `require` in a clause is named, not crashed on.
+///
+/// They ARE expressions in PHP and PHP runs them there — both `for (include "f.php"; …)` and
+/// `for ($v = include "f.php"; …)` execute on 8.5.10. elephc cannot yet, because
+/// `resolver::engine`'s `StmtKind::For` arm resolves only the loop BODY, so an include left
+/// in a clause survives into the checker as a transient node every consumer treats as
+/// `unreachable!()`.
+///
+/// The assignment spelling is the one that mattered: once the clause started going through
+/// the real statement parser it PARSED, and the compiler then panicked with
+/// `ExprKind::IncludeValue must be expanded by the resolver`. Before that it was a plain
+/// parse error. This pins the diagnostic that replaced the panic.
+#[test]
+fn test_error_for_clause_rejects_include() {
+    expect_error(
+        "<?php for (include \"f.php\"; false; ) {} echo 1;",
+        "include/require is not supported in a for clause",
+    );
+    expect_error(
+        "<?php for ($v = include \"f.php\"; false; ) {} echo 1;",
+        "include/require is not supported in a for clause",
+    );
+    expect_error(
+        "<?php for ($i = 0; $i < 1; require \"f.php\") {} echo 1;",
+        "include/require is not supported in a for clause",
+    );
+}
+
+/// Pins the parser invariant the `for`-clause include guard rests on: `include` is an
+/// expression in exactly ONE position, the whole right-hand side of a plain assignment or a
+/// `return`.
+///
+/// `ExprKind::IncludeValue` has two construction sites, both in `try_parse_value_include`, and
+/// the assignment one builds a plain `StmtKind::Assign` BEFORE `parse_assignment_value_expr`
+/// runs. So no typed, indexed, property or static-property assignment can carry one, and the
+/// guard in `parse_for_clause` does not need to walk for them.
+///
+/// Raised in review on issue #476 as a possible hole. It is not one today — but it is an
+/// invariant nobody was testing, so if any of these ever starts parsing, this fails and points
+/// at that guard.
+#[test]
+fn test_error_include_is_only_an_expression_in_an_assignment_rhs() {
+    expect_error(
+        r#"<?php int $a = include "f.php";"#,
+        "Unexpected token: Include",
+    );
+    expect_error(
+        r#"<?php $a = []; $a[0] = include "f.php";"#,
+        "Unexpected token: Include",
+    );
+    expect_error(
+        r#"<?php $o = new stdClass(); $o->p = include "f.php";"#,
+        "Unexpected token: Include",
+    );
+    expect_error(
+        r#"<?php class K { public static $s; } K::$s = include "f.php";"#,
+        "Unexpected token: Include",
+    );
+    // The same rejection inside a clause, which is the case the review asked about.
+    expect_error(
+        r#"<?php for (int $v = include "f.php"; false; ) {} echo 1;"#,
+        "Unexpected token: Include",
+    );
+}
+
+/// Issue #476 review follow-up: PHP allows a comma list in the `for` CONDITION as well, but
+/// elephc has no sequence expression to hold one and the condition re-runs every iteration,
+/// so the leading expressions cannot be hoisted into the init clause.
+///
+/// The diagnostic says so rather than letting the comma fall through to a bare `Expected ';'`
+/// that names neither the construct nor the limitation.
+#[test]
+fn test_error_for_condition_comma_list_is_named() {
+    expect_error(
+        "<?php for ($i = 0; $i++, $i < 3; $i++) {}",
+        "not supported in a for CONDITION",
     );
 }

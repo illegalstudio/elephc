@@ -249,4 +249,121 @@ fn test_while_null_no_loop() {
     assert_eq!(out, "ok");
 }
 
+/// Issue #476: a `for` update clause accepts an array push, and the pushed element is the
+/// value the clause sees at the end of each iteration.
+///
+/// The clause used to go through a bespoke mini-grammar that recognised only `$v++`, `++$v`
+/// and `$v = / op= / ??= expr`, so `$a[] = $i` failed to PARSE with
+/// `Expected '=' after variable name`. PHP prints `3|2`.
+#[test]
+fn test_for_update_clause_accepts_an_array_push() {
+    let out = compile_and_run(
+        "<?php $a = []; $i = 0; for (; $i < 3; $a[] = $i) { $i++; } echo count($a), \"|\", $a[1];",
+    );
+    assert_eq!(out, "3|2");
+}
+
+/// Issue #476: both `for` clauses accept a COMMA-SEPARATED list, which is what PHP's grammar
+/// has always been. The update form used to fail with `Expected ')' after for clauses` and
+/// the init form — not reported on the issue, same gap — with `Expected ';'`.
+#[test]
+fn test_for_clauses_accept_comma_separated_lists() {
+    let update = compile_and_run(
+        "<?php $b = []; for ($i = 0; $i < 3; $i++, $b[] = $i) {} echo count($b), \"|\", $b[0];",
+    );
+    assert_eq!(update, "3|1");
+
+    let init = compile_and_run(
+        "<?php for ($x = 0, $y = 10; $x < 2; $x++) {} echo $x, \"|\", $y;",
+    );
+    assert_eq!(init, "2|10");
+}
+
+/// Issue #476: the same gap rejected an indexed assignment and a property assignment in the
+/// update clause. Neither is on the issue; both fell into the same mini-grammar error arms
+/// (`Expected '=' after variable name` and `Invalid assignment target`).
+///
+/// The indexed case also pins that the clause runs AFTER the body: `$i` is already 3 on the
+/// final pass, so PHP grows the array to four elements rather than three.
+#[test]
+fn test_for_update_clause_accepts_indexed_and_property_assignment() {
+    let indexed = compile_and_run(
+        "<?php $c = [0, 0, 0]; for ($i = 0; $i < 3; $c[$i] = $i * 2) { $i++; } echo implode(\",\", $c);",
+    );
+    assert_eq!(indexed, "0,2,4,6");
+
+    let property = compile_and_run(
+        "<?php class Box { public int $n = 0; } $box = new Box(); \
+         for ($i = 0; $i < 4; $box->n = $i) { $i++; } echo $box->n;",
+    );
+    assert_eq!(property, "4");
+}
+
+/// Issue #476 regression guard: a comma nested inside a call's argument list, an array
+/// literal or an index is NOT a clause separator, and an empty clause still parses.
+///
+/// This is the half a naive comma split gets wrong — `for ($i = max(0, 1); …)` would be cut
+/// in two at the argument comma.
+#[test]
+fn test_for_clause_commas_respect_nesting_and_empty_clauses() {
+    let call = compile_and_run(
+        "<?php for ($i = max(0, 1); $i < 3; $i = min($i + 1, 9)) {} echo $i;",
+    );
+    assert_eq!(call, "3");
+
+    let literal = compile_and_run(
+        "<?php for ($p = [1, 2, 3], $i = 0; $i < 2; $i++) {} echo count($p), \"|\", $i;",
+    );
+    assert_eq!(literal, "3|2");
+
+    let empty = compile_and_run(
+        "<?php $n = 0; for (;;) { $n++; if ($n > 2) { break; } } echo $n;",
+    );
+    assert_eq!(empty, "3");
+}
+
+/// Issue #476, the case that pins the depth tracking on BOTH axes at once: a closure in the
+/// init clause puts a `;` inside braces (which must not end the clause) ahead of the comma
+/// that really separates it from the next piece (which must).
+///
+/// A slicer that stopped at the first `;`, or split at the first `,`, would cut this clause
+/// in half. PHP prints `10|3`.
+#[test]
+fn test_for_init_clause_accepts_a_closure_containing_a_semicolon() {
+    let out = compile_and_run(
+        "<?php for ($f = function (int $n): int { return $n * 2; }, $i = 0; $i < 3; $i++) {} \
+         echo $f(5), \"|\", $i;",
+    );
+    assert_eq!(out, "10|3");
+}
+
+/// Issue #476 review follow-up: `throw` is an EXPRESSION in PHP 8, so it belongs in a clause.
+///
+/// The first version of the clause allow-list listed `throw` among the statements to reject,
+/// on the reasoning that it is a statement in PHP's grammar. That was true before PHP 8.0 and
+/// is not now: `for (throw new LogicException("init"); false; )` and a `throw` in the update
+/// clause both run on 8.5.10, and the output below was measured there.
+#[test]
+fn test_for_clause_throw_is_an_expression() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    for (throw new LogicException("init"); false; ) {
+    }
+} catch (LogicException $e) {
+    echo "init:", $e->getMessage(), "\n";
+}
+
+try {
+    for ($i = 0; $i < 3; throw new RuntimeException("update")) {
+        echo $i;
+    }
+} catch (RuntimeException $e) {
+    echo "|update:", $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "init:init\n0|update:update\n");
+}
+
 // --- Ternary operator ---

@@ -359,3 +359,30 @@ fn test_include_function_variant_keeps_error_when_call_does_not_respecialize() {
         "main.php",
     ));
 }
+
+/// Issue #476 review follow-up: an include inside a CLOSURE in a `for` clause is DEFERRED, so
+/// the clause's include restriction must not reach it.
+///
+/// `include`/`require` cannot run as the clause itself — the resolver expands a value-include
+/// by rewriting the surrounding statement LIST, which a clause is not — and the parser rejects
+/// those two shapes with a named diagnostic. A closure body is different: its include runs when
+/// the closure is CALLED, after the loop. The first version of the guard reused the resolver's
+/// `has_includes`, which descends into closure bodies, and rejected a program PHP accepts.
+///
+/// The ordering in the expected output is the proof: the loop body and `compiled` print first,
+/// and the included file's own output appears only at the call. Measured on PHP 8.5.10.
+#[test]
+fn test_for_clause_allows_a_deferred_include_inside_a_closure() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nfor ($f = function () { include 'inner.php'; }, $i = 0; $i < 1; $i++) {\n\
+                 echo 'body ', $i, \"\\n\";\n}\necho \"compiled\\n\";\n$f();\necho \"|called\\n\";\n",
+            ),
+            ("inner.php", "<?php\necho 'inc';\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "body 0\ncompiled\ninc|called\n");
+}

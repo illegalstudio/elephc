@@ -129,7 +129,29 @@ fn parse_stmt_dispatch(
         Token::Trait => oop::parse_trait_decl(tokens, pos, span),
         Token::Abstract => oop::parse_abstract_decl(tokens, pos, span),
         Token::Final => oop::parse_final_decl(tokens, pos, span),
+        // A `function` with no NAME is a closure EXPRESSION, not a declaration, and PHP
+        // accepts one as an expression statement (the value is simply discarded). Routing it
+        // to the declaration parser reported "Expected function name" for valid PHP —
+        // reachable both as a bare statement and, since #476, as a `for` clause member.
+        // `function &() {}` is the by-reference closure spelling; `function &f()` is still a
+        // named declaration, so the `&` is only skipped when a `(` follows it.
+        Token::Function
+            if matches!(
+                tokens.get(*pos + 1).map(|(token, _)| token),
+                Some(Token::LParen)
+            ) || matches!(
+                (
+                    tokens.get(*pos + 1).map(|(token, _)| token),
+                    tokens.get(*pos + 2).map(|(token, _)| token),
+                ),
+                (Some(Token::Ampersand), Some(Token::LParen))
+            ) =>
+        {
+            simple::parse_expr_stmt(tokens, pos, span)
+        }
         Token::Function => params::parse_function_decl(tokens, pos, span),
+        // `fn (…) => …` is always an arrow-function expression; it has no declaration form.
+        Token::Fn => simple::parse_expr_stmt(tokens, pos, span),
         Token::Namespace => namespace_use::parse_namespace_stmt(tokens, pos, span),
         Token::Use => namespace_use::parse_use_stmt(tokens, pos, span),
         Token::Declare => declare::parse_declare(tokens, pos, span),
