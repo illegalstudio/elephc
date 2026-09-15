@@ -110,9 +110,21 @@ pub(super) fn reflection_method_class_get_constructor_target(
     if !reflection_class_new_instance_args(args).is_empty() {
         return None;
     }
-    let class_name = reflection_class_reflected_class(ctx, object)?;
-    let method = resolve_known_class_method_name(ctx, &class_name, "__construct")?;
-    Some((class_name, method))
+    let reflected_class = reflection_class_reflected_class(ctx, object)?;
+    // PHP's `getConstructor()` reports the DECLARING class, which for a descendant of a class
+    // with a private constructor is the ancestor: `ReflectionClass('Child')->getConstructor()`
+    // is a `ReflectionMethod` on `Owner`, even though `method_exists('Child', '__construct')`
+    // is `false`. A private method is not inherited, so the descendant's own `methods` map has
+    // no entry and resolving only there returned `None` — `getConstructor()` answered `null`
+    // where PHP answers a method (issue #869). Walking to the owner models both halves, and
+    // leaves an inherited PUBLIC constructor exactly where it already resolved.
+    let (owner_name, _) = crate::types::constructor_owner(
+        ctx.classes,
+        reflected_class.trim_start_matches('\\'),
+    )?;
+    let owner_name = owner_name.to_string();
+    let method = resolve_known_class_method_name(ctx, &owner_name, "__construct")?;
+    Some((owner_name, method))
 }
 
 /// Extracts the property target from inline `ReflectionClass::getProperty()` calls.

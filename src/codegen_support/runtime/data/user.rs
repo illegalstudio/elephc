@@ -1398,6 +1398,44 @@ fn emit_eval_reflection_method_lookup_data(
             );
         }
 
+        // A private method is not inherited, so a descendant of a class with a private
+        // constructor has no `__construct` key of its own and the loop above emitted no row
+        // for it. PHP still reports one through `ReflectionClass::getConstructor()`, on the
+        // DECLARING class, so eval-side reflection needs the row too (issue #869). The row is
+        // keyed by the descendant and carries the OWNER as its declaring class and flags.
+        //
+        // This table backs ReflectionMethod lookups only. `method_exists()` and
+        // `get_class_methods()` answer from `class_method`/`class_method_names`, which are
+        // untouched here — so they keep reporting `false`/empty for such a descendant, exactly
+        // as PHP does.
+        let constructor_key = php_symbol_key("__construct");
+        if !class_info.methods.contains_key(&constructor_key) {
+            if let Some((owner_name, owner_info)) =
+                eval_reflection_constructor_owner(&class_infos, class_name)
+            {
+                let declaring_class = eval_reflection_instance_method_declaring_class(
+                    owner_name,
+                    owner_info,
+                    &constructor_key,
+                );
+                let flags = eval_reflection_method_flags_with_source_lines(
+                    eval_reflection_instance_method_flags(owner_info, &constructor_key),
+                    owner_info,
+                    &constructor_key,
+                    false,
+                );
+                push_eval_reflection_method_lookup_row(
+                    out,
+                    &mut entries,
+                    &mut index,
+                    class_name,
+                    &constructor_key,
+                    flags,
+                    declaring_class,
+                );
+            }
+        }
+
         let mut static_methods = class_info.static_methods.keys().collect::<Vec<_>>();
         static_methods.sort();
         for method_name in static_methods {
@@ -1543,6 +1581,31 @@ fn eval_reflection_method_flags_with_source_lines(
 }
 
 /// Returns the class name that declares one visible instance method.
+/// Walks to the class whose `__construct` PHP runs when `class_name` is instantiated.
+///
+/// The same rule as [`crate::types::constructor_owner`], over the borrowed map this emitter
+/// already builds: reproducing the walk here avoids cloning every `ClassInfo` into the owned
+/// map that function takes. A cycle in the parent chain terminates the walk rather than
+/// hanging the emitter.
+fn eval_reflection_constructor_owner<'a>(
+    class_infos: &HashMap<&'a str, &'a ClassInfo>,
+    class_name: &'a str,
+) -> Option<(&'a str, &'a ClassInfo)> {
+    let mut current = Some(class_name);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(name) = current {
+        if !seen.insert(name) {
+            return None;
+        }
+        let (owner_name, info) = class_infos.get_key_value(name)?;
+        if info.methods.contains_key("__construct") {
+            return Some((owner_name, info));
+        }
+        current = info.parent.as_deref();
+    }
+    None
+}
+
 fn eval_reflection_instance_method_declaring_class<'a>(
     reflected_class: &'a str,
     class_info: &'a ClassInfo,

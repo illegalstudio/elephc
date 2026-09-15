@@ -289,6 +289,74 @@ echo (new ShadowChild())->n();
     assert_eq!(out, "7");
 }
 
+/// Issue #869: `ReflectionClass::getConstructor()` on a descendant of a class with a PRIVATE
+/// constructor returns a `ReflectionMethod` on the DECLARING class, as PHP does. It used to
+/// answer `null`, because the descendant's own method map deliberately carries no entry.
+#[test]
+fn test_reflection_get_constructor_reports_the_declaring_class_for_an_inherited_private_ctor() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflPrivOwner { private function __construct() {} }
+class ReflPrivChild extends ReflPrivOwner {}
+$constructor = (new ReflectionClass('ReflPrivChild'))->getConstructor();
+var_dump($constructor === null);
+echo $constructor?->getName(), "|", $constructor?->getDeclaringClass()->getName(), "|";
+var_dump($constructor?->isPrivate());
+"#,
+    );
+    assert_eq!(out, "bool(false)\n__construct|ReflPrivOwner|bool(true)\n");
+}
+
+/// `isInstantiable()` follows from the same lookup: the inherited constructor is not public, so
+/// PHP answers `false`. With no constructor member found at all it used to answer `true`.
+#[test]
+fn test_reflection_is_instantiable_is_false_for_an_inherited_private_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class InstOwner { private function __construct() {} }
+class InstChild extends InstOwner {}
+class InstPubOwner { public function __construct() {} }
+class InstPubChild extends InstPubOwner {}
+var_dump(
+    (new ReflectionClass('InstChild'))->isInstantiable(),
+    (new ReflectionClass('InstOwner'))->isInstantiable(),
+    (new ReflectionClass('InstPubChild'))->isInstantiable()
+);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\nbool(true)\n");
+}
+
+/// The descendant's own method LIST is unchanged: PHP reports `method_exists()` as `false` and
+/// `getMethods()` as empty for an inherited private constructor, and only `getConstructor()`
+/// sees it. Pinning both halves is what keeps the #869 fix from over-reaching.
+#[test]
+fn test_an_inherited_private_constructor_stays_off_the_method_list() {
+    let out = compile_and_run(
+        r#"<?php
+class ListOwner { private function __construct() {} }
+class ListChild extends ListOwner {}
+var_dump(method_exists('ListChild', '__construct'));
+echo count((new ReflectionClass('ListChild'))->getMethods());
+"#,
+    );
+    assert_eq!(out, "bool(false)\n0");
+}
+
+/// The eval bridge reads the same AOT reflection rows, so it must agree with the compiled side.
+#[test]
+fn test_eval_reflection_sees_an_inherited_private_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalOwner { private function __construct() {} }
+class EvalChild extends EvalOwner {}
+echo eval('return (new ReflectionClass("EvalChild"))->getConstructor()?->getDeclaringClass()->getName();'), "|";
+var_dump(eval('return method_exists("EvalChild", "__construct");'));
+"#,
+    );
+    assert_eq!(out, "EvalOwner|bool(false)\n");
+}
+
 /// Verifies the singleton shape this defect actually reached: private constructor, static
 /// accessor, one subclass, and a call through the base type.
 #[test]

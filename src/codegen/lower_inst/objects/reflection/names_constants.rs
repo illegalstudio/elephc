@@ -19,6 +19,38 @@ pub(super) fn reflection_constructor_member(
         .cloned()
 }
 
+/// Returns the `__construct` member a class inherits from an ancestor that declares it PRIVATE.
+///
+/// A private method is not inherited, so the descendant's own method list — which is what
+/// `getMethods()` and `method_exists()` answer from, and which PHP also reports as empty here —
+/// carries no `__construct`. PHP's `getConstructor()` nevertheless returns a `ReflectionMethod`
+/// on the DECLARING class, and `isInstantiable()` is `false` because that constructor is not
+/// public. Both were wrong without this fallback: `getConstructor()` answered `null` and
+/// `isInstantiable()` answered `true` (issue #869).
+///
+/// Built from the OWNER's `ClassInfo`, so the member's declaring class, visibility flags,
+/// parameters and source lines are the ancestor's, exactly as PHP reports them. Returns `None`
+/// for a class with no constructor anywhere in its chain, and for one whose own list already
+/// carried the entry — that caller checks first.
+pub(super) fn inherited_private_constructor_member(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Result<Option<ReflectionListedMember>> {
+    let Some((owner_name, owner_info)) =
+        crate::types::constructor_owner(&ctx.module.class_infos, class_name)
+    else {
+        return Ok(None);
+    };
+    if php_symbol_key(owner_name) == php_symbol_key(class_name) {
+        return Ok(None);
+    }
+    // The failure is PROPAGATED, not swallowed into `None`. Building a member resolves the
+    // owner's prototype and parameter defaults, and either can fail; answering "no constructor"
+    // instead would turn a real metadata error into a silently wrong `isInstantiable() == true`,
+    // where the ordinary method-member path reports it. `?` here matches that path.
+    reflection_class_method_member(ctx, owner_name, owner_info, "__construct")
+}
+
 /// Builds common ReflectionMethod/ReflectionProperty predicate flags.
 pub(super) fn reflection_member_flags(
     is_static: bool,
