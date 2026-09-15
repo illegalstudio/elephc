@@ -1403,6 +1403,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// using the final widened storage type, and `prune_untracked_release_local_slot_ops`
     /// erases the op when the slot never widens (issue #534: without this, the
     /// previous outer iteration's Mixed box leaked on every re-initialization).
+    ///
+    /// A storage type that ALREADY needs lifetime tracking can go stale the same way, and
+    /// that is issue #479. A slot typed `Object("Shape")` is widened to `Mixed` by a later
+    /// store of a different class (`$s = make(); $s = new Sq();`, or a `catch (\Throwable
+    /// $e)` variable reassigned to a `TypeError`). The backend then uses the FINAL boxed
+    /// storage for the whole frame, so this eager load — emitted at the concrete type and
+    /// therefore an unbox — becomes `__rt_mixed_unbox` + retain: it hands back the inner
+    /// pointer with a fresh reference, the release cancels that reference, and the BOX is
+    /// never freed. Two blocks leaked per iteration, the box and the object it pinned.
+    ///
+    /// So inside a loop the deferred op is used for every storage type that can still
+    /// widen. `Mixed`/`Union` storage is excluded because it is terminal — nothing widens a
+    /// box further, so its eager load is already correctly typed. `Str` is excluded too:
+    /// its eager release runs through the ownership analysis, which knows that a `.rodata`
+    /// literal pointer must not be freed, and the slot-typed cleanup does not model that.
     fn release_stored_local_value_before_overwrite(
         &mut self,
         name: &str,
@@ -1410,18 +1425,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let storage_type = self.builder.local_php_type(slot);
-        if Ownership::php_type_needs_lifetime_tracking(&storage_type) {
-            self.release_stored_local_value(name, slot, span);
-            return;
-        }
-        if self.loop_stack.is_empty() {
-            // Outside loops no back-edge can execute a later widening store before
-            // this one, so the untracked storage type is final for this path.
-            return;
-        }
-        // Ref-bound locals keep a cell pointer in the frame slot and are released
-        // through the ref-cell owner machinery, never through a raw slot release.
-        if self.is_ref_bound_local(name) {
+        let tracked = Ownership::php_type_needs_lifetime_tracking(&storage_type);
+        // Ref-bound locals keep a cell pointer in the frame slot and are released through
+        // the ref-cell owner machinery, never through a raw slot release.
+        if self.loop_stack.is_empty()
+            || self.is_ref_bound_local(name)
+            || !storage_type_can_still_widen(&storage_type)
+        {
+            if tracked {
+                self.release_stored_local_value(name, slot, span);
+            }
             return;
         }
         self.emit_void(
@@ -3369,6 +3382,24 @@ impl LoweringContext<'_, '_> {
             _ => None,
         }
     }
+}
+
+/// Returns whether a slot's storage type can still be widened by a store lowered later.
+///
+/// `Mixed` and `Union` are terminal: `widened_local_storage_type` never moves off them, so a
+/// load emitted against them is typed against the frame's final representation. Everything
+/// else can be widened to `Mixed` by a store of an incompatible type, which is what makes an
+/// eager release load stale (issues #534 and #479).
+///
+/// `Str` answers `false` deliberately. Its storage CAN widen, but its eager release goes
+/// through the ownership analysis, which knows a `.rodata` literal pointer must not be
+/// freed; the slot-typed deferred cleanup does not model that, so moving strings onto it
+/// would trade a leak for a free of read-only memory.
+fn storage_type_can_still_widen(storage_type: &PhpType) -> bool {
+    !matches!(
+        storage_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Str
+    )
 }
 
 /// Returns true for addressable local kinds whose `StoreLocal` overwrites owned storage.
