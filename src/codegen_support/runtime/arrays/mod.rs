@@ -85,6 +85,7 @@ mod array_slice_to_hash;
 mod array_splice;
 mod array_splice_insert;
 mod array_splice_refcounted;
+mod array_slice_str;
 mod array_splice_str;
 mod array_strict_eq;
 mod array_sum;
@@ -342,6 +343,7 @@ pub use array_splice_insert::{
 };
 /// Emit array splice helper.
 pub use array_splice_refcounted::emit_array_splice_refcounted;
+pub use array_slice_str::emit_array_slice_str;
 pub use array_splice_str::{emit_array_splice_insert_str, emit_array_splice_str};
 /// Emit deep array strict-equality (`===`) helper.
 pub use array_strict_eq::emit_array_strict_eq;
