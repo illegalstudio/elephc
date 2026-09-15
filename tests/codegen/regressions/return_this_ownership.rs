@@ -181,3 +181,90 @@ echo "after=" . T::$alive;
     );
     assert_eq!(out, "alive=1;v=9\nafter=0");
 }
+
+/// Issue #512: an object CONSTRUCTED INSIDE a producing method and returned must survive a
+/// heavy call to another class before its fields are read.
+///
+/// Reported on v0.26.0 as corruption or a worker crash: `$p = $this->db->find(…)` read back
+/// correctly right after the return, then a syntax-highlighting call ran in between and
+/// `$p->title` crashed while `$p->createdAt` came back as `4294967328` — a 32-bit-looking value
+/// where a real timestamp belonged. The reporter's workaround was to rebuild the object in the
+/// CALLER's frame, which is what pointed at the return boundary rather than at the producer.
+///
+/// Not reproducible on HEAD, so this is the regression the family
+/// (#483 / #484 / #486 / #498, all closed) was missing on the read side: those were measured as
+/// leaks, and this shape is what turns a leaked-then-reused block into a bad read.
+///
+/// Three things have to hold together, and only together:
+///
+/// - the producer's frame is gone by the time the fields are read — `produce()` returns and the
+///   heavy call runs before `renderPaste`;
+/// - the heavy call churns enough string memory to reclaim anything the producer abandoned;
+/// - the whole thing repeats, so the allocator is handing back blocks it has already freed. A
+///   single pass reads untouched memory and would pass whatever the ownership rules did.
+///
+/// Deliberately a VALUE assertion and not a heap-clean one. This fixture does leak, at one
+/// block per `$p->body` / `$p->lang` handed straight to a string-returning callee — which is
+/// #1018, a live and separate bug in the same family, not this shape. Pinning the reads is what
+/// #512 asked for; asserting a clean heap here would only re-report #1018 under the wrong name.
+#[test]
+fn test_object_returned_across_a_heavy_call_keeps_its_fields() {
+    let out = compile_and_run(
+        r#"<?php
+class Paste {
+    public function __construct(
+        public string $title,
+        public string $lang,
+        public string $body,
+        public int $createdAt,
+    ) {}
+}
+
+class Db {
+    // The object is built INSIDE this method, from values that are not literals at the
+    // construction site, and handed back across the return boundary.
+    public function find(string $raw, int $now): ?Paste {
+        $parts = explode("|", $raw, 4);
+        if (count($parts) < 4) {
+            return null;
+        }
+        return new Paste($parts[0], $parts[1], $parts[3], (int) $parts[2] + $now);
+    }
+}
+
+class Highlighter {
+    public function highlight(string $code, string $lang): string {
+        $out = "";
+        foreach (explode(" ", $code) as $w) {
+            $out .= $lang === "php" ? htmlspecialchars($w) . " " : $w . " ";
+        }
+        for ($i = 0; $i < 64; $i++) {
+            $out = str_replace("  ", " ", $out . " ");
+        }
+        return trim($out);
+    }
+}
+
+class View {
+    public function renderPaste(Paste $p, string $hl): string {
+        return "[" . $p->title . "][" . $p->createdAt . "][" . strlen($hl) . "]";
+    }
+}
+
+$db = new Db();
+$hl = new Highlighter();
+$view = new View();
+
+for ($i = 0; $i < 6; $i++) {
+    $p = $db->find("My Title|php|1700000000|\$x = 1; echo \$x;", 0);
+    if ($p === null) {
+        echo "NULL";
+        continue;
+    }
+    $rendered = $hl->highlight($p->body, $p->lang);
+    echo $view->renderPaste($p, $rendered);
+}
+"#,
+    );
+    assert_eq!(out, "[My Title][1700000000][16]".repeat(6));
+}
