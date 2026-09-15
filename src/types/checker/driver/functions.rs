@@ -177,12 +177,47 @@ impl Checker {
                         {
                             errors.extend(error.flatten());
                         }
+                        self.widen_dynamic_only_passthrough_return(&name, &decl);
                     }
                     Err(error) => errors.extend(error.flatten()),
                 }
             }
         }
         self.resolve_function_variant_groups(errors);
+    }
+
+    /// Records `mixed` for a function that returns one of its own untyped parameters and has no
+    /// direct call site.
+    ///
+    /// An untyped parameter starts as the `Int` PLACEHOLDER, which a direct call replaces with
+    /// the argument's real type. Every function reaching THIS pass is one no direct call
+    /// resolved — `fn_decls` minus `functions` is exactly that set — so the placeholder is all
+    /// its parameters ever had, and a return inferred from one records `Int` for a value that is
+    /// really whatever the caller passes. Reached through `call_user_func` or `array_map`, the
+    /// runtime-callable invoker then coerces through that recorded type and a returned string
+    /// arrives as `int(0)`, silently (issue #576).
+    ///
+    /// Gated on having no direct call site ON PURPOSE. Applying it to every such body instead
+    /// feeds back: `function grow($arr) { …; return $arr; }` called as `$arr = grow($arr);`
+    /// would record `mixed`, the caller's local would become `mixed`, the next call would
+    /// re-specialize the parameter to `mixed`, and `array_push($arr, …)` inside the body would
+    /// stop type-checking. A function with a direct call site already learns its real types from
+    /// it and needs nothing here.
+    fn widen_dynamic_only_passthrough_return(&mut self, name: &str, decl: &super::super::FnDecl) {
+        let Some(signature) = self.functions.get(name) else {
+            return;
+        };
+        if !crate::types::dynamic_params::return_exposes_dynamic_param(
+            &decl.body,
+            signature,
+            name,
+            &self.callable_param_sigs,
+        ) {
+            return;
+        }
+        if let Some(signature) = self.functions.get_mut(name) {
+            signature.return_type = crate::types::PhpType::Mixed;
+        }
     }
 
     /// Iterates all variant groups that are not yet in `functions` and calls

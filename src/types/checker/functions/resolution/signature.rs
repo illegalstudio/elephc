@@ -268,7 +268,7 @@ impl Checker {
             }
         }
 
-        let mut sig = FunctionSig {
+        let sig = FunctionSig {
             params: param_types,
             param_type_exprs: decl
                 .param_types
@@ -293,29 +293,6 @@ impl Checker {
                 &decl.attributes,
             ),
         };
-        // A body that hands one of its UNTYPED parameters straight back returns whatever the
-        // caller passed, so the recorded type has to say `mixed`. Without this it says whatever
-        // the parameter's placeholder happened to be: an untyped parameter starts as `Int` and
-        // only a direct call site narrows it to something real, so
-        // `function h($b, $p) { return $b; }` reached ONLY through `call_user_func` kept `Int` —
-        // and the runtime-callable invoker coerced a returned string through it, yielding
-        // `int(0)` with no diagnostic (issue #576).
-        //
-        // Recorded HERE, not during EIR lowering, because the declaration and its call sites
-        // must reach the same answer. EIR already boxes such a parameter and already widens the
-        // callee's return through this same rule for methods; widening only the callee left the
-        // caller reading the boxed cell back as a raw integer. The checker's signature is what
-        // both of them start from.
-        if crate::types::dynamic_params::return_exposes_dynamic_param(
-            &decl.body,
-            &sig,
-            name,
-            &self.callable_param_sigs,
-        ) {
-            return_type = PhpType::Mixed;
-            sig.return_type = PhpType::Mixed;
-        }
-        let sig = sig;
         self.functions.insert(name.to_string(), sig);
         if return_type == PhpType::Callable {
             if let Some(callable_sig) = matching_callable_sig(&callable_return_sigs) {

@@ -387,8 +387,9 @@ The `Int` fallback is only sound because a direct call site replaces it. A funct
 fallback, and a return inferred from one records `Int` for a value that is really whatever the
 caller passed.
 
-So an un-hinted body that hands one of its untyped by-value parameters straight back records
-`mixed` instead (`src/types/dynamic_params.rs`):
+So a function with NO direct call site whose un-hinted body hands one of its untyped by-value
+parameters straight back records `mixed` instead (`src/types/dynamic_params.rs`, applied from
+`resolve_unchecked_functions` — the pass that resolves exactly the functions no call site did):
 
 ```php
 function h($b, $p) { return $b; }
@@ -402,10 +403,25 @@ callee left the caller reading the boxed cell back as a raw integer. `ir_lower` 
 predicate to methods when it normalizes their ABIs, through the same module, so the two cannot
 drift apart.
 
-The rule is narrow on purpose. Only a `return` that yields the parameter itself counts —
-through the pass-through shapes (`?:`, `??`, `match`, `@`, assignment) — so a body that computes
-its own result keeps the type it inferred (`function add($a, $b) { return $a + $b; }` still
-returns `int`), and a declared return type is authoritative and never overridden (issue #576).
+The rule is narrow on purpose, in two ways.
+
+Only a `return` that yields the parameter itself counts — through the pass-through shapes
+(`?:`, `??`, `match`, `@`, assignment) — so a body that computes its own result keeps the type
+it inferred (`function add($a, $b) { return $a + $b; }` still returns `int`), and a declared
+return type is authoritative and never overridden.
+
+And it applies only where no direct call site exists. Applying it to every pass-through body
+feeds back on itself:
+
+```php
+function grow($arr) { … ; return $arr; }
+$arr = grow($arr);        // recording mixed makes the LOCAL mixed…
+                          // …which re-specializes the parameter to mixed…
+                          // …and array_push($arr, …) inside the body stops checking
+```
+
+A function with a direct call site already learns its real parameter types from it and needs
+nothing here (issue #576).
 
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 
