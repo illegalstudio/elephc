@@ -81,16 +81,16 @@ pub fn loop_carried_storage_types(
     let mut contracts = entry
         .iter()
         .filter_map(|(name, entry_ty)| {
-            if !is_array_like(entry_ty) {
-                return None;
-            }
             let fixed_ty = fixed.get(name)?;
-            representation_contract(
-                entry_ty,
-                fixed_ty,
-                whole_mixed_sources.contains(name),
-            )
-                .map(|contract| (name.clone(), contract))
+            if is_array_like(entry_ty) {
+                return representation_contract(
+                    entry_ty,
+                    fixed_ty,
+                    whole_mixed_sources.contains(name),
+                )
+                .map(|contract| (name.clone(), contract));
+            }
+            null_entry_contract(entry_ty, fixed_ty).map(|contract| (name.clone(), contract))
         })
         .collect::<Vec<_>>();
     contracts.sort_by(|left, right| left.0.cmp(&right.0));
@@ -423,6 +423,31 @@ fn is_array_like(ty: &PhpType) -> bool {
         ty.codegen_repr(),
         PhpType::Array(_) | PhpType::AssocArray { .. }
     )
+}
+
+/// The contract for a local that enters the loop holding `null` and is assigned something else
+/// inside it.
+///
+/// The body is checked ONCE, with the entry environment, so without this the header keeps the
+/// first iteration's `null` for the whole loop — and every later iteration re-enters holding
+/// whatever the previous one stored. `$n = null; for (…) { if ($n === null) { $n = 0; } $n++;
+/// echo $n; }` printed `111` where PHP prints `123`: the guard was folded as always-true
+/// because the loaded value was typed `null` (issue #562).
+///
+/// Boxed `Mixed` rather than the fixed-point join: the join of `null` and `int` is already
+/// `Mixed`, but the join of `null` and `array` is `array` — right for an array-typed entry that
+/// is merely growing, wrong here, because the FIRST read still happens before the assignment
+/// and still sees null. `Mixed` is the one representation that holds both on every path, which
+/// is also what makes the `=== null` guard a real runtime tag test instead of a folded
+/// constant.
+fn null_entry_contract(entry_ty: &PhpType, fixed_ty: &PhpType) -> Option<PhpType> {
+    if !matches!(entry_ty.codegen_repr(), PhpType::Void) {
+        return None;
+    }
+    if matches!(fixed_ty.codegen_repr(), PhpType::Void) {
+        return None;
+    }
+    Some(PhpType::Mixed)
 }
 
 /// Returns a self-evident scalar type when semantic inference is unavailable.

@@ -249,4 +249,100 @@ fn test_while_null_no_loop() {
     assert_eq!(out, "ok");
 }
 
+/// Issue #562: a local that enters a loop holding `null` and is assigned inside it must be
+/// typed for BOTH, or the init guard re-runs every iteration.
+///
+/// A loop body is checked ONCE, with the entry environment, so the header kept the first
+/// iteration's `null` for the whole loop and `$n === null` folded to always-true. The fixture
+/// below printed `111` where PHP prints `123` — the guard fired every time, so the counter
+/// reset instead of accumulating. The same shape is how any `$x = null;` accumulator, parser
+/// cursor or lazily built buffer silently produced first-iteration results.
+///
+/// All four loop forms are here because they reach the header through different code:
+/// `do`-`while` runs its body before the condition, and `foreach` binds its own value
+/// variable. The widening targets beyond `int` — `null` to `string` through `.=`, `null` to
+/// `array` through `[]=` — are here because the join that produces the header type is
+/// per-shape. Nested loops check that an inner body's assignment reaches the OUTER header.
+///
+/// The last block is the control: a loop that never assigns the local must leave it `null` and
+/// keep the guard, so the widening is driven by evidence rather than applied to every
+/// null-initialized local that a loop happens to read.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_null_local_assigned_inside_a_loop_is_typed_for_both() {
+    let out = compile_and_run(
+        r#"<?php
+$a = null;
+for ($i = 0; $i < 3; $i++) {
+    if ($a === null) { $a = 0; }
+    $a++;
+    echo $a;
+}
+echo "|";
+
+$b = null;
+$j = 0;
+while ($j < 3) {
+    if ($b === null) { $b = 0; }
+    $b++;
+    echo $b;
+    $j++;
+}
+echo "|";
+
+$c = null;
+$k = 0;
+do {
+    if ($c === null) { $c = 0; }
+    $c++;
+    echo $c;
+    $k++;
+} while ($k < 3);
+echo "|";
+
+$d = null;
+foreach ([1, 2, 3] as $ignored) {
+    if ($d === null) { $d = 0; }
+    $d++;
+    echo $d;
+}
+echo "|";
+
+$s = null;
+for ($i = 0; $i < 3; $i++) {
+    if ($s === null) { $s = ""; }
+    $s .= "x";
+    echo strlen($s);
+}
+echo "|";
+
+$arr = null;
+for ($i = 0; $i < 3; $i++) {
+    if ($arr === null) { $arr = []; }
+    $arr[] = $i;
+    echo count($arr);
+}
+echo "|";
+
+$n = null;
+for ($i = 0; $i < 2; $i++) {
+    for ($j = 0; $j < 2; $j++) {
+        if ($n === null) { $n = 0; }
+        $n++;
+    }
+    echo $n;
+}
+echo "|";
+
+$never = null;
+for ($i = 0; $i < 2; $i++) {
+    if ($never === null) { echo "n"; }
+}
+var_dump($never);
+"#,
+    );
+    assert_eq!(out, "123|123|123|123|123|123|24|nnNULL\n");
+}
+
 // --- Ternary operator ---
