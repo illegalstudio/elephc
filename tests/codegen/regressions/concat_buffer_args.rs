@@ -173,3 +173,98 @@ echo implode(",", $r);
     );
     assert_eq!(out.stdout, "x,1.5");
 }
+
+// --- Issue #515: the join has to stay INSIDE the 64 KiB scratch, or leave it ---
+//
+// `__rt_implode` computed `_concat_buf + _concat_off` once and streamed every byte into it
+// with no bounds check, so a result past the scratch ran into the adjacent BSS globals. The
+// boundary is exact and the two targets fail differently, which is what kept it hidden: a CLI
+// program corrupted its own result silently while a `--web` worker took SIGSEGV for the same
+// input, at any `--heap-size`, because `_concat_buf` is a fixed BSS array.
+//
+// `strlen()` stayed right through all of it — only the middle bytes were wrong — so these
+// assertions compare the whole string, not its length.
+
+/// The exact boundary. 5958 ten-byte elements joined by one byte is 65537 bytes: one past
+/// `CONCAT_BUF_CAPACITY`, and the smallest join that used to corrupt.
+///
+/// 5950 elements (65449 bytes) was already correct before the fix and is asserted alongside,
+/// so a regression that broke the scratch path instead would be caught here too.
+#[test]
+fn test_regression_515_implode_one_byte_past_the_scratch_is_intact() {
+    let out = compile_and_run(
+        r#"<?php
+function join_n(int $n): string {
+    $parts = [];
+    for ($i = 0; $i < $n; $i++) {
+        $parts[] = "abcdefghij";
+    }
+    return implode(",", $parts);
+}
+
+foreach ([5950, 5958] as $n) {
+    $out = join_n($n);
+    $want = str_repeat("abcdefghij,", $n - 1) . "abcdefghij";
+    echo $n, ":", strlen($out), ":", $out === $want ? "ok" : "CORRUPT", "\n";
+}
+"#,
+    );
+    assert_eq!(out, "5950:65449:ok\n5958:65537:ok\n");
+}
+
+/// Well past the boundary, so the destination grows more than once: 20000 elements join to
+/// 219999 bytes, against a 64 KiB scratch and a doubling growth.
+///
+/// Compared against a value the program builds itself rather than a literal, because the
+/// failure was never in the length — `strlen()` reported 219999 on the pre-fix build too,
+/// with the middle of the string overwritten.
+#[test]
+fn test_regression_515_implode_far_past_the_scratch_is_intact() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = [];
+for ($i = 0; $i < 20000; $i++) {
+    $parts[] = "abcdefghij";
+}
+$out = implode(",", $parts);
+$want = str_repeat("abcdefghij,", 19999) . "abcdefghij";
+echo strlen($out), ":", $out === $want ? "ok" : "CORRUPT";
+"#,
+    );
+    assert_eq!(out, "219999:ok");
+}
+
+/// The boxed-Mixed path across the same boundary. Int, float, bool and null elements are
+/// FORMATTED into the scratch by `__rt_itoa` / `__rt_ftoa` before implode can measure them,
+/// so the destination has to have headroom reserved before the cast rather than after it —
+/// and once the join has grown out of the scratch, the cast gets the whole buffer back.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_regression_515_implode_mixed_elements_past_the_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = [];
+for ($i = 0; $i < 6000; $i++) {
+    $m = $i % 5;
+    if ($m === 0) {
+        $parts[] = $i;
+    } elseif ($m === 1) {
+        $parts[] = $i / 7;
+    } elseif ($m === 2) {
+        $parts[] = $i % 2 === 0;
+    } elseif ($m === 3) {
+        $parts[] = null;
+    } else {
+        $parts[] = "s" . $i;
+    }
+}
+$out = implode("|", $parts);
+echo strlen($out), "|", md5($out), "|", substr($out, 0, 24), "|", substr($out, -16);
+"#,
+    );
+    assert_eq!(
+        out,
+        "32883|9d3b4508b8ca428e2f57263ca05b17e0|0|0.14285714285714|1||s4|42857143|||s5999"
+    );
+}
