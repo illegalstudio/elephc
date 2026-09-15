@@ -166,8 +166,6 @@ never needed staging at all.
 both go through `stage_boxed_fill_integer` / `settle_fill_integer`, and the
 string fill helper's `(count, ptr, len)` ABI — which puts the count in the FIRST
 argument register rather than the second — is settled the same way.
-`file_put_contents()`'s `$flags` and `mkdir()`'s `$permissions` / `$recursive`
-follow the same shape.
 
 Which representations need staging:
 
