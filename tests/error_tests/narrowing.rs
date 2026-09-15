@@ -252,3 +252,26 @@ fn test_the_guard_stops_governing_after_the_region_stores() {
         "cannot reassign $a",
     );
 }
+
+/// Raised in review on #509: a store in a NESTED guard must end the enclosing guard's authority
+/// too, or nesting becomes a way around the rule above.
+///
+/// The inner region's entry is the one `record_store_over_flow_narrowing` clears, and the outer
+/// entry is restored when that region closes — so the outer view came back intact and the later
+/// `$a = 2` was accepted against `$a`'s original `int`. The enclosing region CONTAINS the inner
+/// one, so a store the inner one made is a store the enclosing one made:
+/// `NarrowedLocalOrigin::stored_in_region` travels outward at `exit_flow_narrowing` and the two
+/// spellings agree again.
+///
+/// Written with `$a = 1.5` rather than `$a = "x"` on purpose: `"x"` does not fit the `int`
+/// binding either, so it is rejected at the inner store and never reaches the shape under test.
+#[test]
+fn a_store_in_a_nested_guard_ends_the_enclosing_guards_authority() {
+    let source =
+        "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; } echo $a;";
+    // The same answer in both modes, and the same one HEAD gave before this feature: the outer
+    // region is not transparent, but its replay from `$a`'s own `int` sees no conflict either,
+    // so `mixed_storage_scan` does not mark the name and the checker reports.
+    expect_error(source, "cannot reassign $a from string to int");
+    expect_error_strict(source, "cannot reassign $a from string to int");
+}

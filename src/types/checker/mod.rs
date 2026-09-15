@@ -455,8 +455,17 @@ pub struct NarrowedLocalOrigin {
     ///
     /// Restored by a COMPLEMENT: `restore_narrowed_var` puts the pre-`if` type back before the
     /// `elseif`/`else` clauses are checked, so what they see is a fresh guard fact whatever the
-    /// then-branch stored.
+    /// then-branch stored — the `else` is a path the then-branch's store says nothing about.
     pub view: Option<PhpType>,
+    /// Whether ANYTHING inside this entry's region has bound the name, on any path.
+    ///
+    /// Distinct from `view.is_none()` because a complement re-opens a view and this has to
+    /// survive it. It travels OUTWARD at [`Checker::exit_flow_narrowing`]: the enclosing region
+    /// CONTAINS the closing one, so a store the inner one made is a store the enclosing one
+    /// made. Without that, nesting was a way around the rule —
+    /// `$a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; }` compiled while
+    /// the same two stores written flat did not (raised in review on #509).
+    pub stored_in_region: bool,
 }
 
 /// One entry of [`Checker::narrowed_local_origins`] as it stood before a guard region opened it.
@@ -655,7 +664,15 @@ impl Checker {
             Some(origin) => {
                 self.narrowed_local_origins.insert(
                     name.to_string(),
-                    NarrowedLocalOrigin { origin, view: Some(view.clone()) },
+                    NarrowedLocalOrigin {
+                        origin,
+                        view: Some(view.clone()),
+                        // The REGION is new even when the entry inherits an outer origin, so a
+                        // store the enclosing region already made does not follow it inward. It
+                        // is still recorded on the enclosing entry, which comes back at
+                        // `exit_flow_narrowing`.
+                        stored_in_region: false,
+                    },
                 );
             }
             // `guard_narrowing` bails on an unbound plain variable, so this is the property and
@@ -675,6 +692,13 @@ impl Checker {
     /// guard's view of the value rather than anything the region stored, so
     /// `if ($h !== false) { … } else { $h = []; }` — the same issue-#509 idiom written the other
     /// way round — has to be recognised on the complement side too.
+    ///
+    /// `stored_in_region` deliberately SURVIVES this. The complement is a fresh fact about the
+    /// `else` path, but a store the then-branch made is still a store the construct made, and
+    /// that is what the enclosing region has to hear about. It also fires for a single-clause
+    /// `if` with nothing after it, where the "rest of the chain" is empty — which is how
+    /// clearing only `view` let a nested store's effect evaporate before `exit_flow_narrowing`
+    /// could see it.
     pub(crate) fn republish_flow_narrowing(&mut self, name: &str, view: &PhpType) {
         if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
             entry.view = Some(view.clone());
@@ -689,14 +713,27 @@ impl Checker {
     pub(crate) fn record_store_over_flow_narrowing(&mut self, name: &str) {
         if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
             entry.view = None;
+            entry.stored_in_region = true;
         }
     }
 
     /// Closes a region opened by [`Checker::enter_flow_narrowing`]. Regions opened in order must
     /// be closed in REVERSE order, the way the environment's own narrowings are restored.
+    ///
+    /// A store inside the closing region travels OUTWARD: the enclosing entry comes back with
+    /// its view cleared. See [`NarrowedLocalOrigin::stored_in_region`] for why nesting would
+    /// otherwise be a way around the rule.
     pub(crate) fn exit_flow_narrowing(&mut self, saved: SavedNarrowingOrigin) {
+        let region_stored = self
+            .narrowed_local_origins
+            .get(&saved.name)
+            .is_some_and(|entry| entry.stored_in_region);
         match saved.previous {
-            Some(entry) => {
+            Some(mut entry) => {
+                if region_stored {
+                    entry.view = None;
+                    entry.stored_in_region = true;
+                }
                 self.narrowed_local_origins.insert(saved.name, entry);
             }
             None => {
