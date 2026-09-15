@@ -8,7 +8,11 @@
 //! Key details:
 //! - The initial schema pass cannot reliably resolve inheritance or interface relationships.
 //! - Direct scoped-constant method defaults and Object-to-Object pairs are revisited.
-//! - Plain property scoped-constant defaults stay outside this pass until EIR lowering supports them.
+//! - Directly declared instance and static property defaults are revisited here too, on the same
+//!   rule: enum cases do not exist while class schemas are built, so `public Level $l =
+//!   Level::Low;` is judged once they do (issue #566). It changes WHEN a default is checked,
+//!   never what counts as compatible — a missing case and an incompatible scalar constant are
+//!   both still rejected, from the pass that can tell them apart.
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
@@ -193,7 +197,7 @@ fn validate_class_defaults(checker: &mut Checker, class_name: &str, errors: &mut
 
 /// Revalidates local declared instance and static property defaults for one class.
 fn validate_class_property_defaults(
-    checker: &Checker,
+    checker: &mut Checker,
     class_name: &str,
     class_info: &crate::types::ClassInfo,
     errors: &mut Vec<CompileError>,
@@ -210,7 +214,7 @@ fn validate_class_property_defaults(
         let Some(default) = class_info.defaults.get(index).and_then(Option::as_ref) else {
             continue;
         };
-        validate_object_default(
+        validate_deferred_default(
             checker,
             expected_ty,
             default,
@@ -237,7 +241,7 @@ fn validate_class_property_defaults(
         else {
             continue;
         };
-        validate_object_default(
+        validate_deferred_default(
             checker,
             expected_ty,
             default,
@@ -274,7 +278,7 @@ fn validate_signature_deferred_defaults(
         let Some(default) = default.as_ref() else {
             continue;
         };
-        validate_deferred_parameter_default(
+        validate_deferred_default(
             checker,
             expected_ty,
             default,
@@ -286,7 +290,11 @@ fn validate_signature_deferred_defaults(
 }
 
 /// Resolves a direct scoped-constant default semantically, or rechecks a deferred object pair.
-fn validate_deferred_parameter_default(
+///
+/// Shared by parameters and by directly declared properties: both defer a scoped constant at
+/// schema time, for the same reason — enum cases and class constants do not exist yet — so both
+/// have to be resolved here, where they do (issue #566).
+fn validate_deferred_default(
     checker: &mut Checker,
     expected_ty: &PhpType,
     default: &Expr,

@@ -805,6 +805,36 @@ Rules:
 
 Enum constants are readable both inside the enum (`self::CONST`) and from outside it (`EnumName::CONST`). Enum method bodies are type-checked like class method bodies, so a mismatched return type or an undefined variable inside an enum method is reported.
 
+### Enum cases as defaults
+
+An enum case is a constant expression, so it may be the default of a property, a static property, a promoted constructor property, or a parameter:
+
+```php
+<?php
+enum Level {
+    case Low;
+    case High;
+}
+
+class Config {
+    public static Level $shared = Level::High;   // static property
+    public Level $level = Level::Low;            // declared property
+
+    public function __construct(
+        public Level $promoted = Level::High,    // promoted property
+    ) {}
+}
+
+function log(string $message, Level $at = Level::Low): void {}   // parameter
+
+$config = new Config();
+var_dump($config->level === Level::Low);         // bool(true)
+```
+
+Every form stores the case's **canonical singleton**, so `===` against the case holds, exactly as it does for a case read anywhere else. Cases are materialized lazily, and a default is resolved through that same materialization rather than by copying the slot, so a default written before the case's first use elsewhere in the program is still the singleton and not `null`.
+
+A default naming a case that does not exist is a compile error (`Undefined enum case: Level::Missing`), and a scoped constant that resolves to a scalar is still rejected for an enum-typed slot.
+
 ### Built-in `SortDirection`
 
 PHP 8.6's global unit enum is available without a user declaration:

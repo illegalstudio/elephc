@@ -332,14 +332,20 @@ fn test_enum_from_string_failure_throws_value_error() {
 }
 
 /// Compiles and runs the checked-in `examples/enums/main.php` fixture and asserts stdout includes
-/// user-declared enum output, the `->name`/`->value` case introspection loop, and the builtin
-/// `SortDirection` helper result.
+/// user-declared enum output, the `->name`/`->value` case introspection loop, the builtin
+/// `SortDirection` helper result, and the enum-case property defaults.
+///
+/// The last row is the #566 section: a declared property, a promoted one and a static one all
+/// defaulted to an enum case, plus `=== Level::Low` on the declared one. The identity check is
+/// the part that matters — a default that allocated a fresh object, or stored the case slot
+/// before it was materialized, would still print the right `->name`.
 #[test]
 fn test_example_enums_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enums/main.php"));
     assert_eq!(
         out,
-        "1\n2\n3\nRed=1 Green=2 Blue=3 \nDefault=default Match=match MATCH=upper-match \nDESC"
+        "1\n2\n3\nRed=1 Green=2 Blue=3 \nDefault=default Match=match MATCH=upper-match \nDESC\n\
+         Low High High same"
     );
 }
 
@@ -1036,4 +1042,148 @@ fn test_backed_int_enum_tryfrom_mixed() {
         ",
     );
     assert_eq!(out, "HighnullLow");
+}
+
+/// Issue #566: a DIRECTLY declared typed property may default to an enum case, and gets the
+/// canonical singleton — not a fresh object, and not null.
+///
+/// Constructor promotion already worked, because its default is evaluated as a parameter
+/// default before the assignment; a plain `public Level $level = Level::Low;` had no path at
+/// all. The checker rejected it at schema time (enum cases do not exist yet there, so
+/// `Level::Low` typed as `Str`), and behind that the EIR property-initialization path had no
+/// form for it either — `object_new for default value of property $level`.
+///
+/// `===` is the assertion that matters: a default that allocated a new object, or that stored
+/// the still-null lazy slot, would print the right `->name` and still be a different value
+/// from `Level::Low` everywhere else in the program. The singleton is materialized lazily, so
+/// the fourth row — a default written before the case's first use anywhere — is the one that
+/// catches storing the unmaterialized slot.
+///
+/// All three declaration forms are here together, and asserted to agree with each other:
+/// static, instance, and promoted. Every expectation is the host PHP 8.5.10 output.
+#[test]
+fn test_enum_case_default_on_every_property_form_is_the_singleton() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level
+{
+    case Low;
+    case High;
+}
+
+enum Backed: string
+{
+    case Alpha = 'a';
+}
+
+class Config
+{
+    public static Level $shared = Level::High;
+    public Level $level = Level::Low;
+    public Backed $backed = Backed::Alpha;
+
+    public function __construct(public Level $promoted = Level::High) {}
+}
+
+$c = new Config();
+var_dump(Config::$shared === Level::High);
+var_dump($c->level === Level::Low);
+var_dump($c->level === Level::High);
+var_dump($c->promoted === Level::High);
+var_dump($c->level === $c->promoted);
+var_dump($c->level->name);
+var_dump($c->backed->value);
+
+$c->level = Level::High;
+var_dump($c->level === Level::High);
+Config::$shared = Level::Low;
+var_dump(Config::$shared === Level::Low);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "string(3) \"Low\"\n",
+            "string(1) \"a\"\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+
+/// An enum-case default makes its slot a new OWNER of the singleton, so it must retain it.
+///
+/// Storing the borrowed global without an incref is not a leak but its opposite: the first
+/// thing that releases the slot — a property reassignment, an object's cleanup, a web worker's
+/// static teardown — consumes the global's only reference and frees a case that is still
+/// reachable by name. Lazy materialization then hands the freed block to the NEXT case, so two
+/// cases end up sharing one object; this is the same under-retention that #349 fixed for an
+/// ordinary `Enum::Case` read, reached through the default paths instead.
+///
+/// The loop is what makes it observable. Pre-fix, 500 iterations of
+/// `$c = new Config(); $c->level = Level::High;` left `Level::Low->name` reading back `""`
+/// from the reused block, while `Level::Low === Level::Low` still answered `true` — identity
+/// survives a dangling pointer, so `->name` is the assertion that catches it.
+///
+/// All three default forms churn here, because each has its own store site: the instance path
+/// and the promoted one go through `emit_property_default`, the static one through
+/// `emit_static_property_default_value`.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_enum_case_defaults_retain_the_singleton_across_reassignment() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level
+{
+    case Low;
+    case High;
+}
+
+class Config
+{
+    public static Level $shared = Level::Low;
+    public Level $level = Level::Low;
+
+    public function __construct(public Level $promoted = Level::Low) {}
+}
+
+function churn(int $n): void
+{
+    for ($i = 0; $i < $n; $i++) {
+        $config = new Config();
+        $config->level = Level::High;
+        $config->promoted = Level::High;
+        Config::$shared = Level::High;
+        Config::$shared = Level::Low;
+    }
+}
+
+churn(500);
+var_dump(Level::Low->name);
+var_dump(Level::High->name);
+$fresh = new Config();
+var_dump($fresh->level === Level::Low);
+var_dump($fresh->promoted === Level::Low);
+var_dump(Config::$shared === Level::Low);
+var_dump($fresh->level->name);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(3) \"Low\"\n",
+            "string(4) \"High\"\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "string(3) \"Low\"\n",
+        )
+    );
 }

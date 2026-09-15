@@ -266,6 +266,21 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        // A direct scoped-constant default is DEFERRED, not accepted: enum cases and
+        // class/interface constants do not exist yet while schemas are being built, so
+        // `infer_expr_type_syntactic` answers `Str` for `Level::Low` and a declared
+        // `public Level $level = Level::Low;` was rejected with "expects Object(\"Level\"), got
+        // Str" — a constant expression PHP accepts (issue #566).
+        //
+        // `schema::defaults::validate_deferred_default` revalidates every one of these once the
+        // schemas are complete, resolving the constant semantically, so nothing is waved
+        // through: a missing case or an incompatible scalar constant is still reported, just
+        // from the pass that can tell the difference.
+        if default_expr
+            .is_some_and(|default| matches!(default.kind, ExprKind::ScopedConstantAccess { .. }))
+        {
+            return Ok(());
+        }
         if let Some(default_expr) = default_expr {
             let default_ty = infer_expr_type_syntactic(default_expr);
             if matches!(expected_ty, PhpType::Object(_)) && matches!(default_ty, PhpType::Object(_))
@@ -286,11 +301,10 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
-        if default_expr.is_some_and(|default| {
-            matches!(default.kind, ExprKind::ScopedConstantAccess { .. })
-        }) {
-            return Ok(());
-        }
+        // The scoped-constant deferral now lives in the declared-default validator below,
+        // because a directly declared PROPERTY needs it for the same reason a parameter does
+        // (issue #566). Kept as its own entry point so the two callers stay distinguishable at
+        // the call site, and so a future parameter-only rule has somewhere to go.
         self.validate_schema_declared_default_type(expected_ty, default_expr, span, context)
     }
 

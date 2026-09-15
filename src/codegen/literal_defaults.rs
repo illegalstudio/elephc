@@ -64,6 +64,24 @@ pub(crate) enum LiteralDefaultValue {
         elem_type: PhpType,
         elements: Vec<LiteralArrayElement>,
     },
+    /// An enum case singleton named by a scoped constant: `public Level $l = Level::Low;`.
+    ///
+    /// Not a literal in the sense the rest of this enum is — the value is a heap object the
+    /// runtime materializes lazily, so what is stored is the case's canonical singleton, which
+    /// is what makes `$config->level === Level::Low` hold (issue #566). Constructor promotion
+    /// already worked because its default is evaluated as a parameter before the assignment;
+    /// a DIRECTLY declared property had no form for it at all.
+    ///
+    /// Recognition is by shape only, because this function has no module: whether the receiver
+    /// really names an enum, and the constant one of its cases, is settled by
+    /// `emit_property_default`, which does. The checker has already validated the pair by then
+    /// (`schema::defaults::validate_deferred_default`); the emit-side lookup is what keeps a
+    /// non-enum `Foo::BAR` in an object slot reporting unsupported rather than loading a symbol
+    /// that does not exist.
+    EnumCase {
+        enum_name: String,
+        case_name: String,
+    },
 }
 
 /// Literal indexed-array element that can be materialized without evaluating code.
@@ -238,6 +256,18 @@ pub(crate) fn literal_default_value(
                 elements,
             })
         }
+        // `public Level $level = Level::Low;` — the enum case singleton, not a literal. See
+        // `LiteralDefaultValue::EnumCase` for why the receiver is taken on shape alone here.
+        (
+            PhpType::Object(_),
+            ExprKind::ScopedConstantAccess {
+                receiver: crate::parser::ast::StaticReceiver::Named(enum_name),
+                name: case_name,
+            },
+        ) => Ok(LiteralDefaultValue::EnumCase {
+            enum_name: enum_name.to_string(),
+            case_name: case_name.clone(),
+        }),
         _ => Err(unsupported_literal_default(context, php_type, op_name)),
     }
 }

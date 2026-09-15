@@ -42,3 +42,27 @@ function sql_sort_keyword(SortDirection $direction): string {
 }
 
 echo sql_sort_keyword(SortDirection::Descending);
+echo PHP_EOL;
+
+// An enum case is a constant expression, so it can be the default of a declared
+// property, a static property, a promoted constructor property, or a parameter.
+// Every form stores the canonical singleton, so === against the case holds.
+enum Level {
+    case Low;
+    case High;
+}
+
+class Config {
+    public static Level $shared = Level::High;
+    public Level $level = Level::Low;
+
+    public function __construct(
+        public Level $promoted = Level::High,
+    ) {}
+}
+
+$config = new Config();
+echo $config->level->name, " ",
+     $config->promoted->name, " ",
+     Config::$shared->name, " ",
+     ($config->level === Level::Low ? "same" : "DIFF");
