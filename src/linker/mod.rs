@@ -32,15 +32,55 @@ pub enum LinkError {
     MissingBridge {
         /// Authoritative bridge linker name that could not be materialized.
         name: String,
+        /// Archive this bridge resolves to (`libelephc_web.a`), when known.
+        ///
+        /// A bridge the table does not describe — a `LinkOrigin::Bridge` item whose name is
+        /// not in `BRIDGES` — has no archive filename, environment override, or candidate
+        /// list to report, so it renders the bare first line and nothing else.
+        archive: Option<String>,
+        /// Per-bridge directory override that takes priority over every search location.
+        env_var: Option<String>,
+        /// Directories that were consulted, in the order they were tried.
+        searched: Vec<String>,
     },
 }
 
 impl std::fmt::Display for LinkError {
     /// Formats an actionable linker-preparation diagnostic.
+    ///
+    /// "Actionable" means naming the way out, which the bare first line never did: a binary
+    /// copied out of its build tree fails here with nothing to go on, and the archives simply
+    /// have to travel with it (issue #517). So the message reports the archive it wanted, the
+    /// directories it actually looked in, and the environment override — a resolution order
+    /// that is otherwise only discoverable by reading `linker::bridges`.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingBridge { name } => {
-                write!(formatter, "required Elephc bridge `{name}` could not be found")
+            Self::MissingBridge {
+                name,
+                archive,
+                env_var,
+                searched,
+            } => {
+                write!(formatter, "required Elephc bridge `{name}` could not be found")?;
+                let Some(archive) = archive else {
+                    return Ok(());
+                };
+                write!(formatter, "\n  needs: {archive}")?;
+                if !searched.is_empty() {
+                    write!(formatter, "\n  looked in:")?;
+                    for directory in searched {
+                        write!(formatter, "\n    {directory}")?;
+                    }
+                }
+                if let Some(env_var) = env_var {
+                    write!(
+                        formatter,
+                        "\n\nSet {env_var} to a directory containing {archive}, or keep the \
+                         bridge archives next to the elephc binary (or in a sibling lib/). \
+                         `elephc --print-capabilities` lists every archive this binary can need."
+                    )?;
+                }
+                Ok(())
             }
         }
     }

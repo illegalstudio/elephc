@@ -517,9 +517,18 @@ fn validate_archive_path(name: &str, archive: PathBuf) -> Result<PathBuf, LinkEr
     if valid {
         Ok(archive)
     } else {
-        Err(LinkError::MissingBridge {
-            name: name.to_string(),
-        })
+        Err(bridge_for_library(name).map_or_else(
+            // A `LinkOrigin::Bridge` item the table does not describe: no archive filename,
+            // override, or candidate list exists for it, so the diagnostic stays the bare
+            // first line rather than inventing any of the three.
+            || LinkError::MissingBridge {
+                name: name.to_string(),
+                archive: None,
+                env_var: None,
+                searched: Vec::new(),
+            },
+            BridgeStaticlib::missing_error,
+        ))
     }
 }
 
@@ -682,15 +691,21 @@ impl BridgeStaticlib {
     /// here: the PLAIN magician archive may be present and fine — only the curl-aware
     /// build is missing, so the message should say so and suggest the fix).
     fn magician_curl_missing_error(&self) -> LinkError {
+        let LinkError::MissingBridge {
+            archive,
+            env_var,
+            searched,
+            ..
+        } = self.missing_archive_error(&self.magician_curl_archive_filename());
         LinkError::MissingBridge {
             name: format!(
-                "{} (curl-aware build for eval()+curl programs — set {} to a directory \
-                 containing {}, or run elephc from an elephc source checkout so it can be \
-                 built automatically)",
-                self.lib_name,
-                self.env_var,
-                self.magician_curl_archive_filename()
+                "{} (curl-aware build for eval()+curl programs — run elephc from an elephc \
+                 source checkout to have it built automatically)",
+                self.lib_name
             ),
+            archive,
+            env_var,
+            searched,
         }
     }
 
@@ -706,25 +721,7 @@ impl BridgeStaticlib {
     /// `find_archive()`'s search, generalized to an arbitrary archive filename so the
     /// curl-aware variant can reuse the same candidate-directory list.
     fn find_named_archive(&self, filename: &str) -> Option<PathBuf> {
-        let executable = std::env::current_exe().ok()?;
-        let executable_dir = executable.parent()?;
-        let mut candidates = vec![
-            executable_dir.to_path_buf(),
-            executable_dir
-                .parent()
-                .map(|parent| parent.join("lib"))
-                .unwrap_or_default(),
-        ];
-        if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
-            if !target_dir.is_empty() {
-                candidates.push(PathBuf::from(&target_dir).join("debug"));
-                candidates.push(PathBuf::from(target_dir).join("release"));
-            }
-        }
-        candidates.push(PathBuf::from("target/debug"));
-        candidates.push(PathBuf::from("target/release"));
-
-        candidates
+        self.archive_search_dirs()
             .into_iter()
             .map(|candidate| candidate.join(filename))
             .find(|candidate| candidate.exists())
@@ -834,19 +831,48 @@ impl BridgeStaticlib {
     }
 
     /// Creates the structured error used by discovery and invalid environment overrides.
+    ///
+    /// Carries the archive, the override variable and the directories actually consulted, so
+    /// the diagnostic can say how to fix it. A binary copied out of its build tree used to
+    /// fail here with only the bridge's linker name (issue #517).
     fn missing_error(&self) -> LinkError {
+        self.missing_archive_error(&self.archive_filename())
+    }
+
+    /// [`Self::missing_error`] for an archive filename other than this bridge's default one —
+    /// the curl-aware magician build, whose absence must not be reported as the plain
+    /// archive's.
+    fn missing_archive_error(&self, filename: &str) -> LinkError {
         LinkError::MissingBridge {
             name: self.lib_name.to_string(),
+            archive: Some(filename.to_string()),
+            env_var: Some(self.env_var.to_string()),
+            searched: self
+                .archive_search_dirs()
+                .iter()
+                .map(|directory| directory.display().to_string())
+                .collect(),
         }
     }
 
-    /// Returns the first installed or source-tree candidate containing this archive.
-    fn find_archive(&self) -> Option<PathBuf> {
-        let archive = self.archive_filename();
-        let executable = std::env::current_exe().ok()?;
-        let executable_dir = executable.parent()?;
+    /// The directories an archive is looked for in, in the order they are tried.
+    ///
+    /// Shared by [`Self::find_archive`], [`Self::find_named_archive`] and
+    /// [`Self::missing_error`], so the list the diagnostic prints is by construction the list
+    /// that was searched, rather than a second copy that can drift from it.
+    ///
+    /// The environment override is deliberately NOT here: it short-circuits discovery in
+    /// `archive_path` before any of these are consulted, and the message names it separately
+    /// as the way out rather than as somewhere that was checked.
+    fn archive_search_dirs(&self) -> Vec<PathBuf> {
+        let Some(executable_dir) = std::env::current_exe()
+            .ok()
+            .and_then(|executable| executable.parent().map(Path::to_path_buf))
+        else {
+            return vec![PathBuf::from("target/debug"), PathBuf::from("target/release")];
+        };
         let mut candidates = vec![
-            executable_dir.to_path_buf(),
+            executable_dir.clone(),
             executable_dir
                 .parent()
                 .map(|parent| parent.join("lib"))
@@ -860,11 +886,12 @@ impl BridgeStaticlib {
         }
         candidates.push(PathBuf::from("target/debug"));
         candidates.push(PathBuf::from("target/release"));
-
         candidates
-            .into_iter()
-            .map(|candidate| candidate.join(&archive))
-            .find(|candidate| candidate.exists())
+    }
+
+    /// Returns the first installed or source-tree candidate containing this archive.
+    fn find_archive(&self) -> Option<PathBuf> {
+        self.find_named_archive(&self.archive_filename())
     }
 
     /// Rebuilds `archive` when this checkout's sources have moved past it.
@@ -1637,9 +1664,9 @@ mod tests {
 
         assert_eq!(
             error,
-            LinkError::MissingBridge {
-                name: "elephc_tls".to_string()
-            }
+            bridge_for_library("elephc_tls")
+                .expect("tls bridge")
+                .missing_error()
         );
     }
 
@@ -1653,15 +1680,57 @@ mod tests {
         ));
         assert_eq!(
             bridge.validate_archive(nonexistent),
-            Err(LinkError::MissingBridge {
-                name: "elephc_tls".to_string()
-            })
+            Err(bridge.missing_error())
         );
         assert_eq!(
             bridge.validate_archive(std::env::temp_dir()),
-            Err(LinkError::MissingBridge {
-                name: "elephc_tls".to_string()
-            })
+            Err(bridge.missing_error())
+        );
+    }
+
+    /// Issue #517: the diagnostic has to say how to fix it, not just which bridge is gone.
+    ///
+    /// A binary copied out of its build tree fails here, and the archives simply have to
+    /// travel with it — a fact the bare `required Elephc bridge \`elephc_web\`` line gave a
+    /// user no way to discover. The message now names the archive, every directory that was
+    /// actually consulted, and the override variable.
+    ///
+    /// The searched list is asserted to BE the one `find_archive` walks rather than a second
+    /// copy of it: both read `archive_search_dirs`, so a candidate added to discovery cannot
+    /// go unreported.
+    #[test]
+    fn missing_bridge_message_names_the_archive_the_search_and_the_override() {
+        let bridge = bridge_for_library("elephc_web").expect("web bridge");
+        let rendered = bridge.missing_error().to_string();
+
+        assert!(rendered.contains("required Elephc bridge `elephc_web`"));
+        assert!(rendered.contains("needs: libelephc_web.a"));
+        assert!(rendered.contains("ELEPHC_WEB_LIB_DIR"));
+        assert!(rendered.contains("--print-capabilities"));
+        for directory in bridge.archive_search_dirs() {
+            assert!(
+                rendered.contains(&directory.display().to_string()),
+                "the message must list every directory discovery checks, missing {}:\n{}",
+                directory.display(),
+                rendered
+            );
+        }
+    }
+
+    /// A `LinkOrigin::Bridge` item the table does not describe has no archive, override or
+    /// candidate list, so the diagnostic stays the bare first line rather than inventing any
+    /// of the three.
+    #[test]
+    fn missing_bridge_outside_the_table_renders_only_its_name() {
+        let error = LinkError::MissingBridge {
+            name: "elephc_not_a_bridge".to_string(),
+            archive: None,
+            env_var: None,
+            searched: Vec::new(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "required Elephc bridge `elephc_not_a_bridge` could not be found"
         );
     }
 
@@ -1682,7 +1751,7 @@ mod tests {
         )]);
         assert!(matches!(
             resolve_with(&empty_plan, &[], Platform::Linux, |_| panic!("exact path must not invoke locator")),
-            Err(LinkError::MissingBridge { name }) if name == "elephc_tls"
+            Err(LinkError::MissingBridge { name, .. }) if name == "elephc_tls"
         ));
 
         let symlink = base.join("symlink.a");
@@ -1691,7 +1760,7 @@ mod tests {
             .expect("create archive symlink fixture");
         assert!(matches!(
             validate_archive_path("elephc_tls", symlink.clone()),
-            Err(LinkError::MissingBridge { name }) if name == "elephc_tls"
+            Err(LinkError::MissingBridge { name, .. }) if name == "elephc_tls"
         ));
 
         let _ = std::fs::remove_file(empty);
