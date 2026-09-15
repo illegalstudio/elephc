@@ -432,7 +432,13 @@ pub(super) fn array_pad_runtime_helper(source_elem_ty: &PhpType) -> &'static str
 
 /// Returns the helper that matches the source element ownership representation.
 pub(super) fn array_slice_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
-    if source_elem_ty.is_refcounted() {
+    if source_elem_ty.codegen_repr() == PhpType::Str {
+        // An indexed string array stores 16-byte `{pointer, length}` slots. The shared helpers
+        // copy 8 bytes per element, so neither can carry a string pair — `array_slice()` on one
+        // was refused at compile time rather than run (issue #675). Same split, and the same
+        // ownership rule, as `array_splice_runtime_helper` below.
+        "__rt_array_slice_str"
+    } else if source_elem_ty.is_refcounted() {
         "__rt_array_slice_refcounted"
     } else {
         "__rt_array_slice"

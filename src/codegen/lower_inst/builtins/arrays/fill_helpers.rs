@@ -404,6 +404,8 @@ pub(super) fn require_array_slice_element_layout(elem: &PhpType) -> Result<()> {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Void
+            // 16-byte `{pointer, length}` slots, copied by `__rt_array_slice_str` (issue #675).
+            | PhpType::Str
             | PhpType::Mixed
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
