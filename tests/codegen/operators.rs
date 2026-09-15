@@ -677,6 +677,70 @@ echo classify(2), "\n";
 }
 
 
+/// Issue #548, the relational sibling of the #397 family: `>`/`>=`/`<`/`<=`/`<=>` on a Mixed
+/// box holding a float must compare numerically, never through an int cast.
+///
+/// The int cast is architecture-divergent exactly where it matters. A float past the int64
+/// range converts with `fcvtzs` on ARM64, which SATURATES — so `1.84e19` became `INT64_MAX`
+/// and `> 0` was accidentally right — and with `cvttsd2si` on x86_64, which produces the
+/// "integer indefinite" `INT64_MIN`, so the same program answered `false` there. Both diverge
+/// from PHP, which compares as float.
+///
+/// `PHP_INT_MAX * 2` is the overflow shape from the report (it promotes to float). The
+/// `PHP_INT_MAX` comparisons are the cases ARM64 got wrong too, so this fails on either target
+/// if the cast comes back, not just on the one that reported it. `1.5` keeps an in-range float
+/// in the same fixture: truncating THAT answers `1.5 > 1` correctly by accident but
+/// `1.5 <=> PHP_INT_MAX` wrongly, so the spaceship rows carry it.
+///
+/// Each of the four relational operators is asserted on its own, because each maps to its own
+/// `CmpPredicate` (`Sgt`/`Sge`/`Slt`/`Sle`) after the shared Mixed dispatch — a regression
+/// isolated to one predicate would slip past a fixture that only exercises its sibling. The
+/// rows are chosen so every operator has at least one discriminating case: `<= PHP_INT_MAX` is
+/// the one ARM64's saturating `fcvtzs` gets wrong on the positive overflow (`INT64_MAX <=
+/// INT64_MAX` is true where `1.84e19 <= INT64_MAX` is false), `< PHP_INT_MAX` is the one
+/// x86_64's `INT64_MIN` indefinite gets wrong on the same value, and `<= 1` separates float
+/// from truncated-int for the in-range `1.5` (`1.5 <= 1` is false; `1 <= 1` is not).
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_relational_mixed_float_compares_numerically_across_the_int64_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+function probe($m) {
+    var_dump($m > 0);
+    var_dump($m > PHP_INT_MAX);
+    var_dump($m >= PHP_INT_MAX);
+    var_dump($m < 0);
+    var_dump($m < PHP_INT_MAX);
+    var_dump($m <= PHP_INT_MAX);
+    var_dump($m <= 1);
+    var_dump($m <=> 0);
+    var_dump($m <=> PHP_INT_MAX);
+}
+$a = $argc > 0 ? PHP_INT_MAX : 0;
+probe($a * 2);
+probe($a * -2);
+probe(1.5);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // 1.8446744073709552E+19: above everything, and above INT64_MAX in particular.
+            "bool(true)\nbool(true)\nbool(true)\nbool(false)\n",
+            "bool(false)\nbool(false)\nbool(false)\nint(1)\nint(1)\n",
+            // -1.8446744073709552E+19: below everything, the saturation case in reverse.
+            "bool(false)\nbool(false)\nbool(false)\nbool(true)\n",
+            "bool(true)\nbool(true)\nbool(true)\nint(-1)\nint(-1)\n",
+            // 1.5: in range, so the PHP_INT_MAX rows and `<= 1` separate float from
+            // truncated-int.
+            "bool(true)\nbool(false)\nbool(false)\nbool(false)\n",
+            "bool(true)\nbool(true)\nbool(false)\nint(1)\nint(-1)\n",
+        )
+    );
+}
+
+
 /// Regression for #397: `!=` (LooseNotEq) with a Mixed float operand must
 /// also avoid truncation. `1.5 != 1` must be true.
 #[test]
