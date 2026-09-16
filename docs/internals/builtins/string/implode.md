@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `independent`
-- **Effects**: `static (0 declared effects)`
+- **Effects**: `shared`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
