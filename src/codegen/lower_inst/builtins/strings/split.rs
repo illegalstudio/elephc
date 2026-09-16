@@ -307,6 +307,13 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         )));
     }
     let array_index = inst.operands.len() - 1;
+    let array = expect_operand(inst, array_index)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        emit_boxed_implode_array_type_guard(ctx, array)?;
+    }
     let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
     let normalized_copy = implode_normalized_value_type(ctx, inst, array_index)?;
     match ctx.emitter.target.arch {
@@ -629,6 +636,7 @@ fn implode_normalized_value_type(
     let array = expect_operand(inst, array_index)?;
     match ctx.value_php_type(array)? {
         PhpType::AssocArray { value, .. } => Ok(Some(value.codegen_repr())),
+        // The boxed payload is normalized to an owned dense Mixed array in both runtime arms.
         PhpType::Mixed | PhpType::Union(_) => Ok(Some(PhpType::Mixed)),
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => Ok(Some(PhpType::Mixed)),
         _ => Ok(None),
@@ -654,7 +662,7 @@ pub(super) fn lower_implode_aarch64(
         load_value_as_string_to_regs(ctx, glue, "implode", "x1", "x2")?;
     }
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the glue string while materializing the array argument
-    load_implode_array(ctx, array, array_index)?;
+    load_implode_array(ctx, array)?;
     ctx.emitter.instruction("mov x3, x0");                                      // pass the indexed array pointer as the third implode argument
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the glue string into primary implode argument registers
     Ok(())
@@ -679,28 +687,17 @@ pub(super) fn lower_implode_x86_64(
         load_value_as_string_to_regs(ctx, glue, "implode", "rax", "rdx")?;
     }
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    load_implode_array(ctx, array, array_index)?;
+    load_implode_array(ctx, array)?;
     ctx.emitter.instruction("mov rdx, rax");                                    // pass the indexed array pointer as the third implode argument
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
     Ok(())
 }
 
 /// Loads or normalizes an array into the dense payload required by the join renderers.
-fn load_implode_array(
-    ctx: &mut FunctionContext<'_>,
-    array: ValueId,
-    array_index: usize,
-) -> Result<()> {
+fn load_implode_array(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
     ctx.load_value_to_result(array)?;
     match ctx.value_php_type(array)?.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => {
-            let message = if array_index == 0 {
-                "implode(): Argument #1 ($separator) must be of type array when called with one argument"
-            } else {
-                "implode(): Argument #2 ($array) must be of type array"
-            };
-            emit_loaded_boxed_array_values(ctx, message)
-        }
+        PhpType::Mixed | PhpType::Union(_) => emit_boxed_implode_array_source(ctx),
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
             emit_loaded_dynamic_mixed_array_values(ctx)
         }

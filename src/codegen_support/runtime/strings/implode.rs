@@ -262,6 +262,17 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #48]");                                  // clear the owned mixed-cast slot; borrowed element slots release nothing
     emitter.instruction("cmp x13, #7");                                         // are elements boxed Mixed cells?
     emitter.instruction("b.eq __rt_implode_mixed_elem");                        // mixed slots must be cast to string before copying
+    // A RAW scalar payload is 8 bytes wide and carries no length, so it cannot be read through
+    // the 16-byte `{pointer, length}` string slot below: an int element's value would be
+    // dereferenced as a pointer. Reaching this helper with one is normal — the operand's
+    // declared type was `mixed` or a union (`?array`), so the element layout is only knowable
+    // here, from the tag (issues #689 and #640).
+    emitter.instruction("cmp x13, #0");                                         // value_type 0 = raw int elements
+    emitter.instruction("b.eq __rt_implode_raw_int_elem");                      // render the integer through __rt_itoa
+    emitter.instruction("cmp x13, #2");                                         // value_type 2 = raw float elements
+    emitter.instruction("b.eq __rt_implode_raw_float_elem");                    // render the double through __rt_ftoa
+    emitter.instruction("cmp x13, #3");                                         // value_type 3 = raw bool elements
+    emitter.instruction("b.eq __rt_implode_raw_bool_elem");                     // PHP renders true as "1" and false as ""
     emitter.instruction("lsl x12, x11, #4");                                    // compute byte offset: index * 16
     emitter.instruction("add x12, x3, x12");                                    // add to array base
     emitter.instruction("add x12, x12, #24");                                   // skip 24-byte array header
@@ -302,6 +313,45 @@ pub fn emit_implode(emitter: &mut Emitter) {
     // heap magic marker, explicitly to let callers pass concat-buffer storage). The pointer is
     // captured BEFORE the copy loop, which post-increments x1 off the allocation base.
     emitter.instruction("str x1, [sp, #48]");                                   // record the persisted mixed-cast string to release once its bytes are copied
+    emitter.instruction("b __rt_implode_copy_value");                           // copy the cast string payload into the result buffer
+
+    // -- raw scalar element arms: 8-byte payloads formatted through the shared scratch --
+    //
+    // `__rt_itoa`/`__rt_ftoa` write into `_concat_buf` at `_concat_off`, so these obey the same
+    // CURSOR invariant the mixed arm above does: publish the live destination first, restore the
+    // loop registers after. Nothing is ALLOCATED here — both formatters answer with a pointer
+    // into that shared scratch — so the owned-temporary slot stays zero and the release below is
+    // correctly skipped.
+    emitter.label("__rt_implode_raw_int_elem");
+    emit_aarch64_scalar_slot_address(emitter);
+    emitter.instruction("ldr x0, [x12]");                                       // load the raw integer element
+    emit_aarch64_scalar_cast_prologue(emitter, "raw_int");
+    emitter.instruction("bl __rt_itoa");                                        // format the integer as decimal text → x1=ptr, x2=len
+    emit_aarch64_scalar_cast_epilogue(emitter);
+    emitter.instruction("b __rt_implode_copy_value");                           // copy the formatted digits into the result buffer
+
+    emitter.label("__rt_implode_raw_float_elem");
+    emit_aarch64_scalar_slot_address(emitter);
+    emitter.instruction("ldr d0, [x12]");                                       // load the raw double element into the FP argument register
+    emit_aarch64_scalar_cast_prologue(emitter, "raw_float");
+    emitter.instruction("bl __rt_ftoa");                                        // format the double with PHP's precision=14 layout → x1=ptr, x2=len
+    emit_aarch64_scalar_cast_epilogue(emitter);
+    emitter.instruction("b __rt_implode_copy_value");                           // copy the formatted float text into the result buffer
+
+    // PHP stringifies bool as "1"/"" — NOT "1"/"0" — which is why false takes a zero-length
+    // copy instead of going through the formatter at all.
+    emitter.label("__rt_implode_raw_bool_elem");
+    emit_aarch64_scalar_slot_address(emitter);
+    emitter.instruction("ldr x0, [x12]");                                       // load the raw bool element
+    emitter.instruction("cbz x0, __rt_implode_raw_bool_false_elem");            // false renders as the empty string
+    emitter.instruction("mov x0, #1");                                          // true renders as the single character "1"
+    emit_aarch64_scalar_cast_prologue(emitter, "raw_booltrue");
+    emitter.instruction("bl __rt_itoa");                                        // format the 1 as text → x1=ptr, x2=len
+    emit_aarch64_scalar_cast_epilogue(emitter);
+    emitter.instruction("b __rt_implode_copy_value");                           // copy the single character into the result buffer
+
+    emitter.label("__rt_implode_raw_bool_false_elem");
+    emitter.instruction("mov x2, #0");                                          // a zero-length element copies nothing and still takes its glue
 
     // -- copy element bytes to output --
     emitter.label("__rt_implode_copy_value");
@@ -345,6 +395,76 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Addresses the current raw 8-byte element slot on x86_64, leaving it in `rcx`.
+fn emit_x86_64_scalar_slot_address(emitter: &mut Emitter) {
+    emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a raw scalar slot offset
+    emitter.instruction("shl rcx, 3");                                          // convert the loop cursor into the 8-byte scalar slot offset
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current scalar slot
+    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current scalar slot after the fixed array header
+}
+
+/// Publishes the LIVE destination cursor as `_concat_off` before an x86_64 formatter call.
+///
+/// The x86_64 mirror of [`emit_aarch64_scalar_cast_prologue`], including its reason for going
+/// through the shared publish helper rather than open-coding the scratch-only form.
+///
+/// The element payload is already in its argument register (`rax` or `xmm0`), which the shared
+/// helper leaves alone: it reads `r10` and clobbers only `rcx`, `rdx`, `r8` and `r9`.
+fn emit_x86_64_scalar_cast_prologue(emitter: &mut Emitter, site: &str) {
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the live implode destination cursor, the helper's input
+    emit_implode_publish_offset_x86_64(emitter, site);
+}
+
+/// Moves an x86_64 formatter's `rax`/`rdx` answer into the shared copy loop's registers.
+fn emit_x86_64_scalar_copy_setup(emitter: &mut Emitter) {
+    emitter.instruction("mov r8, rax");                                         // move the formatted text pointer into the copy-loop source register
+    emitter.instruction("mov r9, rdx");                                         // move the formatted text length into the copy-loop counter register
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor after formatting
+}
+
+/// Addresses the current raw 8-byte element slot on AArch64, leaving it in `x12`.
+///
+/// Raw scalar payloads are half the width of the `{pointer, length}` string slot the main path
+/// indexes, so they get their own scaling: `x3` is the array base and `x11` the loop index.
+fn emit_aarch64_scalar_slot_address(emitter: &mut Emitter) {
+    emitter.instruction("lsl x12, x11, #3");                                    // compute byte offset: index * 8 for raw scalar slots
+    emitter.instruction("add x12, x3, x12");                                    // add the scalar slot offset to the array base
+    emitter.instruction("add x12, x12, #24");                                   // skip the 24-byte array header
+}
+
+/// Saves the AArch64 loop registers and publishes the LIVE destination cursor as `_concat_off`.
+///
+/// See the CURSOR invariant at the top of this file: `__rt_itoa` and `__rt_ftoa` both format
+/// into `_concat_buf` at `_concat_off`, so an offset left parked at the implode result START
+/// would write over the glue and element bytes already copied.
+///
+/// The publish goes through the shared `emit_implode_publish_offset_aarch64` rather than being
+/// open-coded, so these arms obey the same two-destination rule the boxed-Mixed arm and the
+/// finalizer already do: a SCRATCH destination reserves what it has written, a GROWN one holds
+/// no scratch and restores the entry offset.
+///
+/// Measured, so the comment does not overstate it: the open-coded scratch-only form is not
+/// observably wrong TODAY. It publishes `cursor - _concat_buf`, and `__rt_itoa` then writes at
+/// `_concat_buf + offset`, so the arithmetic cancels back to the real cursor and the preceding
+/// `MIXED_CAST_HEADROOM` reservation keeps that write in bounds. It is wrong in the sense that
+/// matters for a shared invariant: it publishes a nonsense offset that only works by accident,
+/// and it silently opts these three arms out of any future change to the helper.
+///
+/// `site` names the labels the shared helper emits, so every arm needs its own.
+fn emit_aarch64_scalar_cast_prologue(emitter: &mut Emitter, site: &str) {
+    emitter.instruction("str x9, [sp, #56]");                                   // save destination cursor across the scalar format call
+    emitter.instruction("str x10, [sp, #64]");                                  // save array length across the scalar format call
+    emitter.instruction("str x11, [sp, #72]");                                  // save loop index across the scalar format call
+    emit_implode_publish_offset_aarch64(emitter, site);
+}
+
+/// Restores the AArch64 loop registers clobbered by a scalar formatter call.
+fn emit_aarch64_scalar_cast_epilogue(emitter: &mut Emitter) {
+    emitter.instruction("ldr x9, [sp, #56]");                                   // restore destination cursor after the scalar format call
+    emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length after the scalar format call
+    emitter.instruction("ldr x11, [sp, #72]");                                  // restore loop index after the scalar format call
 }
 
 /// Emits the x86_64 Linux variant of `__rt_implode`.
@@ -418,6 +538,15 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current indexed-array loop cursor before locating the next string element slot
     emitter.instruction("cmp QWORD PTR [rbp - 64], 7");                         // are elements boxed Mixed cells?
     emitter.instruction("je __rt_implode_mixed_elem");                          // mixed slots must be cast to string before copying
+    // See the AArch64 dispatch: a RAW scalar payload is 8 bytes wide and carries no length, so
+    // reading it through the 16-byte `{pointer, length}` string slot below dereferences the
+    // value itself (issues #689 and #640).
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // value_type 0 = raw int elements
+    emitter.instruction("je __rt_implode_raw_int_elem");                        // render the integer through __rt_itoa
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 2");                         // value_type 2 = raw float elements
+    emitter.instruction("je __rt_implode_raw_float_elem");                      // render the double through __rt_ftoa
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 3");                         // value_type 3 = raw bool elements
+    emitter.instruction("je __rt_implode_raw_bool_elem");                       // PHP renders true as "1" and false as ""
     emitter.instruction("mov rcx, r11");                                        // copy the indexed-array loop cursor before scaling it into a string-slot byte offset
     emitter.instruction("shl rcx, 4");                                          // convert the indexed-array loop cursor into the 16-byte offset of the current string slot
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current string slot
@@ -457,6 +586,45 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, rax");                                         // move the cast string pointer into the copy-loop source register
     emitter.instruction("mov r9, rdx");                                         // move the cast string length into the copy-loop counter register
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor after casting
+    emitter.instruction("jmp __rt_implode_copy");                               // copy the cast string payload into the result buffer
+
+    // -- raw scalar element arms: 8-byte payloads formatted through the shared scratch --
+    //
+    // Same CURSOR invariant as the mixed arm: `__rt_itoa`/`__rt_ftoa` format into `_concat_buf`
+    // at `_concat_off`, so the live destination is published first. Neither ALLOCATES, so the
+    // owned-temporary slot stays zero and the release below is correctly skipped.
+    emitter.label("__rt_implode_raw_int_elem");
+    emit_x86_64_scalar_slot_address(emitter);
+    emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the raw integer element into the integer-to-string input register
+    emit_x86_64_scalar_cast_prologue(emitter, "raw_int");
+    emitter.instruction("call __rt_itoa");                                      // format the integer as decimal text → rax=ptr, rdx=len
+    emit_x86_64_scalar_copy_setup(emitter);
+    emitter.instruction("jmp __rt_implode_copy");                               // copy the formatted digits into the result buffer
+
+    emitter.label("__rt_implode_raw_float_elem");
+    emit_x86_64_scalar_slot_address(emitter);
+    emitter.instruction("movsd xmm0, QWORD PTR [rcx]");                         // load the raw double element into the FP argument register
+    emit_x86_64_scalar_cast_prologue(emitter, "raw_float");
+    emitter.instruction("call __rt_ftoa");                                      // format the double with PHP's precision=14 layout → rax=ptr, rdx=len
+    emit_x86_64_scalar_copy_setup(emitter);
+    emitter.instruction("jmp __rt_implode_copy");                               // copy the formatted float text into the result buffer
+
+    // PHP stringifies bool as "1"/"" — NOT "1"/"0" — which is why false takes a zero-length
+    // copy instead of going through the formatter at all.
+    emitter.label("__rt_implode_raw_bool_elem");
+    emit_x86_64_scalar_slot_address(emitter);
+    emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the raw bool element
+    emitter.instruction("test rax, rax");                                       // false renders as the empty string
+    emitter.instruction("jz __rt_implode_raw_bool_false_elem");                 // skip the formatter entirely for false
+    emitter.instruction("mov rax, 1");                                          // true renders as the single character "1"
+    emit_x86_64_scalar_cast_prologue(emitter, "raw_booltrue");
+    emitter.instruction("call __rt_itoa");                                      // format the 1 as text → rax=ptr, rdx=len
+    emit_x86_64_scalar_copy_setup(emitter);
+    emitter.instruction("jmp __rt_implode_copy");                               // copy the single character into the result buffer
+
+    emitter.label("__rt_implode_raw_bool_false_elem");
+    emitter.instruction("xor r9, r9");                                          // a zero-length element copies nothing and still takes its glue
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor
 
     emitter.label("__rt_implode_copy_value");
     emit_implode_ensure_room_x86_64(emitter, "elem");
@@ -540,6 +708,11 @@ mod tests {
         assert_eq!(asm.matches("add rsp, 112").count(), 1);
     }
 
+    /// The element arms that format through `_concat_buf`: boxed Mixed, raw int, raw float and
+    /// raw bool. Each one publishes the live destination cursor first; the string-slot arm and
+    /// the false-bool arm copy bytes they already hold and publish nothing.
+    const FORMATTING_ARMS: usize = 4;
+
     /// The owned mixed-cast slot must be cleared at the TOP of every element iteration, so a
     /// borrowed (typed-array) element can never inherit the previous iteration's owned pointer
     /// and free it a second time. This is the guard that keeps the release exactly-once.
@@ -559,14 +732,19 @@ mod tests {
     }
 
     /// Pins the ARM64 cursor discipline: the LIVE destination cursor is published as
-    /// `_concat_off` before the nested cast (so `__rt_ftoa`/`__rt_itoa` format past the bytes
+    /// `_concat_off` before every nested cast (so `__rt_ftoa`/`__rt_itoa` format past the bytes
     /// already joined), and the finalizer stamps the ABSOLUTE end offset instead of adding the
     /// result length to whatever `_concat_off` the nested cast left behind.
     ///
-    /// Both sites now branch on where the destination lives. A scratch destination publishes
+    /// Every site branches on where the destination lives. A scratch destination publishes
     /// the live cursor as before; a GROWN one occupies no scratch at all and restores the
     /// offset the call started from, which is also what leaves the nested cast the whole
     /// buffer to format into.
+    ///
+    /// The count is one publish per FORMATTING element arm plus the finalizer, and the THREE
+    /// assertions have to agree on it: the scratch arm, the grown arm and the store are all
+    /// parts of one shared sequence, so a site that open-codes the scratch-only form shows up
+    /// here as a grown-arm count lower than the other two rather than as a missing publish.
     #[test]
     fn test_implode_arm64_publishes_live_cursor_across_mixed_cast() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
@@ -574,15 +752,18 @@ mod tests {
         let asm = emitter.output();
         assert_eq!(
             asm.matches("sub x14, x9, x14").count(),
-            2,
-            "the live cursor offset is published at the cast and at the finalizer"
+            FORMATTING_ARMS + 1,
+            "the live cursor offset is published at every cast and at the finalizer"
         );
         assert_eq!(
             asm.matches("ldr x14, [sp, #88]").count(),
-            2,
-            "and both fall back to the entry offset once the destination has grown"
+            FORMATTING_ARMS + 1,
+            "and every one of them falls back to the entry offset once the destination has grown"
         );
-        assert_eq!(asm.matches("str x14, [x13]").count(), 2);
+        assert_eq!(
+            asm.matches("str x14, [x13]").count(),
+            FORMATTING_ARMS + 1
+        );
         assert!(
             !asm.contains("add x8, x8, x2"),
             "implode must stamp the absolute concat offset, not accumulate a relative length"
@@ -651,18 +832,18 @@ mod tests {
         let asm = emitter.output();
         assert_eq!(
             asm.matches("mov r9, r10").count(),
-            2,
-            "the live cursor is published at the cast and at the finalizer"
+            FORMATTING_ARMS + 1,
+            "the live cursor is published at every cast and at the finalizer"
         );
         assert_eq!(
             asm.matches("sub r9, r8").count(),
-            2,
-            "and converted to an absolute offset at both"
+            FORMATTING_ARMS + 1,
+            "and converted to an absolute offset at every one of them"
         );
         assert_eq!(
             asm.matches("mov r9, QWORD PTR [rbp - 88]").count(),
-            2,
-            "both fall back to the entry offset once the destination has grown"
+            FORMATTING_ARMS + 1,
+            "every one of them falls back to the entry offset once the destination has grown"
         );
         assert!(
             !asm.contains("add r9, rdx"),

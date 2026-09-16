@@ -2570,6 +2570,7 @@ fn lower_array_push_aarch64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?;
+    let scalar_tag = scalar_slot_element_tag(elem_ty, &value_ty);
     if array_push_value_needs_mixed_unbox(elem_ty, &value_ty) {
         return lower_array_push_unboxed_mixed_aarch64(ctx, array, value, elem_ty);
     }
@@ -2627,7 +2628,48 @@ fn lower_array_push_aarch64(
             )));
         }
     }
+    emit_scalar_slot_element_tag(ctx, scalar_tag);
     Ok(())
+}
+
+/// Restamps the header tag of an array whose elements share the raw 8-byte int slot.
+///
+/// `__rt_array_push_int` takes float and bool payloads too -- the slot is identical -- and
+/// stamps `value_type` 0 on the first append to an empty array, which says "int". That is the
+/// only element description a reader holding nothing but the array has, and float and bool do
+/// not RENDER like an int: a double's bits would print as a huge integer and `false` would
+/// print as `0` instead of the empty string. `implode()` reached through a `mixed`/union
+/// operand is exactly such a reader (issues #689 and #640), as is zval packing.
+///
+/// A no-op for every other element type: string, refcounted and tagged-scalar appends already
+/// stamp their own tag, and an int array wants the 0 the helper wrote.
+fn emit_scalar_slot_element_tag(ctx: &mut FunctionContext<'_>, tag: Option<PhpType>) {
+    let Some(tag) = tag else {
+        return;
+    };
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &tag,
+    );
+}
+
+/// Picks the element type an 8-byte-slot append should stamp, if any.
+///
+/// The ARRAY's element type decides, except when the checker still sees the array as empty:
+/// `$a = []` appended inside a loop keeps its `array<never>` back-edge type at every push, so
+/// there the value being written is the only description of the slot. A heterogeneous array is
+/// not reachable here -- a `mixed` element type boxes instead of taking this path.
+fn scalar_slot_element_tag(elem_ty: &PhpType, value_ty: &PhpType) -> Option<PhpType> {
+    let from_array = elem_ty.codegen_repr();
+    if matches!(from_array, PhpType::Float | PhpType::Bool) {
+        return Some(from_array);
+    }
+    if !matches!(from_array, PhpType::Never | PhpType::Void) {
+        return None;
+    }
+    let from_value = value_ty.codegen_repr();
+    matches!(from_value, PhpType::Float | PhpType::Bool).then_some(from_value)
 }
 
 /// Lowers an indexed-array append for x86_64 targets.
@@ -2638,6 +2680,7 @@ fn lower_array_push_x86_64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?;
+    let scalar_tag = scalar_slot_element_tag(elem_ty, &value_ty);
     if array_push_value_needs_mixed_unbox(elem_ty, &value_ty) {
         return lower_array_push_unboxed_mixed_x86_64(ctx, array, value, elem_ty);
     }
@@ -2695,6 +2738,7 @@ fn lower_array_push_x86_64(
             )));
         }
     }
+    emit_scalar_slot_element_tag(ctx, scalar_tag);
     Ok(())
 }
 
