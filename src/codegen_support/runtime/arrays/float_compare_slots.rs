@@ -39,9 +39,9 @@ fn emit_one(emitter: &mut Emitter, label: &str, descending: bool) {
 
     match emitter.target.arch {
         Arch::AArch64 => {
-            // `__rt_php_compare` takes (tag, lo, hi) twice; the slot payload is the low word
-            // and a float carries no high word. b moves first, because a still occupies the
-            // register b's tag is about to take.
+            // -- build the two (tag, lo, hi) triples `__rt_php_compare` expects --
+            // The slot payload is the low word and a float carries no high word. b moves
+            // first, because a still occupies the register b's tag is about to take.
             emitter.instruction("mov x4, x1");                                  // right payload = b's float bits
             emitter.instruction("mov x1, x0");                                  // left payload = a's float bits
             emitter.instruction(&format!("mov x0, #{}", FLOAT_TAG));            // left operand is a float
@@ -49,6 +49,7 @@ fn emit_one(emitter: &mut Emitter, label: &str, descending: bool) {
             emitter.instruction(&format!("mov x3, #{}", FLOAT_TAG));            // right operand is a float
             emitter.instruction("mov x5, xzr");                                 // floats carry no high word
             if descending {
+                // -- descending needs a frame: the call is no longer in tail position --
                 emitter.instruction("sub sp, sp, #16");                         // reserve the saved frame record
                 emitter.instruction("stp x29, x30, [sp]");                      // save it across the nested call
                 emitter.instruction("mov x29, sp");                             // establish a stable comparator frame
@@ -58,10 +59,12 @@ fn emit_one(emitter: &mut Emitter, label: &str, descending: bool) {
                 emitter.instruction("add sp, sp, #16");                         // release the comparator frame
                 emitter.instruction("ret");                                     // return the PHP ordering result
             } else {
+                // -- ascending IS the shared ordering, so hand the frame straight over --
                 emitter.instruction("b __rt_php_compare");                      // tail-call: its answer is ours
             }
         }
         Arch::X86_64 => {
+            // -- build the two (tag, lo, hi) triples `__rt_php_compare` expects --
             emitter.instruction("mov r8, rsi");                                 // right payload = b's float bits
             emitter.instruction("mov rsi, rdi");                                // left payload = a's float bits
             emitter.instruction(&format!("mov edi, {}", FLOAT_TAG));            // left operand is a float
@@ -69,6 +72,7 @@ fn emit_one(emitter: &mut Emitter, label: &str, descending: bool) {
             emitter.instruction(&format!("mov ecx, {}", FLOAT_TAG));            // right operand is a float
             emitter.instruction("xor r9d, r9d");                                // floats carry no high word
             if descending {
+                // -- descending needs a frame: the call is no longer in tail position --
                 emitter.instruction("push rbp");                                // preserve the caller frame pointer
                 emitter.instruction("mov rbp, rsp");                            // establish a stable comparator frame
                 abi::emit_call_label(emitter, "__rt_php_compare");              // ordering as rax = -1, 0, or 1
@@ -76,6 +80,7 @@ fn emit_one(emitter: &mut Emitter, label: &str, descending: bool) {
                 emitter.instruction("pop rbp");                                 // restore the caller frame pointer
                 emitter.instruction("ret");                                     // return the PHP ordering result
             } else {
+                // -- ascending IS the shared ordering, so hand the frame straight over --
                 emitter.instruction("jmp __rt_php_compare");                    // tail-call: its answer is ours
             }
         }
