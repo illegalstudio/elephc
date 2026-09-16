@@ -209,6 +209,18 @@ pub(super) fn lower_indexed_array_sort(
             ctx.load_value_to_reg(array, "rdi")?;
         }
     }
+    if elem_ty == PhpType::Float {
+        // A float slot holds the value, not a pointer to it, so neither the integer helper
+        // (which would compare the bit patterns) nor the string one can order it. The slot
+        // permuter can, with a comparator that hands both payloads to PHP's own ordering.
+        emit_float_slot_sort(ctx, name)?;
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            0x7fff_ffff_ffff_fffe,
+        );
+        return store_if_result(ctx, inst);
+    }
     if elem_ty == PhpType::Mixed {
         // A boxed cell has no ordering of its own, so this is the slot permuter
         // driven by PHP's ordering table, the same one `<` and `<=>` use. The
@@ -569,6 +581,38 @@ pub(super) fn lower_array_key_sort(
     }
 }
 
+/// Sorts an indexed array of raw `float` slots through `__rt_usort`.
+///
+/// The comparator is a runtime callback rather than a user function, so no capture
+/// environment is passed and `__rt_usort` keeps its two-argument path. No validation pass is
+/// needed: every slot of an `array<float>` is a float by construction, which is the one way
+/// this differs from the `Mixed` twin below.
+fn emit_float_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
+    let comparator = match name {
+        "sort" => "__rt_float_compare_slots",
+        "rsort" => "__rt_float_compare_slots_desc",
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{other} over indexed-array elements of PHP type Float"
+            )))
+        }
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // the array moves behind the comparator address
+            abi::emit_symbol_address(ctx.emitter, "x0", comparator);
+            ctx.emitter.instruction("mov x2, #0");                              // no capture environment
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rdi");                            // the array moves behind the comparator address
+            abi::emit_symbol_address(ctx.emitter, "rdi", comparator);
+            ctx.emitter.instruction("xor edx, edx");                            // no capture environment
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_usort");
+    Ok(())
+}
+
 /// Sorts an indexed array of boxed `Mixed` cells through `__rt_usort`.
 ///
 /// The comparator is a runtime callback rather than a user function, so no
@@ -604,19 +648,20 @@ pub(super) fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) ->
 
 /// Returns the indexed-array element type accepted by the selected sort helper.
 ///
-/// `Mixed` is accepted wherever strings are, because those are the two sorts that
-/// have an ordering for scalar values whose type is only known at run time: the
-/// slot is permuted by `__rt_usort`, after a runtime guard rejects non-scalars,
-/// and the ordering comes from `__rt_php_compare`, which is what `<` and `<=>`
-/// already use. The sorts that pass `allow_strings = false`
-/// (`asort`, `natsort`, etc.) keep refusing it because they have no comparator to hand a
-/// boxed cell to, and a loud refusal is the right answer until they do.
+/// `Mixed` and `Float` are accepted wherever strings are, because those are the sorts that
+/// reach an ordering through `__rt_usort`: the slot is permuted there -- after a runtime guard
+/// rejects non-scalars, for `Mixed` -- and the ordering comes from `__rt_php_compare`, which is
+/// what `<` and `<=>` already use. A float needs that route because its slot holds the value
+/// itself rather than a pointer, so neither the integer nor the string helper can order it.
+/// The sorts that pass `allow_strings = false` (`asort`, `natsort`, etc.) keep refusing both
+/// because they have no comparator to hand a slot to, and a loud refusal is the right answer
+/// until they do.
 pub(super) fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: bool) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
             if matches!(elem, PhpType::Int | PhpType::Void | PhpType::Never)
-                || (allow_strings && matches!(elem, PhpType::Str | PhpType::Mixed))
+                || (allow_strings && matches!(elem, PhpType::Str | PhpType::Mixed | PhpType::Float))
             {
                 return Ok(elem);
             }

@@ -200,6 +200,7 @@ mod slice_bounds;
 mod sort_int;
 mod sort_str;
 mod undefined_array_key_warning;
+mod float_compare_slots;
 mod php_compare_slots;
 mod usort;
 mod usort_str;
@@ -553,6 +554,7 @@ pub use sort_str::emit_sort_str;
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
 /// Emit user-defined sort helper.
+pub use float_compare_slots::emit_float_compare_slots;
 pub use php_compare_slots::emit_php_compare_slots;
 pub use usort::emit_usort;
 /// Emit user-defined string-array sort helper.
