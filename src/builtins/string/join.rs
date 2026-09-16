@@ -21,7 +21,5 @@
 
 builtin! {
     contract: "join",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Implode,
-    ),
+    semantics: super::implode::implode_semantics(),
 }
