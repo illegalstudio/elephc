@@ -294,8 +294,8 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `prev()` | `prev(&$arr): mixed` | Rewind the internal pointer one position and return the new element, or `false` |
 | `reset()` | `reset(&$arr): mixed` | Move the internal pointer to the first element and return it, or `false` for an empty array |
 | `end()` | `end(&$arr): mixed` | Move the internal pointer to the last element and return it, or `false` for an empty array |
-| `sort()` | `sort($arr): void` | Sort ascending (in-place) |
-| `rsort()` | `rsort($arr): void` | Sort descending |
+| `sort()` | `sort($arr): void` | Sort ascending (in-place). Elements may be `int`, `string`, `float`, or heterogeneous (`mixed`) |
+| `rsort()` | `rsort($arr): void` | Sort descending. Same element types as `sort()` |
 | `asort()` | `asort($arr): void` | Sort by value, maintain keys |
 | `arsort()` | `arsort($arr): void` | Sort by value desc, maintain keys |
 | `ksort()` | `ksort($arr): bool` | Sort by key ascending with `SORT_REGULAR`. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
