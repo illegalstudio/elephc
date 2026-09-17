@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, the containers an array literal allocates when it defaults a property, boxed or nested, and read-modify-write stores into a typed static property or a property array element.
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, the containers an array literal allocates when it defaults a property, boxed or nested, and read-modify-write stores into a typed static property or a property array element, plus tagged-scalar cells allocated at Mixed call boundaries.
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
@@ -52,6 +52,8 @@ mod foreach_iterator_aggregate_owner;
 mod nested_property_defaults;
 #[path = "runtime_gc/spread_promotion.rs"]
 mod spread_promotion;
+#[path = "runtime_gc/tagged_scalar_boxing.rs"]
+mod tagged_scalar_boxing;
 #[path = "runtime_gc/stack_args.rs"]
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]
