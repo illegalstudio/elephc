@@ -233,9 +233,14 @@ The second generation of the pass (control-flow normalization v2) adds shell can
 
 ### A generator must still look like one
 
-Every pass that rewrites a callable body goes through
-`optimize::generator_bodies::rewrite_preserving_yield`, which refuses a rewrite that would drop
-the body's last `yield`.
+Constant propagation and pruning rewrite callable bodies through
+`optimize::generator_bodies::rewrite_preserving_yield`, which keeps the original body when a
+rewrite would leave it with NO `yield` at all. (DCE is **not** wrapped yet — see the note at the
+end of this section.)
+
+Generator-ness itself is not re-derived from the body afterwards. The checker records it on
+`FunctionSig::is_generator` from the SOURCE body, before any pass runs, and lowering reads that
+bit.
 
 PHP decides whether a declaration is a **generator** syntactically, before any folding, and the
 type checker does the same — it types `g()` as `Generator` from the `yield` it can see. These
@@ -255,6 +260,15 @@ function g() { return; yield; }                     // the stop-at-terminator ru
 Keeping the un-rewritten body is the conservative answer: the retained `yield` is unreachable by
 construction, so the cost is one unexecuted statement in a body that is now lowered as the
 coroutine it is — and only a body whose every `yield` is dead pays it.
+
+It is also whole-body: one dead `yield` blocks *all* propagation and pruning in that callable.
+A surgical "keep one yield, apply the rest" would be tighter, and is worth doing if a real body
+ever pays for it.
+
+**DCE is not wrapped.** `dce_block_with_guards` / `dce_method` rewrite bodies without going
+through this helper, so a named function can still lose its last `yield` there. That no longer
+mis-classifies it — `FunctionSig::is_generator` is recorded before any pass and is what lowering
+reads — but the body it lowers is then a coroutine with no `yield` left in it. Tracked as #1084.
 
 ### Example
 

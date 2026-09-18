@@ -362,3 +362,48 @@ var_dump($manual->current());
         )
     );
 }
+
+/// A FACTORY declaring `: Generator` is not a generator function.
+///
+/// PHP decides generator-ness syntactically: a body containing `yield` is a generator, and a
+/// body that merely declares and RETURNS a `Generator` is an ordinary function. Inferring it
+/// from `return_type == Generator` instead conflates the two — the factory's public symbol
+/// became a generator constructor, its `return inner()` lowered to `Generator::getReturn()`,
+/// and the `foreach` over it saw nothing. Raised in review on the #673 fix (issue #1086).
+///
+/// The three shapes here are the ones that must disagree with each other: a factory with no
+/// yield at all, a factory whose returned generator is built inline, and a real generator that
+/// also declares `: Generator` and must stay one.
+#[test]
+fn test_generator_factory_is_not_itself_a_generator() {
+    let out = compile_and_run(
+        r#"<?php
+function inner() { yield 1; yield 2; }
+function factory(): Generator { return inner(); }
+function declaredGenerator(): Generator { yield 8; yield 9; }
+
+class Build {
+    public function make(): Generator { return inner(); }
+    public static function makeStatic(): Generator { return inner(); }
+}
+
+$f = "";
+foreach (factory() as $v) { $f .= $v . ","; }
+$d = "";
+foreach (declaredGenerator() as $v) { $d .= $v . ","; }
+$m = "";
+$b = new Build();
+foreach ($b->make() as $v) { $m .= $v . ","; }
+$s = "";
+foreach (Build::makeStatic() as $v) { $s .= $v . ","; }
+$c = "";
+$closure = function (): Generator { return inner(); };
+foreach ($closure() as $v) { $c .= $v . ","; }
+echo "factory=", $f, " declared=", $d, " method=", $m, " static=", $s, " closure=", $c;
+"#,
+    );
+    assert_eq!(
+        out,
+        "factory=1,2, declared=8,9, method=1,2, static=1,2, closure=1,2,"
+    );
+}

@@ -20,7 +20,12 @@
 
 use crate::parser::ast::Stmt;
 
-/// Applies `rewrite` to a callable body, unless doing so would drop its last `yield`.
+/// Applies `rewrite` to a callable body, keeping the original if the rewrite would leave it
+/// with NO `yield` at all.
+///
+/// The test is "any yield survives", not "the last yield survives": a rewrite that deletes
+/// some yields and keeps others is accepted, because the body still reads as a generator.
+/// Only a rewrite that empties the set is refused.
 pub(super) fn rewrite_preserving_yield<F>(body: Vec<Stmt>, rewrite: F) -> Vec<Stmt>
 where
     F: FnOnce(Vec<Stmt>) -> Vec<Stmt>,
