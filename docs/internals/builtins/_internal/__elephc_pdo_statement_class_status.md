@@ -2,7 +2,7 @@
 title: "__elephc_pdo_statement_class_status() — internals"
 description: "Compiler internals for __elephc_pdo_statement_class_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1037
+  order: 1043
 ---
 
 ## `__elephc_pdo_statement_class_status()` — internals

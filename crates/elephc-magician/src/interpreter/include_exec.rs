@@ -9,9 +9,14 @@
 //! Key details:
 //! - Included code runs against the current eval context and materialized scope.
 //! - Missing include emits a warning and returns false; missing require is fatal.
+//! - An include's file is loaded through `crate::script_cache`, which returns the
+//!   already-segmented, already-parsed form when the OPcache cache is enabled. The
+//!   replay below must therefore stay an exact mirror of `segments::segment_script`:
+//!   same alternation, same "a file ending inside PHP emits no trailing output".
 
 use super::*;
 use crate::parse_cache::parse_fragment_cached;
+use crate::script_cache::{load_script, ScriptSegment};
 
 /// Evaluates nested `eval(...)` calls against the current materialized scope.
 pub(super) fn eval_nested_eval(
@@ -45,12 +50,12 @@ pub(super) fn eval_include_expr(
     if once && context.has_included_file(&include_key) {
         return values.bool_value(true);
     }
-    let bytes = match std::fs::read(&resolved_path) {
-        Ok(bytes) => bytes,
+    let segments = match load_script(&resolved_path) {
+        Ok(segments) => segments,
         Err(_) => return eval_include_missing_file(&path, required, values),
     };
     context.mark_included_file(include_key);
-    eval_execute_include_bytes(&bytes, &resolved_path, context, scope, values)
+    eval_replay_include_segments(&segments, &resolved_path, context, scope, values)
 }
 
 /// Returns the include/require result for a file that cannot be opened.
@@ -98,21 +103,31 @@ fn eval_include_key(path: &std::path::Path) -> String {
         .into_owned()
 }
 
-/// Executes a local include file, alternating raw output and PHP code blocks.
-fn eval_execute_include_bytes(
-    bytes: &[u8],
+/// Replays an included file's cached segments, alternating raw output and code blocks.
+///
+/// The segment list already encodes what the old inline scan computed per include:
+/// a file that ended inside a code block simply has no trailing output segment, so
+/// the uniform `int(1)` here reproduces that path's early return.
+fn eval_replay_include_segments(
+    segments: &[ScriptSegment],
     path: &std::path::Path,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut cursor = 0;
-    while let Some((tag_start, code_start)) = eval_find_php_open_tag(bytes, cursor) {
-        eval_echo_include_bytes(&bytes[cursor..tag_start], values)?;
-        let close = eval_find_php_close_tag(bytes, code_start);
-        let code_end = close.unwrap_or(bytes.len());
-        match eval_execute_include_code(&bytes[code_start..code_end], path, context, scope, values)?
-        {
+    for segment in segments {
+        let program = match segment {
+            ScriptSegment::Output(bytes) => {
+                eval_echo_include_bytes(bytes, values)?;
+                continue;
+            }
+            // Parse failures are stored rather than raised when the file is segmented,
+            // so that a block only fails once replay actually reaches it — after the
+            // earlier blocks have run and produced their output.
+            ScriptSegment::ParseError(error) => return Err(error.clone().status()),
+            ScriptSegment::Code(program) => program,
+        };
+        match eval_execute_include_program(program, path, context, scope, values)? {
             EvalControl::None => {}
             EvalControl::ReturnVoid => return values.null(),
             EvalControl::Return(value) => return Ok(value),
@@ -124,24 +139,21 @@ fn eval_execute_include_bytes(
                 return Err(EvalStatus::UnsupportedConstruct);
             }
         }
-        let Some(close) = close else {
-            return values.int(1);
-        };
-        cursor = close + 2;
     }
-    eval_echo_include_bytes(&bytes[cursor..], values)?;
     values.int(1)
 }
 
-/// Parses and executes one PHP code block from an included file.
-fn eval_execute_include_code(
-    code: &[u8],
+/// Executes one already-parsed PHP code block from an included file.
+///
+/// Parsing moved to `crate::script_cache::segments`, so a warm include reaches this
+/// with no lexing, no parsing and no source hashing left to do.
+fn eval_execute_include_program(
+    program: &EvalProgram,
     path: &std::path::Path,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let program = parse_fragment_cached(code).map_err(EvalParseError::status)?;
     let previous = context.call_site();
     let file = path.to_string_lossy().into_owned();
     let dir = path
@@ -166,35 +178,4 @@ fn eval_echo_include_bytes(
     }
     let output = values.string_bytes_value(bytes)?;
     values.echo(output)
-}
-
-/// Finds the next `<?php` opening tag and returns tag and code byte offsets.
-fn eval_find_php_open_tag(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
-    bytes
-        .get(start..)?
-        .windows(5)
-        .position(eval_is_php_open_tag)
-        .map(|offset| {
-            let tag_start = start + offset;
-            (tag_start, tag_start + 5)
-        })
-}
-
-/// Returns true when a five-byte window is a case-insensitive `<?php` tag.
-fn eval_is_php_open_tag(window: &[u8]) -> bool {
-    window.len() == 5
-        && window[0] == b'<'
-        && window[1] == b'?'
-        && window[2].eq_ignore_ascii_case(&b'p')
-        && window[3].eq_ignore_ascii_case(&b'h')
-        && window[4].eq_ignore_ascii_case(&b'p')
-}
-
-/// Finds the next PHP closing tag after a code block start.
-fn eval_find_php_close_tag(bytes: &[u8], start: usize) -> Option<usize> {
-    bytes
-        .get(start..)?
-        .windows(2)
-        .position(|window| window == b"?>")
-        .map(|offset| start + offset)
 }

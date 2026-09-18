@@ -10,7 +10,7 @@
 use super::*;
 
 /// Runtime trait declared by an eval fragment.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalTrait {
     name: String,
     source_location: Option<EvalSourceLocation>,

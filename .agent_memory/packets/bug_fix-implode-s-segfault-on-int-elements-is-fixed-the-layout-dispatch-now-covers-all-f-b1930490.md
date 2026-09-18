@@ -1,0 +1,51 @@
+---
+type: "Bug Fix"
+title: "implode()'s segfault on int elements is FIXED: the layout dispatch now covers all five tags"
+description: "FIXED by commit 44baea7183 \"join every element layout in implode , not just two of them\" . This records the resolution of the earlier open bug packet, which reported implode \",\", array f segfaulting exit 139 whenever a M"
+resource: "src/codegen_support/runtime/strings/implode.rs"
+tags: ["session-learning", "implode", "mixed", "runtime-helper", "codegen", "element-layout", "fixed"]
+timestamp: "2026-09-12T16:40:39.306Z"
+x-kage-id: "repo:sparkling-jingling-flute:bug_fix:implode-s-segfault-on-int-elements-is-fixed-the-layout-dispatch-now-covers-all-f"
+x-kage-type: "bug_fix"
+x-kage-status: "approved"
+x-kage-scope: "repo"
+x-kage-visibility: "team"
+x-kage-confidence: 0.7
+x-kage-verified: "verified"
+x-kage-paths: ["src/codegen_support/runtime/strings/implode.rs", "src/codegen_support/runtime/strings/implode_float.rs", "src/codegen/lower_inst/builtins/strings/split.rs", "tests/implode_element_layout_tests.rs"]
+x-kage-stack: ["rust", "php", "aarch64"]
+---
+
+# implode()'s segfault on int elements is FIXED: the layout dispatch now covers all five tags
+
+> FIXED by commit 44baea7183 "join every element layout in implode , not just two of them" . This records the resolutio…
+
+FIXED by commit 44baea7183 ("join every element layout in implode(), not just two of them"). This records the resolution of the earlier open-bug packet, which reported `implode(",", (array) f())` segfaulting (exit 139) whenever a `Mixed`-typed array held raw ints.
+
+THE FIX, in src/codegen_support/runtime/strings/implode.rs: `__rt_implode` reads the element `value_type` tag out of the packed metadata word at `[array_ptr - 8]` and now dispatches on ALL of it rather than on two cases. Tag 1 (string pairs) and tag 7 (boxed Mixed) stay inline; tags 0 (int), 2 (float) and 3 (bool) TAIL-JUMP to `__rt_implode_int` / `__rt_implode_float` / `__rt_implode_bool`, which share the helper's register contract. Before it, an int array was read as `(ptr, len)` string pairs and each element dereferenced as a pointer.
+
+The fix went BEYOND the shape the old packet suggested, which is the part worth inheriting:
+- The suggested fix named only the int and bool arms. FLOAT was missing from that list and was equally broken, so `src/codegen_support/runtime/strings/implode_float.rs` was added — a structural twin of `__rt_implode_int` differing in exactly two things: the element loads into the float argument register (`d0`/`xmm0`), and it renders with `__rt_ftoa` instead of `__rt_itoa`.
+- THE TWIN IS NOT EXACT IN ONE PLACE, and it is the subtle one: `__rt_ftoa` formats directly into `_concat_buf` at `_concat_off` and advances it by the bytes actually emitted, so the offset must be republished as the LIVE destination cursor before every call and the final offset stamped ABSOLUTELY. `__rt_itoa` needs neither. A future helper added by copying the int twin will corrupt the join if it renders through a converter that writes into the concat buffer.
+- Bools render "1"/"" — NOT "1"/"0" — per PHP.
+
+Both invariants the old packet flagged in the boxed-Mixed path (the owned mixed-cast slot, ownership #601, and the live `_concat_off` cursor) survived the rework.
+Evidence: tests/implode_element_layout_tests.rs covers the mixed-typed array joining every element layout, a statically-typed float array, PHP's float spelling, glue between float elements, and a long float join. The dispatch is visible in implode.rs (tag 0 -> __rt_implode_int, tag 3 -> __rt_implode_bool, tag 2 -> __rt_implode_float).
+Verified by: Commit 44baea7183 (+481 lines incl. tests/implode_element_layout_tests.rs); the tag dispatch read back from the current source during reconciliation
+
+## Verification
+
+tests/implode_element_layout_tests.rs covers the mixed-typed array joining every element layout, a statically-typed float array, PHP's float spelling, glue between float elements, and a long float join. The dispatch is visible in implode.rs (tag 0 -> __rt_implode_int, tag 3 -> __rt_implode_bool, tag 2 -> __rt_implode_float).
+
+# Citations
+
+[1] explicit_capture (2026-09-12T16:40:39.306Z)
+
+## Kage state
+
+Machine state for lossless round-trip; OKF consumers can ignore it.
+
+```json kage-state
+{"schema_version":2,"id":"repo:sparkling-jingling-flute:bug_fix:implode-s-segfault-on-int-elements-is-fixed-the-layout-dispatch-now-covers-all-f","title":"implode()'s segfault on int elements is FIXED: the layout dispatch now covers all five tags","summary":"FIXED by commit 44baea7183 \"join every element layout in implode , not just two of them\" . This records the resolution of the earlier open bug packet, which reported implode \",\", array f segfaulting exit 139 whenever a M","body":"FIXED by commit 44baea7183 (\"join every element layout in implode(), not just two of them\"). This records the resolution of the earlier open-bug packet, which reported `implode(\",\", (array) f())` segfaulting (exit 139) whenever a `Mixed`-typed array held raw ints.\n\nTHE FIX, in src/codegen_support/runtime/strings/implode.rs: `__rt_implode` reads the element `value_type` tag out of the packed metadata word at `[array_ptr - 8]` and now dispatches on ALL of it rather than on two cases. Tag 1 (string pairs) and tag 7 (boxed Mixed) stay inline; tags 0 (int), 2 (float) and 3 (bool) TAIL-JUMP to `__rt_implode_int` / `__rt_implode_float` / `__rt_implode_bool`, which share the helper's register contract. Before it, an int array was read as `(ptr, len)` string pairs and each element dereferenced as a pointer.\n\nThe fix went BEYOND the shape the old packet suggested, which is the part worth inheriting:\n- The suggested fix named only the int and bool arms. FLOAT was missing from that list and was equally broken, so `src/codegen_support/runtime/strings/implode_float.rs` was added — a structural twin of `__rt_implode_int` differing in exactly two things: the element loads into the float argument register (`d0`/`xmm0`), and it renders with `__rt_ftoa` instead of `__rt_itoa`.\n- THE TWIN IS NOT EXACT IN ONE PLACE, and it is the subtle one: `__rt_ftoa` formats directly into `_concat_buf` at `_concat_off` and advances it by the bytes actually emitted, so the offset must be republished as the LIVE destination cursor before every call and the final offset stamped ABSOLUTELY. `__rt_itoa` needs neither. A future helper added by copying the int twin will corrupt the join if it renders through a converter that writes into the concat buffer.\n- Bools render \"1\"/\"\" — NOT \"1\"/\"0\" — per PHP.\n\nBoth invariants the old packet flagged in the boxed-Mixed path (the owned mixed-cast slot, ownership #601, and the live `_concat_off` cursor) survived the rework.\nEvidence: tests/implode_element_layout_tests.rs covers the mixed-typed array joining every element layout, a statically-typed float array, PHP's float spelling, glue between float elements, and a long float join. The dispatch is visible in implode.rs (tag 0 -> __rt_implode_int, tag 3 -> __rt_implode_bool, tag 2 -> __rt_implode_float).\nVerified by: Commit 44baea7183 (+481 lines incl. tests/implode_element_layout_tests.rs); the tag dispatch read back from the current source during reconciliation","type":"bug_fix","scope":"repo","visibility":"team","sensitivity":"internal","status":"approved","confidence":0.7,"tags":["session-learning","implode","mixed","runtime-helper","codegen","element-layout","fixed"],"paths":["src/codegen_support/runtime/strings/implode.rs","src/codegen_support/runtime/strings/implode_float.rs","src/codegen/lower_inst/builtins/strings/split.rs","tests/implode_element_layout_tests.rs"],"stack":["rust","php","aarch64"],"source_refs":[{"kind":"explicit_capture","captured_at":"2026-09-12T16:40:39.306Z"}],"context":{"fact":"FIXED by commit 44baea7183 (\"join every element layout in implode(), not just two of them\"). This records the resolution of the earlier open-bug packet, which reported `implode(\",\", (array) f())` segfaulting (exit 139) whenever a `Mixed`-typed array held raw ints.","verification":"tests/implode_element_layout_tests.rs covers the mixed-typed array joining every element layout, a statically-typed float array, PHP's float spelling, glue between float elements, and a long float join. The dispatch is visible in implode.rs (tag 0 -> __rt_implode_int, tag 3 -> __rt_implode_bool, tag 2 -> __rt_implode_float)."},"freshness":{"ttl_days":365,"last_verified_at":"2026-09-12T16:40:39.306Z","path_fingerprints":[{"path":"src/codegen_support/runtime/strings/implode.rs","sha256":"68aed593585ce027f2ff8e064ba35c4cd0e36a50fd1ae22397e4eae96380b16f","size":39352},{"path":"src/codegen_support/runtime/strings/implode_float.rs","sha256":"e4f5f16ae57fde688e9e391a8ff4ff2069ab05f2ca4f69de6380a9f30bac9543","size":22502},{"path":"src/codegen/lower_inst/builtins/strings/split.rs","sha256":"cc1732570e9dcc5cae21f642bef4894d45a8b1a2894b8c4979c2302a6294caa9","size":36003},{"path":"tests/implode_element_layout_tests.rs","sha256":"ed1d92e581679aed433c7036016f36002578d1838faa61ac785b4f77a8b610ff","size":6991}],"path_fingerprint_policy":"source_hash_staleness","verification":"repo_local_agent_capture"},"edges":[{"relation":"supersedes","to":"repo:sparkling-jingling-flute:bug_fix:implode-on-a-mixed-typed-array-segfaults-for-int-elements-rt-implodes-layout-dis","evidence":"The old packet is tagged open-bug and describes the segfault as live, with a SUGGESTED FIX SHAPE. Commit 44baea7183 fixed it, and went wider than the suggestion (float was missing from the suggested arms and was equally broken). Leaving it recallable would send a future session to re-diagnose a closed bug from an incomplete fix plan.","created_at":"2026-09-12T16:40:42.881Z"}],"quality":{"reviewer":"repo-local-agent","votes_up":0,"votes_down":0,"uses_30d":0,"reports_stale":0,"review_boundary":"git_or_pr","promotion_requires_review":true,"discovery_tokens":8000,"discovery_tokens_estimated":true,"score":94,"reasons":["high-value memory type","has source evidence","grounded to repo paths","tagged","actionable rationale or verification"],"risks":[],"duplicate_candidates":[],"estimated_tokens_saved":614},"created_at":"2026-09-12T16:40:39.306Z","updated_at":"2026-09-12T16:41:20.948Z","author_branch":"feat/opcache-runtime-cache"}
+```
+

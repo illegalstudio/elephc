@@ -2,7 +2,7 @@
 title: "_cairo_pack() — internals"
 description: "Compiler internals for _cairo_pack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1061
+  order: 1067
 ---
 
 ## `_cairo_pack()` — internals

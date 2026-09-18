@@ -971,16 +971,38 @@ fn branch_on_heap_kind_result(
 }
 
 /// Branches to the concrete iterator path from a `__rt_mixed_unbox` tag result.
+///
+/// The Mixed tag records the STATIC shape the value was boxed with, which is not always the
+/// shape its storage has at run time: `__rt_array_set_mixed_key` promotes an indexed array to
+/// hash storage when a key does not fit the packed layout, and the tag does not move with it.
+/// Taking the indexed path for such a value snapshots the hash header's first word as the
+/// element count — zero — and the loop body never runs, which is how `foreach` inside
+/// `var_export()` over a rebuilt `[5 => 3]` printed an empty `array (...)`. So tag 4 is
+/// confirmed against the payload's actual heap kind before the indexed path is taken; tags 5
+/// and 6 need no probe because nothing promotes INTO them.
 fn branch_on_mixed_iterable_tag(
     ctx: &mut FunctionContext<'_>,
     indexed_case: &str,
     hash_case: &str,
     object_case: &str,
 ) {
+    let tag_not_indexed = ctx.next_label("iter_mixed_tag_not_indexed");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #4");                              // mixed tag 4 identifies indexed arrays
-            ctx.emitter.instruction(&format!("b.eq {}", indexed_case));         // dispatch to the indexed-array iterator path
+            ctx.emitter.instruction(&format!("b.ne {}", tag_not_indexed));      // only the indexed tag needs the promotion probe
+            // The payload is the only live value across the probe: `__rt_heap_kind` answers in
+            // x0, which is where the tag was, and the tag is not read again on any path this
+            // arm reaches. The pop lands BEFORE the compare because its x86_64 twin ends in an
+            // `add rsp` that would clobber the flags.
+            abi::emit_push_reg(ctx.emitter, "x1");                              // preserve the unboxed payload across the heap-kind probe
+            ctx.emitter.instruction("mov x0, x1");                              // hand the payload to the heap-kind probe
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // restore the payload the iterator state is built from
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 = storage promoted to an associative hash
+            ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // a promoted array iterates through the hash path
+            abi::emit_jump(ctx.emitter, indexed_case);                          // genuinely packed storage keeps the indexed path
+            ctx.emitter.label(&tag_not_indexed);
             ctx.emitter.instruction("cmp x0, #5");                              // mixed tag 5 identifies associative arrays
             ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // dispatch to the associative-array iterator path
             ctx.emitter.instruction("cmp x0, #6");                              // mixed tag 6 identifies object payloads
@@ -988,7 +1010,17 @@ fn branch_on_mixed_iterable_tag(
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 4");                              // mixed tag 4 identifies indexed arrays
-            ctx.emitter.instruction(&format!("je {}", indexed_case));           // dispatch to the indexed-array iterator path
+            ctx.emitter.instruction(&format!("jne {}", tag_not_indexed));       // only the indexed tag needs the promotion probe
+            // See the AArch64 arm: the payload lives in rdi here, and the pop MUST precede the
+            // compare because `emit_pop_reg` ends in an `add rsp, 16` that sets the flags.
+            abi::emit_push_reg(ctx.emitter, "rdi");                             // preserve the unboxed payload across the heap-kind probe
+            ctx.emitter.instruction("mov rax, rdi");                            // hand the payload to the heap-kind probe
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            abi::emit_pop_reg(ctx.emitter, "rdi");                              // restore the payload the iterator state is built from
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 = storage promoted to an associative hash
+            ctx.emitter.instruction(&format!("je {}", hash_case));              // a promoted array iterates through the hash path
+            abi::emit_jump(ctx.emitter, indexed_case);                          // genuinely packed storage keeps the indexed path
+            ctx.emitter.label(&tag_not_indexed);
             ctx.emitter.instruction("cmp rax, 5");                              // mixed tag 5 identifies associative arrays
             ctx.emitter.instruction(&format!("je {}", hash_case));              // dispatch to the associative-array iterator path
             ctx.emitter.instruction("cmp rax, 6");                              // mixed tag 6 identifies object payloads

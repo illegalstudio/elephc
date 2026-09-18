@@ -4448,12 +4448,15 @@ fn decl_fn_elephc_session_name_valid() -> Stmt {
 }
 
 /// `ini_set` — transcribed from the PHP form.
+///
+/// The `opcache.*` directives elephc's runtime script cache actually reads are handled
+/// FIRST, by the same arms the CLI wrapper uses, and only then does the blanket
+/// `opcache.*` refusal below apply to the rest. Without that order a `--web` binary would
+/// answer `false` for `opcache.revalidate_freq` while the identical CLI binary honoured
+/// it — the two surfaces disagreeing about the same directive.
 fn decl_fn_ini_set() -> Stmt {
-    function("ini_set")
-        .param("option", TypeExpr::Str)
-        .param_untyped("value")
-        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
-        .body(vec![
+    let mut body = opcache_prelude::build::opcache_ini_set_arms();
+    body.extend(vec![
             s_assign("old", e_str("")),
             s_if(
                 e_binop(e_call("__elephc_opcache_ini_string", vec![e_var("option")]), BinOp::StrictNotEq, e_bool(false)),
@@ -4850,7 +4853,12 @@ fn decl_fn_ini_set() -> Stmt {
                 None,
             ),
             s_return(e_var("old")),
-        ])
+    ]);
+    function("ini_set")
+        .param("option", TypeExpr::Str)
+        .param_untyped("value")
+        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
+        .body(body)
         .build()
 }
 

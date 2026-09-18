@@ -384,6 +384,19 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: serialize_indexed_array (PHP a:n:{...} for indexed arrays) ---");
     emitter.label_global("__rt_serialize_indexed_array");
+    // -- hand a run-time promoted array to the hash serializer --
+    // A statically `Array(Mixed)` value can hold HASH storage at run time:
+    // `__rt_array_set_mixed_key` promotes the destination when a key does not fit the packed
+    // layout, and the static type does not move with it. The probe is the uniform heap-kind
+    // byte, the same one `__rt_array_edge_key` dispatches on. It runs BEFORE the `a:` prefix
+    // is appended, because `__rt_serialize_hash` appends its own — jumping after would emit
+    // it twice. The hash entry takes the pointer in x0 exactly as this one does.
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
+    emitter.instruction("b.ne __rt_serialize_indexed_packed");                  // packed storage appends its own prefix below
+    emitter.instruction("b __rt_serialize_hash");                               // hash storage is the hash serializer's job
+    emitter.label("__rt_serialize_indexed_packed");
     emit_append_literal_aarch64(emitter, &[b'a', b':'], "the array prefix");
     emitter.instruction("b __rt_serialize_indexed_body");                       // emit the shared <count>:{...} body (x0 still = array)
     // __rt_serialize_indexed_body: append <count>:{ i:K;<v>... } WITHOUT the
@@ -1253,6 +1266,16 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: serialize_indexed_array (PHP a:n:{...} for indexed arrays) ---");
     emitter.label_global("__rt_serialize_indexed_array");
+    // -- hand a run-time promoted array to the hash serializer --
+    // Same runtime-promotion probe as the AArch64 path, before the `a:` prefix for the same
+    // reason. NOTE the register: this serializer carries the array in RAX, not rdi, so the
+    // probe reads through rax and the scratch is a different register.
+    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load the uniform heap-kind header word
+    emitter.instruction("and r11, 0xff");                                       // isolate the low-byte heap kind
+    emitter.instruction("cmp r11, 3");                                          // kind 3 = associative hash storage
+    emitter.instruction("jne __rt_serialize_indexed_packed");                   // packed storage appends its own prefix below
+    emitter.instruction("jmp __rt_serialize_hash");                             // hash storage is the hash serializer's job
+    emitter.label("__rt_serialize_indexed_packed");
     emit_append_literal_x86_64(emitter, &[b'a', b':'], "the array prefix");
     emitter.instruction("jmp __rt_serialize_indexed_body");                     // emit the shared <count>:{...} body (rax still = array)
     // __rt_serialize_indexed_body: append <count>:{ i:K;<v>... } WITHOUT the

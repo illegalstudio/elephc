@@ -1,8 +1,10 @@
 //! Purpose:
 //! Eval-interpreter implementation of `opcache_get_configuration()`. Builds the
-//! `['directives' => [...], 'version' => [...], 'blacklist' => []]` array from the
+//! `['directives' => [...], 'version' => [...], 'blacklist' => [...]]` array from the
 //! same version-keyed OPcache directive matrix the native prelude renders, so the
-//! two surfaces never drift.
+//! two surfaces never drift. `blacklist` carries the patterns
+//! `opcache.blacklist_filename` resolved, read straight from the script cache rather
+//! than across the bridge the native surface has to use.
 //!
 //! Called from:
 //! - `crate::interpreter::expressions::calls::eval_call` (direct dispatch).
@@ -59,7 +61,7 @@ pub(in crate::interpreter) fn eval_opcache_get_configuration_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let directives = build_directives(values)?;
     let version = build_version(values)?;
-    let blacklist = values.array_new(0)?;
+    let blacklist = build_blacklist(values)?;
 
     let mut configuration = values.assoc_new(3)?;
     let directives_key = values.string("directives")?;
@@ -69,6 +71,24 @@ pub(in crate::interpreter) fn eval_opcache_get_configuration_result(
     let blacklist_key = values.string("blacklist")?;
     configuration = values.array_set(configuration, blacklist_key, blacklist)?;
     Ok(configuration)
+}
+
+/// Builds the `'blacklist'` sub-array from the patterns `opcache.blacklist_filename` resolved.
+///
+/// Unlike the native surface — which has to read them back across the bridge one at a time —
+/// the eval interpreter IS the side that loaded them, so it reads the list directly. Reference
+/// PHP reports the resolved entries keyed `0..n-1`, which is what an append-ordered array is.
+fn build_blacklist(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let patterns = crate::script_cache::blacklist_patterns();
+    let mut blacklist = values.array_new(patterns.len())?;
+    for (index, pattern) in patterns.iter().enumerate() {
+        let key = values.int(index as i64)?;
+        let value = values.string(pattern)?;
+        blacklist = values.array_set(blacklist, key, value)?;
+    }
+    Ok(blacklist)
 }
 
 /// Builds the `'directives'` sub-array from the shared directive matrix.
