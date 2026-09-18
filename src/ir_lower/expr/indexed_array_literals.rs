@@ -432,6 +432,17 @@ pub(super) fn array_literal_element_type_for_ir(
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
             }
+            // A BUILTIN has no entry in either map, and the syntactic fallback answers `Int`
+            // for any call it cannot name. Stamping `[array_slice($a, 0, 2)]` as `array<int>`
+            // is not a missed optimization: lowering then inserts an `(int)` cast of the
+            // returned array to match the stamp, and `(int)` of a non-empty array is 1, so
+            // every element of such a literal silently became `int(1)`. The checker already
+            // resolved these calls and recorded the result by span.
+            if let Some(ty) = ctx.builtin_call_types.get(&item.span) {
+                if let Some(elem_ty) = materializable_array_element_type(ty.clone()) {
+                    return elem_ty;
+                }
+            }
             ir_array_storage_type(infer_expr_type_syntactic(item))
         }
         // Calls must use declared EIR return metadata rather than the syntactic `Int` fallback,

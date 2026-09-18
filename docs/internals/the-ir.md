@@ -585,6 +585,34 @@ All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
 
+#### The element type stamped on a literal is load-bearing
+
+`ArrayNew`/`HashNew` carry the element type the literal was stamped with, and the
+rest of lowering trusts it: an element whose own type does not match the stamp is
+*converted* to it on the way in, and `ArrayGet`/`HashGet` read the element back in
+the shape the stamp claims. A wrong stamp is therefore not a missed optimization,
+it is a silent conversion.
+
+`array_literal_element_type_for_ir` (and its associative twin) resolves each item's
+type, and the order matters:
+
+1. a literal, spread or constant — structurally, from the item itself;
+2. a variable — from `ctx.local_types`;
+3. a user or extern function call — from its signature in `ctx.functions` /
+   `ctx.extern_functions`;
+4. a **builtin** call — from `ctx.builtin_call_types`, which the checker fills in
+   by span;
+5. anything else — `infer_expr_type_syntactic`, which answers `Int` for a call it
+   cannot name.
+
+Step 4 is easy to leave out, because a builtin appears in neither signature map and
+step 5 then answers plausibly. It is not harmless: `[array_slice($a, 0, 2)]` was
+stamped `array<int>`, so lowering inserted `cast v9 I64` — `(int)` of the returned
+array — and `(int)` of a non-empty array is `1`. Every element of such a literal
+became `int(1)`, with no diagnostic (issue #1096). A literal that mixes the call
+with a plain element widens the merge and hides it, which is why the shape has to
+be tested on its own.
+
 With a typed result, `ArrayGetForWrite` and `HashGetForWrite` are also the read
 side of that rule for a container element that is about to be mutated through an
 alias — today, the source of a by-reference `foreach` (issue #580). Unlike the

@@ -117,6 +117,14 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
             }
+            // A builtin is in neither map, and the syntactic fallback answers `Int` for any
+            // call it cannot name -- see the indexed sibling, where that wrong stamp turned
+            // every element into `(int)$array`. The checker recorded the real return by span.
+            if let Some(ty) = ctx.builtin_call_types.get(&value.span) {
+                if let Some(elem_ty) = materializable_array_element_type(ty.clone()) {
+                    return elem_ty;
+                }
+            }
             ir_array_storage_type(infer_expr_type_syntactic(value))
         }
         ExprKind::MethodCall { object, method, .. } => {
