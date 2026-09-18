@@ -101,6 +101,34 @@ echo implode(",", (array) signed());
     assert_eq!(out, "1,2;1.5,2.5;1,;a,b;;42;-7,0,7");
 }
 
+/// Verifies a `foreach` value bound from a nested container renders (issue #1081).
+///
+/// A loop binding taken out of a container is boxed the same way a nullable slot is, so
+/// `implode()` over it hit the string-layout assumption and SEGFAULTED on int elements --
+/// the crash reported for `array_chunk()`, which is only the most common way to produce
+/// such a container. Reading the same chunk BY INDEX was fine, which is what made it look
+/// like an `array_chunk()` bug rather than a renderer one.
+///
+/// Each shape lives in its own function on purpose: `array_chunk()`'s inner element type
+/// merges across call sites in one scope, and a merged `Mixed` inner element is a separate
+/// backend gap that would mask what this test is for.
+#[test]
+fn test_implode_on_a_foreach_binding_from_a_nested_container() {
+    let out = compile_and_run(
+        r#"<?php
+function ints(): string { $o = ''; foreach (array_chunk([1, 2, 3, 4, 5], 2) as $p => $items) { $o .= $p . ":" . implode(",", $items) . ";"; } return $o; }
+function keyed(): string { $o = ''; foreach (array_chunk([1, 2, 3, 4, 5], 2, true) as $p => $items) { $o .= $p . ":" . implode(",", $items) . ";"; } return $o; }
+function floats(): string { $o = ''; foreach (array_chunk([1.5, 2.5, 3.5], 2) as $items) { $o .= implode(",", $items) . ";"; } return $o; }
+function nested(): string { $o = ''; foreach ([[1, 2], [3, 4], [5]] as $items) { $o .= implode(",", $items) . ";"; } return $o; }
+echo ints(), "|", keyed(), "|", floats(), "|", nested();
+"#,
+    );
+    assert_eq!(
+        out,
+        "0:1,2;1:3,4;2:5;|0:1,2;1:3,4;2:5;|1.5,2.5;3.5;|1,2;3,4;5;"
+    );
+}
+
 /// Verifies an array built by APPENDING renders like the literal of the same elements.
 ///
 /// An array created empty is `array<never>` and its header says so; the append helper stamps
