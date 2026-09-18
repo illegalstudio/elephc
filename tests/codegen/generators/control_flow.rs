@@ -407,3 +407,58 @@ echo "factory=", $f, " declared=", $d, " method=", $m, " static=", $s, " closure
         "factory=1,2, declared=8,9, method=1,2, static=1,2, closure=1,2,"
     );
 }
+
+/// The remaining ways to spell a generator whose every `yield` is dead.
+///
+/// Raised as #1085 after the #673 fix: the original fixture covered `if (false)`, `return;
+/// yield;` and `return 7; yield`, leaving `while (false)`, a dead `switch` arm, a dead
+/// `yield from` and trait methods untested. They are the same mechanism rather than new logic,
+/// but each reaches it through a different pass, so each is a place the classification could
+/// have been lost.
+///
+/// All of them are generators that complete immediately: PHP iterates nothing and `getReturn()`
+/// answers whatever the body returned. `traitLive` is the control — a trait method that really
+/// yields must still yield.
+#[test]
+fn test_every_dead_yield_shape_stays_a_generator() {
+    let out = compile_and_run(
+        r#"<?php
+function whileFalse() { while (false) { yield 1; } return; }
+function deadSwitch() { switch (0) { case 1: yield 1; break; } return; }
+function deadYieldFrom() { if (false) { yield from [1, 2]; } return; }
+function deadWithReturnValue() { if (false) { yield 1; } return 7; }
+
+trait Yielder {
+    public function traitDead() { if (false) { yield 1; } return; }
+    public function traitLive() { yield 5; }
+}
+class Holder { use Yielder; }
+
+function show(string $label, $gen) {
+    $vals = [];
+    foreach ($gen as $v) { $vals[] = $v; }
+    echo $label, "=[", implode(",", $vals), "] ret=";
+    var_dump($gen->getReturn());
+}
+
+show("whileFalse", whileFalse());
+show("deadSwitch", deadSwitch());
+show("deadYieldFrom", deadYieldFrom());
+show("deadWithReturnValue", deadWithReturnValue());
+$h = new Holder();
+show("traitDead", $h->traitDead());
+show("traitLive", $h->traitLive());
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "whileFalse=[] ret=NULL\n",
+            "deadSwitch=[] ret=NULL\n",
+            "deadYieldFrom=[] ret=NULL\n",
+            "deadWithReturnValue=[] ret=int(7)\n",
+            "traitDead=[] ret=NULL\n",
+            "traitLive=[5] ret=NULL\n",
+        )
+    );
+}

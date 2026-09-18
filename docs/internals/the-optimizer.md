@@ -265,10 +265,22 @@ It is also whole-body: one dead `yield` blocks *all* propagation and pruning in 
 A surgical "keep one yield, apply the rest" would be tighter, and is worth doing if a real body
 ever pays for it.
 
-**DCE is not wrapped.** `dce_block_with_guards` / `dce_method` rewrite bodies without going
-through this helper, so a named function can still lose its last `yield` there. That no longer
-mis-classifies it — `FunctionSig::is_generator` is recorded before any pass and is what lowering
-reads — but the body it lowers is then a coroutine with no `yield` left in it. Tracked as #1084.
+**DCE is deliberately NOT wrapped.** `dce_block_with_guards` / `dce_method` rewrite bodies
+without going through this helper, so a named function can lose its last `yield` there. That is
+allowed, and it is safe for a specific reason: generator-ness is no longer re-derived from the
+body at all. `FunctionSig::is_generator` is recorded from the source before any pass runs, and
+lowering reads that bit, so a body DCE has emptied of yields still lowers as the coroutine it
+is — and a coroutine whose yields were all unreachable correctly produces nothing.
+
+Wrapping it would cost real optimization for no correctness gain: the helper reverts the WHOLE
+body, so one dead `yield` would block every DCE rewrite in that callable. Propagation and
+pruning are wrapped only because they run *before* the bit is consulted in the same way and
+because reverting them is cheap by comparison.
+
+The invariant to preserve is therefore "generator-ness is decided once, syntactically, at check
+time" — not "every pass keeps a yield in the body". A future pass may freely delete an
+unreachable `yield`; what it must never do is become the thing that *answers* whether a callable
+is a generator.
 
 ### Example
 
