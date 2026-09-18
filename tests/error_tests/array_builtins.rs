@@ -94,6 +94,23 @@ fn test_error_array_chunk_non_literal_preserve_keys() {
     );
 }
 
+/// Verifies `array_chunk()` still rejects a NON-array receiver at compile time.
+///
+/// The accepted receiver set was widened to include associative arrays, so the arm that refuses
+/// everything else is the one thing left guarding the builtin's contract. Pinning it here keeps
+/// a later widening from quietly turning a scalar receiver into a runtime surprise.
+#[test]
+fn test_error_array_chunk_non_array_receiver() {
+    expect_error(
+        "<?php array_chunk(\"nope\", 2);",
+        "array_chunk() first argument must be array",
+    );
+    expect_error(
+        "<?php array_chunk(5, 2);",
+        "array_chunk() first argument must be array",
+    );
+}
+
 /// Verifies `array_chunk()` reports PHP's full 2-to-3 argument range.
 #[test]
 fn test_error_array_chunk_wrong_args() {

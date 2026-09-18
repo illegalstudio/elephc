@@ -160,6 +160,25 @@ array_chunk($m, 0, true);
     );
 }
 
+/// A chunk size far larger than the source allocates for the source, not for the size.
+///
+/// The requested size is only an UPPER bound on what a chunk can hold. Passing it straight to
+/// `__rt_hash_new` made `array_chunk(["a" => 1], PHP_INT_MAX, true)` ask for a PHP_INT_MAX-entry
+/// table and die with *"requested array size exceeds the maximum allowed array size"*, where PHP
+/// simply returns one one-element chunk. Raised in review on this PR.
+#[test]
+fn test_assoc_chunk_size_beyond_the_source_allocates_for_the_source() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["a" => 1, "b" => 2];
+$huge = array_chunk($m, PHP_INT_MAX, true);
+$big = array_chunk($m, 1000000);
+echo count($huge), count($huge[0]), $huge[0]["b"], "|", count($big), count($big[0]), $big[0][1];
+"#,
+    );
+    assert_eq!(out, "122|122");
+}
+
 /// The indexed forms are untouched by the associative path.
 #[test]
 fn test_indexed_chunk_is_unchanged() {
