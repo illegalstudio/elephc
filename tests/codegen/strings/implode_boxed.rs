@@ -70,6 +70,37 @@ echo h([4.5, 5.5]);
     assert_eq!(out, "1,2;1,2;1,2;1|2|3;4.5-5.5");
 }
 
+/// Verifies the layouts survive an `(array)` cast of a `mixed` RETURN value.
+///
+/// The other boxed shapes reach the renderer through a declared slot -- a nullable property,
+/// a `mixed` parameter, a union. This one reaches it through a cast of a call result, which
+/// is the shape that crashes hardest on `main`: `implode(",", (array) f())` over an int array
+/// dereferences each element's VALUE as a pointer and takes the process down with SIGSEGV, so
+/// there is no wrong output to notice first. Every layout is here because the cast keeps the
+/// array's own `value_type` tag, which is the only thing the renderer can dispatch on.
+#[test]
+fn test_implode_on_an_array_cast_from_a_mixed_return_value() {
+    let out = compile_and_run(
+        r#"<?php
+function ints(): mixed { return [1, 2]; }
+function floats(): mixed { return [1.5, 2.5]; }
+function bools(): mixed { return [true, false]; }
+function strs(): mixed { return ["a", "b"]; }
+function none(): mixed { return []; }
+function one(): mixed { return [42]; }
+function signed(): mixed { return [-7, 0, 7]; }
+echo implode(",", (array) ints()), ";";
+echo implode(",", (array) floats()), ";";
+echo implode(",", (array) bools()), ";";
+echo implode(",", (array) strs()), ";";
+echo implode(",", (array) none()), ";";
+echo implode(",", (array) one()), ";";
+echo implode(",", (array) signed());
+"#,
+    );
+    assert_eq!(out, "1,2;1.5,2.5;1,;a,b;;42;-7,0,7");
+}
+
 /// Verifies an array built by APPENDING renders like the literal of the same elements.
 ///
 /// An array created empty is `array<never>` and its header says so; the append helper stamps
