@@ -88,6 +88,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_slice_to_hash(emitter);
     arrays::emit_hash_slice(emitter);
     arrays::emit_array_chunk_to_hash(emitter);
+    arrays::emit_hash_chunk(emitter);
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
     arrays::emit_array_rand(emitter);

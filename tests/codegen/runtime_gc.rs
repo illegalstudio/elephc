@@ -27,6 +27,8 @@ mod putenv;
 mod regressions;
 #[path = "runtime_gc/assoc_rebind_release.rs"]
 mod assoc_rebind_release;
+#[path = "runtime_gc/assoc_chunk.rs"]
+mod assoc_chunk;
 #[path = "runtime_gc/object_supertype_rebind.rs"]
 mod object_supertype_rebind;
 #[path = "runtime_gc/by_ref_place_args.rs"]
