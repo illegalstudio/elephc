@@ -740,6 +740,7 @@ fn extern_decl_signature(decl: &crate::ir::ExternDecl) -> FunctionSig {
         declared_params: vec![true; decl.params.len()],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     }
 }
 

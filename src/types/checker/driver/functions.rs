@@ -311,6 +311,7 @@ impl Checker {
                 .collect(),
             variadic: decl.variadic,
             deprecation: None,
+            is_generator: false,
         }))
     }
 }

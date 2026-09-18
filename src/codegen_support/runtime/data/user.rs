@@ -3162,6 +3162,7 @@ mod boxed_result_mask_tests {
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+            is_generator: false,
         }
     }
 

@@ -238,6 +238,7 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
         declared_params: vec![false; def.params.len()],
         variadic: def.variadic.clone(),
         deprecation: def.spec.deprecation.map(str::to_string),
+        is_generator: false,
     })
 }
 

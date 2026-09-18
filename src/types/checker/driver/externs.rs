@@ -122,6 +122,7 @@ impl Checker {
             declared_params: vec![true; php_params.len()],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         };
         self.functions.insert(name.to_string(), sig);
         self.extern_functions.insert(

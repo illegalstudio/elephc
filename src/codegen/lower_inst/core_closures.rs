@@ -437,6 +437,7 @@ pub(super) fn function_signature_from_eir_with_param_count(
             .find(|param| param.variadic)
             .map(|param| param.name.clone()),
         deprecation: None,
+        is_generator: false,
     }
 }
 

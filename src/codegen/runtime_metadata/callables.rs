@@ -57,6 +57,7 @@ pub(in crate::codegen) fn ir_function_sig(function: &Function) -> FunctionSig {
             .find(|param| param.variadic)
             .map(|param| param.name.clone()),
         deprecation: None,
+        is_generator: false,
     }
 }
 
