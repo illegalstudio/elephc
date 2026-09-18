@@ -6,8 +6,9 @@
 //!
 //! Key details:
 //! - Functions are built by hand with `crate::ir::Builder`. Tests target the
-//!   AArch64 pool (eight integer, seven float callee-saved registers) so pool
-//!   sizes are deterministic.
+//!   AArch64 pool (seven integer, seven float callee-saved registers) so pool
+//!   sizes are deterministic. x28 is the reserved ctx register and is never
+//!   allocated.
 
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{Builder, Function, Immediate, IrType, Op, Ownership, Terminator, ValueId};
@@ -208,7 +209,8 @@ fn value_live_across_call_uses_callee_saved() {
     let allocation = allocate_registers(&function, aarch64());
 
     let reg = allocation.register_of(live).expect("cross-call value gets a register");
-    let callee_int = ["x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28"];
+    // x28 is the reserved ctx register and is not part of the allocatable pool.
+    let callee_int = ["x21", "x22", "x23", "x24", "x25", "x26", "x27"];
     assert!(
         callee_int.contains(&reg),
         "a value live across a call must use a callee-saved register, got {reg}"
@@ -216,6 +218,45 @@ fn value_live_across_call_uses_callee_saved() {
     assert!(
         allocation.used_callee_saved().contains(&reg),
         "the callee-saved register holding a cross-call value must be recorded"
+    );
+}
+
+/// x28 is the reserved runtime-context register: it carries the per-context
+/// state pointer in ctx-register mode and must never be allocated to a value,
+/// because an allocated write would silently corrupt the context of every
+/// later heap/concat access in the function.
+#[test]
+fn aarch64_pool_never_allocates_the_ctx_register() {
+    // A function with N cross-call values forces the allocator to walk its
+    // whole callee-saved pool; none of the results may land on x28 no matter
+    // how much pressure is applied.
+    let mut function = Function::new("noctx".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        for index in 0..8 {
+            let value = builder.emit_const_i64(index as i64);
+            emit_clobber_call(&mut builder);
+            builder.emit_iadd(value, value);
+        }
+        builder.terminate(Terminator::Return { value: None });
+    }
+
+    let allocation = allocate_registers(&function, aarch64());
+
+    for raw in 0..8 {
+        if let Some(reg) = allocation.register_of(ValueId::from_raw(raw as u32)) {
+            assert_ne!(
+                reg, "x28",
+                "the reserved ctx register must never be value-allocated"
+            );
+        }
+    }
+    assert!(
+        !allocation.used_callee_saved().contains(&"x28"),
+        "x28 must never appear in the callee-saved save/restore set"
     );
 }
 

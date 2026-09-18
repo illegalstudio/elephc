@@ -18,6 +18,13 @@ mod uncaught_report;
 
 pub use class_implements::emit_class_implements_interface;
 pub use cleanup_frames::emit_exception_cleanup_frames;
+/// Keeps the per-context exception state (`_exc_value`, `_exc_handler_top`,
+/// `_exc_call_frame_top`) reachable through the `abi::` accessors only, so that making
+/// the family per-context for M1 is a change to four functions and not to 300 call
+/// sites. Test-only.
+#[cfg(test)]
+mod family_audit;
+
 pub use dynamic_instanceof::emit_dynamic_instanceof;
 pub use matches::emit_exception_matches;
 // The fixed-data emitter defines the string this helper prints; both must agree on its bytes.

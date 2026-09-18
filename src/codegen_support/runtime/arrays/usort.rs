@@ -121,8 +121,12 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, rdi");                                        // preserve the comparator callback address in a callee-saved register for the whole bubble-sort pass
     emitter.instruction("mov r13, rsi");                                        // preserve the indexed-array pointer in a callee-saved register for the whole bubble-sort pass
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save optional callback environment pointer for captured comparator wrappers
-    emitter.instruction("mov r14, QWORD PTR [r13]");                            // load the indexed-array logical length once before the bubble-sort passes begin
-    emitter.instruction("cmp r14, 2");                                          // does the indexed array contain fewer than two elements?
+    // The length snapshot lives in the frame, not in r14: r14 is the reserved
+    // runtime-context register and the comparator below is compiled PHP code,
+    // which reads per-context state through it.
+    emitter.instruction("mov rax, QWORD PTR [r13]");                            // load the indexed-array logical length once before the bubble-sort passes begin
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park the length snapshot across every comparator call
+    emitter.instruction("cmp rax, 2");                                          // does the indexed array contain fewer than two elements?
     emitter.instruction("jl __rt_usort_done_linux_x86_64");                     // arrays of length zero or one are already sorted
 
     emitter.label("__rt_usort_outer_linux_x86_64");
@@ -130,7 +134,7 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor ebx, ebx");                                        // restart the inner-loop cursor at element index zero for the next bubble-sort pass
 
     emitter.label("__rt_usort_inner_linux_x86_64");
-    emitter.instruction("mov r10, r14");                                        // copy the indexed-array length before deriving the final comparable inner-loop index
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // copy the indexed-array length before deriving the final comparable inner-loop index
     emitter.instruction("sub r10, 1");                                          // derive the final comparable inner-loop index as length - 1 for the adjacent-pair scan
     emitter.instruction("cmp rbx, r10");                                        // has the inner-loop cursor reached the final adjacent pair for this bubble-sort pass?
     emitter.instruction("jge __rt_usort_check_linux_x86_64");                   // finish the current outer pass once every adjacent pair has been compared

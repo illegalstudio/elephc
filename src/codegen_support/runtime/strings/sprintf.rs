@@ -118,9 +118,8 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add x22, sp, #704");                                   // argument record base (just past this frame)
 
     // -- set up the concat_buf destination and its hard write limit --
-    abi::emit_symbol_address(emitter, "x25", "_concat_off");
-    emitter.instruction("ldr x8, [x25]");                                       // current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x7");
     emitter.instruction("add x23, x7, x8");                                     // write cursor = buffer base + offset
     emitter.instruction("mov x24, x23");                                        // remember where this result starts
     emitter.instruction(&format!("mov x9, #{}", CONCAT_BUF_CAP));               // total concat-buffer capacity in bytes
@@ -176,9 +175,9 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x23, x24");                                    // result byte length
 
     // -- update concat_off --
-    abi::emit_symbol_address(emitter, "x8", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x8");
     emitter.instruction("sub x8, x23, x8");                                     // derive the absolute cursor after nested concat-producing conversions
-    emitter.instruction("str x8, [x25]");                                       // publish the exact new write offset without double-counting
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x8"); // publish the exact new write offset (ctx-relative in ctx mode)
 
     // -- prepare to pop the caller's packed argument records --
     emitter.instruction("mov x0, x26");                                         // packed argument record count
@@ -460,9 +459,9 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sprintf_t_int");                                // format through the integer path
 
     emitter.label("__rt_sprintf_str_mixed");
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     emitter.instruction("sub x10, x23, x9");                                    // publish bytes already written before a nested __toString call
-    emitter.instruction("str x10, [x25]");                                      // make nested concat users start after the partial sprintf result
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the exact new write offset (ctx-relative in ctx mode)
     emitter.instruction("mov x0, x5");                                          // pass the deferred record tag
     emitter.instruction("mov x1, x3");                                          // pass the preserved record payload
     emitter.instruction("mov x2, x27");                                         // pass the optional eval context

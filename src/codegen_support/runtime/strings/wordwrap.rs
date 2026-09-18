@@ -67,8 +67,8 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.instruction("cbnz x10, __rt_wordwrap_size_overflow");               // reject a wrapped size instead of reserving a too-small destination
     emitter.instruction("mul x0, x20, x9");                                     // compute the worst-case wrapped result size
     emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the wrapped result
-    emitter.instruction("mov x28, x0");                                         // x28 = output write pointer at the reserved payload start
-    emitter.instruction("str x28, [sp, #0]");                                   // save the result start pointer for the final length
+    emitter.instruction("mov x12, x0");                                         // x12 = output write pointer at the reserved payload start at the reserved payload start
+    emitter.instruction("str x12, [sp, #0]");                                   // save the result start pointer for the final length
 
     // -- main scan loop --
     emitter.label("__rt_wordwrap_loop");
@@ -152,7 +152,7 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
 
     // -- finalize result pointer/length and publish the written bytes --
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = result start pointer
-    emitter.instruction("sub x2, x28, x1");                                     // x2 = result length = end - start
+    emitter.instruction("sub x2, x12, x1");                                     // x2 = result length = end - start
     emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
 
     // -- restore callee-saved registers and return --
@@ -165,13 +165,16 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #112");                                    // deallocate the stack frame
     emitter.instruction("ret");                                                 // return the wrapped string in x1/x2
 
-    // -- internal copy helper: copy x10 bytes from x9 to the output pointer x28 --
-    // Clobbers x9, x10, x11 and advances x28. Uses x30 (caller saved it on the stack).
+    // -- internal copy helper: copy x10 bytes from x9 to the output pointer x12 --
+    // Clobbers x9, x10, x11 and advances x12. Uses x30 (caller saved it on the stack).
+    // The cursor lives in x12, NOT in a callee-saved register: x28 is the
+    // reserved runtime-context pointer in `--rt-ctx` builds, and the final
+    // `bl __rt_concat_publish` below reads per-context state through it.
     emitter.label("__rt_wordwrap_cpy");
     emitter.instruction("cbz x10, __rt_wordwrap_cpy_ret");                      // nothing to copy
     emitter.label("__rt_wordwrap_cpy_loop");
     emitter.instruction("ldrb w11, [x9], #1");                                  // load a source byte and advance
-    emitter.instruction("strb w11, [x28], #1");                                 // store it to output and advance
+    emitter.instruction("strb w11, [x12], #1");                                 // store it to output and advance
     emitter.instruction("subs x10, x10, #1");                                   // decrement the remaining byte count
     emitter.instruction("b.ne __rt_wordwrap_cpy_loop");                         // continue until all bytes are copied
     emitter.label("__rt_wordwrap_cpy_ret");
@@ -189,9 +192,14 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
 /// Output registers: rax=result ptr, rdx=result len.
 ///
 /// Hot state lives in callee-saved registers (rbx=source base, r12=current, r13=laststart,
-/// r14=lastspace, r15=output pointer); width, textlen, break ptr/len, cut, and the result start are
-/// spilled to `[rbp-8..56]`. Writes wrapped output to `_concat_buf` / `_concat_off` and advances
-/// `_concat_off` on completion.
+/// r15=output pointer); width, textlen, break ptr/len, cut, the result start AND the
+/// lastspace index (`[rbp-96]`) are spilled. Writes wrapped output to `_concat_buf` /
+/// `_concat_off` and advances `_concat_off` on completion.
+///
+/// `lastspace` lives in a spill slot rather than a register because this target has no
+/// sixth callee-saved register left: `r14` is the reserved runtime-context pointer in
+/// `--rt-ctx` builds, so no runtime helper may borrow it (the same resolution as the
+/// integer-significand flag in `str_to_number`).
 fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: wordwrap (word-aware) ---");
@@ -203,7 +211,7 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve callee-saved rbx (source base)
     emitter.instruction("push r12");                                            // preserve callee-saved r12 (current index)
     emitter.instruction("push r13");                                            // preserve callee-saved r13 (laststart)
-    emitter.instruction("push r14");                                            // preserve callee-saved r14 (lastspace)
+    emitter.instruction("sub rsp, 8");                                          // placeholder for the former lastspace register: keeps every rbp-relative spill offset below unchanged
     emitter.instruction("push r15");                                            // preserve callee-saved r15 (output pointer)
     emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the cold inputs
 
@@ -216,7 +224,7 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbx, rax");                                        // rbx = source base pointer
     emitter.instruction("xor r12, r12");                                        // r12 = current scan index = 0
     emitter.instruction("xor r13, r13");                                        // r13 = laststart = 0
-    emitter.instruction("mov r14, -1");                                         // r14 = lastspace = -1 (no space on line yet)
+    emitter.instruction("mov QWORD PTR [rbp - 96], -1");                        // lastspace = -1 (no space on line yet)
 
     // -- reserve the worst-case wrapped result before writing anything --
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the break-string length before deriving the worst-case expansion factor
@@ -242,7 +250,7 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rbx + r13]");                                // source = base + laststart
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the line including its newline to output
     emitter.instruction("lea r13, [r12 + 1]");                                  // laststart = current + 1
-    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("mov QWORD PTR [rbp - 96], -1");                        // reset lastspace
     emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
     emitter.label("__rt_wordwrap_not_nl_x86_64");
@@ -262,11 +270,11 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // source = break-string pointer
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the break string in place of the space
     emitter.instruction("lea r13, [r12 + 1]");                                  // laststart = current + 1 (skip the space)
-    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("mov QWORD PTR [rbp - 96], -1");                        // reset lastspace
     emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
     emitter.label("__rt_wordwrap_mark_space_x86_64");
-    emitter.instruction("mov r14, r12");                                        // lastspace = current
+    emitter.instruction("mov QWORD PTR [rbp - 96], r12");                       // lastspace = current
     emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
     // -- regular character: break only when the line exceeds the width --
@@ -275,19 +283,20 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, r13");                                        // ... - laststart
     emitter.instruction("cmp r10, QWORD PTR [rbp - 72]");                       // is the line still under the wrap width?
     emitter.instruction("jl __rt_wordwrap_next_x86_64");                        // yes → keep accumulating the word
-    emitter.instruction("cmp r14, -1");                                         // is lastspace == -1 (no space on this line)?
+    emitter.instruction("cmp QWORD PTR [rbp - 96], -1");                        // is lastspace == -1 (no space on this line)?
     emitter.instruction("je __rt_wordwrap_no_space_x86_64");                    // yes → only a long word can be cut here
 
     // -- break at the last space seen on this line --
-    emitter.instruction("mov r10, r14");                                        // count = lastspace ...
+    emitter.instruction("mov r10, QWORD PTR [rbp - 96]");                       // count = lastspace ...
     emitter.instruction("sub r10, r13");                                        // ... - laststart
     emitter.instruction("lea rsi, [rbx + r13]");                                // source = base + laststart
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the line up to (not including) the space
     emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // count = break-string length
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // source = break-string pointer
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the break string in place of the space
-    emitter.instruction("lea r13, [r14 + 1]");                                  // laststart = lastspace + 1
-    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("mov r13, QWORD PTR [rbp - 96]");                       // laststart = lastspace ...
+    emitter.instruction("add r13, 1");                                          // ... + 1 (skip the space that was replaced by the break)
+    emitter.instruction("mov QWORD PTR [rbp - 96], -1");                        // reset lastspace
     emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
     // -- long word with no space: break mid-word only when cut is requested --
@@ -302,7 +311,7 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // source = break-string pointer
     emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the break string mid-word
     emitter.instruction("mov r13, r12");                                        // laststart = current (the remaining word continues)
-    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("mov QWORD PTR [rbp - 96], -1");                        // reset lastspace
 
     emitter.label("__rt_wordwrap_next_x86_64");
     emitter.instruction("add r12, 1");                                          // current += 1
@@ -324,7 +333,7 @@ fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     // -- restore callee-saved registers and return --
     emitter.instruction("add rsp, 64");                                         // release the spill slots
     emitter.instruction("pop r15");                                             // restore r15
-    emitter.instruction("pop r14");                                             // restore r14
+    emitter.instruction("add rsp, 8");                                          // release the former lastspace register placeholder
     emitter.instruction("pop r13");                                             // restore r13
     emitter.instruction("pop r12");                                             // restore r12
     emitter.instruction("pop rbx");                                             // restore rbx

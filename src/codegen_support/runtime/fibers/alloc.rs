@@ -139,7 +139,7 @@ fn emit_alloc_stack_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base while libc calls run
     emitter.instruction("push r12");                                            // preserve the requested usable size across mmap and mprotect
     emitter.instruction("push r13");                                            // preserve the total mapped length across mprotect
-    emitter.instruction("push r14");                                            // preserve the mapping base across mprotect
+    emitter.instruction("push rbx");                                            // preserve the mapping base across mprotect
     emitter.instruction("push r15");                                            // keep the SysV stack aligned while saving three live registers
     emitter.instruction("mov r12, rdi");                                        // r12 = requested usable stack size
 
@@ -158,23 +158,23 @@ fn emit_alloc_stack_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_fiber_alloc_stack_fail");                      // skip mprotect and return zeros when mmap failed
 
     // -- mprotect(base, GUARD_PAGE_SIZE, PROT_NONE) installs the guard at the bottom --
-    emitter.instruction("mov r14, rax");                                        // r14 = mapping base preserved across mprotect
-    emitter.instruction("mov rdi, r14");                                        // base = mapping start for the guard region
+    emitter.instruction("mov rbx, rax");                                        // rbx = mapping base preserved across mprotect
+    emitter.instruction("mov rdi, rbx");                                        // base = mapping start for the guard region
     emitter.instruction(&format!("mov esi, {}", FIBER_GUARD_PAGE_SIZE));        // length = one guard page
     emitter.instruction("xor edx, edx");                                        // prot = PROT_NONE — touching the guard faults via SIGSEGV
     emitter.bl_c("mprotect");                                                   // ignore the return value: a failure still leaves a usable stack
 
     // -- compute stack_top = mapping base + total length, aligned down to 16 --
-    emitter.instruction("lea rdx, [r14 + r13]");                                // rdx = end of mapped region, one byte past the usable stack
+    emitter.instruction("lea rdx, [rbx + r13]");                                // rdx = end of mapped region, one byte past the usable stack
     emitter.instruction("and rdx, -16");                                        // round stack_top down to a 16-byte boundary for SysV calls
 
     // -- pack outputs: rax = base, rdx = top, rcx = total length for munmap --
-    emitter.instruction("mov rax, r14");                                        // rax = mapping base, also used as stack_base for free
+    emitter.instruction("mov rax, rbx");                                        // rax = mapping base, also used as stack_base for free
     emitter.instruction("mov rcx, r13");                                        // rcx = total mapped length
 
     // -- epilogue --
     emitter.instruction("pop r15");                                             // restore the alignment-preserving callee-saved spill register
-    emitter.instruction("pop r14");                                             // restore the caller's r14
+    emitter.instruction("pop rbx");                                             // restore the caller's rbx
     emitter.instruction("pop r13");                                             // restore the caller's r13
     emitter.instruction("pop r12");                                             // restore the caller's r12
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -186,7 +186,7 @@ fn emit_alloc_stack_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // stack_top = 0 mirrors the failure signal
     emitter.instruction("xor ecx, ecx");                                        // total length = 0 so a defensive free is a no-op
     emitter.instruction("pop r15");                                             // restore the alignment-preserving callee-saved spill register
-    emitter.instruction("pop r14");                                             // restore the caller's r14
+    emitter.instruction("pop rbx");                                             // restore the caller's rbx
     emitter.instruction("pop r13");                                             // restore the caller's r13
     emitter.instruction("pop r12");                                             // restore the caller's r12
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

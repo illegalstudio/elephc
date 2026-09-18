@@ -154,10 +154,13 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source associative-array pointer across allocation and iteration helper calls
     emitter.instruction("mov QWORD PTR [rbp - 72], r12");                       // preserve r12 because the clone walk uses it as the long-lived source hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 80], r13");                       // preserve r13 because the clone walk uses it as the long-lived destination hash pointer
-    emitter.instruction("mov QWORD PTR [rbp - 88], r14");                       // preserve r14 because the clone walk uses it to keep the packed heap metadata stable across calls
     emitter.instruction("mov QWORD PTR [rbp - 96], r15");                       // preserve r15 because the clone walk reuses it as a helper scratch across nested calls
     emitter.instruction("mov r12, QWORD PTR [rbp - 8]");                        // keep the source associative-array pointer in a callee-saved register across the whole clone walk
-    emitter.instruction("mov r14, QWORD PTR [r12 - 8]");                        // snapshot the packed heap-kind metadata so the clone preserves the stable kind and copy-on-write bits
+    // The source metadata is parked in the frame rather than in r14: r14 is the
+    // reserved runtime-context register, and this snapshot has to survive the
+    // allocator call below.
+    emitter.instruction("mov rax, QWORD PTR [r12 - 8]");                        // snapshot the packed heap-kind metadata so the clone preserves the stable kind and copy-on-write bits
+    emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // park it across the allocator call
     emitter.instruction("mov rdi, QWORD PTR [r12 + 8]");                        // pass the source hash capacity to the allocator helper in the first SysV integer argument register
     emitter.instruction("mov rsi, QWORD PTR [r12 + 16]");                       // pass the source hash runtime value_type tag to the allocator helper in the second SysV integer argument register
     emitter.instruction("call __rt_hash_new");                                  // allocate a fresh destination associative-array with the same capacity and table-wide value tag
@@ -165,8 +168,9 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the destination associative-array pointer in the local spill area for the return path
     emitter.instruction("mov r15, QWORD PTR [r13 - 8]");                        // snapshot the freshly allocated clone header so the x86_64 heap marker survives the metadata rewrite
     emitter.instruction("and r15, -65536");                                     // keep the high x86_64 heap-marker bits while clearing the low container-kind payload lane
-    emitter.instruction("and r14, 0xffff");                                     // preserve only the stable associative-array kind and copy-on-write metadata bits from the source header
-    emitter.instruction("or r15, r14");                                         // combine the fresh clone header marker bits with the stable source container-kind payload bits
+    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload the parked source metadata (r14 is the reserved ctx register)
+    emitter.instruction("and rax, 0xffff");                                     // preserve only the stable associative-array kind and copy-on-write metadata bits from the source header
+    emitter.instruction("or r15, rax");                                         // combine the fresh clone header marker bits with the stable source container-kind payload bits
     emitter.instruction("mov QWORD PTR [r13 - 8], r15");                        // stamp the cloned associative-array with the preserved container metadata without losing the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the insertion-order iterator cursor so the clone walk starts from the source hash head
 
@@ -235,7 +239,6 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_clone_shallow_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the cloned associative-array pointer in the x86_64 integer result register
     emitter.instruction("mov r15, QWORD PTR [rbp - 96]");                       // restore r15 after using it as a nested-call scratch in the clone walk
-    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore r14 after using it to preserve packed associative-array metadata across helper calls
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore r13 after using it as the long-lived destination associative-array pointer
     emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore r12 after using it as the long-lived source associative-array pointer
     emitter.instruction("add rsp, 128");                                        // release the clone-state spill area before returning to the caller

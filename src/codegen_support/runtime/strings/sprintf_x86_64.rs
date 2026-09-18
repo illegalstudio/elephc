@@ -52,17 +52,19 @@ use super::sprintf::{CONCAT_BUF_CAP, CONV_SCRATCH_CAP};
 /// before `ret`.
 ///
 /// Callee-saved registers used: `rbx` = write cursor in `_concat_buf`, `r12` = format
-/// cursor, `r13` = remaining format bytes, `r14` = next sequential argument index,
-/// `r15` = argument record base.
+/// cursor, `r13` = remaining format bytes, `r15` = argument record base. The next
+/// sequential argument index lives in the `[rbp-128]` spill slot: `r14` is the reserved
+/// runtime-context pointer in `--rt-ctx` builds, so no runtime helper may borrow it, and
+/// every other callee-saved register here already has a role.
 pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: sprintf ---");
     emitter.label_global("__rt_sprintf");
 
     // Frame layout, relative to rbp:
-    //   [rbp-8 .. rbp-40]    = pushed rbx, r12, r13, r14, r15
+    //   [rbp-8 .. rbp-40]    = pushed rbx, r12, r13, (unused slot), r15
     //   [rbp-48]             = result start pointer inside _concat_buf
-    //   [rbp-56]             = address of the _concat_off symbol
+    //   [rbp-56]             = (free)
     //   [rbp-64]             = packed argument record count
     //   [rbp-72]             = parsed field width
     //   [rbp-80]             = parsed precision (-1 when the specifier had no '.')
@@ -71,6 +73,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp-104]            = parsed conversion character
     //   [rbp-112]            = parsed argument number (0 = next sequential argument)
     //   [rbp-120]            = one-past-the-end address of _concat_buf
+    //   [rbp-128]            = next sequential argument index
     //   [rbp-680]            = optional eval context
     //   [rbp-688]            = formatter-owned temporary string
     //   [rbp-160 .. rbp-129] = mini C format string built by this helper
@@ -81,22 +84,20 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve the concat-buffer write cursor register
     emitter.instruction("push r12");                                            // preserve the format-cursor register
     emitter.instruction("push r13");                                            // preserve the remaining-format-length register
-    emitter.instruction("push r14");                                            // preserve the sequential-argument-index register
+    emitter.instruction("sub rsp, 8");                                          // placeholder for the former sequential-index register: keeps every rbp-relative slot below unchanged
     emitter.instruction("push r15");                                            // preserve the argument-record base register
     emitter.instruction("sub rsp, 648");                                        // reserve parse slots, conversion scratch, and formatter state
     emitter.instruction("mov r12, rax");                                        // format cursor
     emitter.instruction("mov r13, rdx");                                        // remaining format bytes
-    emitter.instruction("xor r14d, r14d");                                      // next sequential argument index
+    emitter.instruction("mov QWORD PTR [rbp - 128], 0");                        // next sequential argument index
     emitter.instruction("lea r15, [rbp + 16]");                                 // argument records begin above the saved return address
     emitter.instruction("mov QWORD PTR [rbp - 64], rdi");                       // remember how many records the caller pushed
     emitter.instruction("mov QWORD PTR [rbp - 680], rsi");                      // preserve optional eval context for Stringable dispatch
     emitter.instruction("mov QWORD PTR [rbp - 688], 0");                        // no formatter-owned temporary string is live
-    abi::emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "rcx", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r11");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "rcx");
     emitter.instruction("lea rbx, [rcx + r11]");                                // write cursor = buffer base + offset
     emitter.instruction("mov QWORD PTR [rbp - 48], rbx");                       // remember where this result starts
-    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // remember the concat-offset symbol address
     emitter.instruction(&format!("lea rcx, [rcx + {}]", CONCAT_BUF_CAP));       // one-past-the-end address of the concat buffer
     emitter.instruction("mov QWORD PTR [rbp - 120], rcx");                      // publish the hard write limit for every copy below
 
@@ -152,15 +153,14 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // result pointer inside the concat buffer
     emitter.instruction("mov rdx, rbx");                                        // current write cursor
     emitter.instruction("sub rdx, rax");                                        // result byte length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // concat-offset symbol address
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("sub rbx, r11");                                        // derive the absolute cursor after nested concat-producing conversions
-    emitter.instruction("mov QWORD PTR [r10], rbx");                            // publish the exact new write offset without double-counting
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rbx"); // publish the exact new write offset without double-counting
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // packed argument record count
     emitter.instruction("shl rcx, 4");                                          // records are 16 bytes each
     emitter.instruction("add rsp, 648");                                        // release local buffers and formatter state
     emitter.instruction("pop r15");                                             // restore the argument-record base register
-    emitter.instruction("pop r14");                                             // restore the sequential-argument-index register
+    emitter.instruction("add rsp, 8");                                          // release the former sequential-index register placeholder
     emitter.instruction("pop r13");                                             // restore the remaining-format-length register
     emitter.instruction("pop r12");                                             // restore the format-cursor register
     emitter.instruction("pop rbx");                                             // restore the concat-buffer write cursor register
@@ -339,8 +339,8 @@ fn emit_argument_fetch(emitter: &mut Emitter) {
     emitter.instruction("sub r9, 1");                                           // PHP argument numbers are 1-based
     emitter.instruction("jmp __rt_sprintf_arg_have_x64");                       // index resolved
     emitter.label("__rt_sprintf_arg_seq_x64");
-    emitter.instruction("mov r9, r14");                                         // consume the next sequential argument
-    emitter.instruction("add r14, 1");                                          // advance the sequential cursor
+    emitter.instruction("mov r9, QWORD PTR [rbp - 128]");                       // consume the next sequential argument
+    emitter.instruction("add QWORD PTR [rbp - 128], 1");                        // advance the sequential cursor
     emitter.label("__rt_sprintf_arg_have_x64");
     emitter.instruction("cmp r9, QWORD PTR [rbp - 64]");                        // is the index within the supplied records?
     emitter.instruction("jae __rt_sprintf_afatal_x64");                         // no → controlled fatal instead of a stack read
@@ -435,11 +435,10 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_t_int_x64");                          // format through the integer path
 
     emitter.label("__rt_sprintf_str_mixed_x64");
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("mov rax, rbx");                                        // copy the partial-result write cursor
     emitter.instruction("sub rax, r9");                                         // compute bytes already written before nested __toString
-    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload the address of the global concat offset
-    emitter.instruction("mov QWORD PTR [r9], rax");                             // make nested concat users start after the partial result
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rax"); // make nested concat users start after the partial result
     emitter.instruction("mov rdi, r11");                                        // recover the deferred record metadata
     emitter.instruction("and rdi, 255");                                        // pass only its low-byte tag
     emitter.instruction("mov rsi, r10");                                        // pass the preserved record payload

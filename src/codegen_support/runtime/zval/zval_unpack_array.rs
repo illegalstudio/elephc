@@ -199,7 +199,8 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
     // -- set up a shared frame and save the HashTable pointer --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 80");                                         // reserve HT/array/i/nNumUsed/bucket/key_lo/key_hi/cell slots
+    emitter.instruction("sub rsp, 96");                                         // reserve HT/array/i/nNumUsed/bucket/key_lo/key_hi/cell slots plus the callee-saved rbx spill, ROUNDED UP to a 16-byte multiple (pinned by `every_x86_64_runtime_call_site_is_sysv_aligned`)
+    emitter.instruction("mov QWORD PTR [rbp - 72], rbx");                       // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the zend_array pointer across helper calls
 
     // -- dispatch on nTableMask: -2 (HT_MIN_MASK) selects the packed layout --
@@ -235,31 +236,31 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
 
     // -- element loop: convert each bucket value into a Mixed cell and store it --
     emitter.label("__rt_zval_unpack_array_packed_loop");
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload the loop index
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 24]");                       // reload the loop index
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload nNumUsed
-    emitter.instruction("cmp r14, r12");                                        // has every occupied bucket been processed?
+    emitter.instruction("cmp rbx, r12");                                        // has every occupied bucket been processed?
     emitter.instruction("jge __rt_zval_unpack_array_packed_done");              // exit the loop once i reaches nNumUsed
 
     // -- compute the bucket address: arData + i * 32 --
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the HashTable (arData is clobbered by the helper)
     emitter.instruction("mov r11, QWORD PTR [r11 + 16]");                       // arData = first bucket base
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload the loop index before the stride multiply
-    emitter.instruction("shl r14, 5");                                          // i * 32 bytes per Bucket
-    emitter.instruction("lea rax, [r11 + r14]");                                // rax = bucket address (bucket val slot is zval-shaped)
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 24]");                       // reload the loop index before the stride multiply
+    emitter.instruction("shl rbx, 5");                                          // i * 32 bytes per Bucket
+    emitter.instruction("lea rax, [r11 + rbx]");                                // rax = bucket address (bucket val slot is zval-shaped)
     emitter.instruction("call __rt_zval_unpack");                               // rax = boxed Mixed cell for this bucket value
 
     // -- store the cell at arr + 24 + i * 8 --
     emitter.instruction("mov r13, QWORD PTR [rbp - 16]");                       // reload the rebuilt array pointer
     emitter.instruction("add r13, 24");                                         // elements start after the 24-byte array header
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload the loop index before the slot stride multiply
-    emitter.instruction("shl r14, 3");                                          // i * 8 bytes per Mixed-cell slot
-    emitter.instruction("add r13, r14");                                        // r13 = destination element slot
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 24]");                       // reload the loop index before the slot stride multiply
+    emitter.instruction("shl rbx, 3");                                          // i * 8 bytes per Mixed-cell slot
+    emitter.instruction("add r13, rbx");                                        // r13 = destination element slot
     emitter.instruction("mov QWORD PTR [r13], rax");                            // arr[i] = owned Mixed cell pointer
 
     // -- advance the loop index --
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload the loop index
-    emitter.instruction("inc r14");                                             // i = i + 1
-    emitter.instruction("mov QWORD PTR [rbp - 24], r14");                       // store the next loop index
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 24]");                       // reload the loop index
+    emitter.instruction("inc rbx");                                             // i = i + 1
+    emitter.instruction("mov QWORD PTR [rbp - 24], rbx");                       // store the next loop index
     emitter.instruction("jmp __rt_zval_unpack_array_packed_loop");              // continue with the next bucket
 
     // -- packed done: return tag 4 (indexed array) and the rebuilt array --
@@ -285,17 +286,17 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
 
     // -- element loop: unpack each bucket value and insert it under its key --
     emitter.label("__rt_zval_unpack_array_hash_loop");
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload the loop index
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 24]");                       // reload the loop index
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload nNumUsed
-    emitter.instruction("cmp r14, r12");                                        // has every occupied bucket been processed?
+    emitter.instruction("cmp rbx, r12");                                        // has every occupied bucket been processed?
     emitter.instruction("jge __rt_zval_unpack_array_hash_done");                // exit the loop once i reaches nNumUsed
 
     // -- compute the bucket address and unpack its value into a Mixed cell --
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the HashTable pointer
     emitter.instruction("mov r11, QWORD PTR [r11 + 16]");                       // arData = first bucket base
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload the loop index before the stride multiply
-    emitter.instruction("shl r14, 5");                                          // i * 32 bytes per Bucket
-    emitter.instruction("lea r11, [r11 + r14]");                                // r11 = bucket address
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 24]");                       // reload the loop index before the stride multiply
+    emitter.instruction("shl rbx, 5");                                          // i * 32 bytes per Bucket
+    emitter.instruction("lea r11, [r11 + rbx]");                                // r11 = bucket address
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the bucket address across the unpack call
     emitter.instruction("mov rax, r11");                                        // rax = bucket address (bucket val slot is zval-shaped)
     emitter.instruction("call __rt_zval_unpack");                               // rax = boxed Mixed cell for this bucket value
@@ -333,9 +334,9 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // update the hash pointer after a possible reallocation
 
     // -- advance the loop index --
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload the loop index
-    emitter.instruction("inc r14");                                             // i = i + 1
-    emitter.instruction("mov QWORD PTR [rbp - 24], r14");                       // store the next loop index
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 24]");                       // reload the loop index
+    emitter.instruction("inc rbx");                                             // i = i + 1
+    emitter.instruction("mov QWORD PTR [rbp - 24], rbx");                       // store the next loop index
     emitter.instruction("jmp __rt_zval_unpack_array_hash_loop");                // continue with the next bucket
 
     // -- hash done: return tag 5 (associative array) and the rebuilt hash --
@@ -346,7 +347,8 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
 
     // -- shared epilogue: rax = tag, rdx = array/hash pointer --
     emitter.label("__rt_zval_unpack_array_epilogue");
-    emitter.instruction("add rsp, 80");                                         // release the local slots
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 72]");                       // restore the caller's callee-saved rbx value
+    emitter.instruction("add rsp, 96");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return tag in rax, array pointer in rdx
 }

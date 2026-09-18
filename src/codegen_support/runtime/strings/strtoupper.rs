@@ -10,7 +10,6 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
 
 /// Emits the `__rt_strtoupper` runtime helper for ARM64.
 /// Copies the source string pointed to by `x1` with length `x2` into the concat buffer,
@@ -33,9 +32,8 @@ pub fn emit_strtoupper(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // compute destination pointer
     emitter.instruction("mov x10, x9");                                         // save destination start for return value
     emitter.instruction("mov x11, x2");                                         // copy length as loop counter
@@ -57,7 +55,7 @@ pub fn emit_strtoupper(emitter: &mut Emitter) {
     // -- update concat_off and return --
     emitter.label("__rt_strtoupper_done");
     emitter.instruction("add x8, x8, x2");                                      // advance offset by string length
-    emitter.instruction("str x8, [x6]");                                        // store updated offset to _concat_off
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x8"); // store updated offset to the concat scratch (ctx-relative in ctx mode)
     emitter.instruction("mov x1, x10");                                         // return new pointer (start of uppered copy)
 
     // -- restore frame and return --
@@ -77,9 +75,8 @@ fn emit_strtoupper_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_strtoupper");
 
     // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before copying the uppercased string bytes
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("lea r11, [r10 + r9]");                                 // compute the concat-buffer destination pointer for the uppercased string
     emitter.instruction("mov rcx, rdx");                                        // copy the source string length into the loop counter so the returned byte length remains unchanged
     emitter.instruction("mov rsi, rdx");                                        // preserve the original source string length for the final string result after the byte loop clobbers caller-saved registers
@@ -107,7 +104,7 @@ fn emit_strtoupper_linux_x86_64(emitter: &mut Emitter) {
     // -- update concat_off and return --
     emitter.label("__rt_strtoupper_done_linux_x86_64");
     emitter.instruction("add r9, rsi");                                         // advance the concat-buffer write offset by the original string length that strtoupper() copied
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // persist the updated concat-buffer write offset after materializing the uppercased string
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");             // persist the updated concat-buffer write offset after materializing the uppercased string
     emitter.instruction("mov rdx, rsi");                                        // restore the original string length into the x86_64 string result length register before returning
     emitter.instruction("ret");                                                 // return the concat-backed uppercased string in the standard x86_64 string result registers
 }

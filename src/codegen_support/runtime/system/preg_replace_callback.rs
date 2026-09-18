@@ -10,7 +10,7 @@
 //!   unmatched prefix until after callback results have been persisted, and
 //!   backs up already-emitted output because callback prologues reset `_concat_off`.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// __rt_preg_replace_callback: replace regex matches with a callback result.
 /// Input:  x1=pattern ptr, x2=pattern len, x3=callback ptr, x4=callback env ptr,
@@ -94,9 +94,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save null-terminated subject pointer
 
     // -- set up output buffer in concat_buf --
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current concat-buffer offset
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // compute the replacement output start pointer
     emitter.instruction(&format!("str x11, [sp, #{}]", output_start_off));      // save final output start pointer
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // initialize final output write pointer
@@ -303,10 +302,9 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
 /// * `output_write_off` - stack offset where the current output write pointer is saved
 fn publish_concat_offset(emitter: &mut Emitter, output_write_off: usize) {
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // reload current output write pointer for concat publication
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     emitter.instruction("sub x10, x11, x9");                                    // compute current absolute concat-buffer offset
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("str x10, [x9]");                                       // publish concat offset before a nested callback writes strings
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10");
 }
 
 /// x86_64 Linux implementation of `__rt_preg_replace_callback`.
@@ -389,9 +387,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // save null-terminated subject pointer
 
     // -- set up output buffer in concat_buf --
-    abi::emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load current concat-buffer offset
-    abi::emit_symbol_address(emitter, "rax", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r11");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "rax");
     emitter.instruction("add rax, r11");                                        // compute the replacement output start pointer
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_start_off)); // save final output start pointer
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_write_off)); // initialize final output write pointer
@@ -596,9 +593,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
 /// pointer as the `_concat_off` global offset before a nested callback invocation.
 fn publish_concat_offset_x86_64(emitter: &mut Emitter, output_write_off: usize) {
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // reload current output write pointer for concat publication
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("mov r10, r11");                                        // copy output pointer before converting it into an absolute offset
     emitter.instruction("sub r10, r9");                                         // compute current absolute concat-buffer offset
-    abi::emit_symbol_address(emitter, "r9", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish concat offset before a nested callback writes strings
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r10");
 }

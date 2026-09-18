@@ -452,9 +452,15 @@ fn emit_loaded_mixed_array_callback_call(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    // rbx rather than r14 on x86_64: r14 is the reserved runtime-context
+    // register, and this body CALLS the PHP callable, which reads per-context
+    // state through it. Holding a type tag there handed every closure-driven
+    // `usort`/`array_filter`/`array_reduce`/`array_walk` a tag where the context
+    // pointer belongs — five SIGSEGVs on linux-x86_64. rbx is already in this
+    // invoker's saved set, so the caller's value still comes back.
     let (mixed_reg, tag_reg, payload_reg) = match emitter.target.arch {
         Arch::AArch64 => ("x20", "x21", "x22"),
-        Arch::X86_64 => ("r13", "r14", "r15"),
+        Arch::X86_64 => ("r13", "rbx", "r15"),
     };
     let indexed_label = ctx.next_label("cufa_mixed_indexed");
     let assoc_label = ctx.next_label("cufa_mixed_assoc");
@@ -543,8 +549,13 @@ fn emit_loaded_indexed_array_callback_call(
         Arch::AArch64 => (
             "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x9", "x0", "x1", "x10",
         ),
+        // `len_reg` is rax here, a caller-saved scratch free of any other role in
+        // this tuple, because the count is re-read from the array header right
+        // before each use rather than held across calls — see `reload_len`
+        // below. It must NOT be r14: that is the reserved runtime-context
+        // register, and compiled PHP reads per-context state through it.
         Arch::X86_64 => (
-            "r13", "r14", "r15", "rbx", "rcx", "r8", "r9", "r11", "rdi", "rsi", "r10",
+            "r13", "rax", "r15", "rbx", "rcx", "r8", "r9", "r11", "rdi", "rsi", "r10",
         ),
     };
     let elem_ty = match arr_ty {
@@ -562,7 +573,19 @@ fn emit_loaded_indexed_array_callback_call(
 
     // -- load the argument array and validate the required argument count --
     emit_loaded_array_source_to_reg(array_source, array_reg, emitter);
-    abi::emit_load_from_address(emitter, len_reg, array_reg, 0);
+    // The count is re-read from the array header at each use rather than parked
+    // in a register. x86_64 has no callee-saved register left here — r12 carries
+    // the callable, r13/r15/rbx have roles, and r14 is the reserved
+    // runtime-context register, which is what the first version borrowed: the
+    // count then sat where compiled PHP expects the context pointer, and every
+    // closure-driven usort/array_filter/array_reduce/array_walk/array_any
+    // SIGSEGVd on its first heap access. The header is owned by this invoker and
+    // does not change between these reads, so re-reading is the same value a
+    // snapshot would have held.
+    let reload_len = |emitter: &mut Emitter| {
+        abi::emit_load_from_address(emitter, len_reg, array_reg, 0);
+    };
+    reload_len(emitter);
     emit_indexed_required_arg_count_check(sig, regular_param_count, len_reg, emitter, ctx, data);
 
     let mut arg_types = Vec::new();
@@ -575,6 +598,7 @@ fn emit_loaded_indexed_array_callback_call(
             if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref) {
                 let load_label = ctx.next_label("invoker_ref_load_arg");
                 let done_label = ctx.next_label("invoker_ref_arg_done");
+                reload_len(emitter);
                 emit_compare_len_ge(emitter, len_reg, index + 1, &load_label);
                 push_default_ref_arg(default_expr, target_ty, emitter, ctx, data);
                 abi::emit_jump(emitter, &done_label);
@@ -596,6 +620,7 @@ fn emit_loaded_indexed_array_callback_call(
         if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref) {
             let load_label = ctx.next_label("invoker_load_arg");
             let done_label = ctx.next_label("invoker_arg_done");
+            reload_len(emitter);
             emit_compare_len_ge(emitter, len_reg, index + 1, &load_label);
             push_default_value_arg(default_expr, target_ty, emitter, ctx, data);
             abi::emit_jump(emitter, &done_label);
@@ -622,6 +647,7 @@ fn emit_loaded_indexed_array_callback_call(
         let build_label = ctx.next_label("invoker_build_variadic");
         let done_label = ctx.next_label("invoker_variadic_done");
         // -- no tail arguments: pass an empty variadic array --
+        reload_len(emitter);
         emit_compare_len_gt(emitter, len_reg, regular_param_count, &build_label);
         emit_empty_indexed_array(emitter, &variadic_elem_ty);
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
@@ -629,6 +655,7 @@ fn emit_loaded_indexed_array_callback_call(
 
         // -- allocate the variadic array sized to the argument tail --
         emitter.label(&build_label);
+        reload_len(emitter);
         emit_tail_count(emitter, tail_count_reg, len_reg, regular_param_count);
         emitter.instruction(&format!(
             "mov {}, {}",
@@ -2144,7 +2171,7 @@ fn call_target_with_pushed_args(
 /// Saves the current concat offset before the nested callable target runs.
 fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
     let scratch = abi::temp_int_reg(emitter.target);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, scratch);
     match emitter.target.arch {
         Arch::AArch64 => abi::emit_push_reg(emitter, scratch),
         Arch::X86_64 => abi::store_at_offset(emitter, scratch, INVOKER_CONCAT_OFFSET),
@@ -2161,7 +2188,7 @@ fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &Ph
         Arch::AArch64 => abi::emit_pop_reg(emitter, scratch),
         Arch::X86_64 => abi::load_at_offset(emitter, scratch, INVOKER_CONCAT_OFFSET),
     }
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, scratch);
 }
 
 /// Emits an associative variadic array argument from remaining hash entries.

@@ -21,7 +21,7 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
 
         emitter.instruction("push r12");                                        // preserve the first callee-saved scratch register used by the x86_64 slot walker
         emitter.instruction("push r13");                                        // preserve the second callee-saved scratch register used by the x86_64 slot walker
-        emitter.instruction("push r14");                                        // preserve the third callee-saved scratch register used by the x86_64 tag dispatcher
+        emitter.instruction("push r8");                                        // the tag dispatcher scratches r8 (NOT r14, the reserved ctx register); pushed to keep this helper's four-push frame layout and call alignment
         emitter.instruction("push r15");                                        // preserve the callee-saved register used by the nested mixed unwrapping loop
         emitter.instruction("test rax, rax");                                   // null hashes are never cycle roots
         emitter.instruction("jz __rt_hash_may_have_cyclic_values_no");          // skip the slot walk entirely for null hash pointers
@@ -38,28 +38,28 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
         emitter.instruction("mov r13, QWORD PTR [r12]");                        // load the occupied flag for the current hash slot
         emitter.instruction("cmp r13, 1");                                      // is this slot currently occupied by a live hash entry?
         emitter.instruction("jne __rt_hash_may_have_cyclic_values_next");       // skip empty and tombstone slots during the cycle-capability scan
-        emitter.instruction("mov r14, QWORD PTR [r12 + 40]");                   // load the runtime value tag for this hash entry payload
-        emitter.instruction("cmp r14, 4");                                      // does the entry hold an indexed array directly?
+        emitter.instruction("mov r8, QWORD PTR [r12 + 40]");                   // load the runtime value tag for this hash entry payload
+        emitter.instruction("cmp r8, 4");                                      // does the entry hold an indexed array directly?
         emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // indexed arrays can participate in reference cycles
-        emitter.instruction("cmp r14, 5");                                      // does the entry hold an associative array directly?
+        emitter.instruction("cmp r8, 5");                                      // does the entry hold an associative array directly?
         emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // associative arrays can participate in reference cycles
-        emitter.instruction("cmp r14, 6");                                      // does the entry hold an object directly?
+        emitter.instruction("cmp r8, 6");                                      // does the entry hold an object directly?
         emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // objects can participate in reference cycles
-        emitter.instruction("cmp r14, 7");                                      // does the entry hold a boxed mixed value?
+        emitter.instruction("cmp r8, 7");                                      // does the entry hold a boxed mixed value?
         emitter.instruction("jne __rt_hash_may_have_cyclic_values_next");       // scalars and strings cannot form cycles through this helper
         emitter.instruction("mov r15, QWORD PTR [r12 + 24]");                   // load the boxed mixed pointer from the entry value_lo field
         emitter.instruction("test r15, r15");                                   // does the mixed entry actually carry a boxed payload?
         emitter.instruction("jz __rt_hash_may_have_cyclic_values_next");        // null mixed boxes behave like null scalars here
 
         emitter.label("__rt_hash_may_have_cyclic_values_mixed_loop");
-        emitter.instruction("mov r14, QWORD PTR [r15]");                        // load the current boxed mixed payload tag while unwrapping nested mixed cells
-        emitter.instruction("cmp r14, 4");                                      // does the boxed payload hold an indexed array?
+        emitter.instruction("mov r8, QWORD PTR [r15]");                        // load the current boxed mixed payload tag while unwrapping nested mixed cells
+        emitter.instruction("cmp r8, 4");                                      // does the boxed payload hold an indexed array?
         emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // boxed arrays can participate in reference cycles
-        emitter.instruction("cmp r14, 5");                                      // does the boxed payload hold an associative array?
+        emitter.instruction("cmp r8, 5");                                      // does the boxed payload hold an associative array?
         emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // boxed hashes can participate in reference cycles
-        emitter.instruction("cmp r14, 6");                                      // does the boxed payload hold an object?
+        emitter.instruction("cmp r8, 6");                                      // does the boxed payload hold an object?
         emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // boxed objects can participate in reference cycles
-        emitter.instruction("cmp r14, 7");                                      // does the boxed payload wrap another mixed cell?
+        emitter.instruction("cmp r8, 7");                                      // does the boxed payload wrap another mixed cell?
         emitter.instruction("jne __rt_hash_may_have_cyclic_values_next");       // scalar and string payloads do not need cycle collection
         emitter.instruction("mov r15, QWORD PTR [r15 + 8]");                    // follow the nested mixed pointer stored in value_lo
         emitter.instruction("test r15, r15");                                   // did the nested mixed chain terminate with a null payload?
@@ -73,7 +73,7 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
         emitter.label("__rt_hash_may_have_cyclic_values_yes");
         emitter.instruction("mov eax, 1");                                      // report that the hash may need cycle collection on x86_64
         emitter.instruction("pop r15");                                         // restore the mixed-loop callee-saved scratch register before returning true
-        emitter.instruction("pop r14");                                         // restore the tag-dispatch callee-saved scratch register before returning true
+        emitter.instruction("pop r8");                                         // restore the tag-dispatch scratch register before returning true
         emitter.instruction("pop r13");                                         // restore the slot-walk callee-saved scratch register before returning true
         emitter.instruction("pop r12");                                         // restore the scaled-offset callee-saved scratch register before returning true
         emitter.instruction("ret");                                             // return true to the caller
@@ -81,7 +81,7 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
         emitter.label("__rt_hash_may_have_cyclic_values_no");
         emitter.instruction("xor eax, eax");                                    // report that ordinary decref can skip cycle collection
         emitter.instruction("pop r15");                                         // restore the mixed-loop callee-saved scratch register before returning false
-        emitter.instruction("pop r14");                                         // restore the tag-dispatch callee-saved scratch register before returning false
+        emitter.instruction("pop r8");                                         // restore the tag-dispatch scratch register before returning false
         emitter.instruction("pop r13");                                         // restore the slot-walk callee-saved scratch register before returning false
         emitter.instruction("pop r12");                                         // restore the scaled-offset callee-saved scratch register before returning false
         emitter.instruction("ret");                                             // return false to the caller

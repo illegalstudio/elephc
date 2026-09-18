@@ -130,9 +130,10 @@ fn emit_aarch64_extern_callback_trampoline(
     let wrapper = extern_trampoline_wrapper_view(trampoline);
     let visible_count = wrapper.visible_arg_types.len();
     let slot_count = (visible_count + 1).max(1);
-    let frame_size = align16(slot_count * 16 + 48);
-    let saved_descriptor_offset = frame_size - 48;
-    let saved_runtime_offset = frame_size - 32;
+    let frame_size = align16(slot_count * 16 + 64);
+    let saved_descriptor_offset = frame_size - 64;
+    let saved_runtime_offset = frame_size - 48;
+    let saved_ctx_offset = frame_size - 32;
 
     emitter.blank();
     emitter.comment(&format!(
@@ -144,14 +145,23 @@ fn emit_aarch64_extern_callback_trampoline(
     abi::emit_frame_prologue(emitter, frame_size);
     emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_descriptor_offset)); // preserve descriptor trampoline registers across invoker dispatch
     emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); // preserve runtime-loop registers across descriptor invocation
+    emitter.instruction(&format!("str x28, [sp, #{}]", saved_ctx_offset)); // preserve the foreign caller's x28 before the ctx publish overwrites it
 
     abi::emit_load_symbol_to_reg(emitter, "x19", &trampoline.descriptor_slot_label, 0);
+    // Foreign-entry publish (spike review, B2): an FFI callback is invoked by
+    // foreign code (qsort and friends) whose x28 is not elephc's ctx pointer;
+    // re-publish before the descriptor invoker can reach compiled PHP code.
+    // The publish overwrites x28, so the foreign caller's value was spilled
+    // above and is restored below (spike review round 2, NB2: a callee-saved
+    // register must return to the foreign caller untouched).
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(emitter, "x19");
     emit_cast_descriptor_mixed_result_for_callback(emitter, &trampoline.return_type);
 
+    emitter.instruction(&format!("ldr x28, [sp, #{}]", saved_ctx_offset)); // restore the foreign caller's x28 before returning across the FFI boundary
     emitter.instruction(&format!("ldp x21, x22, [sp, #{}]", saved_runtime_offset)); // restore runtime-loop registers after descriptor invocation
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_descriptor_offset)); // restore descriptor trampoline registers
     abi::emit_frame_restore(emitter, frame_size);
@@ -186,6 +196,11 @@ fn emit_x86_64_extern_callback_trampoline(
     abi::store_at_offset(emitter, "r15", saved_runtime_count_offset);
 
     abi::emit_load_symbol_to_reg(emitter, "r12", &trampoline.descriptor_slot_label, 0);
+    // Foreign-entry publish (spike review, B2): the foreign caller's r14 is
+    // not elephc's ctx pointer and this trampoline's own scratch use of r14
+    // above would clobber it anyway — re-publish before the descriptor invoker
+    // can reach compiled PHP code.
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
@@ -472,5 +487,113 @@ fn descriptor_array_frame_offset(
     match emitter.target.arch {
         Arch::AArch64 => frame_size - 16 - visible_count * 16,
         Arch::X86_64 => frame_arg_slot_offset(visible_count),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    /// Builds a minimal one-argument extern callback trampoline fixture.
+    fn one_arg_trampoline() -> DeferredExternCallbackTrampoline {
+        DeferredExternCallbackTrampoline {
+            label: "__test_cb_trampoline".to_string(),
+            descriptor_slot_label: "_test_cb_slot".to_string(),
+            visible_arg_types: vec![PhpType::Int],
+            return_type: PhpType::Int,
+        }
+    }
+
+    /// The x86_64 extern callback trampoline ordering contract (spike review
+    /// round 2, NB2): in ctx mode the trampoline must (a) save the foreign
+    /// caller's callee-saved registers BEFORE any scratch use, (b) re-publish
+    /// the ctx pointer BEFORE the first instruction that can reach compiled
+    /// PHP code or a ctx-addressed helper, and (c) never let a `[r14 + CTX_*]`
+    /// access appear before the `lea r14, [rip + _rt_ctx]` publish. This pins
+    /// the ordering textually; a reorder that puts the invoker call or a ctx
+    /// access ahead of the publish fails here instead of doing a wild read
+    /// with the foreign caller's r14 (an integer runtime index).
+    ///
+    /// Exception-path note (documented contract, not tested here): an exception
+    /// thrown inside the callback unwinds via longjmp PAST the trampoline —
+    /// either to an enclosing PHP handler (the foreign C caller never resumes,
+    /// so its callee-saved registers never matter again) or to the uncaught
+    /// path, which exits the process. No path returns to the foreign caller
+    /// with restored-but-wrong registers: the trampoline is never "returned
+    /// from" under an exception.
+    #[test]
+    fn x86_64_trampoline_publishes_ctx_before_any_ctx_access() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emitter.ctx_register = true;
+        let trampoline = one_arg_trampoline();
+        emit_extern_callback_trampoline(&mut emitter, &trampoline);
+        let asm = emitter.output();
+
+        let publish = asm
+            .find("lea r14, [rip + _rt_ctx]")
+            .expect("ctx-mode trampoline must publish the ctx pointer");
+        let first_save = asm.find("mov QWORD PTR [rbp").expect("callee-saved saves exist");
+        assert!(
+            first_save < publish,
+            "the foreign caller's callee-saved registers must be spilled before the publish"
+        );
+
+        // No ctx-relative access may precede the publish.
+        if let Some(ctx_access) = asm.find("[r14 + ") {
+            assert!(
+                publish < ctx_access,
+                "a ctx-relative access appears before the ctx publish — wild read with foreign r14"
+            );
+        }
+
+        // The invoker dispatch call must come after the publish too.
+        let invoker_call = asm
+            .find("call QWORD PTR [r12]")
+            .or_else(|| asm.find("call [r12]"))
+            .or_else(|| asm.find("call r12"));
+        if let Some(call) = invoker_call {
+            assert!(
+                publish < call,
+                "the descriptor invoker call must run after the ctx publish"
+            );
+        }
+
+        // The trampoline restores the caller's r14 before returning.
+        assert!(
+            asm.contains("mov r14, QWORD PTR [rbp"),
+            "the trampoline must restore the foreign caller's r14 before returning"
+        );
+    }
+
+    /// Same ordering contract on AArch64: the publish (`adrp x28, _rt_ctx`)
+    /// precedes any `[x28, #...]` access and the callee-saved saves precede it.
+    #[test]
+    fn aarch64_trampoline_publishes_ctx_before_any_ctx_access() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emitter.ctx_register = true;
+        let trampoline = one_arg_trampoline();
+        emit_extern_callback_trampoline(&mut emitter, &trampoline);
+        let asm = emitter.output();
+
+        let publish = asm
+            .find("adrp x28, _rt_ctx")
+            .expect("ctx-mode trampoline must publish the ctx pointer");
+        let first_save = asm.find("stp x19").expect("callee-saved saves exist");
+        assert!(
+            first_save < publish,
+            "the foreign caller's callee-saved registers must be spilled before the publish"
+        );
+        if let Some(ctx_access) = asm.find("[x28, #") {
+            assert!(
+                publish < ctx_access,
+                "a ctx-relative access appears before the ctx publish — wild read with foreign x28"
+            );
+        }
+        assert!(
+            asm.contains("ldr x28, [sp,"),
+            "the trampoline must restore the foreign caller's x28 before returning"
+        );
     }
 }

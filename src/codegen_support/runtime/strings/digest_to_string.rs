@@ -13,7 +13,6 @@
 //! - Writes into the global `_concat_buf` and advances `_concat_off`, matching
 //!   the ownership contract of the other concat-backed string helpers.
 
-use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -46,9 +45,8 @@ fn emit_digest_to_string_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_digest_to_string");
 
     // -- resolve the concat-buffer destination cursor --
-    abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load the current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // compute the destination pointer for the formatted digest
     emitter.instruction("mov x10, x9");                                         // preserve the result start pointer across the write loop
     emitter.instruction("mov x11, x0");                                         // source = raw digest bytes
@@ -96,9 +94,9 @@ fn emit_digest_to_string_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_digest_done");
     emitter.instruction("mov x1, x10");                                         // result pointer = formatted-digest start
     emitter.instruction("sub x2, x9, x10");                                     // result length = bytes written
-    emitter.instruction("ldr x8, [x6]");                                        // reload the concat-buffer write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8"); // reload the concat-buffer write offset (ctx-relative in ctx mode)
     emitter.instruction("add x8, x8, x2");                                      // advance it past the formatted digest
-    emitter.instruction("str x8, [x6]");                                        // persist the updated concat-buffer write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x8"); // publish the updated concat offset (ctx-relative in ctx mode)
     emitter.instruction("ret");                                                 // return the PHP string ptr/len in x1/x2
 }
 
@@ -109,8 +107,8 @@ fn emit_digest_to_string_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_digest_to_string");
 
     // -- resolve the concat-buffer destination cursor --
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // load the current concat-buffer write offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("lea r11, [r10 + r8]");                                 // compute the destination pointer for the formatted digest
     emitter.instruction("mov r8, r11");                                         // preserve the result start pointer across the write loop
     emitter.instruction("mov rcx, rdi");                                        // source = raw digest bytes
@@ -167,8 +165,8 @@ fn emit_digest_to_string_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r8");                                         // result pointer = formatted-digest start
     emitter.instruction("mov rdx, r11");                                        // copy the final destination cursor before computing the length
     emitter.instruction("sub rdx, r8");                                         // result length = bytes written
-    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "rcx");             // reload the concat-buffer write offset
     emitter.instruction("add rcx, rdx");                                        // advance it past the formatted digest
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // persist the updated concat-buffer write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");            // persist the updated concat-buffer write offset
     emitter.instruction("ret");                                                 // return the PHP string ptr/len in rax/rdx
 }

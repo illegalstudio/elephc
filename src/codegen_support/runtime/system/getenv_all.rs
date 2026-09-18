@@ -145,7 +145,7 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve the envp cursor across nested calls
     emitter.instruction("push r12");                                            // preserve the destination hash
     emitter.instruction("push r13");                                            // preserve the current entry pointer
-    emitter.instruction("push r14");                                            // preserve the name length
+    emitter.instruction("push r15");                                            // preserve the name length (r15, not r14: r14 is the reserved ctx register and this body calls the allocator)
     // No padding: rsp is 16-byte aligned here already. A call leaves it at 8 mod
     // 16 on entry, and the five pushes above bring it back to 0 — so subtracting
     // another 8 would MISALIGN every nested call rather than align it, which is
@@ -165,19 +165,19 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_getenv_all_done");
 
     // -- find the FIRST '=', which is where the name ends --
-    emitter.instruction("xor r14, r14");                                        // r14 = scan cursor and, at the end, the name length
+    emitter.instruction("xor r15, r15");                                        // r15 = scan cursor and, at the end, the name length
     emitter.label("__rt_getenv_all_scan");
-    emitter.instruction("mov cl, BYTE PTR [r13 + r14]");                        // load the next byte of the entry
+    emitter.instruction("mov cl, BYTE PTR [r13 + r15]");                        // load the next byte of the entry
     emitter.instruction("test cl, cl");                                         // no '=' before the terminator: not a variable
     emitter.instruction("jz __rt_getenv_all_skip");
     emitter.instruction("cmp cl, 61");                                          // 61 = '='
     emitter.instruction("je __rt_getenv_all_split");                            // the name ends here
-    emitter.instruction("add r14, 1");                                          // keep scanning
+    emitter.instruction("add r15, 1");                                          // keep scanning
     emitter.instruction("jmp __rt_getenv_all_scan");
 
     // -- measure the value, which runs from just past the '=' to the terminator --
     emitter.label("__rt_getenv_all_split");
-    emitter.instruction("lea r10, [r13 + r14 + 1]");                            // r10 = start of the value, one past the '='
+    emitter.instruction("lea r10, [r13 + r15 + 1]");                            // r10 = start of the value, one past the '='
     emitter.instruction("xor r11, r11");                                        // r11 = value length
     emitter.label("__rt_getenv_all_vlen");
     emitter.instruction("mov cl, BYTE PTR [r10 + r11]");                        // load the next byte of the value
@@ -199,7 +199,7 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, 1");                                           // value_tag 1 = string
     emitter.instruction("mov rdi, r12");                                        // hash to insert into
     emitter.instruction("mov rsi, r13");                                        // key_ptr = the entry, whose name is its prefix
-    emitter.instruction("mov rdx, r14");                                        // key_len = the name length, stopping at the '='
+    emitter.instruction("mov rdx, r15");                                        // key_len = the name length, stopping at the '='
     abi::emit_call_label(emitter, "__rt_hash_set");                             // hash_set persists the key itself
     emitter.instruction("mov r12, rax");                                        // the table may have been reallocated
 
@@ -209,7 +209,7 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_getenv_all_done");
     emitter.instruction("mov rax, r12");                                        // return the populated hash
-    emitter.instruction("pop r14");                                             // restore the name-length register
+    emitter.instruction("pop r15");                                             // restore the name-length register
     emitter.instruction("pop r13");                                             // restore the entry register
     emitter.instruction("pop r12");                                             // restore the hash register
     emitter.instruction("pop rbx");                                             // restore the envp cursor

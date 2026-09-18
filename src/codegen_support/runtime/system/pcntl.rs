@@ -598,13 +598,17 @@ fn emit_pcntl_async_dispatch_preserving_aarch64(emitter: &mut Emitter) {
             register * 16
         ));
     }
-    emitter.instruction("str x28, [sp, #736]");                                 // preserve the scratch base register
     emitter.instruction("str x29, [sp, #768]");                                 // preserve the caller frame pointer
     emitter.instruction("str x30, [sp, #776]");                                 // preserve the caller return address
-    emitter.instruction("add x28, sp, #512");                                   // address the general-register spill area
+    // The spill-area base is x30, NOT x28: x28 is the reserved runtime-context
+    // register in `--rt-ctx` builds, and the handlers this helper dispatches run
+    // compiled PHP code that reads per-context state through it. x30 is already
+    // parked above, the `bl` below clobbers it anyway, and the restore path
+    // re-materializes it before reloading the caller's return address.
+    emitter.instruction("add x30, sp, #512");                                   // address the general-register spill area
     for register in (0..28).step_by(2) {
         emitter.instruction(&format!(                                           // preserve one pair of general registers
-            "stp x{register}, x{}, [x28, #{}]",
+            "stp x{register}, x{}, [x30, #{}]",
             register + 1,
             register * 8
         ));
@@ -626,10 +630,10 @@ fn emit_pcntl_async_dispatch_preserving_aarch64(emitter: &mut Emitter) {
     emitter.instruction("msr fpcr, x9");                                        // restore FP control state after dispatch
     emitter.instruction("ldr x9, [sp, #760]");                                  // reload the caller's FP status state
     emitter.instruction("msr fpsr, x9");                                        // restore FP status state after dispatch
-    emitter.instruction("add x28, sp, #512");                                   // address the general-register restore area
+    emitter.instruction("add x30, sp, #512");                                   // address the general-register restore area
     for register in (0..28).step_by(2).rev() {
         emitter.instruction(&format!(                                           // restore one pair of general registers
-            "ldp x{register}, x{}, [x28, #{}]",
+            "ldp x{register}, x{}, [x30, #{}]",
             register + 1,
             register * 8
         ));
@@ -643,7 +647,6 @@ fn emit_pcntl_async_dispatch_preserving_aarch64(emitter: &mut Emitter) {
             register * 16
         ));
     }
-    emitter.instruction("ldr x28, [sp, #736]");                                 // restore the scratch base register last
     emitter.instruction("add sp, sp, #800");                                    // release the complete preserving spill
     emitter.instruction("ret");                                                 // resume the interrupted generated-code path
 }

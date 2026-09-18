@@ -148,8 +148,7 @@ fn emit_throw_dynamic_bcmath_error_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
     emitter.instruction("str xzr, [x0, #40]");                                  // previous exception defaults to null
-    abi::emit_symbol_address(emitter, "x9", "_exc_value");
-    emitter.instruction("str x0, [x9]");                                        // publish the active BCMath throwable
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the active BCMath throwable
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the caller frame before unwinding
     emitter.instruction("add sp, sp, #80");                                     // discard the dynamic-error helper frame
     emitter.instruction("b __rt_throw_current");                                // enter the standard catchable exception path

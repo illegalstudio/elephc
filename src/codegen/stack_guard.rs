@@ -80,7 +80,19 @@ pub(super) fn emit_stack_limit_check(emitter: &mut Emitter, ok_label: &str) {
     emitter.comment("call-stack overflow guard");
     match emitter.target.arch {
         Arch::AArch64 => {
-            if emitter.pic_data_refs {
+            if let Some(field) =
+                crate::codegen_support::runtime::ctx::per_context_symbol_offset(
+                    emitter,
+                    STACK_LIMIT_SYMBOL,
+                )
+            {
+                // A ctx build reads THIS context's floor. Routed here rather than through
+                // `emit_cmp_reg_to_symbol` so the sequence stays two instructions, the same
+                // length as the legacy `adrp`/`ldr` pair below: this runs in every function
+                // prologue that carries a guard.
+                crate::codegen_support::runtime::ctx::emit_ctx_load(emitter, "x9", field);
+                emitter.instruction("cmp sp, x9");                              // is the freshly reserved frame below this context's stack floor?
+            } else if emitter.pic_data_refs {
                 // PIC builds must reach the limit through the GOT; the shared helper owns
                 // that sequence and leaves the comparison flags set the same way.
                 abi::emit_cmp_reg_to_symbol(emitter, "sp", STACK_LIMIT_SYMBOL);

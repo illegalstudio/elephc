@@ -231,8 +231,8 @@ pub(super) fn lower_in_array_bool_needle_string_array_x86_64(
     ctx.emitter.instruction("mov rax, QWORD PTR [r11 + rcx]");                  // load the current string element pointer
     ctx.emitter
         .instruction("mov rdx, QWORD PTR [r11 + rcx + 8]"); // load the current string element length
-    emit_string_regs_truthiness_to_reg(ctx, "rax", "rdx", "r14");
-    ctx.emitter.instruction("cmp r14, r10");                                    // compare element truthiness against needle truthiness
+    emit_string_regs_truthiness_to_reg(ctx, "rax", "rdx", "r15");
+    ctx.emitter.instruction("cmp r15, r10");                                    // compare element truthiness against needle truthiness
     ctx.emitter.instruction(&format!("je {}", found_label));                    // stop as soon as a loosely equal string is found
     ctx.emitter.instruction("add r13, 1");                                      // advance to the next indexed string element
     ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining string payload slots

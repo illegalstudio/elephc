@@ -242,7 +242,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 128");                                        // reserve the object-projection helper frame
     emitter.instruction("mov QWORD PTR [rbp - 96], r12");                       // save the saved r12 slot across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 104], r13");                      // save the saved r13 slot across nested runtime calls
-    emitter.instruction("mov QWORD PTR [rbp - 112], r14");                      // save the saved r14 slot across nested runtime calls
+    emitter.instruction("mov QWORD PTR [rbp - 112], rbx");                      // save the saved rbx slot across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 120], r15");                      // save the saved r15 slot across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the object pointer slot across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the cast-mode slot across nested runtime calls
@@ -277,7 +277,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, r11");                                        // derive the current descriptor/property offset with `add r10, r11`
     emitter.instruction("mov r12, QWORD PTR [r10]");                            // load the current object/descriptor operand for `mov r12, QWORD PTR [r10]`
     emitter.instruction("mov r13, QWORD PTR [r10 + 8]");                        // load the current object/descriptor operand for `mov r13, QWORD PTR [r10 + 8]`
-    emitter.instruction("mov r14, QWORD PTR [r10 + 16]");                       // load the current object/descriptor operand for `mov r14, QWORD PTR [r10 + 16]`
+    emitter.instruction("mov rbx, QWORD PTR [r10 + 16]");                       // load the current object/descriptor operand for `mov rbx, QWORD PTR [r10 + 16]`
     emitter.instruction("mov r15, QWORD PTR [r10 + 24]");                       // load the current object/descriptor operand for `mov r15, QWORD PTR [r10 + 24]`
     emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // decide whether visibility filtering applies to this serialize row
     emitter.instruction("jne __rt_object_to_hash_row_ready_x");                 // casts retain every serialize-mangled declared property key
@@ -347,10 +347,10 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_object_to_hash_row_ready_x");
     emitter.instruction("mov QWORD PTR [rbp - 64], r12");                       // save the property-key pointer slot across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 72], r13");                       // save the property-key length slot across nested runtime calls
-    emitter.instruction("mov QWORD PTR [rbp - 80], r14");                       // save the property-storage offset slot across nested runtime calls
+    emitter.instruction("mov QWORD PTR [rbp - 80], rbx");                       // save the property-storage offset slot across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 88], r15");                       // save the property runtime-tag slot across nested runtime calls
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the object pointer slot for `mov r10, QWORD PTR [rbp - 8]`
-    emitter.instruction("add r10, r14");                                        // derive the current descriptor/property offset with `add r10, r14`
+    emitter.instruction("add r10, rbx");                                        // derive the current descriptor/property offset with `add r10, rbx`
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the current object/descriptor operand for `mov rdi, QWORD PTR [r10]`
     emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // load the current object/descriptor operand for `mov rsi, QWORD PTR [r10 + 8]`
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
@@ -425,7 +425,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the result-hash slot for `mov rax, QWORD PTR [rbp - 24]`
     emitter.instruction("mov r12, QWORD PTR [rbp - 96]");                       // load the saved r12 slot for `mov r12, QWORD PTR [rbp - 96]`
     emitter.instruction("mov r13, QWORD PTR [rbp - 104]");                      // load the saved r13 slot for `mov r13, QWORD PTR [rbp - 104]`
-    emitter.instruction("mov r14, QWORD PTR [rbp - 112]");                      // load the saved r14 slot for `mov r14, QWORD PTR [rbp - 112]`
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 112]");                      // load the saved rbx slot for `mov rbx, QWORD PTR [rbp - 112]`
     emitter.instruction("mov r15, QWORD PTR [rbp - 120]");                      // load the saved r15 slot for `mov r15, QWORD PTR [rbp - 120]`
     emitter.instruction("mov rsp, rbp");                                        // discard the x86_64 object-projection spill area
     emitter.instruction("pop rbp");                                             // restore the caller frame before returning

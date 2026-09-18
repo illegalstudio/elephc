@@ -53,9 +53,8 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_json_depth_enter");                            // increment _json_active_depth and throw on overflow when requested
 
     // -- get output position in concat_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // output position
     emitter.instruction("str x11, [sp, #8]");                                   // save output start
     emitter.instruction("str x11, [sp, #16]");                                  // save output write pos
@@ -97,10 +96,9 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload index
     emitter.instruction("add x4, x4, #3");                                      // skip 24-byte header (3 * 8 bytes)
     emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load element value
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x10");
     emitter.instruction("sub x12, x11, x10");                                   // compute scratch-safe concat offset from the current write position
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("str x12, [x9]");                                       // move itoa scratch after the pretty-printed prefix
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x12");
     emitter.instruction("bl __rt_itoa");                                        // convert to string → x1/x2
 
     // -- copy itoa result to output --
@@ -142,10 +140,9 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x11, x1");                                     // x2 = total length
 
     // -- update concat_off --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
     emitter.instruction("add x10, x10, x2");                                    // add result length
-    emitter.instruction("str x10, [x9]");                                       // store updated offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat offset (ctx-relative in ctx mode)
 
     // -- tear down and return --
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
@@ -177,8 +174,8 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     // Enter the recursion-depth check.
     emitter.instruction("call __rt_json_depth_enter");                          // increment _json_active_depth and throw on overflow when requested
 
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before appending the JSON array
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base pointer for the current JSON append
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");             // load the current concat-buffer absolute offset before appending the JSON array
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");                    // materialize the concat-buffer base pointer for the current JSON append
     emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the encoded-array start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the current concat-buffer write pointer for the element loop
@@ -210,10 +207,10 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current integer-array element index before computing the payload slot address
     emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first integer payload slot
     emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the integer element payload from the indexed-array storage slot
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base before positioning itoa scratch
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");                    // materialize the concat-buffer base before positioning itoa scratch
     emitter.instruction("mov rcx, r11");                                        // copy the current write pointer for the concat-offset calculation
     emitter.instruction("sub rcx, r10");                                        // compute scratch-safe concat offset from the current write position
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // move itoa scratch after the pretty-printed prefix
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");            // move itoa scratch after the pretty-printed prefix
     emitter.instruction("call __rt_itoa");                                      // encode the integer element as a decimal JSON slice
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before copying the encoded integer bytes
     emitter.instruction("xor rcx, rcx");                                        // initialize the encoded-integer copy index to the beginning of the returned decimal slice
@@ -247,10 +244,10 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the encoded-array start pointer in the leading x86_64 string result register
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer write pointer before turning it into a slice length
     emitter.instruction("sub rdx, rax");                                        // compute the final encoded-array length from write_end - write_start
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base pointer for the global offset update
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");                    // materialize the concat-buffer base pointer for the global offset update
     emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON array
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated concat-buffer offset so later writers append after this JSON array
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");            // publish the updated concat-buffer offset so later writers append after this JSON array
     emitter.instruction("add rsp, 48");                                         // release the local JSON-array scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return the encoded JSON integer array slice in the x86_64 string result registers

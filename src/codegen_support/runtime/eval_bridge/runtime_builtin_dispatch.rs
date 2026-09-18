@@ -85,14 +85,14 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve the typed runtime builtin ID
     emitter.instruction("push r12");                                            // preserve the borrowed argument-pointer array
     emitter.instruction("push r13");                                            // preserve the boxed argument count
-    emitter.instruction("push r14");                                            // preserve the caller-owned result-out slot and call alignment
+    emitter.instruction("push r15");                                            // preserve the caller-owned result-out slot and call alignment
     emitter.instruction("mov ebx, edi");                                        // retain the typed runtime builtin ID
     emitter.instruction("mov r12, rsi");                                        // retain the borrowed argument-pointer array
     emitter.instruction("mov r13, rdx");                                        // retain the boxed argument count
-    emitter.instruction("mov r14, r8");                                         // retain the caller-owned result-out slot
-    emitter.instruction("test r14, r14");                                       // validate the result ownership slot
+    emitter.instruction("mov r15, r8");                                         // retain the caller-owned result-out slot
+    emitter.instruction("test r15, r15");                                       // validate the result ownership slot
     emitter.instruction("jz __elephc_runtime_builtin_v1_fatal_x86");            // reject a missing result-out pointer
-    emitter.instruction("mov QWORD PTR [r14], 0");                              // clear result-out before fallible dispatch
+    emitter.instruction("mov QWORD PTR [r15], 0");                              // clear result-out before fallible dispatch
     emitter.instruction("test r13, r13");                                       // zero-arity calls need no argument array
     emitter.instruction("jz __elephc_runtime_builtin_v1_dispatch_x86");         // proceed directly for zero-argument helpers
     emitter.instruction("test r12, r12");                                       // non-empty calls require a readable pointer array
@@ -130,7 +130,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_result_x86");
     emitter.instruction("test rax, rax");                                       // null helper results report runtime failure
     emitter.instruction("jz __elephc_runtime_builtin_v1_fatal_x86");            // keep result-out null on failure
-    emitter.instruction("mov QWORD PTR [r14], rax");                            // transfer the fresh boxed result to the caller
+    emitter.instruction("mov QWORD PTR [r15], rax");                            // transfer the fresh boxed result to the caller
     emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::Success as i32)); // report Success through the versioned status contract
     emitter.instruction("jmp __elephc_runtime_builtin_v1_done_x86");            // return success after ownership transfer
     emitter.label("__elephc_runtime_builtin_v1_fatal_x86");
@@ -139,7 +139,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_unsupported_x86");
     emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::Unsupported as i32)); // report Unsupported for unknown IDs and arities
     emitter.label("__elephc_runtime_builtin_v1_done_x86");
-    emitter.instruction("pop r14");                                             // restore the caller-owned result-out register
+    emitter.instruction("pop r15");                                             // restore the caller-owned result-out register
     emitter.instruction("pop r13");                                             // restore the boxed argument count register
     emitter.instruction("pop r12");                                             // restore the borrowed argument-array register
     emitter.instruction("pop rbx");                                             // restore the typed runtime builtin ID register

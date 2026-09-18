@@ -316,7 +316,12 @@ fn spill_cost(weight: u32, end: u32) -> (u32, std::cmp::Reverse<u32>) {
 /// frame pointer, scratch registers, and registers the emitters use inline.
 fn callee_int_pool(target: Target) -> &'static [&'static str] {
     match target.arch {
-        Arch::AArch64 => &["x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28"],
+        // x28 is the reserved runtime-context register (see
+        // `codegen_support::runtime::ctx`): in ctx-register mode it carries the
+        // per-context state pointer, and a value-allocated write would silently
+        // corrupt every later heap/concat access. It stays out of the pool in
+        // both modes so ctx and legacy builds share one register discipline.
+        Arch::AArch64 => &["x21", "x22", "x23", "x24", "x25", "x26", "x27"],
         // Only rbx is reliably preserved across the hand-written x86_64 runtime
         // routines and shared heap-marker codegen; r14/r15 are used there as
         // scratch without ABI-compliant save/restore, so they are not allocated.

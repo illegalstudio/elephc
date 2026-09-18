@@ -10,7 +10,6 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
 
 /// Emits `__rt_strrev` which reverses a PHP byte-string into the concat buffer.
 ///
@@ -30,9 +29,8 @@ pub fn emit_strrev(emitter: &mut Emitter) {
     emitter.label_global("__rt_strrev");
 
     // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // compute destination pointer
     emitter.instruction("mov x10, x9");                                         // save destination start for return value
     emitter.instruction("add x11, x1, x2");                                     // x11 = pointer to end of source string
@@ -50,7 +48,7 @@ pub fn emit_strrev(emitter: &mut Emitter) {
     // -- update concat_off and return --
     emitter.label("__rt_strrev_done");
     emitter.instruction("add x8, x8, x2");                                      // advance offset by string length
-    emitter.instruction("str x8, [x6]");                                        // store updated offset to _concat_off
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x8"); // publish the updated concat offset (ctx-relative in ctx mode)
     emitter.instruction("mov x1, x10");                                         // return pointer to reversed string
     // x2 unchanged
     emitter.instruction("ret");                                                 // return to caller
@@ -65,9 +63,8 @@ fn emit_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strrev ---");
     emitter.label_global("__rt_strrev");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before emitting the reversed string
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("lea r11, [r10 + r9]");                                 // compute the concat-buffer destination pointer where the reversed string begins
     emitter.instruction("mov rcx, rdx");                                        // copy the source string length into the remaining-byte counter for the reverse-copy loop
     emitter.instruction("mov rsi, rdx");                                        // preserve the original source-string length so the final result length survives the byte-copy scratch register
@@ -86,7 +83,7 @@ fn emit_strrev_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_strrev_done_linux_x86_64");
     emitter.instruction("add r9, rsi");                                         // advance the concat-buffer write offset by the reversed-string length
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated concat-buffer write offset after emitting the reversed string
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");             // publish the updated concat-buffer write offset after emitting the reversed string
     emitter.instruction("mov rax, r10");                                        // return the reversed-string start pointer in the primary x86_64 string result register
     emitter.instruction("mov rdx, rsi");                                        // restore the original source-string length into the x86_64 string result-length register
     emitter.instruction("ret");                                                 // return the reversed concat-backed string in the standard x86_64 string result registers

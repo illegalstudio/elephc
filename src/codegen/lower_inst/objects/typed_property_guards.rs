@@ -112,8 +112,7 @@ pub(super) fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
-            abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");             // materialize the active exception cell
-            ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
+            abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);  // publish the active exception object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
         }
         Arch::X86_64 => {

@@ -31,6 +31,10 @@ struct ScalarBoundaryLayout {
     param_offsets: Vec<Vec<usize>>,
     result_offset: Option<usize>,
     concat_offset: usize,
+    /// Slot holding the HOST's ctx register across the call. The ctx register
+    /// is callee-saved, so an export that publishes elephc's pointer into it
+    /// must give the host's value back on every return path.
+    saved_ctx_offset: usize,
     handler_base: usize,
     frame_size: usize,
 }
@@ -118,12 +122,15 @@ fn scalar_boundary_layout(export: &ExportedFunction) -> ScalarBoundaryLayout {
     };
     offset += 8;
     let concat_offset = offset;
+    offset += 8;
+    let saved_ctx_offset = offset;
     let handler_base = align_16(offset + TRY_HANDLER_SLOT_SIZE);
     let frame_size = align_16(handler_base + 16);
     ScalarBoundaryLayout {
         param_offsets,
         result_offset,
         concat_offset,
+        saved_ctx_offset,
         handler_base,
         frame_size,
     }
@@ -282,16 +289,12 @@ pub(super) fn emit_enter_boundary(emitter: &mut Emitter, concat_offset: usize, s
             emitter.instruction(&format!("cbnz x9, {nested}"));                 // isolate concat scratch only for a nested host entry
             emitter.instruction("mov x10, #0");                                 // outer entries restore an empty concat arena on return
             abi::store_at_offset(emitter, "x10", concat_offset);
-            emit_store_immediate_to_symbol(emitter, "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
             emitter.instruction(&format!("b {configured}"));                    // join nested and outer concat setup
             emitter.label(&nested);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
             abi::store_at_offset(emitter, "x10", concat_offset);
-            emit_store_immediate_to_symbol(
-                emitter,
-                "_concat_off",
-                CONCAT_SCRATCH_CAPACITY,
-            );
+            crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, CONCAT_SCRATCH_CAPACITY);
             emitter.label(&configured);
             abi::emit_load_symbol_to_reg(emitter, "x9", BOUNDARY_ACTIVE, 0);
             emitter.instruction("add x9, x9, #1");                              // increment the re-entrant boundary depth
@@ -303,16 +306,12 @@ pub(super) fn emit_enter_boundary(emitter: &mut Emitter, concat_offset: usize, s
             emitter.instruction(&format!("jnz {nested}"));                      // isolate concat scratch only for a nested host entry
             emitter.instruction("xor r11d, r11d");                              // outer entries restore an empty concat arena on return
             abi::store_at_offset(emitter, "r11", concat_offset);
-            emit_store_immediate_to_symbol(emitter, "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
             emitter.instruction(&format!("jmp {configured}"));                  // join nested and outer concat setup
             emitter.label(&nested);
-            abi::emit_load_symbol_to_reg(emitter, "r11", "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r11");
             abi::store_at_offset(emitter, "r11", concat_offset);
-            emit_store_immediate_to_symbol(
-                emitter,
-                "_concat_off",
-                CONCAT_SCRATCH_CAPACITY,
-            );
+            crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, CONCAT_SCRATCH_CAPACITY);
             emitter.label(&configured);
             abi::emit_load_symbol_to_reg(emitter, "r10", BOUNDARY_ACTIVE, 0);
             emitter.instruction("add r10, 1");                                  // increment the re-entrant boundary depth
@@ -329,14 +328,14 @@ pub(super) fn emit_leave_boundary(emitter: &mut Emitter, concat_offset: usize) {
             emitter.instruction("sub x9, x9, #1");                              // leave exactly one nested host boundary
             abi::emit_store_reg_to_symbol(emitter, "x9", BOUNDARY_ACTIVE, 0);
             abi::load_at_offset(emitter, "x10", concat_offset);
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10");
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(emitter, "r10", BOUNDARY_ACTIVE, 0);
             emitter.instruction("sub r10, 1");                                  // leave exactly one nested host boundary
             abi::emit_store_reg_to_symbol(emitter, "r10", BOUNDARY_ACTIVE, 0);
             abi::load_at_offset(emitter, "r11", concat_offset);
-            abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);
+            crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r11");
         }
     }
 }
@@ -395,8 +394,14 @@ fn emit_zero_scalar_result(emitter: &mut Emitter, return_type: &PhpType) {
 }
 
 /// Restores the native wrapper frame and returns to the host.
-fn emit_scalar_native_return(emitter: &mut Emitter, frame_size: usize) {
-    abi::emit_frame_restore(emitter, frame_size);
+fn emit_scalar_native_return(emitter: &mut Emitter, layout: &ScalarBoundaryLayout) {
+    // The ctx register is callee-saved: hand the host back its own value on
+    // every return path, including the error and exception returns.
+    crate::codegen_support::runtime::ctx::emit_ctx_restore_foreign(
+        emitter,
+        layout.saved_ctx_offset,
+    );
+    abi::emit_frame_restore(emitter, layout.frame_size);
     abi::emit_return(emitter);
 }
 
@@ -418,6 +423,15 @@ fn emit_scalar_export_aarch64(
     runtime_error: (&str, usize),
 ) {
     abi::emit_frame_prologue(emitter, layout.frame_size);
+    // Foreign-entry publish (spike review, B2): the host calls this export with
+    // its own callee-saved ctx register (pointing at HOST data, not zero), so
+    // the per-context pointer must be re-published before any compiled PHP code
+    // can run. Publish-only: never reset allocator state here.
+    crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(
+        emitter,
+        layout.saved_ctx_offset,
+    );
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
     emit_save_scalar_c_inputs(emitter, export, layout);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,
@@ -434,7 +448,7 @@ fn emit_scalar_export_aarch64(
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
     emit_load_scalar_result(emitter, &export.sig.return_type, layout.result_offset);
-    emit_scalar_native_return(emitter, layout.frame_size);
+    emit_scalar_native_return(emitter, layout);
 
     emitter.label(escaped);
     emit_boundary_pop_aarch64(emitter, layout.handler_base);
@@ -456,27 +470,27 @@ fn emit_scalar_export_aarch64(
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_PHP_EXCEPTION as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
     emit_zero_scalar_result(emitter, &export.sig.return_type);
-    emit_scalar_native_return(emitter, layout.frame_size);
+    emit_scalar_native_return(emitter, layout);
 
     emitter.label(allocation);
     emit_set_static_error_aarch64(emitter, allocation_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_ALLOCATION_FAILURE as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
     emit_zero_scalar_result(emitter, &export.sig.return_type);
-    emit_scalar_native_return(emitter, layout.frame_size);
+    emit_scalar_native_return(emitter, layout);
 
     emitter.label(runtime);
     emit_set_static_error_aarch64(emitter, runtime_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_RUNTIME_FAILURE as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
     emit_zero_scalar_result(emitter, &export.sig.return_type);
-    emit_scalar_native_return(emitter, layout.frame_size);
+    emit_scalar_native_return(emitter, layout);
 
     emitter.label(invalid);
     emit_set_static_error_aarch64(emitter, invalid_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_INVALID_ARGUMENT as i64);
     emit_zero_scalar_result(emitter, &export.sig.return_type);
-    emit_scalar_native_return(emitter, layout.frame_size);
+    emit_scalar_native_return(emitter, layout);
 }
 
 /// Emits the x86_64 System V recoverable wrapper for one scalar export.
@@ -497,6 +511,14 @@ fn emit_scalar_export_x86_64(
     runtime_error: (&str, usize),
 ) {
     abi::emit_frame_prologue(emitter, layout.frame_size);
+    // Foreign-entry publish (spike review, B2): re-establish the per-context
+    // state pointer before compiled PHP code runs; the host's r14 is foreign.
+    // Publish-only: never reset allocator state here.
+    crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(
+        emitter,
+        layout.saved_ctx_offset,
+    );
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
     emit_save_scalar_c_inputs(emitter, export, layout);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,
@@ -513,7 +535,7 @@ fn emit_scalar_export_x86_64(
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
     emit_load_scalar_result(emitter, &export.sig.return_type, layout.result_offset);
-    emit_scalar_native_return(emitter, layout.frame_size);
+    emit_scalar_native_return(emitter, layout);
 
     emitter.label(escaped);
     emit_boundary_pop_x86_64(emitter, layout.handler_base);
@@ -537,25 +559,25 @@ fn emit_scalar_export_x86_64(
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_PHP_EXCEPTION as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
     emit_zero_scalar_result(emitter, &export.sig.return_type);
-    emit_scalar_native_return(emitter, layout.frame_size);
+    emit_scalar_native_return(emitter, layout);
 
     emitter.label(allocation);
     emit_set_static_error_x86_64(emitter, allocation_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_ALLOCATION_FAILURE as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
     emit_zero_scalar_result(emitter, &export.sig.return_type);
-    emit_scalar_native_return(emitter, layout.frame_size);
+    emit_scalar_native_return(emitter, layout);
 
     emitter.label(runtime);
     emit_set_static_error_x86_64(emitter, runtime_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_RUNTIME_FAILURE as i64);
     emit_leave_boundary(emitter, layout.concat_offset);
     emit_zero_scalar_result(emitter, &export.sig.return_type);
-    emit_scalar_native_return(emitter, layout.frame_size);
+    emit_scalar_native_return(emitter, layout);
 
     emitter.label(invalid);
     emit_set_static_error_x86_64(emitter, invalid_error);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_INVALID_ARGUMENT as i64);
     emit_zero_scalar_result(emitter, &export.sig.return_type);
-    emit_scalar_native_return(emitter, layout.frame_size);
+    emit_scalar_native_return(emitter, layout);
 }
