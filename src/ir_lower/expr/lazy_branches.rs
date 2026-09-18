@@ -81,11 +81,22 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
     // that can be in that state is read the way `isset()` reads it. Every other property keeps
     // the ordinary path and its exact slot type.
     if let ExprKind::PropertyAccess { object, property } = &value.kind {
+        // The left operand of `??` is one of php's silent probes, exactly like `isset()`: a name
+        // this scope may not reach answers the DEFAULT rather than raising, and a name that was
+        // never created answers it without an `Undefined property` warning. A receiver whose
+        // class is only known at run time needs the runtime-name form to carry that mode.
+        let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
         let object = lower_expr(ctx, object);
         if property_can_be_uninitialized(ctx, object.value, property) {
             return lower_initialized_property_value(ctx, object, property, value);
         }
+        if needs_probe {
+            return lower_property_probe_from_value(ctx, object, property, value);
+        }
         return lower_property_get_from_value(ctx, object, property, Op::PropGet, value);
+    }
+    if let ExprKind::DynamicPropertyAccess { object, property } = &value.kind {
+        return lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, value);
     }
     // A typed STATIC property starts uninitialized the same way, and its guard lives in the
     // backend rather than in an operation the lowering could branch on — so `??` needs its own

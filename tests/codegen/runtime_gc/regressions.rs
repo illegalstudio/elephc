@@ -888,16 +888,10 @@ echo count($x->a);
     );
 }
 
-/// Regression test: overwriting a static array must release the payloads appended
-/// to the old array. The scalar is boxed into Mixed and retained by
-/// `__rt_array_push_refcounted`; only the replacement static array should remain
-/// live at exit. Asserts exactly one live block (the current static array).
+/// Overwriting a static array releases appended scalar boxes, and shutdown releases its replacement.
 #[test]
 fn test_regression_static_property_array_push_scalar_releases_old_payload() {
-    // Static storage itself is process-lifetime state, but an overwritten
-    // static array must release the payloads appended to the old array. The
-    // scalar is boxed into Mixed and then retained by `__rt_array_push_refcounted`;
-    // only the replacement static array should remain live at exit.
+    // The append retains its Mixed scalar; overwrite and shutdown must retire both arrays.
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class C { public static array $a; }
@@ -910,24 +904,16 @@ echo count(C::$a);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "0");
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
-        "expected only the current static array to remain live, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected overwritten and final static arrays to be released, got: {}",
         out.stderr
     );
 }
 
-/// Regression test: pushing an owned array literal into a Mixed-element static
-/// property array needs both the container-aware boxer and the post-push release.
-/// After the static property is overwritten the old array and appended literal
-/// should be gone; only the replacement static array remains live. Asserts exactly
-/// one live block.
+/// Overwriting a static array releases nested literal owners, and shutdown releases its replacement.
 #[test]
 fn test_regression_static_property_array_push_array_value_releases_old_payload() {
-    // Pushing an owned array literal into a Mixed-element static property array
-    // needs both the container-aware boxer and the post-push release. After the
-    // static property is overwritten, the old array and appended literal should
-    // be gone; only the replacement static array remains live by design.
+    // The container-aware boxer and post-push release must balance the nested literal's owner.
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class C { public static array $a; }
@@ -940,21 +926,13 @@ echo count(C::$a);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "0");
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
-        "expected only the current static array to remain live, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected nested and replacement static arrays to be released, got: {}",
         out.stderr
     );
 }
 
-/// Regression test: overwriting a Mixed/nullable-object static property with a
-/// freshly-constructed object must release the previous object's boxed owner. A
-/// non-Mixed value assigned to a Mixed slot is boxed with `__rt_mixed_from_value`,
-/// which takes its own retained reference to the object; the owning `new C()`
-/// temporary is a separate reference that must be released after the store, or
-/// each overwrite leaks one object. Twenty iterations must stay bounded — only the
-/// final boxed value remains live in the process-lifetime static slot (one block),
-/// never a per-iteration accumulation of twenty.
+/// Repeated nullable-object static stores balance object temporaries, replaced boxes, and shutdown.
 #[test]
 fn test_regression_static_property_object_overwrite_releases_old_object() {
     let out = compile_and_run_with_heap_debug(
@@ -971,14 +949,13 @@ echo "done";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
-        "expected only the final boxed static value to remain live (bounded), got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected all overwritten objects and the final static box to be released, got: {}",
         out.stderr
     );
 }
 
-/// Verifies repeated Mixed-to-object static stores retain only the current object.
+/// Repeated Mixed-to-object static stores retain only the current object until shutdown releases it.
 ///
 /// The untyped setter receives a boxed Mixed argument, while inference gives the
 /// static property a concrete object slot. Each store must retain the unboxed
@@ -1005,9 +982,8 @@ echo "done";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
-        "expected only the current static object to remain live, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the final static object and every replaced owner to be released, got: {}",
         out.stderr
     );
 }

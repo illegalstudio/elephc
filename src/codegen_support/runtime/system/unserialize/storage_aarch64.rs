@@ -99,7 +99,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.label("__rt_hash_to_indexed_array_loop");
     emitter.instruction("mov x0, x19");                                         // hash pointer
     emitter.instruction("mov x1, x21");                                         // resume cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // x3=value low, x5=value tag, x0=next cursor
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // x3=value low, x5=value tag, x0=next cursor
     emitter.instruction("cmn x0, #1");                                          // cursor == -1 (iteration done)?
     emitter.instruction("b.eq __rt_hash_to_indexed_array_done");                // stop when exhausted
     emitter.instruction("mov x21, x0");                                         // save the resume cursor

@@ -146,7 +146,7 @@ pub fn emit_array_merge_recursive(emitter: &mut Emitter) {
     emitter.label("__rt_amr_entry_loop");
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the current source pointer
     emitter.instruction("ldr x1, [sp, #40]");                                   // reload the iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // next entry: x0=cursor,x1=kptr,x2=klen,x3=vlo,x4=vhi,x5=vtag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // next entry: x0=cursor,x1=kptr,x2=klen,x3=vlo,x4=vhi,x5=vtag
     emitter.instruction("cmn x0, #1");                                          // has iteration reached the end?
     emitter.instruction("b.eq __rt_amr_next_which");                            // advance to the next source when done
     emitter.instruction("str x0, [sp, #40]");                                   // save the next iterator cursor
@@ -321,7 +321,7 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_amr_entry_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the current source pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // reload the iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // next entry: rax=cursor,rdi=kptr,rdx=klen,rcx=vlo,r8=vhi,r9=vtag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // next entry: rax=cursor,rdi=kptr,rdx=klen,rcx=vlo,r8=vhi,r9=vtag
     emitter.instruction("cmp rax, -1");                                         // has iteration reached the end?
     emitter.instruction("je __rt_amr_next_which");                              // advance to the next source when done
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the next iterator cursor

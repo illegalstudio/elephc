@@ -23,9 +23,13 @@ env:
 
 jobs:
   pdo-core:
-    name: PDO core live suites (PostgreSQL 16 + MySQL 8.4)
+    name: PDO core live suite (${{ matrix.suite }})
     runs-on: ubuntu-24.04
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [native-postgres, libpq-postgres, mysql]
     services:
       postgres:
         image: postgres:16
@@ -76,8 +80,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             target
-          key: rust-pdo-live-core-${{ hashFiles('Cargo.lock') }}
+          key: rust-pdo-live-core-${{ matrix.suite }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
+            rust-pdo-live-core-${{ matrix.suite }}-
             rust-pdo-live-core-
             rust-pdo-live-
 
@@ -187,40 +192,64 @@ jobs:
           exit 1
 
       - name: Build the native PDO bridge staticlib
+        if: matrix.suite == 'native-postgres'
         run: cargo build -p elephc-pdo
 
       - name: Live native bridge tests
+        if: matrix.suite == 'native-postgres'
         run: cargo test -p elephc-pdo -- --ignored
 
       - name: Live native PostgreSQL codegen tests
+        if: matrix.suite == 'native-postgres'
         run: cargo test --test codegen_tests -- --ignored pgsql --test-threads=4
 
       - name: Build the libpq PDO bridge staticlib
+        if: matrix.suite == 'libpq-postgres'
         run: cargo build -p elephc-pdo --features mysql-tls,libpq-gss
 
       - name: Libpq bridge unit tests
+        if: matrix.suite == 'libpq-postgres'
         run: cargo test -p elephc-pdo --features mysql-tls,libpq-gss --lib
 
       - name: Live libpq bridge tests
+        if: matrix.suite == 'libpq-postgres'
         run: cargo test -p elephc-pdo --features mysql-tls,libpq-gss -- --ignored
 
       - name: Live libpq PostgreSQL codegen tests
+        if: matrix.suite == 'libpq-postgres'
         env:
           ELEPHC_PDO_LIBPQ: '1'
         run: cargo test --features pdo-libpq-gss --test codegen_tests -- --ignored pgsql --test-threads=4
 
       - name: Live libpq GSSAPI handshake
+        if: matrix.suite == 'libpq-postgres'
         run: ./scripts/test-pdo-gss.sh
 
       - name: Live MySQL codegen tests
+        if: matrix.suite == 'mysql'
         env:
           ELEPHC_PDO_LIBPQ: '1'
         run: cargo test --features pdo-libpq-gss --test codegen_tests -- --ignored mysql --test-threads=4
 
+  pdo-core-gate:
+    name: PDO core live suites (PostgreSQL 16 + MySQL 8.4)
+    if: always()
+    needs: pdo-core
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm every core PDO suite passed
+        env:
+          MATRIX_RESULT: ${{ needs.pdo-core.result }}
+        run: test "$MATRIX_RESULT" = success
+
   pdo-drivers:
-    name: PDO optional-driver live suites
+    name: PDO optional-driver suite (${{ matrix.suite }})
     runs-on: ubuntu-24.04
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [sqlsrv-oci, cubrid-dblib, firebird-odbc, informix-ibm]
     services:
       postgres:
         image: postgres:16
@@ -302,6 +331,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Oracle Instant Client 23.26 Basic Light
+        if: matrix.suite == 'sqlsrv-oci'
         shell: bash
         run: |
           sudo apt-get update
@@ -329,8 +359,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             target
-          key: rust-pdo-live-drivers-${{ hashFiles('Cargo.lock') }}
+          key: rust-pdo-live-drivers-${{ matrix.suite }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
+            rust-pdo-live-drivers-${{ matrix.suite }}-
             rust-pdo-live-drivers-
             rust-pdo-live-
 
@@ -354,6 +385,7 @@ jobs:
             zlib1g-dev
 
       - name: Install Microsoft ODBC Driver 18 for SQL Server
+        if: matrix.suite == 'sqlsrv-oci'
         shell: bash
         run: |
           curl -fsSLo "$RUNNER_TEMP/packages-microsoft-prod.deb" https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
@@ -362,131 +394,175 @@ jobs:
           sudo env ACCEPT_EULA=Y DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
 
       - name: Build the PDO_SQLSRV 5.13.1 profile
+        if: matrix.suite == 'sqlsrv-oci'
         run: cargo build -p elephc-pdo --features sqlsrv
 
       - name: PDO_SQLSRV bridge unit tests
+        if: matrix.suite == 'sqlsrv-oci'
         run: 'cargo test -p elephc-pdo --features sqlsrv odbc::tests:: -- --skip live_odbc_round_trip --skip live_sqlsrv_round_trip'
 
       - name: Live PDO_SQLSRV bridge test
+        if: matrix.suite == 'sqlsrv-oci'
         run: 'cargo test -p elephc-pdo --features sqlsrv odbc::tests::live_sqlsrv_round_trip -- --ignored --test-threads=1'
 
       - name: Live PDO_SQLSRV codegen tests
+        if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_SQLSRV: '1'
         run: cargo test --features pdo-sqlsrv --test codegen_tests -- --ignored pdo_sqlsrv --test-threads=1
 
       - name: PDO_SQLSRV compiled surface tests
+        if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_SQLSRV: '1'
         run: cargo test --features pdo-sqlsrv --test codegen_tests pdo_sqlsrv -- --test-threads=1
 
       - name: Build the PDO_OCI bridge staticlib
+        if: matrix.suite == 'sqlsrv-oci'
         run: cargo build -p elephc-pdo --features oci
 
       - name: PDO_OCI bridge unit tests
+        if: matrix.suite == 'sqlsrv-oci'
         run: 'cargo test -p elephc-pdo --features oci oci::tests:: -- --skip live_oci_round_trip'
 
       - name: Live PDO_OCI bridge test
+        if: matrix.suite == 'sqlsrv-oci'
         run: 'cargo test -p elephc-pdo --features oci oci::tests::live_oci_round_trip -- --ignored --test-threads=1'
 
       - name: Live PDO_OCI codegen tests
+        if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_OCI: '1'
         run: cargo test --features pdo-oci --test codegen_tests -- --ignored pdo_oci --test-threads=1
 
       - name: PDO_OCI compiled surface tests
+        if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_OCI: '1'
         run: cargo test --features pdo-oci --test codegen_tests pdo_oci_surface -- --test-threads=1
 
       - name: Install the CUBRID CCI client from the service image
+        if: matrix.suite == 'cubrid-dblib'
         run: |
           docker cp '${{ job.services.cubrid.id }}:/home/cubrid/CUBRID/cci/lib/libcascci.so.11.2' "$RUNNER_TEMP/libcascci.so.11.2"
           ln -s libcascci.so.11.2 "$RUNNER_TEMP/libcascci.so"
 
       - name: PDO_CUBRID bridge unit tests
+        if: matrix.suite == 'cubrid-dblib'
         run: 'cargo test -p elephc-pdo --features cubrid cubrid::tests::'
 
       - name: PDO_CUBRID compiled surface tests
+        if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_CUBRID: '1'
         run: cargo test --features pdo-cubrid --test codegen_tests pdo_cubrid_surface -- --test-threads=1
 
       - name: Live PDO_CUBRID codegen test
+        if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_CUBRID: '1'
           CUBRID_CCI_LIBRARY: '${{ runner.temp }}/libcascci.so.11.2'
         run: cargo test --features pdo-cubrid --test codegen_tests -- --ignored pdo_cubrid --test-threads=1
 
       - name: Build the PDO_DBLIB bridge staticlib
+        if: matrix.suite == 'cubrid-dblib'
         run: cargo build -p elephc-pdo --features dblib
 
       - name: Live PDO_DBLIB bridge tests
+        if: matrix.suite == 'cubrid-dblib'
         run: 'cargo test -p elephc-pdo --features dblib dblib::tests:: -- --ignored --test-threads=1'
 
       - name: Live PDO_DBLIB codegen tests
+        if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_DBLIB: '1'
         run: cargo test --features pdo-dblib --test codegen_tests -- --ignored pdo_dblib --test-threads=1
 
       - name: PDO_DBLIB compiled surface tests
+        if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_DBLIB: '1'
         run: cargo test --features pdo-dblib --test codegen_tests pdo_dblib_surface -- --test-threads=1
 
       - name: Build the PDO_FIREBIRD bridge staticlib
+        if: matrix.suite == 'firebird-odbc'
         run: cargo build -p elephc-pdo --features firebird
 
       - name: Live PDO_FIREBIRD bridge tests
+        if: matrix.suite == 'firebird-odbc'
         run: 'cargo test -p elephc-pdo --features firebird firebird::tests:: -- --ignored --test-threads=1'
 
       - name: Live PDO_FIREBIRD codegen tests
+        if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_FIREBIRD: '1'
         run: cargo test --features pdo-firebird --test codegen_tests -- --ignored pdo_firebird --test-threads=1
 
       - name: PDO_FIREBIRD compiled surface tests
+        if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_FIREBIRD: '1'
         run: cargo test --features pdo-firebird --test codegen_tests pdo_firebird_surface -- --test-threads=1
 
       - name: Build the PDO_ODBC bridge staticlib
+        if: matrix.suite == 'firebird-odbc'
         run: cargo build -p elephc-pdo --features odbc
 
       - name: PDO_ODBC bridge unit tests
+        if: matrix.suite == 'firebird-odbc'
         run: 'cargo test -p elephc-pdo --features odbc odbc::tests::'
 
       - name: Live PDO_ODBC bridge test
+        if: matrix.suite == 'firebird-odbc'
         run: 'cargo test -p elephc-pdo --features odbc odbc::tests::live_odbc_round_trip -- --ignored --test-threads=1'
 
       - name: Live PDO_ODBC codegen tests
+        if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_ODBC: '1'
         run: cargo test --features pdo-odbc --test codegen_tests -- --ignored pdo_odbc --test-threads=1
 
       - name: PDO_ODBC compiled surface tests
+        if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_ODBC: '1'
         run: cargo test --features pdo-odbc --test codegen_tests pdo_odbc_surface -- --test-threads=1
 
       - name: Build the PDO_INFORMIX Client SDK profile
+        if: matrix.suite == 'informix-ibm'
         run: cargo build -p elephc-pdo --features informix
 
       - name: PDO_INFORMIX bridge unit tests
+        if: matrix.suite == 'informix-ibm'
         run: 'cargo test -p elephc-pdo --features informix odbc::tests::'
 
       - name: PDO_INFORMIX compiled surface tests
+        if: matrix.suite == 'informix-ibm'
         env:
           ELEPHC_PDO_INFORMIX: '1'
         run: cargo test --features pdo-informix --test codegen_tests pdo_informix -- --test-threads=1
 
       - name: Build the PDO_IBM 1.7.0 CLI profile
+        if: matrix.suite == 'informix-ibm'
         run: cargo build -p elephc-pdo --features ibm
 
       - name: PDO_IBM bridge unit tests
+        if: matrix.suite == 'informix-ibm'
         run: 'cargo test -p elephc-pdo --features ibm odbc::tests::'
 
       - name: PDO_IBM compiled surface tests
+        if: matrix.suite == 'informix-ibm'
         env:
           ELEPHC_PDO_IBM: '1'
         run: cargo test --features pdo-ibm --test codegen_tests pdo_ibm -- --test-threads=1
+
+  pdo-drivers-gate:
+    name: PDO optional-driver live suites
+    if: always()
+    needs: pdo-drivers
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm every optional PDO suite passed
+        env:
+          MATRIX_RESULT: ${{ needs.pdo-drivers.result }}
+        run: test "$MATRIX_RESULT" = success

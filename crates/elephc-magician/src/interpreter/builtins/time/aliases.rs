@@ -36,11 +36,18 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if eval_date_alias_key(name).is_none() {
+    let Some(name) = eval_date_alias_key(name) else {
         return Ok(None);
-    }
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    eval_date_procedural_alias_with_evaluated_args(name, evaluated_args, context, values)
+    };
+    with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+        if eval_date_alias_should_fall_back_to_builtin(&name, &arguments) {
+            // Named mktime/gmmktime calls keep their already evaluated operands at fallback.
+            eval_bound_builtin_call(&name, arguments, context, values)
+        } else {
+            eval_date_procedural_alias_with_evaluated_args(&name, arguments, context, values)?
+                .ok_or(EvalStatus::UnsupportedConstruct)
+        }
+    }).map(Some)
 }
 
 /// Attempts to execute one procedural date/time alias from positional runtime values.

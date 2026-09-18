@@ -41,6 +41,19 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 // (`$x = &f()` aliases it). The pointer is a single machine word regardless of
                 // the aliased element type, so place it in the integer result register rather
                 // than splitting a `Str`/`Float` declared return across the string/float regs.
+                // The returned value is the `Pointer` SSA result `acquire_ref_cell` published:
+                // the exact address it selected and validated, read back here as a SNAPSHOT.
+                // Loading it, instead of rematerializing the returned variable's CURRENT cell,
+                // is what keeps the acquisition and the returned reference identical when a
+                // fallthrough `finally` rebound that variable in between (PHP snapshots the
+                // same way, with `MAKE_REF` before the finally). The frame's lease slot is the
+                // separate managed OWNER, which a superseding return replaces and cleanup
+                // retires; a borrowed cell leaves it zero while still returning this snapshot.
+                if !matches!(ctx.value_php_type(*value)?, PhpType::Pointer(_)) {
+                    return Err(CodegenIrError::invalid_module(
+                        "by-reference return requires a captured pointer value",
+                    ));
+                }
                 let int_reg = abi::int_result_reg(ctx.emitter);
                 ctx.load_value_to_reg(*value, int_reg)?;
                 frame::emit_function_return_epilogue(ctx, None);
@@ -194,15 +207,15 @@ fn lower_switch(
         abi::emit_load_int_immediate(ctx.emitter, case_reg, case.value);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // compare switch scrutinee with the case value
                     &format!("cmp {}, {}", result_reg, case_reg)
-                );                                                              // compare switch scrutinee with the case value
+                );
                 ctx.emitter.instruction(&format!("b.eq {}", branch_label));     // branch to the matching switch case
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // compare switch scrutinee with the case value
                     &format!("cmp {}, {}", result_reg, case_reg)
-                );                                                              // compare switch scrutinee with the case value
+                );
                 ctx.emitter.instruction(&format!("je {}", branch_label));       // branch to the matching switch case
             }
         }

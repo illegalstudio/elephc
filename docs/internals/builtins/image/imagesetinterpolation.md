@@ -1,11 +1,11 @@
 ---
-title: "imagesetinterpolation() — internals"
+title: "imagesetinterpolation() - internals"
 description: "Compiler internals for imagesetinterpolation(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 528
 ---
 
-## `imagesetinterpolation()` — internals
+## `imagesetinterpolation()` - internals
 
 ## Where it lives
 

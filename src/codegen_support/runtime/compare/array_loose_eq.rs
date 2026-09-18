@@ -18,7 +18,7 @@
 //!   would otherwise compare equal to a stored `null`.
 //! - elephc has two array representations. Tag 4 (indexed) is always the list
 //!   `0..count-1`, so its keys are enumerated by counting; tag 5 (hash) is walked
-//!   with the shared `__rt_hash_iter_next` cursor protocol. Both feed the same
+//!   with the shared `__rt_hash_iter_next_value` cursor protocol. Both feed the same
 //!   per-entry comparison block.
 //! - Every value read through `__rt_mixed_array_get` is owned by this helper and is
 //!   released before the next entry.
@@ -99,7 +99,7 @@ fn emit_mixed_array_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_male_hash_loop");
     emitter.instruction("ldr x0, [sp, #64]");                                   // reload the left hash payload pointer
     emitter.instruction("ldr x1, [sp, #48]");                                   // reload the iteration cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // x0=next cursor, x1=key pointer, x2=key length
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=next cursor, x1=key pointer, x2=key length
     emitter.instruction("cmp x0, #-1");                                         // has the walk consumed every entry?
     emitter.instruction("b.eq __rt_male_true");                                 // every key matched loosely
     emitter.instruction("str x0, [sp, #48]");                                   // save the next iteration cursor
@@ -234,7 +234,7 @@ fn emit_mixed_array_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_male_hash_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 72]");                       // reload the left hash payload pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload the iteration cursor
-    abi::emit_call_label(emitter, "__rt_hash_iter_next"); // rax=next cursor, rdi=key pointer, rdx=key length
+    abi::emit_call_label(emitter, "__rt_hash_iter_next_value"); // rax=next cursor, rdi=key pointer, rdx=key length
     emitter.instruction("cmp rax, -1");                                         // has the walk consumed every entry?
     emitter.instruction("je __rt_male_true");                                   // every key matched loosely
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the next iteration cursor

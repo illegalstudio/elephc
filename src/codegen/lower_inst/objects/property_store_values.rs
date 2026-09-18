@@ -10,12 +10,37 @@
 use super::*;
 
 /// Loads an SSA value in the shape required by a typed object property store.
+///
+/// A value that is only known as a boxed `Mixed`/`Union` runs the weak-mode typed-property
+/// guard first. The guard reads the box and never touches the destination, so a value PHP
+/// rejects throws `TypeError` while the slot still owns its previous contents.
 pub(super) fn load_property_store_value_to_result(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
-    slot_ty: &PhpType,
+    slot: &PropertySlot,
 ) -> Result<()> {
+    let slot_ty = &slot.php_type;
     let value_ty = ctx.value_php_type(value)?;
+    let coerced_done_label = if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
+        emit_mixed_property_type_guard(ctx, value, slot)?
+    } else {
+        None
+    };
+    load_accepted_property_store_value_to_result(ctx, value, slot_ty, &value_ty)?;
+    if let Some(done_label) = coerced_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
+}
+
+/// Materializes a property-store value the weak-mode guard has already accepted.
+fn load_accepted_property_store_value_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    slot_ty: &PhpType,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let value_ty = value_ty.clone();
     if can_box_value_for_mixed_property(&value_ty, slot_ty) {
         let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
         // Property stores do not consume the SSA source; explicit release ops still
@@ -78,6 +103,10 @@ pub(super) fn load_property_store_value_to_result(
                 coerce_loaded_value_to_tagged_scalar(ctx, &value_ty)?;
             }
         }
+        // Inline tagged storage copies the payload OUT of the source box and keeps no pointer
+        // to it, so a source EIR expects the consumer to adopt has no owner left afterwards.
+        // Without this release a `?int` slot leaked one boxed cell per runtime-shaped write.
+        release_adopted_mixed_source(ctx, value, &PhpType::TaggedScalar)?;
         return Ok(());
     }
     if can_coerce_tagged_scalar_to_int_property(&value_ty, slot_ty) {
@@ -92,7 +121,20 @@ pub(super) fn load_property_store_value_to_result(
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
-            PhpType::Object(_) => property_values::emit_mixed_object_for_property_store(ctx),
+            // An object slot stores the unboxed object POINTER, retained on its own, so the
+            // adopted cell keeps no owner here either. Without this release a declared object
+            // property leaked one boxed cell and its payload owner per runtime-shaped write.
+            PhpType::Object(_) => {
+                property_values::emit_mixed_object_for_property_store(ctx);
+                release_adopted_mixed_source(ctx, value, &PhpType::Object(String::new()))?;
+            }
+            // An `iterable` slot stores the raw container/object pointer, not the cell wrapping
+            // it, so the payload is promoted out of the box and retained on its own. The box's
+            // own reference then has no owner left here, which is what the release ends.
+            PhpType::Iterable => {
+                emit_mixed_iterable_for_property_store(ctx);
+                release_adopted_mixed_source(ctx, value, &PhpType::Iterable)?;
+            }
             _ => {}
         }
         return Ok(());
@@ -107,6 +149,59 @@ pub(super) fn load_property_store_value_to_result(
     } else if slot_ty.codegen_repr().is_refcounted() {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty.codegen_repr());
     }
+    Ok(())
+}
+
+/// The `__rt_mixed_unbox` tags an `iterable` slot can hold: both array shapes and an object.
+const ITERABLE_MIXED_TAGS: [u8; 3] = [4, 5, 6];
+
+/// Promotes the array or `Traversable` payload of a boxed `Mixed` into `iterable` storage.
+///
+/// An `iterable` slot holds the same raw heap pointer a statically typed `array`/`Traversable`
+/// write stores: `__rt_decref_any` and the `iterable` foreach dispatch both read the heap kind off
+/// that pointer, so storing the Mixed cell itself would publish a cell where a container is
+/// expected. The retained owner is therefore the PAYLOAD, taken out of the cell.
+///
+/// The weak-mode guard already refused every tag this slot cannot hold, so the fallback only
+/// normalizes to a null pointer rather than republishing an unrelated payload as a heap pointer,
+/// which both `__rt_incref` and the slot's later `__rt_decref_any` already ignore.
+fn emit_mixed_iterable_for_property_store(ctx: &mut FunctionContext<'_>) {
+    let payload_label = ctx.next_label("prop_store_mixed_iterable_payload");
+    let done = ctx.next_label("prop_store_mixed_iterable_done");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    for tag in ITERABLE_MIXED_TAGS {
+        super::super::enums::emit_mixed_tag_branch(ctx, result_reg, i64::from(tag), &payload_label);
+    }
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0); // normalize a payload `iterable` cannot hold to a null pointer
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&payload_label);
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    abi::emit_reg_move(ctx.emitter, result_reg, payload_reg); // promote the unboxed iterable pointer into the result register
+    ctx.emitter.label(&done);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Iterable); // retain the payload independently for property storage
+}
+
+/// Releases a boxed source the slot was expected to adopt but did not keep a pointer to.
+///
+/// `value_can_own_mixed_box_source()` is EIR's promise that this consumer takes the box over, so
+/// EIR emits no cleanup of its own for it. A slot that copies the payload instead of storing the
+/// box has to end that ownership here.
+pub(in crate::codegen::lower_inst) fn release_adopted_mixed_source(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    result_ty: &PhpType,
+) -> Result<()> {
+    if !matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed)
+        || !ctx.value_can_own_mixed_box_source(value)?
+    {
+        return Ok(());
+    }
+    let result_ty = result_ty.codegen_repr();
+    abi::emit_push_result_value(ctx.emitter, &result_ty);
+    ctx.load_value_to_result(value)?;
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    restore_property_store_result(ctx, &result_ty);
     Ok(())
 }
 

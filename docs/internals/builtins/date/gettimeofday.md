@@ -1,11 +1,11 @@
 ---
-title: "gettimeofday() — internals"
+title: "gettimeofday() - internals"
 description: "Compiler internals for gettimeofday(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 221
 ---
 
-## `gettimeofday()` — internals
+## `gettimeofday()` - internals
 
 ## Where it lives
 

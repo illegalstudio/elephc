@@ -1,11 +1,11 @@
 ---
-title: "imagewebp() — internals"
+title: "imagewebp() - internals"
 description: "Compiler internals for imagewebp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 537
 ---
 
-## `imagewebp()` — internals
+## `imagewebp()` - internals
 
 ## Where it lives
 

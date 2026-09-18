@@ -27,7 +27,7 @@ pub(super) fn lower_include(
         effects_lookup::runtime_effects(),
         Some(span),
     );
-    ctx.clear_static_callable_locals();
+    ctx.invalidate_static_callable_locals();
 }
 
 /// Lowers an include-once marker.
@@ -83,4 +83,3 @@ pub(super) fn lower_include_once_guard(
     ctx.builder.position_at_end(after_block);
     ctx.clear_static_callable_locals();
 }
-

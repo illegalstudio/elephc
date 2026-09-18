@@ -22,16 +22,16 @@
 //! - The value is a boxed `Mixed` pointer consumed by the write (stored directly
 //!   into the slot for the indexed path, or stored as a `Mixed`-tagged hash
 //!   payload for the hash path), mirroring `__rt_array_set_mixed` ownership.
-//! - OWNERSHIP: the caller hands this helper an OWNED reference to the incoming
-//!   array (`lower_array_set_mixed_key_*` acquires it, mirroring `Op::ArrayToHash`).
+//! - OWNERSHIP: the caller passes one OWNED reference to the incoming array,
+//!   mirroring `Op::ArrayToHash`. A consuming raw-local store transfers its existing
+//!   slot owner; a ref-cell, static, or global store acquires a separate helper owner
+//!   because its later storeback retires the owner currently in storage.
 //!   The in-place paths hand that `+1` back inside the returned pointer; the promote
 //!   paths abandon the source for a freshly built hash and RELEASE it, because
 //!   `__rt_array_hash_union` only borrows its operands. The helper therefore always
-//!   returns a `+1` the caller owns, and `Op::ArraySetMixedKey` is classified as an
-//!   owning temporary so `store_local` releases whatever the slot held before.
-//!   Getting this wrong in either direction is fatal: releasing without the caller's
-//!   acquire is a use-after-free (the source's only reference lives in the caller's
-//!   slot); not releasing at all leaks the whole abandoned array on every promotion.
+//!   returns a `+1` the destination owns. Acquiring a second reference for a raw
+//!   local would leak the abandoned array, while omitting it for a retiring storeback
+//!   would release the same source owner twice.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;

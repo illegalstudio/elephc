@@ -310,6 +310,10 @@ pub(super) fn cast_loaded_mixed_pointer_to_result(
         PhpType::Int => "__rt_mixed_cast_int",
         PhpType::Float => "__rt_mixed_cast_float",
         PhpType::Bool => "__rt_mixed_cast_bool",
+        PhpType::TaggedScalar => {
+            coerce_loaded_value_to_tagged_scalar(ctx, &PhpType::Mixed)?;
+            return Ok(());
+        }
         PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable
@@ -331,4 +335,3 @@ pub(super) fn cast_loaded_mixed_pointer_to_result(
     abi::emit_call_label(ctx.emitter, label);
     Ok(())
 }
-

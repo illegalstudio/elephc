@@ -105,3 +105,42 @@ fn test_dot_vs_ellipsis() {
         ]
     );
 }
+
+/// Verifies PHP 8.5 `clone($obj)` still lexes the keyword as `Token::Clone` followed by an
+/// ordinary call parenthesis pair, so the parser alone decides between the unary construct
+/// and the function-call form.
+#[test]
+fn test_clone_call_tokens() {
+    let t = tokens("<?php clone($obj);");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Clone,
+            Token::LParen,
+            Token::Variable("obj".into()),
+            Token::RParen,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies `clone(...)` lexes as `Token::Clone`, `Token::LParen`, `Token::Ellipsis`,
+/// `Token::RParen`: the same token shape as any other first-class callable.
+#[test]
+fn test_clone_first_class_callable_tokens() {
+    let t = tokens("<?php clone(...);");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Clone,
+            Token::LParen,
+            Token::Ellipsis,
+            Token::RParen,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}

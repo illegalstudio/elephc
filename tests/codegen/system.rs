@@ -2259,6 +2259,22 @@ echo preg_replace_callback("/[A-Z]/", $callback, "AB");
     assert_eq!(out, "U1U1");
 }
 
+/// Literal, propagated-string and first-class regex callbacks share the boxed PHP array boundary.
+#[test]
+fn test_preg_replace_callback_literal_and_callable_share_boxed_array_abi() {
+    let out = compile_and_run(r#"<?php
+function boxed_regex_matches(array $matches): string {
+    return $matches[1] . count($matches);
+}
+echo preg_replace_callback('/([A-Z])/', 'boxed_regex_matches', 'AB'), "|";
+$name = 'boxed_regex_matches';
+echo preg_replace_callback('/([A-Z])/', $name, 'CD'), "|";
+$callback = boxed_regex_matches(...);
+echo preg_replace_callback('/([A-Z])/', $callback, 'EF');
+"#);
+    assert_eq!(out, "A2B2|C2D2|E2F2");
+}
+
 /// Verifies runtime string static-method callbacks route regex replacements through descriptors.
 #[test]
 fn test_preg_replace_callback_runtime_string_static_method_callback() {

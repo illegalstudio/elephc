@@ -101,7 +101,7 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     // -- get next entry via hash_iter --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash ptr
     emitter.instruction("ldr x1, [sp, #32]");                                   // load iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // get entry → x0=next_cursor, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // get entry → x0=next_cursor, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
     emitter.instruction("str x0, [sp, #32]");                                   // save next iterator cursor
 
     // -- save key and value on stack --
@@ -481,7 +481,7 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_assoc_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source associative-array pointer for the next insertion-order iteration step
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the current hash iterator cursor for the next insertion-order iteration step
-    emitter.instruction("call __rt_hash_iter_next");                            // advance one insertion-order hash entry and return its key plus payload in the x86_64 result registers
+    emitter.instruction("call __rt_hash_iter_next_value");                      // advance one insertion-order hash entry and return its key plus payload in the x86_64 result registers
     emitter.instruction("cmp rax, -1");                                         // has associative-array iteration reached the done sentinel?
     emitter.instruction("je __rt_json_assoc_close");                            // finish by writing the closing brace once every hash entry has been encoded
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the updated hash iterator cursor for the next insertion-order loop step

@@ -1,7 +1,6 @@
 //! Purpose:
-//! Carries the checker's local-binding decisions — the span-keyed kill / retype / mixed-storage
-//! sites, and the NAMES the mixed-storage marking boxed — into the post-typecheck AST passes, so
-//! those passes never break the invariants the decisions rest on.
+//! Carries checker binding decisions, mixed-storage names, and native buffer read proofs
+//! into post-typecheck AST passes without losing their typing or ownership invariants.
 //!
 //! Called from:
 //! - `crate::pipeline`, which installs the sets around post-typecheck optimization.
@@ -25,10 +24,12 @@
 //!   with an `Int` operand and panicked the compiler.
 //! - Installed as scoped thread-locals, matching `with_callable_effect_analysis` and
 //!   `with_by_ref_signatures`. The SPAN set is installed around the prune, normalize AND dce
-//!   phases, because the cloning passes live in all three. Both sets are empty by default. The
+//!   phases, because the cloning passes live in all three. All sets are empty by default. The
 //!   SPAN set has an explicit `is_empty()` fast path (`has_local_binding_decisions`) that keeps
 //!   the scan off the hot path entirely; the NAME set has none — `local_has_mixed_storage` is a
 //!   plain hash lookup, which on an empty set is already the cheapest thing it could do.
+//! - Buffer read proofs are installed only for propagation. They remove intrinsic warning-handler
+//!   effects, never effects from evaluating a receiver or index or from a bounds failure.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -40,6 +41,23 @@ thread_local! {
     static ACTIVE_BINDING_DECISION_SPANS: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
     /// Local names the checker compiled as boxed `mixed` storage, for one optimizer run.
     static ACTIVE_MIXED_STORAGE_LOCALS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// Indexed reads the checker proved cannot dispatch PHP warning handlers.
+    static ACTIVE_BUFFER_READ_SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
+}
+
+/// Installs checker-proven buffer reads for one constant-propagation run.
+pub(crate) fn with_buffer_read_sites<R>(sites: HashSet<Span>, f: impl FnOnce() -> R) -> R {
+    ACTIVE_BUFFER_READ_SITES.with(|slot| {
+        let previous = slot.replace(sites);
+        let result = f();
+        slot.replace(previous);
+        result
+    })
+}
+
+/// Returns whether all checker observations at this read used native buffer storage.
+pub(crate) fn is_buffer_read_site(span: Span) -> bool {
+    ACTIVE_BUFFER_READ_SITES.with(|slot| slot.borrow().contains(&span))
 }
 
 /// Installs `spans` as the active local-binding decision set for the duration of `f`.

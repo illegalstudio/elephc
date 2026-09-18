@@ -501,7 +501,7 @@ fn emit_from_array_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_from_array_hash_size_loop");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload source hash for sizing iteration
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload current hash iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next hash entry in insertion order
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next hash entry in insertion order
     emitter.instruction("cmn x0, #1");                                          // did sizing iteration reach the end sentinel?
     emitter.instruction("b.eq __rt_spl_fixed_from_array_alloc");                // allocate once every numeric key has been inspected
     emitter.instruction("str x0, [sp, #32]");                                   // save next hash iterator cursor
@@ -616,7 +616,7 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_copy_hash_packed_loop");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload source hash for iteration
     emitter.instruction("ldr x1, [sp, #48]");                                   // reload current hash iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next hash entry in insertion order
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next hash entry in insertion order
     emitter.instruction("cmn x0, #1");                                          // did iteration reach the end sentinel?
     emitter.instruction("b.eq __rt_spl_fixed_copy_from_array_done");            // finish after every hash value has been copied
     emitter.instruction("str x0, [sp, #48]");                                   // save next hash iterator cursor
@@ -631,7 +631,7 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_copy_hash_preserve_size_loop");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload source hash for sizing
     emitter.instruction("ldr x1, [sp, #48]");                                   // reload current hash iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next hash entry for preserved sizing
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next hash entry for preserved sizing
     emitter.instruction("cmn x0, #1");                                          // did sizing reach the end sentinel?
     emitter.instruction("b.eq __rt_spl_fixed_copy_hash_preserve_resize");       // resize once numeric keys have been inspected
     emitter.instruction("str x0, [sp, #48]");                                   // save next hash iterator cursor
@@ -656,7 +656,7 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_copy_hash_preserve_loop");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload source hash for preserved import
     emitter.instruction("ldr x1, [sp, #48]");                                   // reload current hash iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next hash entry in insertion order
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next hash entry in insertion order
     emitter.instruction("cmn x0, #1");                                          // did iteration reach the end sentinel?
     emitter.instruction("b.eq __rt_spl_fixed_copy_from_array_done");            // finish after every preserved numeric key has been copied
     emitter.instruction("str x0, [sp, #48]");                                   // save next hash iterator cursor
@@ -1186,7 +1186,7 @@ fn emit_from_array_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_from_array_hash_size_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload source hash for sizing iteration
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // reload current hash iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next hash entry in insertion order
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next hash entry in insertion order
     emitter.instruction("cmp rax, -1");                                         // did sizing iteration reach the end sentinel?
     emitter.instruction("je __rt_spl_fixed_from_array_alloc_x86");              // allocate once every numeric key has been inspected
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save next hash iterator cursor
@@ -1299,7 +1299,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_copy_hash_packed_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload source hash for iteration
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload current hash iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next hash entry in insertion order
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next hash entry in insertion order
     emitter.instruction("cmp rax, -1");                                         // did iteration reach the end sentinel?
     emitter.instruction("je __rt_spl_fixed_copy_from_array_done");              // finish after every hash value has been copied
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save next hash iterator cursor
@@ -1314,7 +1314,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_copy_hash_preserve_size_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload source hash for sizing
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload current hash iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next hash entry for preserved sizing
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next hash entry for preserved sizing
     emitter.instruction("cmp rax, -1");                                         // did sizing reach the end sentinel?
     emitter.instruction("je __rt_spl_fixed_copy_hash_preserve_resize_x86");     // resize once numeric keys have been inspected
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save next hash iterator cursor
@@ -1338,7 +1338,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_copy_hash_preserve_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload source hash for preserved import
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload current hash iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next hash entry in insertion order
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next hash entry in insertion order
     emitter.instruction("cmp rax, -1");                                         // did iteration reach the end sentinel?
     emitter.instruction("je __rt_spl_fixed_copy_from_array_done");              // finish after every preserved numeric key has been copied
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save next hash iterator cursor

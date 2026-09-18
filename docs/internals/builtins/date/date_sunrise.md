@@ -1,11 +1,11 @@
 ---
-title: "date_sunrise() — internals"
+title: "date_sunrise() - internals"
 description: "Compiler internals for date_sunrise(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 210
 ---
 
-## `date_sunrise()` — internals
+## `date_sunrise()` - internals
 
 ## Where it lives
 

@@ -12,16 +12,18 @@
 //! - Ordinary `->` method calls on real null receivers fatal before arguments,
 //!   matching PHP's observable evaluation order.
 
-use crate::ir::{BlockId, Immediate, Op, Terminator};
+use crate::ir::{BlockId, Immediate, Op, PropertyFetchMode, Terminator};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::{
     branch_to, lower_array_access_from_value, lower_boxed_null,
-    lower_dynamic_property_get_from_value, lower_expr, lower_expr_call_from_value,
-    lower_method_call_with_receiver, lower_property_get_from_value, property_can_be_uninitialized,
-    store_value_into_temp, take_owned_temp, value_is_definitely_null, value_is_nullable,
+    lower_dynamic_property_fetch_from_value, lower_expr, lower_expr_call_from_value,
+    lower_method_call_with_receiver, lower_property_get_from_value,
+    lower_property_probe_from_value, property_can_be_uninitialized,
+    property_probe_needs_runtime_name_form_for_type, store_value_into_temp, take_owned_temp,
+    value_is_definitely_null, value_is_nullable,
 };
 
 /// Lowers `expr` when it is a postfix chain containing `?->`.
@@ -29,7 +31,17 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Option<Lo
     lower_with_missing_warning(ctx, expr, true)
 }
 
+/// Reports the boxed representation shared by successful and short-circuited postfix chains.
+pub(super) fn result_storage_type(expr: &Expr) -> Option<PhpType> {
+    flatten_nullsafe_postfix_chain(expr).map(|_| PhpType::Mixed)
+}
+
 /// Lowers a nullsafe postfix chain while configuring native array-miss warnings.
+///
+/// `warn_on_missing == false` is exactly php's SILENT-probe context: the chain is the left operand
+/// of `??` / `??=`, or an `isset()` / `empty()` operand. The property segments below take their
+/// fetch mode from it, so a chain probe answers `null` for a name php refuses instead of raising,
+/// the same way the non-chain forms do.
 pub(super) fn lower_with_missing_warning(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
@@ -276,6 +288,16 @@ fn lower_nullsafe_postfix_segment(
             {
                 return None;
             }
+            // A receiver whose class is only known at run time has no compile-time visibility
+            // answer, so a probe has to reach the ladder through the runtime-name form to keep
+            // php's silence. Every other receiver keeps the ordinary named read.
+            if !warn_on_missing
+                && property_probe_needs_runtime_name_form_for_type(
+                    &ctx.builder.value_php_type(current.value),
+                )
+            {
+                return Some(lower_property_probe_from_value(ctx, current, property, expr));
+            }
             Some(lower_property_get_from_value(
                 ctx,
                 current,
@@ -292,7 +314,14 @@ fn lower_nullsafe_postfix_segment(
             if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
                 return None;
             }
-            Some(lower_dynamic_property_get_from_value(ctx, current, property, expr))
+            let mode = if warn_on_missing {
+                PropertyFetchMode::Read
+            } else {
+                PropertyFetchMode::Probe
+            };
+            Some(lower_dynamic_property_fetch_from_value(
+                ctx, current, property, mode, expr,
+            ))
         }
         PostfixSegment::Method {
             expr,

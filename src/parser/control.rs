@@ -316,10 +316,10 @@ fn parse_foreach_pattern_target(
         .get(*pos)
         .map(|(_, metadata)| metadata.span)
         .unwrap_or(span);
-    let value_var = format!(
+    let value_var = crate::names::generated_local_name(&format!(
         "__elephc_foreach_{}_{}",
         pattern_span.line, pattern_span.col
-    );
+    ));
     let source = Expr::new(ExprKind::Variable(value_var.clone()), pattern_span);
     let unpack = parse_destructuring_pattern_unpack(tokens, pos, pattern_span, source)?;
     Ok((value_var, unpack))

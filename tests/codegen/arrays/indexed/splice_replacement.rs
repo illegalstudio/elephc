@@ -8,7 +8,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Every expected string in this file is verbatim `LC_ALL=C php` 8.4 output for the same fixture.
+//! - Expected output pins PHP-compatible replacement windows, value types and alias behavior.
 //! - The fixtures cover a replacement LONGER than the removed window (which forces
 //!   `__rt_array_grow` and therefore a receiver relocation), SHORTER than it, and a pure
 //!   insertion (`$length === 0`), plus negative `$offset`/`$length` combinations.
@@ -313,25 +313,20 @@ string(1) "x"
     );
 }
 
-/// Pins the DOCUMENTED refusal: a type-changing `$replacement` on a receiver whose storage this
-/// call cannot retype stays a named compile error rather than becoming a wrong answer.
-///
-/// A by-reference parameter shares its storage with a caller slot the callee cannot widen, so
-/// promoting it would publish boxed `Mixed` cells through a slot the caller still reads as
-/// `array<int>`. The diagnostic has to say so, because "use a local" is the actual workaround.
+/// Declared array reference parameters publish heterogeneous replacements without changing aliases.
 #[test]
-fn test_array_splice_type_changing_replacement_on_by_ref_parameter_is_refused() {
-    let error = crate::support::compile_source_expect_backend_error(
+fn test_array_splice_type_changing_replacement_on_by_ref_parameter_preserves_cow() {
+    let out = compile_and_run_with_heap_debug(
         r#"<?php
 function f(array &$a): void { array_splice($a, 1, 1, ["x"]); }
 $x = [1,2,3];
+$alias = $x;
 f($x);
-echo implode(",", $x);
+echo implode(",", $x), "|", implode(",", $alias), "|", gettype($x[1]);
+unset($x, $alias);
 "#,
     );
-    assert!(
-        error.contains("array_splice replacement PHP type")
-            && error.contains("a by-reference parameter"),
-        "expected the named receiver-promotion diagnostic, got: {error}"
-    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1,x,3|1,2,3|string", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

@@ -114,19 +114,15 @@ $stmt->bind_param();
     );
 }
 
-/// `mysqli_stmt::bind_param` with a literal in the by-ref variadic tail is
-/// tolerated by the checker (the tail skips the lvalue rule); under elephc's
-/// bind-time value capture that call is well-defined, so it must type-check.
+/// `mysqli_stmt::bind_param` preserves PHP's by-ref variadic lvalue requirement.
 #[test]
-fn bind_param_accepts_literal_bind_arguments_leniently() {
-    assert_eq!(
-        check_mysqli(
-            r#"<?php
+fn bind_param_rejects_literal_bind_arguments() {
+    expect_mysqli_error(
+        r#"<?php
 $stmt = new mysqli_stmt();
 $stmt->bind_param("i", 42);
-"#
-        ),
-        Ok(())
+"#,
+        "variadic parameter $vars must be passed a variable",
     );
 }
 

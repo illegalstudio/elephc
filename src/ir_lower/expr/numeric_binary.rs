@@ -45,7 +45,9 @@ pub(super) fn lower_numeric_binary(
     let rhs = lower_expr(ctx, right);
     if matches!(op, BinOp::Add) {
         if let Some((op, result_ty)) = array_union_plan(ctx, lhs.value, rhs.value) {
-            return ctx.emit_value(
+            // Union helpers borrow both inputs and return fresh storage. Retire expression
+            // temporaries only after the helper has retained every payload needed by its result.
+            let result = ctx.emit_value(
                 op,
                 vec![lhs.value, rhs.value],
                 None,
@@ -53,6 +55,11 @@ pub(super) fn lower_numeric_binary(
                 op.default_effects(),
                 Some(expr.span),
             );
+            release_binary_operand_temporary(ctx, lhs, expr.span);
+            if rhs.value != lhs.value {
+                release_binary_operand_temporary(ctx, rhs, expr.span);
+            }
+            return result;
         }
     }
     if matches!(op, BinOp::Pow) {
@@ -372,4 +379,3 @@ pub(super) fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
         _ => None,
     }
 }
-

@@ -26,6 +26,7 @@ pub(crate) struct CallArgPlan {
     pub(crate) first_named_pos: Option<usize>,
     pub(crate) prefix_has_dynamic_named_spread: bool,
     pub(super) passthrough_args: Option<Vec<Expr>>,
+    pub(super) regular_param_count: usize,
 }
 
 /// A resolved regular (non-variadic) parameter slot in the plan.
@@ -51,6 +52,7 @@ pub(crate) enum PlannedRegularArg {
 /// A resolved variadic argument entry collected from positional or named call-site values.
 #[derive(Clone)]
 pub(crate) struct PlannedVariadicArg {
+    pub(crate) source_index: usize,
     pub(crate) key: Option<String>,
     pub(crate) expr: Expr,
 }
@@ -110,6 +112,35 @@ pub(crate) enum CallArgPlanError {
 }
 
 impl CallArgPlan {
+    /// Marks normalized regular slots supplied by a declaration default, not by caller storage.
+    pub(crate) fn default_argument_mask(&self) -> Vec<bool> {
+        self.regular_args.iter()
+            .map(|arg| matches!(arg, PlannedRegularArg::Default(_)))
+            .collect()
+    }
+
+    /// Marks normalized values projected from a dynamic spread into regular parameter slots.
+    ///
+    /// The checker uses this provenance to permit runtime descriptor unboxing only for values
+    /// that lowering will actually extract from a spread container. A direct `Mixed` argument
+    /// must not gain the same exception merely because its normalized expression has that type.
+    pub(crate) fn descriptor_projection_mask(&self) -> Vec<bool> {
+        if let Some(args) = &self.passthrough_args {
+            let first_spread = args
+                .iter()
+                .position(|arg| matches!(arg.kind, ExprKind::Spread(_)));
+            return (0..self.regular_param_count)
+                .map(|param_idx| first_spread.is_some_and(|spread_idx| param_idx >= spread_idx))
+                .collect();
+        }
+
+        self.regular_args
+            .iter()
+            .map(|arg| matches!(arg, PlannedRegularArg::SpreadElement { .. }))
+            .chain(self.variadic_args.iter().map(|_| false))
+            .collect()
+    }
+
     /// Returns `true` if any source argument used the spread (`...`) operator.
     pub(crate) fn has_spread_args(&self) -> bool {
         self.source_args
@@ -379,6 +410,26 @@ mod tests {
         ]
     }
 
+    /// Default provenance is positional metadata, even when caller literals equal declaration defaults.
+    #[test]
+    fn default_argument_mask_distinguishes_supplied_literals() {
+        let sig = sig_with_defaults(vec![
+            Some(Expr::int_lit(1)), Some(Expr::int_lit(2)), Some(Expr::int_lit(3)),
+        ]);
+        let named = |name: &str, value| Expr::new(
+            ExprKind::NamedArg { name: name.to_string(), value: Box::new(Expr::int_lit(value)) },
+            Span::dummy(),
+        );
+        let plan = super::super::planner::plan_call_args(
+            &sig, &[named("b", 2)], Span::dummy(), false, true,
+        ).expect("omitted defaults should be planned");
+        assert_eq!(plan.default_argument_mask(), vec![true, false, true]);
+        let explicit = super::super::planner::plan_call_args(
+            &sig, &[named("b", 2), named("a", 1), named("c", 3)], Span::dummy(), false, true,
+        ).expect("explicit equal literals should remain source arguments");
+        assert_eq!(explicit.default_argument_mask(), vec![false, false, false]);
+    }
+
     /// Implements the `normalized_args_skip_default_guard_when_spread_check_guarantees_slot`
     /// operation for this module.
     #[test]
@@ -415,5 +466,41 @@ mod tests {
         assert_eq!(plan.spread_bounds_checks[0].min_len, 1);
         let normalized = plan.normalized_args();
         assert!(matches!(&normalized[1].kind, ExprKind::Ternary { .. }));
+    }
+
+    /// Positional passthrough keeps descriptor provenance in parameter space.
+    #[test]
+    fn descriptor_projection_mask_marks_only_slots_fed_by_positional_spread() {
+        let sig = sig_with_defaults(vec![None, None, None]);
+        let spread = Expr::new(
+            ExprKind::Spread(Box::new(Expr::var("args"))),
+            Span::dummy(),
+        );
+        let plan = super::super::planner::plan_call_args(
+            &sig,
+            &[Expr::int_lit(1), spread],
+            Span::dummy(),
+            false,
+            true,
+        )
+        .expect("positional spread should remain a passthrough source");
+
+        assert_eq!(plan.descriptor_projection_mask(), vec![false, true, true]);
+    }
+
+    /// A direct unknown value never inherits descriptor-spread provenance.
+    #[test]
+    fn descriptor_projection_mask_does_not_mark_direct_values() {
+        let sig = sig_with_defaults(vec![None, None, None]);
+        let plan = super::super::planner::plan_call_args(
+            &sig,
+            &[Expr::var("first"), Expr::var("second")],
+            Span::dummy(),
+            false,
+            true,
+        )
+        .expect("direct positional values should remain passthrough sources");
+
+        assert_eq!(plan.descriptor_projection_mask(), vec![false, false, false]);
     }
 }

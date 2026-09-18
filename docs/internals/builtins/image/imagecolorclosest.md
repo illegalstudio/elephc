@@ -1,11 +1,11 @@
 ---
-title: "imagecolorclosest() — internals"
+title: "imagecolorclosest() - internals"
 description: "Compiler internals for imagecolorclosest(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 467
 ---
 
-## `imagecolorclosest()` — internals
+## `imagecolorclosest()` - internals
 
 ## Where it lives
 

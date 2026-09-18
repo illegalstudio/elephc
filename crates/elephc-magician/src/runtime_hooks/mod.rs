@@ -16,7 +16,11 @@ mod externs;
 #[cfg(not(test))]
 mod ops;
 #[cfg(not(test))]
+mod object_owners;
+#[cfg(not(test))]
 mod tags;
+#[cfg(not(test))]
+pub(crate) mod release;
 
 #[cfg(not(test))]
 use crate::errors::EvalStatus;
@@ -26,6 +30,7 @@ use crate::abi::ElephcEvalContext;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 #[cfg(not(test))]
 use externs::{
+    __elephc_eval_install_closure_bind_hook, __elephc_eval_install_dynamic_object_clone_hook,
     __elephc_eval_install_dynamic_object_destructor_hook, __elephc_eval_value_array_new,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
 };
@@ -66,15 +71,25 @@ impl ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_object_from_raw(object) })
     }
 
-    /// Packs source-order argument cells into the boxed eval array ABI.
-    fn arg_array(args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
+    /// Packs borrowed arguments, releasing temporary keys and unfinished arrays on failure.
+    fn arg_array(&mut self, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
         let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
         let mut arg_array = Self::handle(arg_array)?;
-        for (index, value) in args.into_iter().enumerate() {
-            let index = Self::handle(unsafe { __elephc_eval_value_int(index as i64) })?;
-            arg_array = Self::handle(unsafe {
-                __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
-            })?;
+        let populated = (|| {
+            for (index, value) in args.into_iter().enumerate() {
+                let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+                let key = Self::handle(unsafe { __elephc_eval_value_int(index) })?;
+                let inserted = Self::handle(unsafe {
+                    __elephc_eval_value_array_set(arg_array.as_ptr(), key.as_ptr(), value.as_ptr())
+                });
+                self.release_cells([key])?;
+                arg_array = inserted?;
+            }
+            Ok(())
+        })();
+        if let Err(status) = populated {
+            self.release_cells([arg_array])?;
+            return Err(status);
         }
         Ok(arg_array)
     }
@@ -91,12 +106,75 @@ impl ElephcRuntimeOps {
     }
 }
 
-/// Installs the eval dynamic object destructor callback into runtime data.
+/// Installs eval destruction, object-edge, and array-reference retirement callbacks.
 #[cfg(not(test))]
 pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
     unsafe {
         __elephc_eval_install_dynamic_object_destructor_hook(callback);
+        externs::__elephc_eval_install_object_owner_hooks(
+            object_owners::object_gc_child as *const () as usize,
+            object_owners::release_object_children as *const () as usize,
+            crate::ffi::array_references::retire_array_reference_cell_callback as *const () as usize,
+        );
     }
+}
+
+/// Installs the eval closure `$this` rebinding callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of a function with the `__elephc_eval_closure_bind_this` ABI.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_closure_bind_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_closure_bind_hook(callback);
+    }
+}
+
+/// Installs the eval dynamic-object clone callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of a function with the
+/// `__elephc_eval_dynamic_object_clone` ABI; the generated `clone` lowering calls
+/// through it before its own shallow-clone adapter runs.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_dynamic_object_clone_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_dynamic_object_clone_hook(callback);
+    }
+}
+
+/// Reports whether one natively built override entry still belongs to a live PHP reference set.
+///
+/// Magician's own array-element alias table only knows arrays eval itself built, so an override
+/// array that generated code built is read here instead. Every input stays borrowed.
+#[cfg(not(test))]
+pub(crate) fn array_entry_is_shared_reference(
+    array: RuntimeCellHandle,
+    key: &str,
+    value: Option<RuntimeCellHandle>,
+) -> bool {
+    if array.is_null() {
+        return false;
+    }
+    let shared = unsafe {
+        externs::__elephc_eval_array_entry_is_shared_reference(
+            array.as_ptr(),
+            key.as_ptr(),
+            key.len() as u64,
+            value.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr),
+        )
+    };
+    shared != 0
+}
+
+/// Unit test builds do not link the generated runtime, so no native entry state can exist.
+#[cfg(test)]
+pub(crate) fn array_entry_is_shared_reference(
+    _array: crate::value::RuntimeCellHandle,
+    _key: &str,
+    _value: Option<crate::value::RuntimeCellHandle>,
+) -> bool {
+    false
 }
 
 /// Installs the eval output-buffering handler callback into the generated runtime.

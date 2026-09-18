@@ -19,6 +19,8 @@
 //! - x86_64 heap headers carry `X86_64_HEAP_MAGIC_HI32` ("ELPH") in the high 32 bits. Every
 //!   stamp must go through `x86_64_heap_kind_word`; every magic check must compare against
 //!   `X86_64_HEAP_MAGIC_HI32`. Local copies of either constant are forbidden.
+//! - Uniform heap kinds are a single numeric namespace on both architectures. New managed
+//!   shapes must be registered here so the compile-time uniqueness gate catches collisions.
 //! - The compact Throwable payload's creation-line slot lives here for the same reason as the
 //!   heap-header word: it is written by a dozen emitters across `codegen` and read by the runtime
 //!   emitters in `codegen_support::runtime`, which cannot see `codegen`. Every allocator of that
@@ -80,6 +82,49 @@ pub(crate) const TAGGED_SCALAR_TAG_NULL: i64 = 8;
 /// Indexed-array header value_type for inline `{payload, tag}` tagged-scalar slots.
 /// This is an internal array-storage tag, not a boxed Mixed runtime value tag.
 pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
+
+/// Uniform low-byte heap kinds shared by allocation producers, ownership dispatchers and GC.
+///
+/// These values describe top-level managed allocations. They are unrelated to Mixed runtime
+/// tags, indexed-array value types and resource subtypes, which use separate namespaces.
+pub(crate) const STRING_HEAP_KIND: u32 = 1;
+pub(crate) const ARRAY_HEAP_KIND: u32 = 2;
+pub(crate) const HASH_HEAP_KIND: u32 = 3;
+pub(crate) const OBJECT_HEAP_KIND: u32 = 4;
+pub(crate) const MIXED_HEAP_KIND: u32 = 5;
+pub(crate) const THROWABLE_HEAP_KIND: u32 = 6;
+/// Heap-backed `.` result that remains transient until `__rt_str_persist` adopts it.
+pub(crate) const CONCAT_TEMP_HEAP_KIND: u32 = 7;
+/// Independently owned reference cell whose payload descriptor occupies bits 8 through 14.
+pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
+
+/// The complete registered top-level heap-kind namespace.
+const MANAGED_HEAP_KINDS: [u32; 8] = [
+    STRING_HEAP_KIND,
+    ARRAY_HEAP_KIND,
+    HASH_HEAP_KIND,
+    OBJECT_HEAP_KIND,
+    MIXED_HEAP_KIND,
+    THROWABLE_HEAP_KIND,
+    CONCAT_TEMP_HEAP_KIND,
+    REFERENCE_CELL_HEAP_KIND,
+];
+
+/// Reject duplicate heap-kind registrations at compile time. The reference-cell allocator
+/// previously reused concat temporary kind 7, which made generic ownership dispatch inspect a
+/// transient string buffer as a reference cell.
+const _: () = {
+    let mut left = 0;
+    while left < MANAGED_HEAP_KINDS.len() {
+        assert!(MANAGED_HEAP_KINDS[left] > 0 && MANAGED_HEAP_KINDS[left] <= u8::MAX as u32);
+        let mut right = left + 1;
+        while right < MANAGED_HEAP_KINDS.len() {
+            assert!(MANAGED_HEAP_KINDS[left] != MANAGED_HEAP_KINDS[right]);
+            right += 1;
+        }
+        left += 1;
+    }
+};
 
 /// Returns the register holding a tagged scalar's tag word; the payload word lives in the
 /// integer result register. AArch64: `x1`. x86_64: `rdx` (mirrors the `Str` second word).

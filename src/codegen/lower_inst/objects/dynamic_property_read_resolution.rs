@@ -42,11 +42,12 @@ pub(super) fn lower_runtime_dynamic_declared_prop_get(
     let class_name = dynamic_property_object_class(ctx, object, inst)?;
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
-    let slots = declared_dynamic_property_slots(ctx, &class_name, inst)?;
-    ensure_dynamic_property_slot_results_supported(&slots, inst)?;
-    let match_labels = slots
+    let mode = property_fetch_mode(inst);
+    let plans = declared_dynamic_property_read_plans(ctx, &class_name, mode, inst)?;
+    ensure_dynamic_property_plan_results_supported(&plans, inst)?;
+    let match_labels = plans
         .iter()
-        .map(|slot| ctx.next_label(&format!("dyn_prop_{}", label_fragment(&slot.property))))
+        .map(|(property, _)| ctx.next_label(&format!("dyn_prop_{}", label_fragment(property))))
         .collect::<Vec<_>>();
     let miss_label = ctx.next_label("dyn_prop_miss");
     let done_label = ctx.next_label("dyn_prop_done");
@@ -58,27 +59,70 @@ pub(super) fn lower_runtime_dynamic_declared_prop_get(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (slot, label) in slots.iter().zip(match_labels.iter()) {
-        emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
+    for ((property, _), label) in plans.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, property, label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
-    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+    for ((property, plan), label) in plans.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
+        // The receiver is read out of the temporary block first and the block is released BEFORE
+        // the per-runtime-class dispatch, so every arm of both ladders reaches `done` with the
+        // same stack pointer and the class-id probes read the receiver from the register.
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-        if slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
-        }
-        emit_property_load(ctx, slot, base_reg)?;
-        materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
         abi::emit_release_temporary_stack(ctx.emitter, 32);
+        emit_property_runtime_dispatch(
+            ctx,
+            plan,
+            &format!("dyn_prop_{}", label_fragment(property)),
+            DispatchStackCleanup::NONE,
+            |ctx, class_id, label| {
+                emit_branch_if_object_reg_class_matches(ctx, base_reg, class_id, label)
+            },
+            |ctx, arm| emit_runtime_name_plan_read(ctx, &class_name, property, arm, base_reg, mode),
+        )?;
+        cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
     ctx.emitter.label(&miss_label);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    emit_dynamic_property_miss_result(ctx, inst);
+    // A class with per-instance hash storage keeps undeclared names there, so the ladder's miss
+    // arm has to probe it before answering null: `$o->{$name}` must see exactly what the clone
+    // override applicator, or a literal-name write, stored under the same key.
+    match dynamic_property_runtime_plan_for_class(
+        ctx,
+        &class_name,
+        "",
+        PropertyAccessKind::RuntimeHashMiss,
+        inst,
+    )? {
+        // The receiver is still stacked at offset 16 here, so the ladder probes it there rather
+        // than materializing it again, and each arm releases the site's 32-byte block itself.
+        Some(plan) => emit_property_runtime_dispatch(
+            ctx,
+            &plan,
+            "dyn_prop_get_hash",
+            DispatchStackCleanup(32),
+            |ctx, class_id, label| {
+                emit_branch_if_stacked_object_class_matches(ctx, class_id, 16, label)
+            },
+            |ctx, arm| match &arm.action {
+                PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
+                    lower_runtime_allow_dynamic_prop_get(ctx, inst, *hash_offset, 16, 0, 32)
+                }
+                _ => {
+                    abi::emit_release_temporary_stack(ctx.emitter, 32);
+                    emit_dynamic_property_miss_result(ctx, inst);
+                    Ok(())
+                }
+            },
+        )?,
+        None => {
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            emit_dynamic_property_miss_result(ctx, inst);
+        }
+    }
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -117,35 +161,65 @@ pub(super) fn ensure_runtime_dynamic_property_name(
     )))
 }
 
-/// Resolves all declared property slots that a runtime dynamic property read may match.
-pub(super) fn declared_dynamic_property_slots(
+/// Resolves the per-RUNTIME-CLASS plan every candidate property name takes on a runtime-name read.
+///
+/// EVERY matched name gets a plan, not only the ones the static class answers dynamically. The
+/// static class only bounds the runtime class, and php's answer can change KIND under that bound
+/// in both directions: a subclass can redeclare a strict ancestor's private name as its own
+/// public property, and it can WIDEN a `protected` the static class refuses into a `public` slot.
+/// Resolving the static class's arm and emitting it directly therefore refused, or read the wrong
+/// storage, for a receiver whose runtime class php answers from a slot of its own.
+///
+/// The candidate names are the union over the runtime subtree, so a name only a subclass declares
+/// is in the ladder at all.
+pub(super) fn declared_dynamic_property_read_plans(
     ctx: &FunctionContext<'_>,
     class_name: &str,
+    mode: PropertyFetchMode,
     inst: &Instruction,
-) -> Result<Vec<PropertySlot>> {
+) -> Result<Vec<(String, PropertyRuntimePlan)>> {
     let normalized = class_name.trim_start_matches('\\');
-    let property_names = {
-        let class_info =
-            ctx.module.class_infos.get(normalized).ok_or_else(|| {
-                CodegenIrError::unsupported(format!("unknown class {}", normalized))
-            })?;
-        class_info
-            .properties
-            .iter()
-            .map(|(property, _)| property.clone())
-            .collect::<Vec<_>>()
-    };
-    property_names
+    let property_names = runtime_name_candidate_properties(ctx, normalized)?;
+    let mut plans = Vec::with_capacity(property_names.len());
+    for property in property_names {
+        let plan = resolve_property_runtime_plan(
+            ctx,
+            normalized,
+            &property,
+            PropertyAccessKind::RuntimeRead(mode),
+            inst,
+        )?;
+        plans.push((property, plan));
+    }
+    Ok(plans)
+}
+
+/// Verifies the EIR result type can receive every slot any arm of any plan can load.
+pub(super) fn ensure_dynamic_property_plan_results_supported(
+    plans: &[(String, PropertyRuntimePlan)],
+    inst: &Instruction,
+) -> Result<()> {
+    let slots = plans
         .iter()
-        .map(|property| resolve_property_slot_for_class(ctx, normalized, property, inst))
-        .collect()
+        .flat_map(|(_, plan)| plan.arms())
+        .filter_map(|arm| match &arm.action {
+            PropertyRuntimeAction::Slot(slot) => Some(slot.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    ensure_dynamic_property_slot_results_supported(&slots, inst)
 }
 
 /// Collects declared-property candidates readable from a boxed Mixed receiver.
+///
+/// A name php refuses on one of those classes keeps its arm, because the ladder dispatches on the
+/// receiver's runtime class id and name, but the arm raises instead of reading. A silent probe
+/// drops the arm so the name lands in the miss path and answers `null`.
 pub(super) fn declared_mixed_property_get_candidates(
     ctx: &FunctionContext<'_>,
+    mode: PropertyFetchMode,
     inst: &Instruction,
-) -> Result<Vec<MixedPropertyCandidate>> {
+) -> Result<Vec<MixedPropertyReadCandidate>> {
     let mut candidates = Vec::new();
     let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
@@ -154,22 +228,61 @@ pub(super) fn declared_mixed_property_get_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
-            let Ok(slot) = resolve_property_slot_for_class(ctx, class_name, property, inst) else {
-                continue;
-            };
-            candidates.push(MixedPropertyCandidate {
-                class_id: class_info.class_id,
-                slot,
+            let (slot, kind) =
+                match resolve_property_read_arm(ctx, class_name, property, mode, inst) {
+                    Ok(Some(PropertyNameArm::Slot(slot))) => (slot, MixedPropertyReadKind::Slot),
+                    Ok(Some(PropertyNameArm::Refuse { message, .. })) => {
+                        let Ok(slot) =
+                            resolve_property_slot_for_class(ctx, class_name, property, inst)
+                        else {
+                            continue;
+                        };
+                        (slot, MixedPropertyReadKind::Refuse(message))
+                    }
+                    // The arm exists so the class id and name still dispatch here, but it answers
+                    // from the per-instance hash and warns on a READ miss instead of reading the
+                    // slot. Dropping it sent the name to the shared miss arm, which is silent.
+                    Ok(Some(PropertyNameArm::ScopeDynamic)) => {
+                        let Ok(slot) =
+                            resolve_property_slot_for_class(ctx, class_name, property, inst)
+                        else {
+                            continue;
+                        };
+                        (slot, MixedPropertyReadKind::ScopeDynamic)
+                    }
+                    Ok(Some(PropertyNameArm::MagicDeferred)) => {
+                        let Ok(slot) =
+                            resolve_property_slot_for_class(ctx, class_name, property, inst)
+                        else {
+                            continue;
+                        };
+                        (slot, MixedPropertyReadKind::MagicDeferred)
+                    }
+                    _ => continue,
+                };
+            candidates.push(MixedPropertyReadCandidate {
+                candidate: MixedPropertyCandidate {
+                    class_id: class_info.class_id,
+                    slot,
+                },
+                kind,
             });
         }
     }
     candidates.sort_by(|left, right| {
-        left.class_id
-            .cmp(&right.class_id)
-            .then_with(|| left.slot.property.cmp(&right.slot.property))
+        left.candidate
+            .class_id
+            .cmp(&right.candidate.class_id)
+            .then_with(|| {
+                left.candidate
+                    .slot
+                    .property
+                    .cmp(&right.candidate.slot.property)
+            })
     });
     Ok(candidates)
 }
+
 
 /// Verifies that the EIR result type can receive every declared property candidate.
 pub(super) fn ensure_dynamic_property_slot_results_supported(
@@ -283,4 +396,66 @@ pub(super) fn label_fragment(value: &str) -> String {
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect()
+}
+
+/// Emits one runtime-class arm of a RUNTIME-name read whose name php answers dynamically.
+///
+/// The receiver is already in `base_reg` and the site's temporary block is already released, so
+/// every arm here only has to produce the instruction's own result and store it.
+fn emit_runtime_name_plan_read(
+    ctx: &mut FunctionContext<'_>,
+    static_class: &str,
+    property: &str,
+    arm: &PropertyRuntimeArm,
+    base_reg: &str,
+    mode: PropertyFetchMode,
+) -> Result<()> {
+    match &arm.action {
+        // This runtime class declares the name, so php reads its own slot. The static class made
+        // the name invisible; the subclass that redeclared it did not.
+        PropertyRuntimeAction::Slot(slot) => {
+            let read_done = emit_property_read_state_guard(
+                ctx,
+                slot,
+                base_reg,
+                mode,
+                PropertyReadMissingResult::Boxed,
+            )?;
+            emit_property_load(ctx, slot, base_reg)?;
+            box_mixed_property_candidate_result(ctx, &slot.php_type);
+            if let Some(read_done) = read_done {
+                ctx.emitter.label(&read_done);
+            }
+            Ok(())
+        }
+        PropertyRuntimeAction::DynamicHash {
+            hash_offset,
+            warns_on_miss,
+        } => emit_scope_dynamic_property_hash_probe(
+            ctx,
+            &arm.class_name,
+            property,
+            base_reg,
+            *hash_offset,
+            mode.is_read() && *warns_on_miss,
+        ),
+        PropertyRuntimeAction::DynamicMissing { warns_on_miss } => {
+            if mode.is_read() && *warns_on_miss {
+                emit_undefined_property_warning(ctx, &arm.class_name, property);
+            }
+            emit_boxed_null(ctx);
+            Ok(())
+        }
+        // php would answer the accessor, which a RUNTIME name cannot reach in this phase. It
+        // answers php null and, above all, never reads the slot. `MagicGet` is a DIRECT-name
+        // answer and is never built for a runtime name, but it takes the same safe arm.
+        PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet => {
+            let _ = static_class;
+            emit_boxed_null(ctx);
+            Ok(())
+        }
+        PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
+            "property dispatch handed a refusal arm to its action emitter",
+        )),
+    }
 }

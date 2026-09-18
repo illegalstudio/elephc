@@ -43,13 +43,14 @@ pub(in crate::interpreter) fn eval_builtin_is_callable_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    eval_is_callable_call_with_evaluated_args_from_scope(
-        &evaluated_args,
-        Some(scope),
-        context,
-        values,
-    )
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, scope, values| {
+        eval_is_callable_call_with_evaluated_args_from_scope(
+            &evaluated_args,
+            Some(scope),
+            context,
+            values,
+        )
+    })
 }
 
 /// Evaluates `is_callable()` from already evaluated arguments that may retain ref targets.
@@ -118,35 +119,8 @@ pub(in crate::interpreter) fn eval_builtin_is_callable(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match args {
-        [value] => {
-            let value = eval_expr(value, context, scope, values)?;
-            eval_is_callable_result(value, false, None, Some(scope), context, values)
-        }
-        [value, syntax_only] => {
-            let value = eval_expr(value, context, scope, values)?;
-            let syntax_only = eval_expr(syntax_only, context, scope, values)?;
-            let syntax_only = values.truthy(syntax_only)?;
-            eval_is_callable_result(value, syntax_only, None, Some(scope), context, values)
-        }
-        [value, syntax_only, callable_name] => {
-            let value = eval_expr(value, context, scope, values)?;
-            let syntax_only = eval_expr(syntax_only, context, scope, values)?;
-            let syntax_only = values.truthy(syntax_only)?;
-            let (_, callable_name_target) =
-                eval_call_arg_value(callable_name, context, scope, values)?;
-            let callable_name_target = callable_name_target.ok_or(EvalStatus::RuntimeFatal)?;
-            eval_is_callable_result(
-                value,
-                syntax_only,
-                Some(&callable_name_target),
-                Some(scope),
-                context,
-                values,
-            )
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
+    let args = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+    eval_builtin_is_callable_call(&args, context, scope, values)
 }
 
 /// Returns whether one runtime value is callable from the current eval scope.
@@ -156,14 +130,18 @@ pub(in crate::interpreter) fn eval_is_callable_value(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let callback = match lexical_scope {
-        Some(scope) => eval_callable_from_scope(value, context, scope, values),
-        None => eval_callable(value, context, values),
-    };
-    let Ok(callback) = callback else {
+    let Ok((callback, receiver)) =
+        eval_callable_for_probe(value, context, lexical_scope, values)
+    else {
         return Ok(false);
     };
-    eval_callable_probe_exists(&callback, context, values)
+    let probed = eval_callable_probe_exists(&callback, context, values);
+    let released = receiver.map_or(Ok(()), |receiver| values.release(receiver));
+    match (probed, released) {
+        (Err(status), _) => Err(status),
+        (Ok(_), Err(status)) => Err(status),
+        (Ok(exists), Ok(())) => Ok(exists),
+    }
 }
 
 /// Evaluates `is_callable()` and writes PHP's display callable name when requested.

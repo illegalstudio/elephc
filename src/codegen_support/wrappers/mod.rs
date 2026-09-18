@@ -24,6 +24,12 @@ pub(crate) struct DeferredCallbackWrapper {
     pub(crate) capture_types: Vec<PhpType>,
     pub(crate) descriptor_prefix_types: Vec<PhpType>,
     pub(crate) descriptor_return_type: Option<PhpType>,
+    /// Dense lexical class id of the PHP callsite, or `-1` for global scope.
+    ///
+    /// Descriptor-backed runtime callbacks execute later, but PHP visibility still answers to
+    /// the callsite that entered the runtime helper. Hardcoding it in the wrapper preserves that
+    /// site exactly without descriptor-creation capture or process-global mutable state.
+    pub(crate) invocation_scope_class_id: i64,
 }
 
 /// Metadata for a C-ABI callback trampoline backed by a callable descriptor slot.

@@ -15,8 +15,8 @@ use crate::types::traits::FlattenedClass;
 
 use super::super::super::Checker;
 use super::super::validation::{
-    build_method_sig, matches_global_builtin_attribute, validate_override_signature,
-    visibility_rank,
+    build_method_sig, declaration_is_source, matches_global_builtin_attribute,
+    validate_override_signature, visibility_rank,
 };
 use super::state::ClassBuildState;
 use super::{collect_attribute_args, collect_attribute_names};
@@ -133,6 +133,10 @@ fn apply_static_method(
         }
     }
     if let Some(parent_sig) = state.static_sigs.get(&method_key) {
+        let parent_is_source = state
+            .static_method_declaring_classes
+            .get(&method_key)
+            .is_none_or(|owner| declaration_is_source(checker, owner));
         validate_override_signature(
             checker,
             class,
@@ -142,6 +146,7 @@ fn apply_static_method(
                 .late_static_static_method_returns
                 .get(&method_key),
             true,
+            parent_is_source,
         )?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, true)
@@ -258,6 +263,10 @@ fn apply_instance_method(
         }
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
+        let parent_is_source = state
+            .method_declaring_classes
+            .get(&method_key)
+            .is_none_or(|owner| declaration_is_source(checker, owner));
         validate_override_signature(
             checker,
             class,
@@ -265,6 +274,7 @@ fn apply_instance_method(
             parent_sig,
             state.late_static_method_returns.get(&method_key),
             false,
+            parent_is_source,
         )?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, false)

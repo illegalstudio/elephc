@@ -87,25 +87,17 @@ pub(super) fn throwable_payload_compatible_user_class(
     class_info: &ClassInfo,
 ) -> bool {
     super::super::is_throwable_like_class(ctx, class_name)
-        && !class_declares_own_instance_properties(class_name, class_info)
-        && !class_declares_own_constructor(class_name, class_info)
+        && throwable_inherits_only_builtin_storage_and_constructor(class_info)
 }
 
-/// Returns true when `class_name` declares an instance property of its own.
-pub(super) fn class_declares_own_instance_properties(class_name: &str, class_info: &ClassInfo) -> bool {
+/// Requires the complete inheritance chain, not only the leaf, to retain the builtin layout.
+fn throwable_inherits_only_builtin_storage_and_constructor(class_info: &ClassInfo) -> bool {
     class_info
         .property_declaring_classes
         .values()
-        .any(|declaring_class| declaring_class == class_name)
-}
-
-/// Returns true when `class_name` declares its own `__construct` method.
-pub(super) fn class_declares_own_constructor(class_name: &str, class_info: &ClassInfo) -> bool {
-    let constructor_key = php_symbol_key("__construct");
-    class_info
-        .method_declaring_classes
-        .get(&constructor_key)
-        .is_some_and(|declaring_class| declaring_class == class_name)
+        .all(|owner| is_builtin_throwable_payload_class(owner))
+        && class_info.method_declaring_classes.get("__construct")
+            .is_none_or(|owner| is_builtin_throwable_payload_class(owner))
 }
 
 /// Compact Throwable payload bytes: class_id + message(16) + code(16) + previous(16).
@@ -121,7 +113,7 @@ pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id:
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // -- allocate and stamp the compact Throwable payload --
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // allocate enough storage for every compact Throwable field
                 &format!("mov x0, #{}", THROWABLE_COMPACT_PAYLOAD_SIZE)
             );                                                                  // request compact Throwable payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
@@ -135,11 +127,11 @@ pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id:
         }
         Arch::X86_64 => {
             // -- allocate and stamp the compact Throwable payload --
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // allocate enough storage for every compact Throwable field
                 &format!("mov rax, {}", THROWABLE_COMPACT_PAYLOAD_SIZE)
             );                                                                  // request compact Throwable payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // preserve the x86_64 heap marker when selecting the Throwable kind
                 "mov r10, 0x{:x}",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
             ));                                                                 // materialize the x86_64 Throwable heap kind word
@@ -165,14 +157,14 @@ pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_aarch64(
     creation_line: u32,
 ) {
     if creation_line == 0 {
-        ctx.emitter.instruction(&format!(
+        ctx.emitter.instruction(&format!(                                       // initialize the creation line even when no source span is available
             "str xzr, [{}, #{}]",
             payload_reg, THROWABLE_CREATION_LINE_OFFSET
         ));                                                                     // no span on the allocating instruction: an unknown line reads back as zero
         return;
     }
     abi::emit_load_int_immediate(ctx.emitter, scratch_reg, i64::from(creation_line));
-    ctx.emitter.instruction(&format!(
+    ctx.emitter.instruction(&format!(                                           // record the source line associated with this allocation
         "str {}, [{}, #{}]",
         scratch_reg, payload_reg, THROWABLE_CREATION_LINE_OFFSET
     ));                                                                         // store the one-based source line of the `new` expression
@@ -187,7 +179,7 @@ pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_x86_64(
     payload_reg: &str,
     creation_line: u32,
 ) {
-    ctx.emitter.instruction(&format!(
+    ctx.emitter.instruction(&format!(                                           // record the source line associated with this allocation
         "mov QWORD PTR [{} + {}], {}",
         payload_reg, THROWABLE_CREATION_LINE_OFFSET, creation_line
     ));                                                                         // store the one-based source line of the `new` expression (zero when unknown)

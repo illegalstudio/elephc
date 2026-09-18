@@ -59,7 +59,13 @@ pub(super) fn emit_shared_helper(
     let function = helper_function(label, return_php_type);
     // Shared helpers own no cleanup-tracked locals, so an exception can skip
     // their synthetic frame and unwind through the caller's activation record.
-    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear, false);
+    let layout = frame::layout_for_function(
+        &function,
+        emitter.target,
+        regalloc_linear,
+        false,
+        false,
+    );
     let mut ctx = FunctionContext::new(
         module, &function, emitter, data, shared, layout, false, false, false, None,
     );
@@ -74,9 +80,10 @@ pub(super) fn emit_shared_helper(
 }
 
 /// Builds the minimal EIR function a `FunctionContext` needs to exist.
-fn helper_function(label: &str, return_php_type: PhpType) -> Function {
+pub(super) fn helper_function(label: &str, return_php_type: PhpType) -> Function {
     let return_ir_type = match return_php_type {
         PhpType::Str => IrType::Str,
+        PhpType::Callable => IrType::I64,
         _ => IrType::Void,
     };
     let mut function = Function::new(label.to_string(), return_ir_type, return_php_type);

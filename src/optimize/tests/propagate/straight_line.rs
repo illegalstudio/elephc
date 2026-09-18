@@ -393,3 +393,34 @@ fn test_global_writing_user_call_clears_constants_at_top_level() {
         "a global-writing callee can rewrite top-level locals"
     );
 }
+
+/// A by-reference return must retain its addressable variable even after a constant assignment.
+#[test]
+fn test_by_reference_return_preserves_local_place() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "relay".to_string(),
+            params: vec![("value".to_string(), None, None, true)],
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: true,
+            body: vec![
+                Stmt::assign("value", Expr::string_lit("changed")),
+                Stmt::new(StmtKind::Return(Some(Expr::var("value"))), Span::dummy()),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let propagated = propagate_constants(program);
+    let StmtKind::FunctionDecl { body, .. } = &propagated[0].kind else {
+        panic!("expected function declaration");
+    };
+    assert!(matches!(
+        &body[1].kind,
+        StmtKind::Return(Some(Expr { kind: ExprKind::Variable(name), .. })) if name == "value"
+    ));
+}

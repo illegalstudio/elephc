@@ -1,16 +1,16 @@
 ---
-title: "array_diff() — internals"
+title: "array_diff() - internals"
 description: "Compiler internals for array_diff(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 7
 ---
 
-## `array_diff()` — internals
+## `array_diff()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_diff.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_diff.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

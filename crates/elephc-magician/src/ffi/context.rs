@@ -36,6 +36,21 @@ pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
     Box::into_raw(Box::new(ElephcEvalContext::new()))
 }
 
+/// Retains one heap eval context for a process-wide callback owner.
+///
+/// # Safety
+/// `ctx` must be a live pointer returned by `__elephc_eval_context_new`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_retain(ctx: *mut ElephcEvalContext) -> i32 {
+    let Some(context) = (unsafe { ctx.as_mut() }) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    match context.retain_abi_owner() {
+        Ok(()) => EvalStatus::Ok.code(),
+        Err(status) => status.code(),
+    }
+}
+
 /// Marks this program's eval bridge as strict-PHP: extension builtins
 /// (`ptr_*`, `buffer_*`, `class_attribute_*`) disappear from eval dispatch and
 /// introspection, matching the PHP interpreter where those names do not exist.
@@ -89,7 +104,10 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
-    if ctx.is_null() || crate::context::pcntl_runtime::defer_context_free(ctx) {
+    let Some(context) = (unsafe { ctx.as_mut() }) else {
+        return;
+    };
+    if !context.release_abi_owner() || crate::context::pcntl_runtime::defer_context_free(ctx) {
         return;
     }
     unsafe { drop_eval_context_now(ctx) };
@@ -104,16 +122,20 @@ pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext)
 /// `ctx` must point to a live context allocated by `__elephc_eval_context_new`
 /// and no process-global PCNTL handler may still reference it.
 pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
+    let Some(context) = (unsafe { ctx.as_mut() }) else {
+        return;
+    };
+    if context.has_abi_owners() {
+        return;
+    }
     #[cfg(all(feature = "curl", not(test)))]
-    if let Some(context) = unsafe { ctx.as_mut() } {
+    {
         let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
         context
             .stream_resources_mut()
             .release_curl_easy_private_values(&mut values);
     }
-    if let Some(context) = unsafe { ctx.as_ref() } {
-        context.unregister_dynamic_object_context();
-    }
+    context.unregister_dynamic_object_context();
     crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
     unsafe { drop(Box::from_raw(ctx)) };
 }

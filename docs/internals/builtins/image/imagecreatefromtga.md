@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefromtga() — internals"
+title: "imagecreatefromtga() - internals"
 description: "Compiler internals for imagecreatefromtga(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 492
 ---
 
-## `imagecreatefromtga()` — internals
+## `imagecreatefromtga()` - internals
 
 ## Where it lives
 

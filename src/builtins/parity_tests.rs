@@ -251,7 +251,8 @@ fn shared_php_visible_extension_contracts(
             matches!(
                 aot_support(contract),
                 BackendSupport::Implemented(
-                    BackendImplementation::Registry | BackendImplementation::DedicatedSyntax
+                    BackendImplementation::Registry
+                        | BackendImplementation::DedicatedSyntax
                 )
             )
         })
@@ -532,8 +533,8 @@ fn parse_prelude_param(raw: &str, function: &str) -> PreludeParam {
 
 /// Returns whether a prelude's declared PHP type is the contract's neutral type.
 ///
-/// `TypeSpec` spells the scalars, `array`, `callable`, `ptr` and `?T` exactly, so each of
-/// those must match the declaration; it has no object or union vocabulary, so a class-typed
+/// `TypeSpec` spells scalars, `object`, `array`, `callable`, `ptr` and `?T` exactly, so each of
+/// those must match the declaration; it has no class-specific or union vocabulary, so a class-typed
 /// or union surface is `Mixed` in the catalog and the prelude is free to declare
 /// `CurlHandle`, `mixed` or a union for it. The check is therefore compatibility, not
 /// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared with a
@@ -548,6 +549,7 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Float => "float",
         TypeSpec::Str => "string",
         TypeSpec::Bool => "bool",
+        TypeSpec::Object => "object",
         TypeSpec::Void => "void",
         // Neither is a PHP scalar, and neither is `Mixed`'s open surface: `Ptr` is elephc's
         // own `ptr` type and `Callable` is the owned descriptor `callable` lowers to. Both
@@ -561,7 +563,7 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Mixed => {
             return !matches!(
                 declared,
-                "int" | "float" | "string" | "bool" | "ptr" | "callable" | "array"
+                "int" | "float" | "string" | "bool" | "object" | "ptr" | "callable" | "array"
             );
         }
     };
@@ -585,6 +587,7 @@ fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
         }
         // A built prelude carries the folded literal; PHP text spells the constant.
         DefaultSpec::IntMax => declared == "PHP_INT_MAX" || declared.parse::<i64>() == Ok(i64::MAX),
+        DefaultSpec::ErrorAll => declared == "E_ALL",
         DefaultSpec::EmptyArray => declared == "[]" || declared.replace(' ', "") == "array()",
         DefaultSpec::Constant(name) => declared == *name,
         DefaultSpec::Expr(source) => {
@@ -611,6 +614,7 @@ fn default_text(default: &DefaultSpec) -> String {
         DefaultSpec::Float(value) => format!("{value:?}"),
         DefaultSpec::Str(value) => format!("\"{value}\""),
         DefaultSpec::IntMax => "PHP_INT_MAX".to_string(),
+        DefaultSpec::ErrorAll => "E_ALL".to_string(),
         DefaultSpec::EmptyArray => "[]".to_string(),
         DefaultSpec::Constant(name) => (*name).to_string(),
         DefaultSpec::Expr(source) => (*source).to_string(),
@@ -765,6 +769,7 @@ fn prelude_parameters_parse_every_php_passing_form() {
     assert!(!default_matches(&DefaultSpec::Float(1.0), "5.0"));
     assert!(default_matches(&DefaultSpec::Null, "NULL"));
     assert!(!default_matches(&DefaultSpec::Bool(false), "true"));
+    assert!(default_matches(&DefaultSpec::ErrorAll, "E_ALL"));
 }
 
 /// Returns the PHP-visible function names one prelude source declares at top level.

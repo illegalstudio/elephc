@@ -92,7 +92,7 @@ pub(crate) struct CallableDescriptorInvocation {
 
 /// Full static callable descriptor input before data-section serialization.
 pub(crate) struct CallableDescriptorSpec<'a> {
-    pub(crate) entry_label: &'a str,
+    pub(crate) entry_label: Option<&'a str>,
     pub(crate) php_name: Option<&'a str>,
     pub(crate) kind: u64,
     pub(crate) sig: Option<&'a FunctionSig>,
@@ -178,7 +178,7 @@ pub(crate) fn static_descriptor_with_optional_invoker_meta(
     invoker_label: Option<&str>,
 ) -> String {
     let spec = CallableDescriptorSpec {
-        entry_label,
+        entry_label: Some(entry_label),
         php_name,
         kind,
         sig,
@@ -186,6 +186,26 @@ pub(crate) fn static_descriptor_with_optional_invoker_meta(
         hidden_params,
         invocation,
         invoker_label,
+    };
+    static_descriptor_from_spec(data, &spec)
+}
+
+/// Emits a descriptor for a callable whose statically tracked lowering has no runtime entry.
+pub(crate) fn static_only_descriptor(
+    data: &mut DataSection,
+    php_name: &str,
+    kind: u64,
+    invocation: CallableDescriptorInvocation,
+) -> String {
+    let spec = CallableDescriptorSpec {
+        entry_label: None,
+        php_name: Some(php_name),
+        kind,
+        sig: None,
+        captures: &[],
+        hidden_params: &[],
+        invocation,
+        invoker_label: None,
     };
     static_descriptor_from_spec(data, &spec)
 }
@@ -224,10 +244,14 @@ fn static_descriptor_from_spec(
         .invoker_label
         .map(|label| DataWord::Symbol(label.to_string()))
         .unwrap_or(DataWord::U64(0));
+    let entry_word = spec
+        .entry_label
+        .map(|label| DataWord::Symbol(label.to_string()))
+        .unwrap_or(DataWord::U64(0));
 
     data.add_words(vec![
         DataWord::U64(spec.kind),
-        DataWord::Symbol(spec.entry_label.to_string()),
+        entry_word,
         name_word,
         DataWord::U64(name_len),
         signature_word,

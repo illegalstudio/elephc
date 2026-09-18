@@ -6,25 +6,25 @@
 //! - Future `crate::scope` and `crate::interpreter` implementations.
 //!
 //! Key details:
-//! - Handles point at elephc runtime cells whose tag/payload/refcount contract
-//!   is owned by the main runtime.
+//! - Handles carry Rust-only result provenance; native ABI slots contain raw pointers only.
+//! - Copying a handle does not retain its cell. Borrowed reads must acquire a lease before cleanup.
 
 use std::ffi::c_void;
 
 /// Opaque pointer to an elephc runtime cell.
 pub type RuntimeCell = c_void;
 
-/// Wraps an opaque runtime cell pointer without taking ownership by itself.
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Wraps a runtime pointer and records whether an expression borrows an existing owner's cell.
+#[derive(Clone, Copy, Debug)]
 pub struct RuntimeCellHandle {
     ptr: *mut RuntimeCell,
+    borrowed: bool,
 }
 
 impl RuntimeCellHandle {
     /// Creates a runtime-cell handle from a raw pointer supplied by elephc.
     pub const fn from_raw(ptr: *mut RuntimeCell) -> Self {
-        Self { ptr }
+        Self { ptr, borrowed: false }
     }
 
     /// Returns the raw runtime-cell pointer for ABI calls back into elephc.
@@ -36,4 +36,28 @@ impl RuntimeCellHandle {
     pub const fn is_null(self) -> bool {
         self.ptr.is_null()
     }
+
+    /// Marks a storage read as borrowed without changing the runtime reference count.
+    pub(crate) const fn borrowed(self) -> Self {
+        Self { borrowed: true, ..self }
+    }
+
+    /// Records a retained or transferred owner without changing the runtime reference count.
+    pub(crate) const fn owned(self) -> Self {
+        Self { borrowed: false, ..self }
+    }
+
+    /// Returns whether the expression must retain this cell before consuming it.
+    pub(crate) const fn is_borrowed(self) -> bool {
+        self.borrowed
+    }
 }
+
+impl PartialEq for RuntimeCellHandle {
+    /// Compares cell identity independently of how the current expression obtained its handle.
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr == other.ptr
+    }
+}
+
+impl Eq for RuntimeCellHandle {}

@@ -85,6 +85,11 @@ pub struct CheckResult {
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
+    pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
+    /// Reads proven to use native buffers on every checker visit to the source span.
+    /// Buffer bounds checks cannot invoke PHP warning handlers.
+    pub buffer_read_sites: HashSet<Span>,
     /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: LoopStorageTypes,
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
@@ -119,6 +124,10 @@ pub struct CheckResult {
     /// file identity would remove the ambiguity outright, and every span-keyed map here would
     /// want it.
     pub local_bind_kill_sites: HashMap<Span, HashSet<String>>,
+    /// Unconditional statement-form unsets allowed to detach an ordinary promoted reference.
+    /// Unlike binding kills, these preserve the checker's escaped-reference type restrictions.
+    /// Lowering keeps the old capture storage type and retires only this binding's cell owner.
+    pub local_ref_detach_sites: HashMap<Span, HashSet<String>>,
     /// The statement-form assignments the checker re-bound to a fresh binding of an incompatible
     /// type, as span -> the SET of local NAMES re-bound at that position, so EIR lowering mints a
     /// new slot there. Read by `crate::ir_lower` alongside `local_bind_kill_sites`, and keyed the
@@ -144,7 +153,7 @@ pub struct CheckResult {
 }
 
 impl CheckResult {
-    /// Every span carrying a local-binding decision: kills, retypes and mixed-storage stores.
+    /// Every span carrying a local-binding decision: kills, reference detaches, retypes and stores.
     ///
     /// Handed to the post-typecheck optimizer. These decisions are keyed BY SPAN and EIR lowering
     /// consults them by span, so any pass that CLONES an AST node would hand one decision to two
@@ -168,8 +177,14 @@ impl CheckResult {
     pub fn local_binding_decision_spans(&self) -> HashSet<Span> {
         self.local_bind_kill_sites
             .keys()
+            .chain(self.local_ref_detach_sites.keys())
             .chain(self.local_retype_sites.keys())
             .chain(self.mixed_storage_store_sites.keys())
+            .chain(
+                self.boxed_reference_promotion_sites
+                    .keys()
+                    .map(|(_, span)| span),
+            )
             .copied()
             .collect()
     }

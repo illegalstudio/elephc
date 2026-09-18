@@ -1,16 +1,16 @@
 ---
-title: "array_keys() — internals"
+title: "array_keys() - internals"
 description: "Compiler internals for array_keys(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 22
 ---
 
-## `array_keys()` — internals
+## `array_keys()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_keys.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -24,7 +24,7 @@ sidebar:
 
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
-- **Result type source**: `checked`
+- **Result type source**: `shared`
 - **Result ownership**: `fresh`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`

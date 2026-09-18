@@ -111,6 +111,10 @@ fn parse_stmt_dispatch(
     match &tokens[*pos].0 {
         Token::Echo => simple::parse_echo(tokens, pos, span),
         Token::Print => simple::parse_expr_stmt(tokens, pos, span),
+        // `clone $o;` and PHP 8.5's `clone($o, $overrides);` are ordinary expression statements
+        // whose result is discarded. Without an arm here the leading keyword reached the
+        // catch-all below and a standalone clone was a parse error rather than a no-op copy.
+        Token::Clone => simple::parse_expr_stmt(tokens, pos, span),
         Token::At => simple::parse_error_suppressed_stmt(tokens, pos, span),
         Token::Variable(_) => assign::parse_variable_stmt(tokens, pos, span),
         Token::This => simple::parse_this_stmt(tokens, pos, span),
@@ -204,7 +208,9 @@ fn parse_stmt_dispatch(
                 assign::parse_static_var(tokens, pos, span)
             }
         }
-        Token::LBracket => assign::parse_list_unpack(tokens, pos, span),
+        Token::LBracket if starts_bracket_destructuring_assignment(tokens, *pos) => {
+            assign::parse_list_unpack(tokens, pos, span)
+        }
         Token::Identifier(_)
         | Token::Enum
         | Token::Self_
@@ -213,6 +219,7 @@ fn parse_stmt_dispatch(
         | Token::Question
         | Token::New
         | Token::LParen
+        | Token::LBracket
         | Token::Match => {
             if matches!(&tokens[*pos].0, Token::Identifier(name) if name.eq_ignore_ascii_case("list"))
                 && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LParen))
@@ -265,6 +272,24 @@ fn parse_stmt_dispatch(
             &format!("Unexpected token at statement position: {:?}", other),
         )),
     }
+}
+
+/// Distinguishes bracket destructuring from array expressions by the matching closing bracket.
+fn starts_bracket_destructuring_assignment(tokens: &[SpannedToken], start: usize) -> bool {
+    let mut depth = 0usize;
+    for (index, (token, _)) in tokens.iter().enumerate().skip(start) {
+        match token {
+            Token::LBracket => depth += 1,
+            Token::RBracket => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return matches!(tokens.get(index + 1).map(|entry| &entry.0), Some(Token::Assign));
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Parses the exit level for `break` or `continue` statements.

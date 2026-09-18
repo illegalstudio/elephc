@@ -30,8 +30,9 @@
 //! | 168    | 8    | user_arg_max      | how many start_args slots `start()` may write |
 //! | 176    | 8    | start_arg_count   | number of boxed values copied by `start()` |
 //! | 184    | 48   | reserved          | legacy slot file; descriptor captures now carry hidden Fiber callback args |
+//! | 232    | 8    | own_magic_set_guard | saved `__set` reentrancy chain head for this fiber |
 //!
-//! Total payload = 232 bytes.
+//! Total payload = 240 bytes.
 
 mod alloc;
 mod api;
@@ -72,6 +73,8 @@ pub(crate) const FIBER_PENDING_THROW_OFFSET: i32 = 88;
 pub(crate) const FIBER_OWN_EXC_HEAD_OFFSET: i32 = 96;
 /// Byte offset of `own_call_frame` (saved _exc_call_frame_top for this fiber's cleanup chain).
 pub(crate) const FIBER_OWN_CALL_FRAME_OFFSET: i32 = 104;
+/// Byte offset of the saved runtime-name `__set` reentrancy chain for this fiber.
+pub(crate) const FIBER_OWN_MAGIC_SET_GUARD_OFFSET: i32 = 232;
 /// Byte offset of the first `start_args` slot (up to 7 Mixed pointers passed to Fiber::start; parallels AArch64 int arg regs).
 pub(crate) const FIBER_START_ARGS_OFFSET: i32 = 112;
 /// Maximum number of `start_args` slots (one per AArch64 integer argument register minus `$this`).
@@ -85,7 +88,7 @@ pub(crate) const FIBER_FLOAT_ARGS_OFFSET: i32 = 184;
 /// Maximum number of reserved legacy float slots.
 pub(crate) const FIBER_FLOAT_ARGS_MAX: i32 = 6;
 /// Total size of the Fiber object payload in bytes (heap-allocated; class_id at offset 0, followed by all runtime-managed fields).
-pub(crate) const FIBER_OBJECT_SIZE: i32 = 232;
+pub(crate) const FIBER_OBJECT_SIZE: i32 = 240;
 
 // ── Lifecycle states (stored in FIBER_STATE_OFFSET) ──────────────────
 // Phase 3 (suspend) will introduce the first user of FIBER_STATE_SUSPENDED.

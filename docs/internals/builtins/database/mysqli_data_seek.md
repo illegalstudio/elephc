@@ -1,11 +1,11 @@
 ---
-title: "mysqli_data_seek() — internals"
+title: "mysqli_data_seek() - internals"
 description: "Compiler internals for mysqli_data_seek(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 108
 ---
 
-## `mysqli_data_seek()` — internals
+## `mysqli_data_seek()` - internals
 
 ## Where it lives
 

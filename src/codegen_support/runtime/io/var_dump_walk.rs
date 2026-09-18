@@ -38,7 +38,7 @@
 //!   `_vd_seen` recursion guard; tag 7 unboxes a Mixed cell and redispatches.
 //!   Mutual recursion with the container walkers gives arbitrary nesting depth.
 //! - Associative arrays (hashes) are handled by `__rt_var_dump_hash`, which
-//!   iterates entries via `__rt_hash_iter_next`, formats string/integer keys and
+//!   iterates entries via `__rt_hash_iter_next_value`, formats string/integer keys and
 //!   delegates every value to `__rt_var_dump_value`.
 //! - Objects (tag 6) render their full body — see `super::var_dump_object` for
 //!   the per-class descriptor, the initialized-property count, and the
@@ -1666,7 +1666,7 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash pointer
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // x0=next cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=next cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
     emitter.instruction("str x0, [sp, #8]");                                    // save the next iterator cursor
     emitter.instruction("str x1, [sp, #32]");                                   // save key ptr (or integer payload)
     emitter.instruction("str x2, [sp, #40]");                                   // save key len (-1 sentinel for integer keys)
@@ -1731,7 +1731,7 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rax=next cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=next cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the next iterator cursor
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save key ptr (or integer payload)
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save key len (-1 sentinel for integer keys)

@@ -12,17 +12,6 @@
 use super::super::super::*;
 use super::super::*;
 
-/// Captures a writable `$matches` argument target from a direct preg call.
-pub(in crate::interpreter) fn eval_preg_matches_target(
-    expr: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<EvalReferenceTarget, EvalStatus> {
-    let (_, target) = eval_call_arg_value(expr, context, scope, values)?;
-    target.ok_or(EvalStatus::RuntimeFatal)
-}
-
 /// Writes a preg `$matches` result back to the captured caller lvalue.
 pub(in crate::interpreter) fn eval_write_preg_matches_target(
     target: &EvalReferenceTarget,

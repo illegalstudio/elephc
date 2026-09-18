@@ -9,6 +9,183 @@
 
 use super::*;
 
+/// Shutdown frees inherited static strings, containers, objects, and captured callbacks exactly once.
+#[test]
+fn test_class_static_properties_release_last_owners_at_shutdown() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ShutdownStaticPayload { public function __destruct() { echo "D"; } }
+class ShutdownStaticOwner {
+    public static string $text = "";
+    public static string $uninitialized;
+    public static mixed $list = null;
+    public static mixed $map = null;
+    public static mixed $object = null;
+    public static mixed $callback = null;
+}
+class ShutdownStaticChild extends ShutdownStaticOwner {}
+ShutdownStaticChild::$text = str_repeat("s", 32);
+ShutdownStaticChild::$list = [str_repeat("l", 32)];
+ShutdownStaticChild::$map = ["key" => str_repeat("m", 32)];
+ShutdownStaticChild::$object = new ShutdownStaticPayload();
+$capture = str_repeat("c", 32);
+ShutdownStaticChild::$callback = static function () use ($capture): void { echo $capture; };
+unset($capture);
+echo isset(ShutdownStaticChild::$uninitialized) ? "bad" : "ready";
+"#);
+    assert!(out.success, "stdout: {} stderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "readyD", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Checked increments of a typed static integer retire every intermediate Mixed cell.
+#[test]
+fn test_static_integer_increment_releases_checked_boxes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StaticIncrementOwner {
+    public static int $count = 0;
+    public static function bump(): void { self::$count++; }
+}
+for ($i = 0; $i < 20; $i = (int)($i + 1)) { StaticIncrementOwner::bump(); }
+echo StaticIncrementOwner::$count;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "20", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Borrowed boxed scalar conversions neither leak a retain nor consume the caller's source.
+#[test]
+fn test_static_scalar_stores_release_only_owned_source_boxes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StaticScalarOwner {
+    public static int $integer = 0;
+    public static bool $flag = false;
+    public static float $fraction = 0.0;
+    public static string $text = "";
+}
+function storeStaticScalars(mixed $value): void {
+    StaticScalarOwner::$integer = $value;
+    StaticScalarOwner::$flag = $value;
+    StaticScalarOwner::$fraction = $value;
+    StaticScalarOwner::$text = $value;
+    echo StaticScalarOwner::$integer, ":", StaticScalarOwner::$flag ? "1" : "0",
+        ":", StaticScalarOwner::$fraction, ":", StaticScalarOwner::$text, ":", $value, "|";
+}
+storeStaticScalars($argc);
+storeStaticScalars(3);
+StaticScalarOwner::$text = "";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:1:1:1:1|3:1:3:3:3|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Persisting boxed string payloads creates exactly one static owner and leaves the source usable.
+#[test]
+fn test_static_string_stores_persist_boxed_payload_once() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StaticStringOwner { public static string $text = ""; }
+function storeStaticString(mixed $value): void {
+    StaticStringOwner::$text = $value;
+    echo strlen(StaticStringOwner::$text), ":", $value, "|";
+}
+$text = str_repeat("x", 24);
+for ($i = 0; $i < 4; $i = (int)($i + 1)) { storeStaticString($text); }
+unset($text);
+echo strlen(StaticStringOwner::$text);
+StaticStringOwner::$text = "";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}24", "24:xxxxxxxxxxxxxxxxxxxxxxxx|".repeat(4)), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies a declared static object property releases the Mixed box it was handed ownership of.
+///
+/// A runtime-shaped write to a static object slot unboxes the payload and retains the OBJECT on
+/// its own, so the cell EIR expects this consumer to adopt keeps no owner afterwards. Without that
+/// release the slot leaked one boxed cell and one payload reference per accepted write, which is
+/// why the loop repeats the write instead of storing once.
+///
+/// The write goes through `ReflectionProperty::setValue()` because a direct `Class::$prop = <mixed>`
+/// assignment into a declared OBJECT static property is refused by the type checker: Mixed is only
+/// statically compatible with the scalar targets that have boxed cast funnels. Reflection is the
+/// PHP-visible route that reaches this lowering with a boxed source, and the reflector is built
+/// inline at each write because a static-property `setValue()` requires an inline known slot.
+///
+/// That route is also why the run cannot assert `HEAP DEBUG: leak summary: clean`: the inline
+/// reflectors leave Reflection allocations of their own live at exit, unrelated to the store under
+/// test, which would swamp the one-cell-per-write signal. The emitted store sequence carries the
+/// evidence instead. Only this lowering emits a `prop_store_mixed_value_done` label, and no other
+/// write in the fixture reaches it, so each occurrence marks one static Mixed-to-object store and
+/// the needles around it are local to the changed code: `__rt_mixed_unbox` feeding the store just
+/// above the label, the independent object `__rt_incref` right at it, then `__rt_decref_mixed`
+/// retiring the adopted cell. Deleting the release deletes that last call and fails the test.
+#[test]
+fn test_static_object_property_releases_adopted_mixed_box() {
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+class StaticAnimal {
+    public string $name = "animal";
+}
+class StaticDog extends StaticAnimal {
+    public string $name = "dog";
+}
+class StaticPen {
+    public static StaticAnimal $pet;
+}
+
+function pickStaticPet(mixed $value): mixed { return $value; }
+
+for ($i = 0; $i < 40; $i++) {
+    (new ReflectionProperty(StaticPen::class, "pet"))->setValue(null, pickStaticPet(new StaticAnimal()));
+    (new ReflectionProperty(StaticPen::class, "pet"))->setValue(null, pickStaticPet(new StaticDog()));
+}
+echo StaticPen::$pet->name, "|", $i;
+"#);
+    assert!(out.success, "stdout: {} stderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "dog|40", "{}", out.stderr);
+
+    let lines: Vec<&str> = assembly.lines().collect();
+    let stores: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            line.contains("prop_store_mixed_value_done") && line.trim_end().ends_with(':')
+        })
+        .map(|(index, _)| index)
+        .collect();
+    assert!(
+        stores.len() >= 2,
+        "expected one Mixed-to-object static store per write, found {}\n{assembly}",
+        stores.len()
+    );
+    for store in stores {
+        assert!(
+            lines[store.saturating_sub(16)..store]
+                .iter()
+                .any(|line| line.contains("__rt_mixed_unbox")),
+            "static object store at line {store} is not fed by a Mixed unbox\n{assembly}"
+        );
+        let tail = &lines[store + 1..(store + 25).min(lines.len())];
+        let retain = tail
+            .iter()
+            .position(|line| line.contains("__rt_incref"))
+            .unwrap_or_else(|| {
+                panic!("static object store at line {store} never retains the object\n{assembly}")
+            });
+        let release = tail
+            .iter()
+            .position(|line| line.contains("__rt_decref_mixed"))
+            .unwrap_or_else(|| {
+                panic!("static object store at line {store} never releases the adopted Mixed box\n{assembly}")
+            });
+        assert!(
+            retain < release,
+            "static object store at line {store} releases the adopted Mixed box before retaining the object\n{assembly}"
+        );
+    }
+}
+
 /// Tests calling a class static method with a string parameter and concatenating the result.
 #[test]
 fn test_class_static_method_string_param() {

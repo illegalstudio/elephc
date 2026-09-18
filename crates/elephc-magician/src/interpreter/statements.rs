@@ -28,6 +28,8 @@ mod method_dispatch;
 mod native_argument_binding;
 mod native_constructor_defaults;
 mod native_method_execution;
+mod native_property_access;
+mod native_property_unset;
 mod native_static_dispatch;
 mod property_constant_validation;
 mod property_dispatch;
@@ -47,11 +49,19 @@ use crate::context::{
 
 use abstract_requirements::*;
 pub(crate) use array_updates::*;
+// Re-exported under a distinct name so the `class_resolution::*` glob below and the crate-level
+// re-export in `interpreter/mod.rs` cannot import the same name at two visibilities.
+#[cfg(not(test))]
+pub(crate) use class_resolution::eval_object_clone_with_properties_result as eval_object_clone_with_properties_for_ffi;
+// Same rule for the property setter the generated stdClass write arm hands eval-declared receivers.
+#[cfg(not(test))]
+pub(crate) use instance_property_access::eval_property_set_result as eval_property_set_for_ffi;
 use attributes_magic_validation::*;
 pub(in crate::interpreter) use callable_objects::*;
 pub(in crate::interpreter) use class_declarations::*;
 pub(in crate::interpreter) use class_resolution::*;
 use closure_binding::*;
+pub(in crate::interpreter) use closure_binding::eval_closure_bind_this_for_ffi;
 pub(in crate::interpreter) use dispatch::*;
 pub(in crate::interpreter) use dynamic_method_execution::*;
 pub(in crate::interpreter) use enum_declarations::*;
@@ -64,6 +74,8 @@ pub(in crate::interpreter) use method_dispatch::*;
 pub(in crate::interpreter) use native_argument_binding::*;
 pub(in crate::interpreter) use native_constructor_defaults::*;
 pub(in crate::interpreter) use native_method_execution::*;
+pub(in crate::interpreter) use native_property_access::*;
+use native_property_unset::*;
 pub(in crate::interpreter) use native_static_dispatch::*;
 use property_constant_validation::*;
 use property_dispatch::*;

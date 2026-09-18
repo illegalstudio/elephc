@@ -45,7 +45,7 @@ impl Effects {
         self.is_empty()
     }
 
-    /// Returns true when the operation can read program-visible state.
+    /// Returns true when the operation or its PHP warning handler can read visible state.
     pub fn may_observe(self) -> bool {
         self.intersects(
             Effects::READS_LOCAL
@@ -53,11 +53,12 @@ impl Effects {
                 | Effects::READS_GLOBAL
                 | Effects::READS_FS
                 | Effects::READS_PROCESS
-                | Effects::NETWORK_IO,
+                | Effects::NETWORK_IO
+                | Effects::MAY_WARN,
         )
     }
 
-    /// Returns true when the operation can mutate program-visible state.
+    /// Returns true when the operation or its PHP warning handler can mutate visible state.
     pub fn may_mutate(self) -> bool {
         self.intersects(
             Effects::WRITES_LOCAL
@@ -65,7 +66,8 @@ impl Effects {
                 | Effects::WRITES_GLOBAL
                 | Effects::WRITES_FS
                 | Effects::WRITES_PROCESS
-                | Effects::REFCOUNT_OP,
+                | Effects::REFCOUNT_OP
+                | Effects::MAY_WARN,
         )
     }
 

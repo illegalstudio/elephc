@@ -11,11 +11,48 @@
 //! - ARM64 uses the project PCS convention; x86_64 uses SysV register materialization.
 //! - Property reads return owned `Mixed*` cells; borrowed hash entries are retained before return.
 //! - Mixed object dispatch rejects zero and sentinel payloads before reading a class id.
+//! - Property-hash entry points accept a slot address for non-stdClass object layouts.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Both property-hash entries preserve stdClass entry points and the runtime hash allocator ABI.
+    #[test]
+    fn property_hash_entries_and_allocator_arguments_cover_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emitter.dead_strip = true;
+            emit_stdclass_new(&mut emitter);
+            emit_stdclass_get(&mut emitter);
+            emit_stdclass_set(&mut emitter);
+            let asm = emitter.output();
+            for entry in ["__rt_stdclass_get:", "__rt_stdclass_set:", "__rt_property_hash_get:", "__rt_property_hash_set:"] {
+                assert!(asm.contains(entry), "{name}: {entry}");
+            }
+            for operation in ["get", "set"] {
+                let entry = format!("__rt_stdclass_{operation}:\n");
+                let helper = format!("__rt_property_hash_{operation}");
+                let wrapper = asm.split_once(&entry).unwrap().1
+                    .split_once(&format!("{helper}:")).unwrap().0;
+                let branch = if target.arch == Arch::X86_64 { "jmp" } else { "b" };
+                assert!(wrapper.contains(&format!("    {branch} {helper}\n")),
+                    "{name}: {operation} must keep its separate helper alive through a relocation");
+            }
+            if target.arch == Arch::X86_64 {
+                assert_eq!(asm.matches("mov rdi, 8").count(), 2);
+                assert_eq!(asm.matches("mov rsi, 7").count(), 2);
+            }
+        }
+    }
+}
 
 /// Emit `__rt_stdclass_new() → obj_ptr` for both targets.
 ///
@@ -235,15 +272,18 @@ fn emit_stdclass_get_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_get ---");
     emitter.label_global("__rt_stdclass_get");
+    emitter.instruction("add x0, x0, #8");                                      // locate the standard object's property-hash slot
+    emitter.instruction("b __rt_property_hash_get");                            // retain and enter the separate helper under linker dead stripping
+    emitter.label_global("__rt_property_hash_get");
 
     emitter.instruction("sub sp, sp, #48");                                     // frame: obj + name_ptr + name_len + saved fp/lr + slack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set new frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save obj
+    emitter.instruction("str x0, [sp, #0]");                                    // save the property-hash slot address
     emitter.instruction("str x1, [sp, #8]");                                    // save name_ptr
     emitter.instruction("str x2, [sp, #16]");                                   // save name_len
 
-    emitter.instruction("ldr x9, [x0, #8]");                                    // load hash_ptr from obj+8
+    emitter.instruction("ldr x9, [x0]");                                        // load the hash from its owning slot
     emitter.instruction("cbz x9, __rt_stdclass_get_null");                      // empty hash → return Mixed(null)
 
     emitter.instruction("mov x0, x9");                                          // x0 = hash pointer
@@ -277,9 +317,12 @@ fn emit_stdclass_set_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_set ---");
     emitter.label_global("__rt_stdclass_set");
+    emitter.instruction("add x0, x0, #8");                                      // locate the standard object's property-hash slot
+    emitter.instruction("b __rt_property_hash_set");                            // retain and enter the separate helper under linker dead stripping
+    emitter.label_global("__rt_property_hash_set");
 
     // Stack:
-    //   [sp, #0]  = obj
+    //   [sp, #0]  = address of the owning hash slot
     //   [sp, #8]  = name_ptr
     //   [sp, #16] = name_len
     //   [sp, #24] = mixed_ptr
@@ -288,24 +331,24 @@ fn emit_stdclass_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #48");                                     // reserve frame: 4 inputs + saved fp/lr
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set new frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save obj
+    emitter.instruction("str x0, [sp, #0]");                                    // save the property-hash slot address
     emitter.instruction("str x1, [sp, #8]");                                    // save name_ptr
     emitter.instruction("str x2, [sp, #16]");                                   // save name_len
     emitter.instruction("str x3, [sp, #24]");                                   // save mixed_ptr
 
-    emitter.instruction("ldr x9, [x0, #8]");                                    // load current hash_ptr from obj+8
+    emitter.instruction("ldr x9, [x0]");                                        // load the current hash from its owning slot
     emitter.instruction("cbnz x9, __rt_stdclass_set_have_hash");                // already allocated → skip lazy init
 
     emitter.instruction("mov x0, #8");                                          // initial capacity = 8 slots
     emitter.instruction("mov x1, #7");                                          // value_type = 7 (boxed Mixed)
     emitter.instruction("bl __rt_hash_new");                                    // x0 = empty hash pointer
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload obj
-    emitter.instruction("str x0, [x10, #8]");                                   // store the new hash_ptr at obj+8
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the property-hash slot address
+    emitter.instruction("str x0, [x10]");                                       // publish the lazily allocated property hash
 
     emitter.label("__rt_stdclass_set_have_hash");
 
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload obj
-    emitter.instruction("ldr x0, [x10, #8]");                                   // x0 = current hash_ptr
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the property-hash slot address
+    emitter.instruction("ldr x0, [x10]");                                       // x0 = current hash_ptr
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = name_ptr (key_lo)
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = name_len (key_hi)
     emitter.instruction("ldr x3, [sp, #24]");                                   // x3 = value_lo (Mixed pointer)
@@ -313,8 +356,8 @@ fn emit_stdclass_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x5, #7");                                          // value_tag = 7 (boxed Mixed)
     emitter.instruction("bl __rt_hash_set");                                    // x0 = updated hash pointer
 
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload obj
-    emitter.instruction("str x0, [x10, #8]");                                   // update obj+8 with the latest hash pointer
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the property-hash slot address
+    emitter.instruction("str x0, [x10]");                                       // publish the hash after insertion or COW
 
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
@@ -469,8 +512,8 @@ fn emit_stdclass_new_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class_id at obj+0
 
-    emitter.instruction("mov rax, 8");                                          // initial capacity = 8 slots (mixed_from_value first arg)
-    emitter.instruction("mov rdi, 7");                                          // value_type = 7 (boxed Mixed)
+    emitter.instruction("mov rdi, 8");                                          // pass the hash capacity through the SysV first argument
+    emitter.instruction("mov rsi, 7");                                          // pass the boxed Mixed value type through the SysV second argument
     emitter.instruction("call __rt_hash_new");                                  // rax = empty hash pointer
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the saved obj pointer
@@ -526,16 +569,19 @@ fn emit_stdclass_get_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_get ---");
     emitter.label_global("__rt_stdclass_get");
+    emitter.instruction("add rdi, 8");                                          // locate the standard object's property-hash slot
+    emitter.instruction("jmp __rt_property_hash_get");                          // retain and enter the separate ELF text section
+    emitter.label_global("__rt_property_hash_get");
 
     // Inputs (SysV): rdi=obj, rsi=name_ptr, rdx=name_len. Output: rax=Mixed*.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 32");                                         // reserve slots for obj, name_ptr, name_len, scratch
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save obj
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the property-hash slot address
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save name_ptr
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save name_len
 
-    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load hash_ptr from obj+8
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the hash from its owning slot
     emitter.instruction("test r10, r10");                                       // empty hash?
     emitter.instruction("je __rt_stdclass_get_null");                           // yes → return Mixed(null)
 
@@ -668,30 +714,33 @@ fn emit_stdclass_set_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_set ---");
     emitter.label_global("__rt_stdclass_set");
+    emitter.instruction("add rdi, 8");                                          // locate the standard object's property-hash slot
+    emitter.instruction("jmp __rt_property_hash_set");                          // retain and enter the separate ELF text section
+    emitter.label_global("__rt_property_hash_set");
 
     // Inputs (SysV): rdi=obj, rsi=name_ptr, rdx=name_len, rcx=mixed_ptr.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 32");                                         // reserve slots for the 4 saved inputs (16-byte aligned)
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save obj
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the property-hash slot address
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save name_ptr
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save name_len
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save mixed_ptr
 
-    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load current hash_ptr from obj+8
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the current hash from its owning slot
     emitter.instruction("test r10, r10");                                       // already allocated?
     emitter.instruction("jne __rt_stdclass_set_have_hash");                     // skip lazy init when present
 
-    emitter.instruction("mov rax, 8");                                          // initial capacity = 8 slots
-    emitter.instruction("mov rdi, 7");                                          // value_type = 7 (boxed Mixed)
+    emitter.instruction("mov rdi, 8");                                          // pass the hash capacity through the SysV first argument
+    emitter.instruction("mov rsi, 7");                                          // pass the boxed Mixed value type through the SysV second argument
     emitter.instruction("call __rt_hash_new");                                  // rax = empty hash pointer
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload obj
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // store the new hash_ptr at obj+8
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the property-hash slot address
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // publish the lazily allocated property hash
 
     emitter.label("__rt_stdclass_set_have_hash");
 
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload obj
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // rdi = current hash_ptr
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the property-hash slot address
+    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // rdi = current hash_ptr
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = name_ptr (key_lo)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = name_len (key_hi)
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // rcx = mixed_ptr (value_lo)
@@ -699,8 +748,8 @@ fn emit_stdclass_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, 7");                                           // value_tag = 7 (boxed Mixed)
     emitter.instruction("call __rt_hash_set");                                  // rax = updated hash pointer
 
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload obj
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // update obj+8 with the latest hash pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the property-hash slot address
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // publish the hash after insertion or COW
 
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

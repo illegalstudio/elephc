@@ -17,11 +17,12 @@ use super::super::{
     FIBER_CALLABLE_OFFSET, FIBER_CALLABLE_WRAPPER_OFFSET, FIBER_CALLER_OFFSET,
     FIBER_DEFAULT_STACK_SIZE, FIBER_FLOAT_ARGS_MAX, FIBER_FLOAT_ARGS_OFFSET,
     FIBER_OBJECT_SIZE, FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET,
-    FIBER_PENDING_THROW_OFFSET, FIBER_SAVED_SP_OFFSET, FIBER_STACK_BASE_OFFSET,
-    FIBER_STACK_SIZE_OFFSET, FIBER_STACK_TOP_OFFSET, FIBER_START_ARGS_MAX,
-    FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET, FIBER_STATE_NOT_STARTED,
-    FIBER_STATE_OFFSET, FIBER_STATE_RUNNING, FIBER_STATE_SUSPENDED,
-    FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET, FIBER_USER_ARG_MAX_OFFSET,
+    FIBER_OWN_MAGIC_SET_GUARD_OFFSET, FIBER_PENDING_THROW_OFFSET, FIBER_SAVED_SP_OFFSET,
+    FIBER_STACK_BASE_OFFSET, FIBER_STACK_SIZE_OFFSET, FIBER_STACK_TOP_OFFSET,
+    FIBER_START_ARGS_MAX, FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET,
+    FIBER_STATE_NOT_STARTED, FIBER_STATE_OFFSET, FIBER_STATE_RUNNING,
+    FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
+    FIBER_USER_ARG_MAX_OFFSET,
 };
 
 /// __rt_fiber_throw_state_error: allocate a `FiberError`, set its message, and
@@ -103,6 +104,7 @@ pub(super) fn emit_construct(emitter: &mut Emitter) {
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_PENDING_THROW_OFFSET)); // pending_throw cleared
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_EXC_HEAD_OFFSET)); // own_exc_head cleared (no installed handlers yet)
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // own_call_frame cleared (no activation records on the fresh fiber stack yet)
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // no active magic-set recursion guard on a fresh fiber
     for i in 0..FIBER_START_ARGS_MAX {
         emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARGS_OFFSET + i * 8)); // start_args[i] cleared
     }

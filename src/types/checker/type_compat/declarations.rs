@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, TypeExpr};
-use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType};
+use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType, TypeEnv};
 
 use super::super::inference::syntactic::infer_expr_type_syntactic;
 use super::super::{Checker, FnDecl};
@@ -199,7 +199,8 @@ impl Checker {
     /// Two rules, both about the WRITE-BACK rather than the incoming value:
     ///
     /// 1. A parameter whose declared type needs boxed or nullable storage cannot write
-    ///    every value it accepts into a concrete non-boxed slot.
+    ///    every value it accepts into a concrete non-boxed slot. Local array slots that EIR
+    ///    can widen, and the reference shapes it can promote, are accepted before that rule.
     /// 2. A parameter whose declared type does NOT accept null cannot be handed a variable
     ///    that holds null, because the slot's representation is the declared scalar's and
     ///    nothing coerces it on the way in. php-src agrees and throws
@@ -214,18 +215,60 @@ impl Checker {
     /// as an operation on a null-typed value: issue #892 reported
     /// `unsupported EIR backend feature: icmp for PHP type Void`, positionless, from
     /// `$running = null; do { … } while ($running > 0);` around `curl_multi_exec()`.
-    pub(crate) fn require_by_ref_argument_storage(
-        &self,
+    pub(crate) fn require_boxed_by_ref_storage(
+        &mut self,
         expected_ty: &PhpType,
         actual_ty: &PhpType,
-        span: crate::span::Span,
+        arg: &Expr,
+        env: &TypeEnv,
+        can_widen_local: bool,
         context: &str,
     ) -> Result<(), CompileError> {
+        if expected_ty.codegen_repr() != PhpType::Mixed
+            && self.by_ref_argument_uses_mixed_or_hash_storage(actual_ty, arg, env)?
+        {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} cannot bind typed by-reference storage from a mixed or hash-backed value; declare the parameter as mixed or pass a concrete indexed array element",
+                    context
+                ),
+            ));
+        }
+        // The call lowering boxes PHP array locals before exposing their ref-cell address.
+        // This changes storage, not the declared values accepted by the reference parameter.
+        if expected_ty.is_php_array()
+            && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            return Ok(());
+        }
         if requires_by_ref_boxed_storage(expected_ty)
             && !supports_by_ref_boxed_storage(actual_ty)
         {
+            if matches!(expected_ty, PhpType::Mixed)
+                && matches!(
+                    &arg.kind,
+                    ExprKind::Variable(name)
+                        if self.boxed_ref_aliased_locals.contains(name)
+                )
+            {
+                return Ok(());
+            }
+            if expected_ty.codegen_repr() == PhpType::Mixed && can_widen_local {
+                return Ok(());
+            }
+            // `lower_by_ref_array_element_arg_with_signature` widens a local
+            // indexed array to Mixed slots before taking the element address.
+            // Only that addressable shape has this conversion, not arbitrary
+            // scalar locals, properties, nested places or tagged nullable slots.
+            if expected_ty.codegen_repr() == PhpType::Mixed
+                && matches!(arg.kind, ExprKind::ArrayAccess { .. })
+                && self.is_by_ref_argument_lvalue(arg, env)?
+            {
+                return Ok(());
+            }
             return Err(CompileError::new(
-                span,
+                arg.span,
                 &format!(
                     "{} requires a variable with mixed/union/nullable storage when passed by reference",
                     context
@@ -234,7 +277,7 @@ impl Checker {
         }
         if *actual_ty == PhpType::Void && !Self::declared_type_accepts_null(expected_ty) {
             return Err(CompileError::new(
-                span,
+                arg.span,
                 // The recovery names the VARIABLE in both branches, deliberately. Saying
                 // "declare the parameter nullable" alone is advice that does not work:
                 // `?int &$slot` needs the caller's variable to have nullable storage too, so
@@ -250,6 +293,44 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    /// Returns whether a by-reference call may give one ordinary local canonical Mixed storage.
+    pub(crate) fn by_ref_argument_can_widen_local_to_mixed(&self, arg: &Expr) -> bool {
+        let mut arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            arg = value;
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            return false;
+        };
+        !self.active_ref_params.contains(name)
+            && !self.ref_aliased_locals.contains(name)
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+            && !self.typed_local_names.contains(name)
+            && !self.name_is_seeded_program_storage(name)
+            && !self.top_level_binding_is_program_global(name)
+    }
+
+    /// Identifies reference arguments whose writable cell stores a canonical boxed Mixed value.
+    fn by_ref_argument_uses_mixed_or_hash_storage(
+        &mut self,
+        actual_ty: &PhpType,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        if actual_ty.codegen_repr() == PhpType::Mixed {
+            return Ok(true);
+        }
+        let ExprKind::ArrayAccess { array, .. } = &arg.kind else {
+            return Ok(false);
+        };
+        Ok(match self.infer_type(array, env)?.codegen_repr() {
+            PhpType::AssocArray { .. } | PhpType::Mixed => true,
+            PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+            _ => false,
+        })
     }
 
     /// Validates that a default value expression is compatible with the declared type it is
@@ -343,8 +424,9 @@ impl Checker {
     }
 
     /// Builds the initial parameter type list for a function declaration, resolving type hints,
-    /// validating defaults, and inferring types for untyped parameters. Adds a variadic parameter
-    /// array type, using the declared element type for typed variadics.
+    /// validating defaults, and inferring types for untyped parameters. Untyped by-reference
+    /// parameters keep canonical Mixed storage. Adds a variadic parameter array type, using the
+    /// declared element type for typed variadics.
     pub(crate) fn initial_function_param_types(
         &mut self,
         name: &str,
@@ -365,6 +447,8 @@ impl Checker {
                     &format!("Function '{}' parameter ${}", name, param_name),
                 )?;
                 param_types.push((param_name.clone(), declared_ty));
+            } else if decl.ref_params.get(idx).copied().unwrap_or(false) {
+                param_types.push((param_name.clone(), PhpType::Mixed));
             } else if let Some(default_expr) = decl.defaults.get(idx).and_then(|d| d.as_ref()) {
                 param_types.push((param_name.clone(), infer_expr_type_syntactic(default_expr)));
             } else {
@@ -389,7 +473,7 @@ impl Checker {
     }
 
     /// Returns a bitvec indicating which parameters of a method have declared type hints.
-    /// Looks up the method by `method_name` and `is_static` in `class_info.method_decls`.
+    /// Local declarations provide the annotations; inherited methods retain them in their signature.
     pub(crate) fn declared_method_param_flags(
         class_info: &ClassInfo,
         method_name: &str,
@@ -413,7 +497,10 @@ impl Checker {
                     .chain(method.variadic.iter().map(|_| method.variadic_type.is_some()))
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_else(|| {
+                let signatures = if is_static { &class_info.static_methods } else { &class_info.methods };
+                signatures.get(&method_key).map(|sig| sig.declared_params.clone()).unwrap_or_default()
+            })
     }
 
     /// Adjusts a function signature so that parameters without declared type hints are marked
@@ -464,6 +551,7 @@ impl Checker {
     {
         let saved_local_binding_scope = self.enter_local_binding_scope(param_names);
         let saved_ref_params = self.active_ref_params.clone();
+        let saved_external_ref_bindings = self.active_external_ref_bindings.clone();
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
         let saved_foreach_keys = self.foreach_key_locals.clone();
@@ -473,6 +561,7 @@ impl Checker {
         let saved_null_probe_scope_is_top_level = self.null_probe_scope_is_top_level;
 
         self.active_ref_params = ref_param_names.into_iter().collect();
+        self.active_external_ref_bindings = self.active_ref_params.clone();
         self.active_globals.clear();
         self.active_statics.clear();
         self.foreach_key_locals.clear();
@@ -500,6 +589,7 @@ impl Checker {
         let result = f(self);
 
         self.active_ref_params = saved_ref_params;
+        self.active_external_ref_bindings = saved_external_ref_bindings;
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
         self.foreach_key_locals = saved_foreach_keys;

@@ -1380,12 +1380,8 @@ var_dump(read_of($a, "absent"));
     );
 }
 
-/// Verifies a nullable-int key still compiles and probes correctly.
-///
-/// A `?int` funnels to the codegen-internal `TaggedScalar` repr — an inline `{payload, tag}`
-/// pair, not a boxed `Mixed` cell — which the mixed-key codegen has no arm for. Widening the
-/// `isset` key-type upgrade to unions therefore has to exclude it explicitly, or this valid
-/// PHP stops compiling.
+/// Nullable integer keys preserve their integer payload or normalize null to the empty string.
+/// TaggedScalar storage must be decoded as an inline pair, never as a Mixed cell pointer.
 #[test]
 fn test_isset_with_nullable_int_key_stays_on_the_integer_path() {
     let out = compile_and_run_capture(
@@ -1396,10 +1392,40 @@ function isset_of(array $arr, ?int $k): bool {
 $p = [10, 20, 30];
 var_dump(isset_of($p, 1));
 var_dump(isset_of($p, 7));
+var_dump(isset_of($p, null));
+$map = ['' => 9, 0 => 10, 1 => null];
+var_dump(isset_of($map, null));
+var_dump(isset_of($map, 0));
+var_dump(isset_of($map, 1));
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\n");
+}
+
+/// Reads, writes and unset share nullable key normalization without conflating null with zero.
+#[test]
+fn test_nullable_int_hash_key_read_write_and_unset() {
+    let source = r#"<?php
+function useNullableKey(array $items, ?int $key): void {
+    echo $items[$key], ':';
+    $items[$key] = 'changed';
+    echo $items[$key], ':';
+    unset($items[$key]);
+    echo isset($items[$key]) ? 'bad' : 'gone';
+    echo '|';
+}
+$items = ['' => 'empty', 0 => 'zero', -2 => 'negative'];
+useNullableKey($items, null);
+useNullableKey($items, 0);
+useNullableKey($items, -2);
+echo $items[''], ':', $items[0], ':', $items[-2];
+unset($items);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "empty:changed:gone|zero:changed:gone|negative:changed:gone|empty:zero:negative");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Verifies the mixed-key probes and reads do not leak *per evaluation*.
@@ -3128,14 +3154,18 @@ echo 'done';
         );
     }
 
-    // -- IterStart: the sentinel source is folded to zero in the iterator slot --
+    // -- IterStart: the sentinel is recognized before any array header is read --
+    // A statically shaped source folds the sentinel to zero in the iterator slot. A source
+    // reached through a reference cell is a boxed Mixed value instead, and `__rt_mixed_unbox`
+    // normalizes a sentinel payload to the null tag before the shape dispatch that would touch
+    // storage — so either recognition satisfies the guarantee, and one of them must be there.
     let normalize = match target().arch {
         Arch::AArch64 => "csel x0, xzr, x0, eq",
         Arch::X86_64 => "cmove rax, r10",
     };
     assert!(
-        user_asm.contains(normalize),
-        "missing iter_start sentinel-to-zero normalization:\n{user_asm}"
+        user_asm.contains(normalize) || user_asm.contains("__rt_mixed_unbox"),
+        "missing iter_start null-container recognition:\n{user_asm}"
     );
 
     // -- IterNext: the by-reference live-length read keeps its zero-source guard --

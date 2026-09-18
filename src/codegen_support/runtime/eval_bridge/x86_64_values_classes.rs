@@ -81,7 +81,6 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
 
     emit_x86_64_object_from_raw_wrapper(emitter);
     emit_x86_64_install_dynamic_object_destructor_hook(emitter);
-    emit_x86_64_object_clone_shallow_wrapper(emitter);
 
     label_c_global(emitter, "__elephc_eval_class_exists");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer

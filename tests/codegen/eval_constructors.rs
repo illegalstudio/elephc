@@ -7,6 +7,9 @@
 //! Key details:
 //! - Fixtures focus on constructor bridge argument binding and by-reference
 //!   writeback for non-variable eval caller targets.
+//! - A constructor bridge is called directly, one argument per PHYSICAL parameter, so the
+//!   argument-frame fixture also covers the compiler-internal count and collector slots eval has
+//!   to materialize on top of the PHP-visible signature.
 
 use crate::support::{compile_and_run, compile_and_run_capture};
 
@@ -457,4 +460,84 @@ return gettype($box->value) . ":" . $box->value;');
         out,
         "Exception:eval-ctor-lvalue:integer:12|Exception:eval-ctor-lvalue:integer:16"
     );
+}
+
+/// An eval `new` into an AOT constructor reports the frame the PHP source declares.
+///
+/// A constructor bridge is reached the same way a method bridge is: eval supplies one argument
+/// per PHYSICAL parameter, including the compiler-internal argument count and, when the source
+/// declares no variadic of its own, the hidden surplus collector whose first element carries
+/// that count. The two shapes are covered separately because they materialize different hidden
+/// slots, and each is exercised with the optional both omitted and supplied plus a surplus tail.
+#[test]
+fn test_eval_aot_constructor_frames_follow_the_declared_signature() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCtorVariadicFrameShape {
+    public string $tally = "";
+
+    public function __construct($first, $second = 5, ...$rest) {
+        $this->tally = func_num_args() . ":" . implode(",", func_get_args())
+            . ":" . implode(",", $rest);
+    }
+}
+
+class EvalCtorCollectorFrameShape {
+    public string $tally = "";
+
+    public function __construct($first, $second = 5) {
+        $this->tally = func_num_args() . ":" . implode(",", func_get_args());
+    }
+}
+
+echo eval('$a = new EvalCtorVariadicFrameShape(1);
+echo $a->tally, "|";
+$b = new EvalCtorVariadicFrameShape(1, 2, 3, 4);
+echo $b->tally, "|";
+$c = new EvalCtorCollectorFrameShape(1);
+echo $c->tally, "|";
+$d = new EvalCtorCollectorFrameShape(1, 2, 3);
+echo $d->tally, "|";
+$e = new EvalCtorCollectorFrameShape(first: 1);
+return $e->tally;');
+"#,
+    );
+
+    assert_eq!(out, "1:1:|4:1,2,3,4:3,4|1:1|3:1,2,3|1:1");
+}
+
+/// An eval `new` into an AOT constructor whose optional default has NO eval representation still
+/// sees the optional as optional, and still reports the real argument count.
+///
+/// Same contract as the method fixture in `tests/codegen/eval_callables.rs`, on the constructor
+/// registration path, which registers its own shape through its own ABI entry point. The default
+/// nests twenty array levels deep, past `MAX_NATIVE_DEFAULT_CONSTANT_DEPTH`, so no default is
+/// registered for `$second`; an enum-case default is unrepresentable for the same reason. Without
+/// the explicit shape, `new EvalCtorUnrepresentableDefault(1)` would be rejected as missing a
+/// mandatory argument, and the hidden collector would carry no count for `func_num_args()`.
+///
+/// The named-argument call at the end also pins that no hidden slot became reachable by name in
+/// the process: hidden slots register the empty name, and a PHP parameter name is never empty.
+#[test]
+fn test_eval_aot_constructor_optional_default_without_an_eval_representation_stays_optional() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCtorUnrepresentableDefault {
+    public string $tally = "";
+
+    public function __construct($first, $second = [[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]) {
+        $this->tally = func_num_args() . ":" . count(func_get_args()) . ":" . count($second);
+    }
+}
+
+echo eval('$a = new EvalCtorUnrepresentableDefault(1);
+echo $a->tally, "|";
+$b = new EvalCtorUnrepresentableDefault(1, [7, 8, 9]);
+echo $b->tally, "|";
+$c = new EvalCtorUnrepresentableDefault(first: 1);
+return $c->tally;');
+"#,
+    );
+
+    assert_eq!(out, "1:1:1|2:2:3|1:1:1");
 }

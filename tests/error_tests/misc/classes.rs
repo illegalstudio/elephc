@@ -9,6 +9,15 @@
 
 use super::*;
 
+/// Defaults require a backing slot even when virtual hook bodies are concrete.
+#[test]
+fn test_error_virtual_property_hook_default() {
+    expect_error(
+        "<?php class Box { public int $value = 1 { get => 42; } }",
+        "Virtual properties cannot have a default value",
+    );
+}
+
 /// Verifies `method_exists()` requires both a class/object and method name.
 #[test]
 fn test_error_method_exists_wrong_args() {
@@ -50,6 +59,46 @@ fn test_error_undefined_property() {
     // accessing an absent property on an object reports undefined property with the class name.
     expect_error(
         "<?php class Box {} $b = new Box(); echo $b->missing;",
+        "Undefined property: Box::missing",
+    );
+}
+
+/// A literal write through `$this` in `__set` can materialize that exact dynamic property when
+/// the active accessor invocation has the same name, so a later read must type-check.
+#[test]
+fn test_magic_set_same_pair_reentry_property_is_readable() {
+    expect_no_error(
+        r#"<?php
+class Box {
+    public function __set(string $name, mixed $value): void {
+        if ($name === "stored") {
+            $this->stored = $value;
+        }
+    }
+}
+$box = new Box();
+$box->stored = 1;
+echo $box->stored;
+"#,
+    );
+}
+
+/// Recording one same-pair `__set` store must not make unrelated missing names readable.
+#[test]
+fn test_magic_set_same_pair_reentry_does_not_open_other_properties() {
+    expect_error(
+        r#"<?php
+class Box {
+    public function __set(string $name, mixed $value): void {
+        if ($name === "stored") {
+            $this->stored = $value;
+        }
+    }
+}
+$box = new Box();
+$box->stored = 1;
+echo $box->missing;
+"#,
         "Undefined property: Box::missing",
     );
 }
@@ -281,6 +330,20 @@ fn test_error_constructor_promotion_by_reference_requires_variable_arg() {
     );
 }
 
+/// A promoted reference property cannot outlive a managed array-entry argument lease.
+#[test]
+fn test_error_constructor_promoted_reference_rejects_array_element() {
+    for source in [
+        "<?php class Box { public function __construct(public mixed &$value) {} } $items = ['k' => new stdClass()]; $box = new Box($items['k']); $items = []; echo $box->value;",
+        "<?php class Box { public function __construct(public mixed &$value) {} } $items = ['k' => new stdClass()]; $alias =& $items['k']; $box = new Box($alias); unset($alias); $items = []; echo $box->value;",
+    ] {
+        expect_error(
+            source,
+            "cannot retain managed or already-reference-bound storage in a promoted property",
+        );
+    }
+}
+
 /// Verifies the error diagnostic for constructor promotion readonly by reference.
 #[test]
 fn test_error_constructor_promotion_readonly_by_reference() {
@@ -476,13 +539,20 @@ fn test_error_cannot_reduce_visibility_when_overriding_method() {
     );
 }
 
-/// Verifies the error diagnostic for subclass cannot access parent private property.
+/// Verifies that a subclass reading a parent's private property is NOT a compile error.
+///
+/// php 7.4 removed shadow properties: `Base::$value` lives under a mangled key, so the child's
+/// by-name table does not contain it and the plain name is a DYNAMIC property there. php 8.5.10
+/// warns `Undefined property: Child::$value` at run time and answers null, so refusing the
+/// program at compile time rejected a program php accepts. The run-time behaviour is pinned by
+/// `tests/codegen/objects/property_access/scope_visibility.rs`.
+///
+/// A private property declared by the receiver's OWN class is still an access error: see
+/// `test_error_private_access`.
 #[test]
-fn test_error_subclass_cannot_access_parent_private_property() {
-    // private properties are invisible to child classes; accessing them via `$this` is an error.
-    expect_error(
+fn test_subclass_read_of_parent_private_property_is_not_an_access_error() {
+    expect_no_error(
         "<?php class Base { private $value = 1; } class Child extends Base { public function read() { return $this->value; } } $c = new Child(); echo $c->read();",
-        "Cannot access private property: Child::value",
     );
 }
 
@@ -1141,5 +1211,106 @@ fn test_error_incompatible_trait_constant_composition() {
     expect_error(
         "<?php trait Left { public const VALUE = 1; } trait Right { public const VALUE = 2; } class UsesBoth { use Left, Right; }",
         "class UsesBoth has incompatible duplicate trait constant 'VALUE'",
+    );
+}
+
+/// Verifies a write to a private property the RECEIVER'S OWN class declares is still refused.
+///
+/// php raises `Cannot access private property Base::$p` here, and step 1 of php's resolution
+/// already took the one scope that may reach the slot. Making a strict ancestor's private name
+/// writable as a dynamic property must not make this one writable too.
+#[test]
+fn test_error_write_to_own_class_private_property_from_global_scope() {
+    expect_error(
+        "<?php class Base { private $p = 1; } $b = new Base(); $b->p = 2;",
+        "Cannot access private property: Base::p",
+    );
+}
+
+/// Verifies a write to a protected property from an unrelated scope is still refused.
+#[test]
+fn test_error_write_to_protected_property_from_an_unrelated_scope() {
+    expect_error(
+        "<?php class Base { protected $q = 1; } $b = new Base(); $b->q = 2;",
+        "Cannot access protected property: Base::q",
+    );
+}
+
+/// Verifies `unset()` on a private property the receiver's own class declares is still refused.
+///
+/// php raises the same access `Error` for `unset()` as for a write. The scope-dynamic arm added
+/// for a strict ancestor's private name must not swallow this one, which is a different
+/// resolution entirely.
+#[test]
+fn test_error_unset_own_class_private_property_from_global_scope() {
+    expect_error(
+        "<?php class Base { private $p = 1; } $b = new Base(); unset($b->p);",
+        "Cannot access private property: Base::p",
+    );
+}
+
+/// Verifies binding a reference to a private property from an unrelated scope is refused.
+///
+/// A reference hands the caller the ADDRESS of the storage, which is the widest exposure a
+/// property access has, so the refusal has to hold there too.
+#[test]
+fn test_error_reference_binding_to_a_private_property_from_global_scope() {
+    expect_error(
+        "<?php class Base { private $p = 1; } $b = new Base(); $r = &$b->p;",
+        "Cannot access private property: Base::p",
+    );
+}
+
+/// Verifies an ARRAY-ELEMENT write through a scope-dynamic name is refused with a precise
+/// diagnostic, and without resolving the ancestor's slot.
+///
+/// `$obj->p[] = v` reads the property's container, mutates it and publishes it back, which needs
+/// storage the element write can address for the whole operation. For a name php resolves to a
+/// dynamic property that container is not a slot at all, and resolving one anyway would select a
+/// strict ancestor's private storage and then refine ITS inferred type from a write that never
+/// reaches it.
+#[test]
+fn test_error_array_element_write_to_a_scope_dynamic_property() {
+    expect_error(
+        "<?php class Base { private $p = []; } class Child extends Base { \
+         public function go() { $this->p[] = 1; } } (new Child())->go();",
+        "Cannot write an array element through Child::p from this scope",
+    );
+}
+
+/// Verifies a `readonly` class refuses to CREATE the dynamic property a strict ancestor's private
+/// name resolves to, instead of storing one.
+///
+/// A `readonly` class carries php's no-dynamic-properties flag, so php answers this write with
+/// `Cannot create dynamic property ROChild::$p`, not with a creation. The scope-dynamic arm
+/// answers before the whole visibility and readonly ladder runs, so without its own check the arm
+/// would have created storage php forbids, and the reservation would have charged every instance
+/// a hash that no legal write can ever fill.
+#[test]
+fn test_error_dynamic_property_creation_on_a_readonly_class() {
+    expect_error(
+        "<?php readonly class ROBase { private string $p; \
+         public function __construct() { $this->p = 'base'; } } \
+         readonly class ROChild extends ROBase {} \
+         $c = new ROChild(); $c->p = 'x';",
+        "Cannot create dynamic property ROChild::$p",
+    );
+}
+
+/// A late-bound constructor cannot promise direct writable storage for an element argument.
+#[test]
+fn test_error_new_static_rejects_array_element_reference_argument() {
+    expect_error(
+        "<?php class Factory { public function __construct(mixed &$value) {} public static function make(array &$items): object { return new static($items['k']); } } $items = ['k' => 1]; Factory::make($items);",
+        "new static() cannot bind an array element by reference because the runtime constructor target is late-bound",
+    );
+}
+
+/// A runtime class name has no signature that can safely bind an element reference.
+#[test]
+fn test_error_dynamic_constructor_rejects_array_element_reference_argument() {
+    expect_error(
+        "<?php class DynamicRefCtor { public function __construct(mixed &$value) {} } $class = $argc > 1 ? 'DynamicRefCtor' : 'DynamicRefCtor'; $items = ['k' => 1]; new $class($items['k']);",
+        "Dynamic constructor cannot bind an array element by reference because its runtime signature is unknown",
     );
 }

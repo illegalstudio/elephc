@@ -176,6 +176,51 @@ fn borrow_changing_ownership_is_not_folded() {
     assert!(validate_function(&function).is_ok());
 }
 
+/// A non-owning `Borrow` around an acquired managed reference cell is a cleanup-policy marker,
+/// not a redundant pointer copy. Codegen uses it to leave normal-path retirement to the EIR
+/// operand ledger instead of popping and releasing the same lease from ABI cleanup.
+#[test]
+fn managed_ref_cell_borrow_marker_is_not_folded() {
+    let mut function = Function::new("managed_ref_borrow".to_string(), IrType::I64, PhpType::Int);
+    let owner = function.add_local(
+        Some("cell_owner".to_string()),
+        IrType::I64,
+        PhpType::Pointer(None),
+        LocalKind::OwnedTemp,
+    );
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let cell = builder.emit_const_i64(4096);
+        let acquired = builder
+            .emit(
+                Op::AcquireRefCell,
+                vec![cell],
+                Some(Immediate::LocalSlot(owner)),
+                IrType::I64,
+                PhpType::Pointer(None),
+                Ownership::NonHeap,
+            )
+            .expect("managed cell acquisition");
+        let borrowed = builder
+            .emit(
+                Op::Borrow,
+                vec![acquired],
+                None,
+                IrType::I64,
+                PhpType::Pointer(None),
+                Ownership::NonHeap,
+            )
+            .expect("managed cell ledger marker");
+        builder.terminate(Terminator::Return { value: Some(borrowed) });
+    }
+    assert!(!run_peephole(&mut function), "the cleanup-policy marker must survive");
+    assert_eq!(function.instructions[2].op, Op::Borrow, "the borrow is preserved");
+    assert!(validate_function(&function).is_ok());
+}
+
 // --- paired acquire / release cancellation -----------------------------------
 
 /// `a = Acquire(x); Release(a)` with `a` used only by that release cancels both:

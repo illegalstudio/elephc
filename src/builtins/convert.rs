@@ -28,6 +28,9 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Float => PhpType::Float,
         TypeSpec::Str => PhpType::Str,
         TypeSpec::Bool => PhpType::Bool,
+        // The checker model records object types by concrete class name. A neutral `object`
+        // declaration therefore remains open until a builtin check hook can refine it.
+        TypeSpec::Object => PhpType::Mixed,
         TypeSpec::Mixed => PhpType::Mixed,
         TypeSpec::Void => PhpType::Void,
         TypeSpec::Ptr => PhpType::Pointer(None),
@@ -54,6 +57,10 @@ pub fn default_spec_to_expr(d: &DefaultSpec) -> Expr {
         DefaultSpec::Float(f) => Expr::new(ExprKind::FloatLiteral(*f), Span::dummy()),
         DefaultSpec::Str(s) => Expr::new(ExprKind::StringLiteral(s.to_string()), Span::dummy()),
         DefaultSpec::IntMax => Expr::new(ExprKind::IntLiteral(i64::MAX), Span::dummy()),
+        DefaultSpec::ErrorAll => Expr::new(
+            ExprKind::IntLiteral(crate::php_version::PhpVersion::default().error_reporting_mask()),
+            Span::dummy(),
+        ),
         DefaultSpec::EmptyArray => Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
         DefaultSpec::Constant(name) => Expr::new(
             ExprKind::ConstRef(crate::names::Name::from(*name)),
@@ -103,6 +110,7 @@ mod tests {
     fn all_scalar_type_specs_convert() {
         assert_eq!(type_spec_to_php(&TypeSpec::Float), PhpType::Float);
         assert_eq!(type_spec_to_php(&TypeSpec::Bool), PhpType::Bool);
+        assert_eq!(type_spec_to_php(&TypeSpec::Object), PhpType::Mixed);
         assert_eq!(type_spec_to_php(&TypeSpec::Mixed), PhpType::Mixed);
         assert_eq!(type_spec_to_php(&TypeSpec::Void), PhpType::Void);
     }

@@ -136,7 +136,7 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
 }
 
 /// Moves raw double bits from a general-purpose register into the float-result register.
-fn emit_float_bits_to_float_result(ctx: &mut FunctionContext<'_>, bits_reg: &str) {
+pub(in crate::codegen::lower_inst) fn emit_float_bits_to_float_result(ctx: &mut FunctionContext<'_>, bits_reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("fmov d0, {}", bits_reg));         // reinterpret the boxed payload as a double

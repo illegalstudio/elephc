@@ -14,6 +14,7 @@ use super::context::*;
 use super::declared_symbols::*;
 use super::execute::*;
 use super::native_functions::*;
+use super::native_constants::*;
 use super::native_methods::*;
 use super::scope::*;
 use super::symbols::*;
@@ -35,6 +36,7 @@ mod class_metadata;
 mod context_symbols;
 mod native_functions;
 mod native_methods;
+mod native_user_constants;
 mod scope_execution;
 
 const TEST_NATIVE_DEFAULT_NULL: u64 = 0;
@@ -58,6 +60,7 @@ const TEST_MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 unsafe extern "C" fn fake_native_invoker(
     _descriptor: *mut c_void,
     _args: *mut RuntimeCell,
+    _invocation_scope: i64,
 ) -> *mut RuntimeCell {
     std::ptr::null_mut()
 }

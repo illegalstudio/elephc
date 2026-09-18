@@ -1,11 +1,11 @@
 ---
-title: "imagefontheight() — internals"
+title: "imagefontheight() - internals"
 description: "Compiler internals for imagefontheight(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 508
 ---
 
-## `imagefontheight()` — internals
+## `imagefontheight()` - internals
 
 ## Where it lives
 

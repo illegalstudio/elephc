@@ -1,6 +1,6 @@
 ---
 title: "array_uintersect()"
-description: "Computes the intersection of arrays using a callback comparator."
+description: "Returns entries from the first of exactly two arrays whose values occur in the second according to an integer-cast callback comparator, preserving keys."
 sidebar:
   order: 42
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_uintersect(array $array1, array $array2, callable $callback): array
 ```
 
-Computes the intersection of arrays using a callback comparator.
+Returns entries from the first of exactly two arrays whose values occur in the second according to an integer-cast callback comparator, preserving keys.
 
 **Parameters**:
 - `$array1` (`array`)
@@ -25,7 +25,7 @@ Computes the intersection of arrays using a callback comparator.
 - **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

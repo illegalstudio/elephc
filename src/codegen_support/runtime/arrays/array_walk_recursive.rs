@@ -84,7 +84,7 @@ pub fn emit_array_walk_recursive(emitter: &mut Emitter) {
     emitter.label("__rt_array_walk_recursive_hash_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload the iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // next entry: x0=cursor,x1=kptr,x2=klen,x3=vlo,x4=vhi,x5=vtag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // next entry: x0=cursor,x1=kptr,x2=klen,x3=vlo,x4=vhi,x5=vtag
     emitter.instruction("cmn x0, #1");                                          // has iteration reached the end (cursor == -1)?
     emitter.instruction("b.eq __rt_array_walk_recursive_done");                 // finish once every entry is visited
     emitter.instruction("str x0, [sp, #16]");                                   // save the next iterator cursor
@@ -174,7 +174,7 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_walk_recursive_hash_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // reload the iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // next entry: rax=cursor,rdi=kptr,rdx=klen,rcx=vlo,r8=vhi,r9=vtag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // next entry: rax=cursor,rdi=kptr,rdx=klen,rcx=vlo,r8=vhi,r9=vtag
     emitter.instruction("cmp rax, -1");                                         // has iteration reached the end?
     emitter.instruction("je __rt_array_walk_recursive_done");                   // finish once every entry is visited
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the next iterator cursor

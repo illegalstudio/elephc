@@ -23,9 +23,15 @@ pub(in crate::interpreter) fn property_hook_set_method(property_name: &str) -> S
 pub(super) fn validate_eval_readonly_property_write(
     declaring_class: &str,
     property: &EvalClassProperty,
-    context: &ElephcEvalContext,
+    clone_target: Option<(u64, &str)>,
+    context: &mut ElephcEvalContext,
 ) -> Result<(), EvalStatus> {
     if !property.is_readonly() {
+        return Ok(());
+    }
+    if clone_target.is_some_and(|(identity, storage_property)| {
+        context.consume_clone_reinitialization(identity, storage_property)
+    }) {
         return Ok(());
     }
     current_eval_method_is_declaring_constructor(declaring_class, context)
@@ -67,7 +73,13 @@ pub(super) fn eval_dynamic_property_for_access(
             }
         }
     }
-    context.class_property(object_class_name, property_name)
+    let (declaring_class, property) = context.class_property(object_class_name, property_name)?;
+    if property.visibility() == EvalVisibility::Private
+        && !same_eval_class_name(&declaring_class, object_class_name)
+    {
+        return None;
+    }
+    Some((declaring_class, property))
 }
 
 /// Returns the physical storage name for an eval object property slot.

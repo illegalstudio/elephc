@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and implemented through the existing repeat hook.
+//! - Direct calls hold source operands through repetition and release them on every exit.
 
 eval_builtin! {
     contract: "str_repeat",
@@ -26,9 +26,9 @@ pub(in crate::interpreter) fn eval_builtin_str_repeat(
     let [value, times] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let value = eval_expr(value, context, scope, values)?;
-    let times = eval_expr(times, context, scope, values)?;
-    eval_str_repeat_result(value, times, values)
+    with_eval_operands(&[value, times], context, scope, values, |args, _, _, values| {
+        eval_str_repeat_result(args[0], args[1], values)
+    })
 }
 
 /// Repeats one PHP string byte sequence according to a PHP-cast integer count.

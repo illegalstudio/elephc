@@ -12,6 +12,7 @@ mod call_destructor;
 mod enum_debug;
 mod export_props;
 mod handles;
+mod magic_set_guard;
 mod mixed_array_append;
 mod mixed_array_fetch_for_write;
 mod mixed_array_get;
@@ -35,6 +36,7 @@ pub(crate) use handles::{
     object_handle_index_slots,
 };
 pub(crate) use mixed_array_append::emit_mixed_array_append;
+pub(crate) use magic_set_guard::emit_magic_set_guard;
 pub(crate) use mixed_array_fetch_for_write::emit_mixed_array_fetch_for_write;
 pub(crate) use mixed_array_get::emit_mixed_array_get;
 pub(crate) use object_not_array::emit_throw_object_not_array;

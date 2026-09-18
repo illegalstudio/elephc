@@ -18,12 +18,23 @@ pub(in crate::interpreter) fn eval_builtin_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, values)?;
-    let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
-        return Err(EvalStatus::UnsupportedConstruct);
-    };
-    Ok(result)
+    with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+        eval_bound_builtin_call(name, arguments, context, values)
+    })
+}
+
+/// Invokes borrowed source arguments and releases only defaults allocated during named binding.
+pub(in crate::interpreter) fn eval_bound_builtin_call(
+    name: &str,
+    mut arguments: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    for argument in &mut arguments { argument.value = argument.value.borrowed(); }
+    let bound = bind_evaluated_builtin_args(name, arguments, values)?;
+    let result = eval_builtin_with_values(name, &bound, context, values)
+        .and_then(|result| result.ok_or(EvalStatus::UnsupportedConstruct));
+    finish_eval_argument_values(result, bound, context, values)
 }
 
 /// Binds evaluated builtin arguments to PHP parameter order when names are used.
@@ -84,15 +95,25 @@ pub(in crate::interpreter) fn collect_bound_builtin_args(
         .rposition(Option::is_some)
         .expect("non-empty bound args has a last supplied arg");
     let mut args = Vec::with_capacity(last_index + 1);
+    let mut defaults = Vec::new();
 
-    for (index, arg) in bound_args.into_iter().take(last_index + 1).enumerate() {
-        if let Some(value) = arg {
-            args.push(value);
-        } else if index >= shape.required_param_count {
-            args.push(eval_builtin_default_arg(name, index, values)?);
-        } else {
-            return Err(EvalStatus::RuntimeFatal);
+    let result = (|| {
+        for (index, arg) in bound_args.into_iter().take(last_index + 1).enumerate() {
+            if let Some(value) = arg {
+                args.push(value);
+            } else if index >= shape.required_param_count {
+                let value = eval_builtin_default_arg(name, index, values)?;
+                defaults.push(value);
+                args.push(value);
+            } else {
+                return Err(EvalStatus::RuntimeFatal);
+            }
         }
+        Ok(())
+    })();
+    if let Err(status) = result {
+        for value in defaults { let _ = values.release(value); }
+        return Err(status);
     }
 
     Ok(args)

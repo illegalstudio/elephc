@@ -148,9 +148,30 @@ mod tests {
         // The PHP-visible `curl_*` surface is published only with the `curl`
         // feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(contracts().len(), 1040 + curl_surface);
+        assert_eq!(contracts().len(), 1069 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
+    }
+
+    /// Verifies the PHP 8.5 clone function keeps its object and override-array contract.
+    #[test]
+    fn clone_contract_matches_php_85() {
+        let contract = lookup("clone").expect("clone contract");
+        assert_eq!(contract.module, crate::PhpModule::Core);
+        assert_eq!(contract.since, Some(crate::PhpVersion::Php85));
+        assert_eq!(contract.kind, crate::BuiltinKind::Function);
+        assert_eq!(contract.params.len(), 2);
+        assert_eq!(contract.params[0].name, "object");
+        assert_eq!(contract.params[0].ty, crate::TypeSpec::Object);
+        assert_eq!(contract.params[1].name, "withProperties");
+        assert_eq!(contract.params[1].ty, crate::TypeSpec::Array);
+        assert_eq!(
+            contract.params[1].default,
+            Some(crate::DefaultSpec::EmptyArray)
+        );
+        assert_eq!(contract.returns, crate::TypeSpec::Object);
+        assert_eq!(contract.signature().required_param_count(), 1);
+        assert_eq!(contract.signature().params.len(), 2);
     }
 
     /// Verifies stable IDs resolve to the same contracts as PHP names.

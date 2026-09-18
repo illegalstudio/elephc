@@ -323,4 +323,149 @@ fn test_parse_nullable_shorthand_cannot_be_combined_with_union() {
     assert!(parse_fails("<?php ?int|string $value = null;"));
 }
 
+// --- PHP 8.5 clone function and clone construct ---
+
+/// Verifies PHP 8.5 `clone($obj)` parses as an ordinary `FunctionCall` named `clone` with a
+/// single positional argument, not as the unary `ExprKind::Clone` construct.
+#[test]
+fn test_parse_clone_call_is_function_call() {
+    let stmts = parse_source("<?php $copy = clone($obj);");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert_eq!(name, "copy");
+            match &value.kind {
+                ExprKind::FunctionCall { name, args } => {
+                    assert_eq!(name.as_str(), "clone");
+                    assert_eq!(args.len(), 1);
+                    assert_eq!(args[0].kind, ExprKind::Variable("obj".into()));
+                }
+                other => panic!("expected clone function call, got {:?}", other),
+            }
+        }
+        other => panic!("expected assignment, got {:?}", other),
+    }
+}
+
+/// Verifies `clone($obj, ["x" => 7])` keeps both arguments through the shared call parser:
+/// the receiver and the `withProperties` associative array literal.
+#[test]
+fn test_parse_clone_call_with_properties_argument() {
+    let stmts = parse_source("<?php $copy = clone($obj, [\"x\" => 7]);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::FunctionCall { name, args } => {
+                assert_eq!(name.as_str(), "clone");
+                assert_eq!(args.len(), 2);
+                assert_eq!(args[0].kind, ExprKind::Variable("obj".into()));
+                match &args[1].kind {
+                    ExprKind::ArrayLiteralAssoc(items) => {
+                        assert_eq!(items.len(), 1);
+                        assert_eq!(items[0].0.kind, ExprKind::StringLiteral("x".into()));
+                        assert_eq!(items[0].1.kind, ExprKind::IntLiteral(7));
+                    }
+                    other => panic!("expected assoc array literal, got {:?}", other),
+                }
+            }
+            other => panic!("expected clone function call, got {:?}", other),
+        },
+        other => panic!("expected assignment, got {:?}", other),
+    }
+}
+
+/// Verifies named and spread arguments inside `clone(...)` reuse the general argument
+/// parser: `object:` and `withProperties:` become `NamedArg`, and `...$args` becomes `Spread`.
+#[test]
+fn test_parse_clone_call_named_and_spread_arguments() {
+    let stmts = parse_source(
+        "<?php $a = clone(object: $obj, withProperties: [\"x\" => 7]); $b = clone(...$args);",
+    );
+    assert_eq!(stmts.len(), 2);
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::FunctionCall { name, args } => {
+                assert_eq!(name.as_str(), "clone");
+                assert_eq!(args.len(), 2);
+                assert!(matches!(
+                    args[0].kind,
+                    ExprKind::NamedArg { ref name, .. } if name == "object"
+                ));
+                assert!(matches!(
+                    args[1].kind,
+                    ExprKind::NamedArg { ref name, .. } if name == "withProperties"
+                ));
+            }
+            other => panic!("expected clone function call, got {:?}", other),
+        },
+        other => panic!("expected assignment, got {:?}", other),
+    }
+    match &stmts[1].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::FunctionCall { name, args } => {
+                assert_eq!(name.as_str(), "clone");
+                assert_eq!(args.len(), 1);
+                match &args[0].kind {
+                    ExprKind::Spread(inner) => {
+                        assert_eq!(inner.kind, ExprKind::Variable("args".into()));
+                    }
+                    other => panic!("expected spread argument, got {:?}", other),
+                }
+            }
+            other => panic!("expected clone function call, got {:?}", other),
+        },
+        other => panic!("expected assignment, got {:?}", other),
+    }
+}
+
+/// Verifies `clone(...)` parses as the first-class callable of the `clone` function, not as
+/// a unary clone applied to an ellipsis.
+#[test]
+fn test_parse_clone_first_class_callable() {
+    let stmts = parse_source("<?php $f = clone(...);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+                assert_eq!(name.as_str(), "clone");
+            }
+            other => panic!("expected clone first-class callable, got {:?}", other),
+        },
+        other => panic!("expected assignment, got {:?}", other),
+    }
+}
+
+/// Precedence regression for the unary construct: `clone $obj->child + 1` must still parse
+/// as `(clone ($obj->child)) + 1`, with `clone` binding the member access but not the addition.
+#[test]
+fn test_unary_clone_keeps_precedence() {
+    let stmts = parse_source("<?php echo clone $obj->child + 1;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::BinaryOp { left, op, right } => {
+                assert_eq!(*op, BinOp::Add);
+                match &left.kind {
+                    ExprKind::Clone(inner) => match &inner.kind {
+                        ExprKind::PropertyAccess { object, property } => {
+                            assert_eq!(object.kind, ExprKind::Variable("obj".into()));
+                            assert_eq!(property, "child");
+                        }
+                        other => panic!("expected property access operand, got {:?}", other),
+                    },
+                    other => panic!("expected unary clone, got {:?}", other),
+                }
+                assert_eq!(right.kind, ExprKind::IntLiteral(1));
+            }
+            other => panic!("expected binary add, got {:?}", other),
+        },
+        other => panic!("expected echo, got {:?}", other),
+    }
+}
+
+/// Verifies a `clone(` call with an unterminated argument list is rejected like any other
+/// malformed call, and that a bare `clone` with no operand still fails.
+#[test]
+fn test_parse_clone_call_malformed_fails() {
+    assert!(parse_fails("<?php $c = clone($obj;"));
+    assert!(parse_fails("<?php $c = clone;"));
+}
+
 // --- Magic constants ---

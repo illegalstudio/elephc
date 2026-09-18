@@ -69,7 +69,8 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.store_result_value(result)?;
         }
     }
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // User callees own their Mixed parameter shadows, including an aliased resource return.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
     emit_ref_arg_writebacks(ctx, &call_args)
 }
@@ -147,6 +148,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         )));
     }
     let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
+    let preleased_ref_cells = plan_preleased_ref_arg_cells(ctx, args, ref_params)?;
     let mut ref_temp_cells = plan_ref_arg_temp_cells(
         ctx,
         args,
@@ -155,7 +157,11 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         &ref_writebacks,
         ref_cell_lifetime,
     )?;
-    emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
+    emit_ref_arg_cell_block(
+        ctx,
+        &mut ref_writebacks,
+        &mut ref_temp_cells,
+    )?;
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -174,7 +180,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
     } else {
         Vec::new()
     };
-    let cleanup_bytes = cleanup_slots.len() * 16;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     if cleanup_bytes > 0 {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     }
@@ -219,6 +225,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
+        preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
         borrowed_stack_arg_bytes,
@@ -248,6 +255,7 @@ pub(super) fn materialize_static_method_call_args_with_refs(
         )));
     }
     let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
+    let preleased_ref_cells = plan_preleased_ref_arg_cells(ctx, args, ref_params)?;
     // `CallOnly`: PHP refuses `Foo::__construct()` as a static call, so nothing reachable
     // here can promote a by-reference parameter into a property.
     let mut ref_temp_cells = plan_ref_arg_temp_cells(
@@ -258,9 +266,13 @@ pub(super) fn materialize_static_method_call_args_with_refs(
         &ref_writebacks,
         RefArgCellLifetime::CallOnly,
     )?;
-    emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
+    emit_ref_arg_cell_block(
+        ctx,
+        &mut ref_writebacks,
+        &mut ref_temp_cells,
+    )?;
     let cleanup_slots = plan_call_arg_temp_cleanups(ctx, args, param_types, ref_params, &[])?;
-    let cleanup_bytes = cleanup_slots.len() * 16;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     if cleanup_bytes > 0 {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     }
@@ -300,6 +312,7 @@ pub(super) fn materialize_static_method_call_args_with_refs(
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
+        preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
@@ -359,7 +372,7 @@ pub(super) fn materialize_called_class_id(
 /// The planner reserves that slot for exactly the borrowed widening arguments, so the presence
 /// of a cleanup is the same decision as the incref and the two cannot drift: an incref with no
 /// cleanup would leak the clone, and a cleanup with no incref would release the caller's array.
-fn materialize_plain_call_arg(
+pub(super) fn materialize_plain_call_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     param_ty: &PhpType,

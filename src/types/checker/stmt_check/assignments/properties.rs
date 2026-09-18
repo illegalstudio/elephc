@@ -17,6 +17,7 @@ use crate::types::{
     PhpType, TypeEnv,
 };
 
+use super::super::super::scope_dynamic_storage;
 use super::super::super::Checker;
 use super::properties_null_coalesce::null_coalesce_property_keeps_non_null;
 
@@ -45,6 +46,13 @@ pub(super) fn check_property_assign(
         check_object_property_write(checker, object, &class_name, property, value, &val_ty, span)?;
         refine_object_property_type(checker, &class_name, property, &val_ty);
     }
+    // A boxed `Mixed` receiver names no class, so the reservation is recorded for every class
+    // whose layout carries THIS name as a strict ancestor's private slot. Without it the Mixed
+    // write ladder had no arm for such a class and the store fell through to the stdClass-only
+    // miss helper, which dropped it with no diagnostic anywhere.
+    if matches!(obj_ty.codegen_repr(), PhpType::Mixed) {
+        scope_dynamic_storage::record_scope_dynamic_mixed_receiver_mutation(checker, property);
+    }
     if let PhpType::Pointer(Some(class_name)) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;
     }
@@ -68,6 +76,7 @@ pub(super) fn check_property_array_push(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     match &obj_ty {
         PhpType::Object(class_name) => {
+            refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
             let updated_prop_ty = updated_array_property_push_type(
@@ -109,6 +118,73 @@ pub(super) fn check_property_array_push(
     }
 }
 
+/// Returns whether the class, or an ancestor, declares one magic accessor.
+///
+/// `ClassInfo::methods` is already flattened over the ancestry, so an inherited accessor counts,
+/// which is the same reading the rest of this check and `magic_set_receiver_has_method` use.
+fn class_declares_method(checker: &Checker, class_name: &str, method: &str) -> bool {
+    checker
+        .classes
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|class_info| class_info.methods.contains_key(method))
+}
+
+/// Refuses creating a dynamic property on a `readonly` class, which php forbids outright.
+///
+/// A `readonly` class carries php's no-dynamic-properties flag, so a name php resolves to a
+/// dynamic property there is not stored at all: php raises `Cannot create dynamic property
+/// C::$p`. The scope-dynamic arm above answers before the whole visibility and readonly ladder
+/// runs, so without this the arm would have created on a class that may not hold anything, and
+/// `scope_dynamic_storage` would have reserved a hash no legal write can ever fill.
+fn refuse_dynamic_property_on_readonly_class(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+    span: Span,
+) -> Result<(), CompileError> {
+    let readonly = checker
+        .classes
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|class_info| class_info.is_readonly_class);
+    if !readonly {
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        &format!(
+            "Cannot create dynamic property {}::${}",
+            class_name.trim_start_matches('\\'),
+            property
+        ),
+    ))
+}
+
+/// Refuses an element write through a name php does NOT resolve to a declared slot here.
+///
+/// `$obj->p[] = v` and `$obj->p[$k] = v` read the property's container, mutate it and publish it
+/// back, which needs storage the element write can address for the whole operation. For a name php
+/// resolves to a dynamic property, or one it refuses outright, the container is not a slot at all,
+/// and resolving one anyway would select a strict ancestor's private storage and then refine its
+/// inferred type from a write that never reaches it. Refusing keeps both from happening.
+fn refuse_scope_dynamic_element_write(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+    span: Span,
+) -> Result<(), CompileError> {
+    if !scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, property) {
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        &format!(
+            "Cannot write an array element through {}::{} from this scope: PHP resolves that \
+             name to a dynamic property here",
+            class_name, property
+        ),
+    ))
+}
+
 /// Type-checks an indexed property array assignment (`$obj->prop[$index] = value`).
 ///
 /// Infers object, index, and value types. Validates array key types and property mutability.
@@ -136,6 +212,7 @@ pub(super) fn check_property_array_assign(
     }
     match &obj_ty {
         PhpType::Object(class_name) => {
+            refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
             if let PhpType::Object(prop_class_name) = &prop_ty {
@@ -216,9 +293,44 @@ fn check_object_property_write(
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
         return Ok(());
     }
+    // php 7.4 removed shadow properties. A strict ancestor's `private $p` lives under a mangled
+    // key and the child's by-name table does not contain it at all, so a write outside the
+    // declaring class CREATES a distinct dynamic property rather than being an access error.
+    // `visible_property` below still finds that slot under its plain name, which is why this
+    // arm has to answer first: without it the write was refused where php stores a value, and
+    // relaxing the refusal alone would have let the write land in the ANCESTOR'S slot.
+    if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, property) {
+        // php consults `__set` BEFORE it decides anything else about a name it does not resolve
+        // to a visible slot, a `readonly` class included: the accessor answers and no dynamic
+        // property is created, so there is nothing for the no-dynamic-properties rule to refuse
+        // and nothing for the reservation to store. `record_scope_dynamic_mutation` skips such a
+        // class too, so the two agree, but the refusal has to be skipped here explicitly or a
+        // readonly class with `__set` would be rejected for a creation php never performs.
+        let same_pair_reentry = scope_dynamic_storage::record_magic_set_same_pair_reentry(
+            checker, object, class_name, property,
+        );
+        if same_pair_reentry || !class_declares_method(checker, class_name, "__set") {
+            refuse_dynamic_property_on_readonly_class(checker, class_name, property, span)?;
+        }
+        if !same_pair_reentry {
+            scope_dynamic_storage::record_scope_dynamic_mutation(
+                checker, class_name, property, "__set",
+            );
+        }
+        return Ok(());
+    }
     if let Some(class_info) = checker.classes.get(class_name) {
         if class_info.visible_property(property).is_none() {
             if class_info.methods.contains_key("__set") {
+                let same_pair_reentry =
+                    scope_dynamic_storage::record_magic_set_same_pair_reentry(
+                    checker, object, class_name, property,
+                );
+                if same_pair_reentry {
+                    refuse_dynamic_property_on_readonly_class(
+                        checker, class_name, property, span,
+                    )?;
+                }
                 return Ok(());
             }
             if class_info.allow_dynamic_properties {
@@ -299,7 +411,12 @@ fn check_object_property_write(
                 ),
             ));
         }
-        if class_info.visible_property_is_declared(property) {
+        // A `mixed` value carries no compile-time type to compare with the declared slot, and
+        // PHP checks exactly this assignment at run time under weak-mode property typing. The
+        // codegen guard raises the catchable `TypeError` there, so rejecting the write here
+        // would forbid a program PHP accepts whenever the runtime value happens to fit.
+        let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed);
+        if class_info.visible_property_is_declared(property) && !defers_to_runtime_property_typing {
             checker.require_compatible_arg_type(
                 &expected_ty,
                 val_ty,
@@ -450,6 +567,13 @@ fn refine_object_property_type(
     property: &str,
     val_ty: &PhpType,
 ) {
+    // A name php resolves to a DYNAMIC property never reaches the physical slot
+    // `visible_property_index` finds for it, so widening that slot would restamp an ancestor's
+    // private storage from a write that only ever creates a distinct dynamic property. The
+    // ancestor keeps reading its own slot with its own type, so the stamp has to stay put.
+    if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, property) {
+        return;
+    }
     // A write inside the written class's own constructor (or a subclass constructor)
     // definitely initializes the slot before any observable read.
     let definitely_initialized = checker.current_method.as_deref() == Some("__construct")
@@ -584,6 +708,9 @@ fn updated_array_property_push_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
+    if prop_ty.is_php_array() {
+        return Ok(prop_ty.clone());
+    }
     match prop_ty {
         PhpType::Array(elem_ty) => {
             if property_has_declared_type {
@@ -636,6 +763,9 @@ fn updated_array_property_assign_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
+    if prop_ty.is_php_array() {
+        return Ok(prop_ty.clone());
+    }
     match prop_ty {
         PhpType::Array(elem_ty) => {
             if !matches!(normalized_idx_ty, PhpType::Int)

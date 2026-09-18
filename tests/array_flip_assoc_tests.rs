@@ -1,55 +1,14 @@
 //! Purpose:
-//! End-to-end tests for `array_flip()` over an ASSOCIATIVE source — the `__rt_hash_flip`
-//! runtime helper (`src/codegen_support/runtime/arrays/hash_flip.rs`) and its lowering
-//! (`lower_hash_flip` in `src/codegen/lower_inst/builtins/arrays.rs`) — plus the heap-ownership
-//! fix that made `RuntimeFnId::ArrayFlip` a `Fresh`-result operation.
-//!
-//! Two independent behaviours are pinned here because they ship together:
-//!
-//! - FLIP OVER A HASH. Before `__rt_hash_flip` existed, only INDEXED sources could be flipped;
-//!   an associative source had no helper at all. The helper walks the source hash in insertion
-//!   order and dispatches on each entry's RUNTIME value tag, so `Str`- and `Int`-valued hashes
-//!   share one lowering, and string values are normalized through `__rt_hash_normalize_key` so
-//!   numeric strings collapse to integer keys exactly as php-src does.
-//! - RESULT OWNERSHIP. `RuntimeFnId::ArrayFlip` sat in the default `MayAliasArguments` bucket,
-//!   which suppresses the release of an owned source TEMPORARY. `array_flip(build())` therefore
-//!   leaked the entire source table on every call while the same flip through a named local
-//!   stayed clean. Every `array_flip` lowering allocates its destination before writing a single
-//!   entry (`__rt_hash_flip` calls `__rt_hash_new`, the indexed helpers call `__rt_array_new`),
-//!   so the result can never alias the source and `Fresh` is the correct classification. The
-//!   `--heap-debug` tests below pin that, in the temporary-argument shape that actually leaked.
+//! End-to-end array_flip coverage for associative and packed function results.
+//! Pins key normalization, duplicate replacement, warnings and independent result ownership.
 //!
 //! Called from:
 //! - `cargo test --test array_flip_assoc_tests` through Rust's test harness.
 //!
 //! Key details:
-//! - Harness style mirrors `tests/null_coalesce_merge_tests.rs`: the elephc CLI
-//!   (`CARGO_BIN_EXE_elephc`) is invoked as a subprocess in an isolated temp dir, compiled to a
-//!   plain executable, run, and its stdout asserted. Host-target only.
-//! - Every expected value was captured from reference PHP 8.5.6 (`php -d xdebug.mode=off`); the
-//!   host `php` loads Xdebug, which overloads `var_dump`, so that flag is mandatory.
-//! - Sources come from a FUNCTION RETURN rather than a literal wherever the shape allows it, so
-//!   the constant folder cannot answer in place of the runtime helper.
-//! - THE SKIP RULE IS NOT EXERCISED AT RUNTIME, and that is not an oversight. php-src's
-//!   `array_flip()` warns `Can only flip string and integer values, entry skipped` for any
-//!   float/bool/array/null value, and `__rt_hash_flip` implements that arm
-//!   (`ARRAY_FLIP_SKIPPED_MESSAGES`). No PHP source shape can reach it today: the lowering's
-//!   `hash_flip_source_value_type` gate refuses every source whose static value type is not
-//!   `Int` or `Str`, so a float-, bool-, array- or Mixed-valued source is rejected AT COMPILE
-//!   TIME and never reaches the helper. The `*_is_still_refused` tests pin those refusals, which
-//!   is the behaviour that actually exists; the skip arm stays live code for the day the gate
-//!   widens.
-//! - The Mixed refusal is DELIBERATE and is documented on `hash_flip_source_value_type`: an
-//!   associative array built entry by entry currently mis-tags heterogeneous values upstream of
-//!   the flip (`$a["k1"] = 1; $a["k2"] = "s";` renders as `int(<pointer>)` under `var_dump()`
-//!   with no `array_flip()` involved), and the flip dispatches on exactly that tag. Accepting a
-//!   Mixed-valued source would convert a visible upstream defect into a silent pointer-keyed
-//!   miscompile.
-//! - Compile-failure assertions read the RAW stderr and only assert a substring, so the HOST
-//!   linker's environmental warnings (GNU `ld` on Linux, silent on macOS) cannot interfere.
-//!   Successful compiles go through `elephc_diagnostics`, which keeps elephc's own lines only.
-//! - Runtime warnings come from the COMPILED PROGRAM's stderr, never the compiler's, so the
-//!   diagnostic filter above can never swallow one.
+//! - Fixtures compile and run in isolated directories on the host target.
+//! - Declared array returns exercise boxed runtime dispatch instead of constant folding.
+//! - Heap fixtures assert warnings from program stderr separately from compiler diagnostics.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -156,28 +115,19 @@ fn assert_program_output(prefix: &str, source: &str, expected: &str) {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Compiles `source` and asserts elephc refused it with a diagnostic containing `needle`.
-fn assert_compile_refused(prefix: &str, source: &str, needle: &str) {
-    let dir = make_test_dir(prefix);
-    let output = compile_raw(&dir, source, prefix, &[]);
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(
-        !output.status.success(),
-        "elephc accepted a source it must refuse; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains(needle),
-        "expected refusal containing {needle:?}, got:\n{stderr}"
-    );
-    let _ = fs::remove_dir_all(&dir);
-}
-
 /// Compiles `source` with `--heap-debug`, runs it, and asserts stdout plus a clean heap.
 ///
 /// `--heap-debug` reports on the program's STDERR after `main` returns, so stdout stays exactly
 /// what the PHP program printed. Both halves are asserted: a program that silently stopped
 /// producing output would otherwise "leak nothing" and pass.
 fn assert_program_output_and_clean_heap(prefix: &str, source: &str, expected_stdout: &str) {
+    assert_program_output_warnings_and_clean_heap(prefix, source, expected_stdout, 0);
+}
+
+/// Checks skipped-entry diagnostics alongside the flipped values and final heap balance.
+fn assert_program_output_warnings_and_clean_heap(
+    prefix: &str, source: &str, expected_stdout: &str, warnings: usize,
+) {
     let dir = make_test_dir(prefix);
     let bin = compile(&dir, source, prefix, &["--heap-debug"]);
     let output = Command::new(&bin)
@@ -191,6 +141,7 @@ fn assert_program_output_and_clean_heap(prefix: &str, source: &str, expected_std
         output.status.code()
     );
     assert_eq!(stdout, expected_stdout, "program stdout diverged:\n{stderr}");
+    assert_eq!(stderr.matches("Can only flip string and integer values, entry skipped").count(), warnings, "{stderr}");
     assert!(
         stderr.contains("live_blocks=0"),
         "array_flip leaked heap blocks:\n{stderr}"
@@ -314,11 +265,7 @@ var_dump(array_flip(build()));
 // Indexed sources — regression pins for the pre-existing helpers
 // ---------------------------------------------------------------------------
 
-/// REGRESSION PIN: an indexed STRING source still uses the indexed helper.
-///
-/// `lower_array_flip` gained an associative branch; this asserts the indexed branch below it
-/// still answers, and still produces `value => position`.
-/// Reference PHP 8.5.6 prints the block asserted below.
+/// A boxed indexed string result flips values into keys and positions into values.
 #[test]
 fn an_indexed_string_source_still_flips_to_value_keyed_positions() {
     assert_program_output(
@@ -331,9 +278,7 @@ var_dump(array_flip(build()));
     );
 }
 
-/// REGRESSION PIN: an indexed INT source still uses the indexed helper.
-///
-/// Reference PHP 8.5.6 prints the block asserted below.
+/// A boxed indexed integer result preserves positions as flipped values.
 #[test]
 fn an_indexed_int_source_still_flips_to_value_keyed_positions() {
     assert_program_output(
@@ -347,75 +292,58 @@ var_dump(array_flip(build()));
 }
 
 // ---------------------------------------------------------------------------
-// Deliberate refusals — the value-type gate on the associative lowering
+// Runtime tags and skipped entries in declared array returns
 // ---------------------------------------------------------------------------
 
-/// NEGATIVE CONTROL: a `Mixed`-valued associative source is still REFUSED.
-///
-/// This is the refusal `hash_flip_source_value_type` documents. php-src would flip the int and
-/// string entries and warn-skip the rest; elephc cannot, because a heterogeneous associative
-/// array currently mis-tags its entries upstream of the flip, and the flip dispatches on exactly
-/// that tag. Accepting this source would produce pointer-valued keys with no diagnostic, which
-/// is strictly worse than refusing. If this test ever fails, the upstream tagging was fixed and
-/// the gate can widen — but only together, never by widening alone.
+/// Mixed integer/string entries retain their runtime tags instead of becoming pointer keys.
 #[test]
-fn a_mixed_valued_associative_source_is_still_refused() {
-    assert_compile_refused(
-        "flip_assoc_mixed_refused",
+fn a_mixed_valued_associative_source_flips_runtime_tags() {
+    assert_program_output_and_clean_heap(
+        "flip_assoc_mixed",
         r#"<?php
 function build(): array { return ["a" => 1, "b" => "s"]; }
 var_dump(array_flip(build()));
 "#,
-        "array_flip for associative value PHP type Mixed",
+        "array(2) {\n  [1]=>\n  string(1) \"a\"\n  [\"s\"]=>\n  string(1) \"b\"\n}\n",
     );
 }
 
-/// A FLOAT-valued associative source is refused rather than warn-skipped.
-///
-/// php-src prints `Warning: array_flip(): Can only flip string and integer values, entry
-/// skipped` once per entry and returns `array(0) {}`. elephc refuses the whole call at compile
-/// time instead: the value-type gate never lets a float reach `__rt_hash_flip`, so the helper's
-/// skip arm — which does emit exactly that warning text — is unreachable from PHP source today.
-/// This pins the divergence honestly instead of asserting a warning the compiler cannot produce.
+/// A boxed float-valued source warns for each skipped entry and returns an empty array.
 #[test]
-fn a_float_valued_associative_source_is_refused_instead_of_warn_skipped() {
-    assert_compile_refused(
-        "flip_assoc_float_refused",
+fn a_float_valued_associative_source_is_warn_skipped() {
+    assert_program_output_warnings_and_clean_heap(
+        "flip_assoc_float",
         r#"<?php
 function build(): array { return ["a" => 1.5, "b" => 2.5]; }
 var_dump(array_flip(build()));
 "#,
-        "array_flip for associative value PHP type Float",
+        "array(0) {\n}\n", 2,
     );
 }
 
-/// A BOOL-valued associative source is refused rather than warn-skipped.
-///
-/// Same divergence as the float case; php-src warn-skips every entry and returns `array(0) {}`.
+/// A boxed bool-valued source warns without coercing its value into an integer key.
 #[test]
-fn a_bool_valued_associative_source_is_refused_instead_of_warn_skipped() {
-    assert_compile_refused(
-        "flip_assoc_bool_refused",
+fn a_bool_valued_associative_source_is_warn_skipped() {
+    assert_program_output_warnings_and_clean_heap(
+        "flip_assoc_bool",
         r#"<?php
 function build(bool $flag): array { return ["a" => $flag]; }
 var_dump(array_flip(build(true)));
 "#,
-        "array_flip for associative value PHP type Bool",
+        "array(0) {\n}\n", 1,
     );
 }
 
-/// An ARRAY-valued associative source is refused rather than warn-skipped.
-///
-/// Same divergence as the float case; php-src warn-skips every entry and returns `array(0) {}`.
+/// Nested array values are skipped with warnings and their source ownership is released.
 #[test]
-fn an_array_valued_associative_source_is_refused_instead_of_warn_skipped() {
-    assert_compile_refused(
-        "flip_assoc_array_refused",
+fn an_array_valued_associative_source_is_warn_skipped() {
+    assert_program_output_warnings_and_clean_heap(
+        "flip_assoc_array",
         r#"<?php
 function build(): array { return ["a" => [1], "b" => [2]]; }
 var_dump(array_flip(build()));
 "#,
-        "array_flip for associative value PHP type Array",
+        "array(0) {\n}\n", 2,
     );
 }
 

@@ -300,8 +300,10 @@ build_and_drop(false);
     assert!(exhaustive.success, "program failed: {}", exhaustive.stderr);
     let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
     let (exhaustive_allocs, exhaustive_frees) = parse_gc_stats(&exhaustive.stderr);
-    assert_eq!(baseline_allocs, exhaustive_allocs);
-    assert_eq!(baseline_frees, exhaustive_frees);
+    // The conditional function also owns boxed untyped arguments. Compare live
+    // allocations so those balanced argument costs cannot mask a leaked local.
+    assert_eq!(baseline_allocs, baseline_frees, "baseline leaks its local array");
+    assert_eq!(exhaustive_allocs, exhaustive_frees, "conditional cleanup leaks storage");
 }
 
 /// Verifies that a nested associative alias survives outer and inner unset.

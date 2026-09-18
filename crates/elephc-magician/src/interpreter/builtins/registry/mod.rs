@@ -274,17 +274,18 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
         return Ok(None);
     };
     if let Some(runtime_builtin) = spec.runtime_builtin {
-        if runtime_builtin.supports_arity(args.len()) {
-            let mut evaluated_args = Vec::with_capacity(args.len());
-            for arg in args {
-                evaluated_args.push(eval_expr(arg, context, scope, values)?);
-            }
-            if let Some(result) = values.runtime_builtin_call(runtime_builtin, &evaluated_args)? {
-                return Ok(Some(result));
-            }
-        } else if spec.direct.is_none() {
+        if !runtime_builtin.supports_arity(args.len()) && spec.values.is_none() {
             return Err(EvalStatus::RuntimeFatal);
         }
+        let operands = args.iter().collect::<Vec<_>>();
+        return with_eval_operands(&operands, context, scope, values, |args, context, _, values| {
+            let borrowed = args.iter().map(|value| value.borrowed()).collect::<Vec<_>>();
+            // Runtime capability misses and deliberate arity adapters reuse the same
+            // evaluated cells. Falling back to expression hooks would repeat side effects.
+            let result = eval_declared_builtin_values_call(name, &borrowed, context, values)?
+                .ok_or(EvalStatus::UnsupportedConstruct)?;
+            if result.is_borrowed() { values.retain(result) } else { Ok(result) }
+        }).map(Some);
     }
     let Some(hook) = spec.direct else {
         return Ok(None);

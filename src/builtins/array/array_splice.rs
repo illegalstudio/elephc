@@ -7,11 +7,11 @@
 //! Key details:
 //! - The signature matches reference PHP 8.4 exactly:
 //!   `array_splice(array &$array, int $offset, ?int $length = null, mixed $replacement = [])`.
-//!   4 params, `array` by-ref, arity 2-4. The `ref` marker is mandatory — it is what makes
+//!   4 params, `array` by-ref, arity 2-4. The `ref` marker is mandatory because it makes
 //!   by-reference mutation lower correctly (ir_lower reads `ref_params` from the registry sig).
-//! - `check` reproduces the legacy rule: `Mixed`/`Union` first arg yields `Mixed`; `Array`
-//!   or `AssocArray` yields the first-arg type; any other type is an error. All remaining
-//!   args are inferred for side effects.
+//! - A declared PHP array preserves its non-null array contract while using boxed storage.
+//!   Other `Mixed`/`Union` sources keep the opaque result; concrete arrays keep their type.
+//!   All remaining arguments are inferred for side effects.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -29,13 +29,16 @@ builtin! {
 /// Returns the result type for an `array_splice` call.
 ///
 /// Arity (2 to 4 args) is pre-validated by the registry. The first argument is re-inferred
-/// to drive the return type; remaining arguments are inferred for side effects. `Mixed` or
-/// `Union` first arguments yield `Mixed` (opaque path); `Array`/`AssocArray` yield the
-/// first-arg type; any other type is a compile error.
+/// to drive the return type; remaining arguments are inferred for side effects. Declared PHP
+/// arrays retain their boxed array contract. Other `Mixed`/`Union` arguments yield `Mixed`;
+/// concrete arrays retain their type, and non-array arguments are rejected.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     for arg in &cx.args[1..] {
         cx.checker.infer_type(arg, cx.env)?;
+    }
+    if ty.is_php_array() {
+        return Ok(ty);
     }
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         return Ok(PhpType::Mixed);

@@ -1,11 +1,11 @@
 ---
-title: "juliantojd() — internals"
+title: "juliantojd() - internals"
 description: "Compiler internals for juliantojd(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 236
 ---
 
-## `juliantojd()` — internals
+## `juliantojd()` - internals
 
 ## Where it lives
 

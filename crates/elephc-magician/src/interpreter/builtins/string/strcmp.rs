@@ -51,7 +51,7 @@ pub(in crate::interpreter) fn eval_builtin_string_compare_named(
     eval_string_compare_named_result(name, left, right, values)
 }
 
-/// Compares two converted strings and returns -1, 0, or 1.
+/// Compares two converted strings and returns PHP's raw first-byte difference.
 pub(in crate::interpreter) fn eval_string_compare_named_result(
     name: &str,
     left: RuntimeCellHandle,
@@ -68,10 +68,21 @@ pub(in crate::interpreter) fn eval_string_compare_named_result(
         }
         _ => return Err(EvalStatus::UnsupportedConstruct),
     }
-    let result = match left.cmp(&right) {
+    let result = compare_byte_slices(&left, &right);
+    values.int(result)
+}
+
+/// Compares two byte slices using php-src's unsigned-byte difference convention.
+pub(in crate::interpreter) fn compare_byte_slices(left: &[u8], right: &[u8]) -> i64 {
+    for (left_byte, right_byte) in left.iter().zip(right) {
+        let difference = i64::from(*left_byte) - i64::from(*right_byte);
+        if difference != 0 {
+            return difference;
+        }
+    }
+    match left.len().cmp(&right.len()) {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
-    };
-    values.int(result)
+    }
 }

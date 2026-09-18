@@ -47,7 +47,7 @@ pub fn check_array_pointer_call(
         ));
     }
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(
+    if !ty.is_php_array() && !matches!(
         ty,
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
     ) {

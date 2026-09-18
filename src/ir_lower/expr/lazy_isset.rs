@@ -93,7 +93,31 @@ pub(super) fn lower_lazy_isset_operand(
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
-            lower_lazy_property_isset_operand(ctx, object, property, arg)
+            if let Some(value) = lower_lazy_property_isset_operand(ctx, object, property, arg) {
+                return Some(value);
+            }
+            // A receiver whose class is unknown until run time has no `property_isset_action`
+            // answer, so the eager fallback would take the RAISING value-read arm of the Mixed
+            // declared-slot ladder. php answers `false` for a property this scope may not reach.
+            if !property_probe_needs_runtime_name_form(ctx, object) {
+                return None;
+            }
+            let object = lower_expr(ctx, object);
+            let probed = lower_property_probe_from_value(ctx, object, property, arg);
+            Some(probe_value_is_set(ctx, probed, arg))
+        }
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            // `isset($o->{$k})` must not raise for a name php refuses, and must not warn for one
+            // it has never created, so the read carries php's probe fetch mode.
+            let probed =
+                lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, arg);
+            Some(probe_value_is_set(ctx, probed, arg))
+        }
+        // `$o?->{$k}` is a nullsafe CHAIN, so its short-circuit belongs to the chain lowering.
+        // Passing the silent-probe flag is what carries the fetch mode down to the segment.
+        ExprKind::NullsafeDynamicPropertyAccess { .. } => {
+            let probed = nullsafe_chain::lower_with_missing_warning(ctx, arg, false)?;
+            Some(probe_value_is_set(ctx, probed, arg))
         }
         // A typed static property starts uninitialized and `isset()` must answer false there
         // rather than take the ordinary read, whose backend guard is fatal.
@@ -112,6 +136,15 @@ pub(super) fn lower_lazy_isset_operand(
         }
         _ => None,
     }
+}
+
+/// Reduces a probed property value to php's `isset()` answer: set means "not null".
+fn probe_value_is_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    probed: LoweredValue,
+    arg: &Expr,
+) -> LoweredValue {
+    emit_builtin_call_value(ctx, "isset", vec![probed.value], PhpType::Int, arg.span, None)
 }
 
 /// Lowers `empty($obj->magicProp)` with PHP's overloaded-property semantics:
@@ -169,6 +202,26 @@ pub(super) fn lower_lazy_empty(
                 ctx, object, property, name, &args[0],
             ));
         }
+        // Same reason as `isset()`: php's `empty()` is a silent probe, so an inaccessible or
+        // never-created name answers `true` instead of raising.
+        if property_probe_needs_runtime_name_form(ctx, object) {
+            let object = lower_expr(ctx, object);
+            let probed = lower_property_probe_from_value(ctx, object, property, &args[0]);
+            return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
+        }
+    }
+    if let ExprKind::DynamicPropertyAccess { object, property } = &args[0].kind {
+        let probed =
+            lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, &args[0]);
+        return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
+    }
+    // A `?->` operand is a nullsafe CHAIN. Its segments only learn they are in a silent probe
+    // from the flag below, so `empty($o?->{$k})` raised for a name php refuses. The magic route
+    // keeps precedence: php consults `__isset` before it evaluates anything.
+    if lazy_empty_magic_property_calls(ctx, &args[0]).is_none() {
+        if let Some(probed) = nullsafe_chain::lower_with_missing_warning(ctx, &args[0], false) {
+            return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
+        }
     }
     let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;
 
@@ -210,6 +263,24 @@ pub(super) fn lower_lazy_empty(
 
     ctx.builder.position_at_end(merge);
     Some(ctx.load_local(&temp_name, Some(expr.span)))
+}
+
+/// Applies php's `empty()` emptiness test to an already probed property value.
+fn lower_empty_of_probed_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    probed: LoweredValue,
+    name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let empty_name = ctx.intern_function_name(name);
+    ctx.emit_value(
+        Op::LanguageConstructCall,
+        vec![probed.value],
+        Some(Immediate::Data(empty_name)),
+        PhpType::Bool,
+        effects_lookup::language_construct_effects(name),
+        Some(expr.span),
+    )
 }
 
 /// For an `empty()` operand that is an overloaded (magic) property access,

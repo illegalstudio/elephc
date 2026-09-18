@@ -12,6 +12,33 @@
 use super::*;
 
 impl EvalStreamResources {
+    /// Returns every PHP resource incarnation, retaining closed entries as `Unknown`.
+    pub(crate) fn resource_entries(&self) -> Vec<(i64, &'static str)> {
+        let mut entries = self
+            .resource_types
+            .iter()
+            .map(|(payload, resource_type)| {
+                let visible_type = if self.is_live(*payload) {
+                    *resource_type
+                } else {
+                    "Unknown"
+                };
+                (*payload, visible_type)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(payload, _)| *payload);
+        entries
+    }
+
+    /// Returns the current PHP type name for one eval-owned resource payload.
+    pub(crate) fn resource_type(&self, payload: i64) -> Option<&'static str> {
+        let original = self.resource_types.get(&payload).copied()?;
+        Some(if self.is_live(payload) {
+            original
+        } else {
+            "Unknown"
+        })
+    }
 
     /// Removes a stream resource from the table, closing its file handle.
     pub(crate) fn close(&mut self, id: i64) -> bool {
@@ -73,6 +100,7 @@ impl EvalStreamResources {
             filter_resources,
             hash_contexts,
             process_children,
+            resource_types: _,
             socket_listeners,
             stream_contexts,
             streams,
@@ -138,6 +166,7 @@ impl EvalStreamResources {
     pub(crate) fn open_filter_resource(&mut self) -> i64 {
         let id = self.take_next_id();
         self.filter_resources.insert(id);
+        self.resource_types.insert(id, "stream filter");
         id
     }
 

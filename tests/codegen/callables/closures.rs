@@ -1345,7 +1345,7 @@ echo $bound();
 }
 
 /// Verifies the canonical scope-stealing pattern: a standalone closure bound to
-/// an object reads a private property (visibility is permissive once bound).
+/// an object reads a private property through the explicitly requested scope.
 #[test]
 fn test_top_level_closure_bind_reads_private_property() {
     let out = compile_and_run(
@@ -1359,6 +1359,634 @@ echo $read();
 "#,
     );
     assert_eq!(out, "250");
+}
+
+/// Verifies explicit scope works for both binding spellings without changing
+/// the original closure or a separate binding that keeps global scope.
+#[test]
+fn test_top_level_closure_bind_private_scope_is_isolated() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault {
+    private string $code = "open";
+}
+$peek = function() { return $this->code; };
+$global = Closure::bind($peek, new Vault());
+try {
+    echo $global();
+} catch (Error $error) {
+    echo "denied|";
+}
+$static = Closure::bind($peek, new Vault(), Vault::class);
+$method = $peek->bindTo(new Vault(), Vault::class);
+$literal = Closure::bind(function() { return $this->code; }, new Vault(), Vault::class);
+echo $static(), "|", $method(), "|", $literal();
+"#,
+    );
+    assert_eq!(out, "denied|open|open|open");
+}
+
+/// Verifies try/catch callable tracking does not restore an entry closure after the local was
+/// rebound inside the try body.
+#[test]
+fn test_scoped_closure_bind_after_try_uses_the_rebound_closure() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$peek = function() { return $this->code; };
+try {
+    $peek = function() { return $this->label; };
+    throw new Error("stop");
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies a dynamic eval mutation inside try prevents restoration of the entry closure fact.
+#[test]
+fn test_scoped_closure_bind_after_try_uses_dynamic_eval_rebinding() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$peek = function() { return $this->code; };
+$source = '$peek = function() { return $this->label; };';
+try {
+    eval($source);
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies a normal closure invocation inside try invalidates an entry callable fact when the
+/// callee can replace that local through a by-reference capture.
+#[test]
+fn test_scoped_closure_bind_after_try_uses_rebinding_from_called_closure() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$peek = function() { return $this->code; };
+$mutate = function() use (&$peek): void {
+    $peek = function() { return $this->label; };
+};
+try {
+    $mutate();
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies a direct user function invalidates the callable local passed to its by-reference
+/// parameter, without requiring dynamic invocation.
+#[test]
+fn test_scoped_closure_bind_after_try_uses_rebinding_from_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function replace_callable(&$target): void {
+    $target = function() { return $this->label; };
+}
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$peek = function() { return $this->code; };
+try {
+    replace_callable($peek);
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies a direct function's declared global alias invalidates the exact top-level callable
+/// fact it can replace during a try body.
+#[test]
+fn test_scoped_closure_bind_after_try_uses_rebinding_from_global_function() {
+    let out = compile_and_run(
+        r#"<?php
+function replace_global_callable(): void {
+    global $peek;
+    $peek = function() { return $this->label; };
+}
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$peek = function() { return $this->code; };
+try {
+    replace_global_callable();
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies global-write summaries follow direct user calls transitively. The wrapper declares no
+/// global itself, but its callee replaces the top-level callable while the try body is active.
+#[test]
+fn test_scoped_closure_bind_after_try_uses_rebinding_from_wrapped_global_function() {
+    let out = compile_and_run(
+        r#"<?php
+function replace_wrapped_global_callable(): void {
+    global $peek;
+    $peek = function() { return $this->label; };
+}
+function invoke_global_replacement(): void {
+    replace_wrapped_global_callable();
+}
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$peek = function() { return $this->code; };
+try {
+    invoke_global_replacement();
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies releasing an object inside a try invalidates a global callable fact when its
+/// destructor replaces that callable before the try join restores entry facts.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_global_rebinding_from_destructor_cleanup() {
+    let out = compile_and_run(
+        r#"<?php
+class DestructorCallableMutator {
+    public function __destruct() {
+        global $peek;
+        $peek = function() { return $this->label; };
+    }
+}
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$victim = new DestructorCallableMutator();
+$peek = function() { return $this->code; };
+try {
+    unset($victim);
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies scalar and string cleanup inside a try does not invalidate an unrelated global
+/// callable fact merely because another function declares that global name.
+#[test]
+fn test_scoped_closure_bind_after_try_survives_scalar_cleanup() {
+    let out = compile_and_run(
+        r#"<?php
+function expose_callable_global(): void { global $peek; }
+class Vault {
+    private string $code = "open";
+}
+$peek = function() { return $this->code; };
+try {
+    $number = 1;
+    $number = 2;
+    $text = str_repeat('x', 2);
+    $text = 'done';
+    unset($number, $text);
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "open");
+}
+
+/// Verifies indexed and associative overwrites invalidate a global callable fact when the
+/// replaced element's destructor changes that callable before the try join.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_container_overwrite_destructors() {
+    let out = compile_and_run(
+        r#"<?php
+class ContainerOverwriteMutator {
+    public string $label = "ignored";
+    public function __destruct() {
+        global $peek;
+        $peek = function() { return $this->label; };
+    }
+}
+function overwrite_victim(): mixed { return new ContainerOverwriteMutator(); }
+function overwrite_container(array &$values): void { $values[0] = null; }
+function invoke_container_overwrite(array &$values): void { overwrite_container($values); }
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$vault = new Vault();
+$indexed = [overwrite_victim()];
+$peek = function() { return $this->code; };
+try {
+    $indexed[0] = null;
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+echo $bound(), "|";
+$hash = ["key" => overwrite_victim()];
+$peek = function() { return $this->code; };
+try {
+    $hash["key"] = null;
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+echo $bound(), "|";
+$wrapped = [overwrite_victim()];
+$peek = function() { return $this->code; };
+try {
+    invoke_container_overwrite($wrapped);
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new|new|new");
+}
+
+/// Verifies statically known and boxed associative unsets invalidate a global callable fact when
+/// removing an element runs its destructor during a try body.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_container_unset_destructors() {
+    let out = compile_and_run(
+        r#"<?php
+class ContainerUnsetMutator {
+    public string $label = "ignored";
+    public function __destruct() {
+        global $peek;
+        $peek = function() { return $this->label; };
+    }
+}
+function unset_victim(): mixed { return new ContainerUnsetMutator(); }
+function boxed_unset_container(): mixed { return ["key" => unset_victim()]; }
+function unset_container(array &$values): void { unset($values["key"]); }
+function invoke_container_unset(array &$values): void { unset_container($values); }
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$vault = new Vault();
+$hash = ["key" => unset_victim()];
+$peek = function() { return $this->code; };
+try {
+    unset($hash["key"]);
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+echo $bound(), "|";
+$boxed = boxed_unset_container();
+$peek = function() { return $this->code; };
+try {
+    invoke_container_unset($boxed);
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new|new");
+}
+
+/// Verifies typed scalar container mutation does not discard an unrelated callable fact.
+#[test]
+fn test_scoped_closure_bind_after_try_survives_scalar_container_mutation() {
+    let out = compile_and_run(
+        r#"<?php
+function expose_container_callable_global(): void { global $peek; }
+class Vault {
+    private string $code = "open";
+}
+$vault = new Vault();
+$indexed = [1];
+$hash = ["key" => 1];
+$peek = function() { return $this->code; };
+try {
+    $indexed[0] = 2;
+    $hash["key"] = 2;
+    unset($hash["key"]);
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "open");
+}
+
+/// Verifies restoring a registered handler invalidates a global callable fact when releasing the
+/// handler's captured object runs its destructor in the try body.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_handler_capture_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class HandlerCaptureMutator {
+    public string $label = "ignored";
+    public function __destruct() {
+        global $peek;
+        $peek = function() { return $this->label; };
+    }
+}
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$vault = new Vault();
+$victim = new HandlerCaptureMutator();
+$handler = function(int $level, string $message) use ($victim): bool { return false; };
+set_error_handler($handler);
+unset($handler, $victim);
+$peek = function() { return $this->code; };
+try {
+    restore_error_handler();
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies a warning-producing instruction accounts for a user error handler that replaces a
+/// global callable before control rejoins after a try body.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_warning_handler_rebinding() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+function read_missing_key(array $values, string $key): mixed { return $values[$key]; }
+function read_missing_key_wrapped(array $values, string $key): mixed {
+    return read_missing_key($values, $key);
+}
+$vault = new Vault();
+set_error_handler(function(int $level, string $message): bool {
+    global $peek;
+    $peek = function() { return $this->label; };
+    return true;
+});
+$values = ["known" => 1];
+$key = $argc > 0 ? "missing" : "other";
+$peek = function() { return $this->code; };
+try {
+    $ignored = read_missing_key_wrapped($values, $key);
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+restore_error_handler();
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies an output instruction accounts for an active output-buffer handler that replaces a
+/// global callable when a chunk is flushed during the try body.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_output_handler_rebinding() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$vault = new Vault();
+ob_start(function(string $buffer, int $phase): string {
+    global $peek;
+    $peek = function() { return $this->label; };
+    return "";
+}, 1);
+$peek = function() { return $this->code; };
+try {
+    echo "x";
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+ob_end_clean();
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies object string conversion invalidates a callable fact when `__toString` replaces it.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_tostring_rebinding() {
+    let out = compile_and_run(
+        r#"<?php
+class StringCallableMutator {
+    public string $label = "ignored";
+    public function __toString(): string {
+        global $peek;
+        $peek = function() { return $this->label; };
+        return "converted";
+    }
+}
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$vault = new Vault();
+$value = new StringCallableMutator();
+$peek = function() { return $this->code; };
+try {
+    $text = (string)$value;
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies a runtime-shaped nested write accounts for `ArrayAccess::offsetGet` mutating a
+/// global callable while the try body is active.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_array_access_fetch_rebinding() {
+    let out = compile_and_run(
+        r#"<?php
+class AccessCallableMutator implements ArrayAccess {
+    public string $label = "ignored";
+    public function offsetExists(mixed $offset): bool { return true; }
+    public function offsetGet(mixed $offset): mixed {
+        global $peek;
+        $peek = function() { return $this->label; };
+        return [];
+    }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void {}
+}
+function runtime_access_receiver(mixed $value): mixed { return $value; }
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$vault = new Vault();
+$access = new AccessCallableMutator();
+$peek = function() { return $this->code; };
+$receiver = runtime_access_receiver($access);
+try {
+    $receiver["slot"][] = 1;
+} catch (Error $error) {}
+$bound = Closure::bind($peek, $vault, Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies a generator suspension prevents the try join from restoring the callable that was
+/// current before caller code replaced its global cell.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_rebinding_while_generator_is_suspended() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+function suspended_bind(): Generator {
+    global $peek, $vault;
+    $peek = function() { return $this->code; };
+    try {
+        yield 1;
+    } catch (Error $error) {}
+    $bound = Closure::bind($peek, $vault, Vault::class);
+    echo $bound();
+}
+$vault = new Vault();
+$generator = suspended_bind();
+$generator->current();
+$peek = function() { return $this->label; };
+$generator->next();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies invoking a known closure with no by-reference captures preserves an unrelated
+/// callable fact across a try join.
+#[test]
+fn test_scoped_closure_bind_after_try_survives_harmless_known_closure() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault {
+    private string $code = "open";
+}
+$peek = function() { return $this->code; };
+$noop = function(): void {};
+try {
+    $noop();
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "open");
+}
+
+/// Verifies a known closure call invalidates a callable cell reachable through an object property
+/// reference, even when that closure does not capture the callable local itself.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_indirect_reference_mutation_from_closure() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureAliasBox { public mixed $slot; }
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$peek = function() { return $this->code; };
+$box = new ClosureAliasBox();
+$box->slot = $peek;
+$peek =& $box->slot;
+$mutate = function() use ($box): void {
+    $box->slot = function() { return $this->label; };
+};
+try {
+    $mutate();
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies a direct user function can mutate a callable through an object-property reference
+/// without a by-reference argument, so all caller reference cells remain an opaque reachability
+/// boundary for that call.
+#[test]
+fn test_scoped_closure_bind_after_try_sees_indirect_reference_mutation_from_function() {
+    let out = compile_and_run(
+        r#"<?php
+class FunctionAliasBox { public mixed $slot; }
+function mutate_alias(FunctionAliasBox $box): void {
+    $box->slot = function() { return $this->label; };
+}
+class Vault {
+    private string $code = "old";
+    public string $label = "new";
+}
+$peek = function() { return $this->code; };
+$box = new FunctionAliasBox();
+$box->slot = $peek;
+$peek =& $box->slot;
+try {
+    mutate_alias($box);
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies calls that cannot reach the closure local do not prevent the try join from restoring
+/// its unchanged callable identity for a later scope-specialized bind.
+#[test]
+fn test_scoped_closure_bind_after_try_survives_unrelated_calls() {
+    let out = compile_and_run(
+        r#"<?php
+function increment(int $value): int {
+    return $value + 1;
+}
+class Vault {
+    private string $code = "open";
+    public string $label = "abc";
+}
+$peek = function() { return $this->code; };
+try {
+    $vault = new Vault();
+    echo increment(strlen($vault->label)), "|";
+} catch (Error $error) {}
+$bound = Closure::bind($peek, new Vault(), Vault::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "4|open");
 }
 
 /// Verifies a top-level closure that calls a method on `$this` and takes an

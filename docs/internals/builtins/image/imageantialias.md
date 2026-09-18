@@ -1,11 +1,11 @@
 ---
-title: "imageantialias() — internals"
+title: "imageantialias() - internals"
 description: "Compiler internals for imageantialias(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 459
 ---
 
-## `imageantialias()` — internals
+## `imageantialias()` - internals
 
 ## Where it lives
 

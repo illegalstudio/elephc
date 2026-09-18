@@ -366,6 +366,46 @@ echo $c . ":" . $d;
     assert_eq!(out, "A-f:B-g|C-m:D-n");
 }
 
+/// By-reference variadic markers widen scalar caller locals before a positional or named write.
+#[test]
+fn test_by_ref_variadic_scalar_and_named_tail_writeback_use_boxed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function replace(&...$items): void {
+    $items[0] = "position";
+    $items["named"] = "name";
+}
+function replaceWithCount(&...$items): void {
+    func_num_args();
+    $items[0] = "counted";
+}
+function replaceBoth(&...$items): void {
+    $items[0] = "first";
+    $items[1] = "second";
+}
+$position = 1;
+$named = 2;
+replace($position, named: $named);
+echo $position . ":" . $named . "|";
+$callable = replace(...);
+$callablePosition = 3;
+$callableNamed = 4;
+$callable($callablePosition, named: $callableNamed);
+echo $callablePosition . ":" . $callableNamed . "|";
+$cuf = 5;
+call_user_func($callable, $cuf);
+echo $cuf . "|";
+$counted = 6;
+replaceWithCount($counted);
+echo $counted . "|";
+$repeated = 7;
+replaceBoth($repeated, $repeated);
+echo $repeated;
+"#,
+    );
+    assert_eq!(out, "position:name|position:name|position|counted|second");
+}
+
 // --- Variadic functions ---
 
 /// Verifies a variadic function collects exactly three positional arguments into the rest array.

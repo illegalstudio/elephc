@@ -7,9 +7,12 @@
 //!
 //! Key details:
 //! - Clone helpers duplicate container headers and child references without deep-copying unless the runtime contract requires it.
+//! - A source entry carrying runtime value tag 11 uses reference-aware cloning: singleton cells
+//!   separate for copy-on-write, while cells with an external alias remain shared.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+
 
 /// hash_clone_shallow: duplicate a hash table for copy-on-write semantics.
 /// Keys are re-persisted, string values are re-persisted, refcounted values are
@@ -94,6 +97,8 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // nested refcounted values need retains
     emitter.instruction("cmp x5, #10");                                         // is this entry's value a callable descriptor?
     emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // runtime descriptors need retains; static descriptors are ignored by incref
+    emitter.instruction("cmp x5, #11");                                         // is this entry a member of a PHP reference set?
+    emitter.instruction("b.eq __rt_hash_clone_shallow_value_reference_cell");   // singleton cells separate while externally aliased reference sets remain shared
     emitter.instruction("ldr x3, [sp, #24]");                                   // x3 = scalar/float value_lo copied as-is
     emitter.instruction("ldr x4, [sp, #32]");                                   // x4 = scalar/float value_hi copied as-is
     emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = scalar/float/null value_tag copied as-is
@@ -115,8 +120,16 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x3");                                          // move the shared child pointer into the retain helper
     emitter.instruction("bl __rt_incref");                                      // retain the shared child pointer for the cloned hash
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload the retained child pointer after the helper call
-    emitter.instruction("mov x4, xzr");                                         // refcounted hash values store only value_lo
     emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = refcounted value_tag copied as-is
+    emitter.instruction("mov x4, xzr");                                         // refcounted hash values store only value_lo
+    emitter.instruction("b __rt_hash_clone_shallow_insert");                    // insert the retained child into the cloned hash
+
+    emitter.label("__rt_hash_clone_shallow_value_reference_cell");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // pass the source managed cell to reference-aware cloning
+    emitter.instruction("bl __rt_reference_cell_clone");                        // copy a singleton cell or retain an externally aliased reference set
+    emitter.instruction("mov x3, x0");                                          // pass the owned cloned or retained cell to hash insertion
+    emitter.instruction("mov x4, xzr");                                         // managed reference cells store only value_lo
+    emitter.instruction("ldr x5, [sp, #40]");                                   // preserve runtime tag 11 on the cloned entry
 
     // -- insert the fully owned cloned entry into the destination table --
     emitter.label("__rt_hash_clone_shallow_insert");
@@ -200,6 +213,8 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // retain nested refcounted child pointers for the cloned associative-array owner
     emitter.instruction("cmp r10, 10");                                         // is the current source entry value a callable descriptor that needs a retain?
     emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // retain runtime descriptors while static descriptor pointers remain unchanged
+    emitter.instruction("cmp r10, 11");                                         // is the current source entry a member of a PHP reference set?
+    emitter.instruction("je __rt_hash_clone_shallow_value_reference_cell");     // singleton cells separate while externally aliased reference sets remain shared
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the scalar or float low payload word that can be forwarded into the destination hash unchanged
     emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the scalar or float high payload word that can be forwarded into the destination hash unchanged
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the scalar or float runtime value_tag that can be forwarded into the destination hash unchanged
@@ -220,8 +235,16 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the shared refcounted child pointer that the cloned associative array must retain
     emitter.instruction("call __rt_incref");                                    // retain the shared child pointer for the cloned associative-array owner
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the retained child pointer into the hash-set value_lo register
-    emitter.instruction("xor r8d, r8d");                                        // clear value_hi because refcounted associative-array payloads only occupy the low word
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the refcounted runtime value_tag into the hash-set value_tag register
+    emitter.instruction("xor r8d, r8d");                                        // refcounted hash values store only value_lo
+    emitter.instruction("jmp __rt_hash_clone_shallow_insert");                  // insert the retained child into the cloned associative array
+
+    emitter.label("__rt_hash_clone_shallow_value_reference_cell");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // pass the source managed cell to reference-aware cloning
+    emitter.instruction("call __rt_reference_cell_clone");                      // copy a singleton cell or retain an externally aliased reference set
+    emitter.instruction("mov rcx, rax");                                        // pass the owned cloned or retained cell to hash insertion
+    emitter.instruction("xor r8d, r8d");                                        // managed reference cells store only value_lo
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // preserve runtime tag 11 on the cloned entry
 
     emitter.label("__rt_hash_clone_shallow_insert");
     emitter.instruction("mov rdi, r13");                                        // pass the destination associative-array pointer to the hash insert helper in the first SysV argument register
@@ -241,4 +264,45 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 128");                                        // release the clone-state spill area before returning to the caller
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the cloned associative-array pointer
     emitter.instruction("ret");                                                 // return to the caller with rax holding the cloned associative-array pointer
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Hash COW delegates tag-11 ownership to the helper that separates singleton cells.
+    #[test]
+    fn hash_clone_uses_reference_aware_cell_cloning_on_every_target() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_hash_clone_shallow(&mut emitter);
+            let assembly = emitter.output();
+            let (tag_branch, reference_path) = assembly
+                .split_once("__rt_hash_clone_shallow_value_reference_cell:")
+                .unwrap_or_else(|| panic!("{name}: missing reference-cell clone path"));
+            assert!(
+                tag_branch.contains("__rt_hash_clone_shallow_value_reference_cell"),
+                "{name}: tag 11 must select the reference-aware path",
+            );
+            assert!(
+                reference_path.contains("__rt_reference_cell_clone"),
+                "{name}: reference entries must use singleton-aware cell cloning",
+            );
+            let reference_path = reference_path
+                .split("__rt_hash_clone_shallow_insert:")
+                .next()
+                .expect("reference path precedes insertion");
+            assert!(
+                !reference_path.contains("__rt_incref"),
+                "{name}: reference entries must not bypass singleton separation",
+            );
+        }
+    }
 }

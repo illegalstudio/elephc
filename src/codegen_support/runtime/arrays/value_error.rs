@@ -3,8 +3,6 @@
 //! Keeps exception object allocation details out of individual array helper loops.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::arrays::array_filter`.
-//! - `crate::codegen_support::runtime::arrays::array_filter_refcounted`.
 //! - `crate::codegen_support::runtime::strings::mb_strlen`.
 //!
 //! Key details:

@@ -38,7 +38,12 @@ mod result;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
 /// Function signature representation and builtin signature helpers.
-mod signatures;
+///
+/// Crate-visible because the descriptor variadic storage contract
+/// (`signatures::descriptor_variadic_container` and its predicates) has to be asked the SAME
+/// question by the checker, by EIR lowering, and by the runtime callable invoker. A contract
+/// three layers must agree on cannot be re-spelled behind a narrow re-export in each of them.
+pub(crate) mod signatures;
 /// Target-dependent values of `ICONV_IMPL` / `ICONV_VERSION`.
 pub(crate) mod iconv_constants;
 /// The compiler's view over the shared builtin class catalog.
@@ -59,7 +64,8 @@ pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conv
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{
-    collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
+    collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
+    ReturnArgAlias,
 };
 pub(crate) use result::LoopStorageTypes;
 pub use checker::CheckOptions;
@@ -69,6 +75,11 @@ pub use checker::CheckOptions;
 pub use result::check_with_target;
 pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
+pub use schema::{
+    class_declares_private_property, class_inherits_from,
+    property_name_shadows_ancestor_private_slot, resolve_property_name,
+    scope_shares_class_hierarchy, PropertyNameResolution,
+};
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,

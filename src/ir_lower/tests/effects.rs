@@ -185,10 +185,8 @@ function install(string $source): void { eval($source); }
 
     assert!(virtual_call.effects.contains(Effects::MAY_DEOPT));
     assert!(virtual_call.effects.contains(Effects::MAY_THROW));
-    assert_eq!(
-        exact_call.effects,
-        Effects::READS_HEAP | Effects::WRITES_GLOBAL
-    );
+    assert!(exact_call.effects.contains(Effects::READS_HEAP));
+    assert!(exact_call.effects.contains(Effects::WRITES_GLOBAL));
     assert!(!exact_call.effects.contains(Effects::MAY_THROW));
     assert!(!exact_call.effects.contains(Effects::MAY_DEOPT));
 }

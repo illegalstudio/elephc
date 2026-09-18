@@ -19,6 +19,9 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::CloneWith => Some({
+            crate::codegen::lower_inst::builtins::clone_with::lower_clone_with(ctx, inst)
+        }),
         RuntimeFnId::GetClass => Some({
             crate::codegen::lower_inst::builtins::types::lower_class_name_lookup(ctx, inst, "get_class")
         }),

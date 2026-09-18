@@ -9,10 +9,10 @@
 //! Key details:
 //! - Unreachable blocks are neutralized in place (terminator set to
 //!   `Unreachable`, instructions rewritten to `nop`) rather than physically
-//!   removed. The validator treats an unreachable block's value *uses* as
-//!   `UseNotDominated`, so clearing all uses keeps the function valid while
-//!   preserving `block.id == index` and every `ValueDef`/`ValueId`/`InstId`
-//!   slot — no renumbering, and `try` handler tokens (block ids encoded in
+//!   removed. Clearing its uses avoids retaining dead SSA dependencies and
+//!   keeps same-block ordering plus sibling dead-block provenance trivially valid,
+//!   while preserving `block.id == index` and every `ValueDef`/`ValueId`/`InstId`
+//!   slot. No renumbering occurs, and `try` handler tokens (block ids encoded in
 //!   `try_push_handler` immediates) stay correct.
 //! - Functions containing exception-handling ops are skipped entirely: their
 //!   handler blocks are reachable through implicit edges not present in the

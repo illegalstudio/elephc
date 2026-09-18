@@ -55,7 +55,8 @@ pub(super) fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instr
     ctx.emitter.comment("push EIR exception handler");
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_handler_top", 0);
     abi::store_at_offset(ctx.emitter, scratch, handler_offset);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    // The catch resumes in this activation; only younger frames may be abandoned.
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
     abi::store_at_offset(ctx.emitter, scratch, handler_offset - 8);
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_suppression", 0);
     abi::store_at_offset(

@@ -221,13 +221,9 @@ pub(super) fn reflection_property_modifiers_for_info(
     None
 }
 
-/// Returns whether a property is virtual because it has or requires hooks.
+/// Reads the resolved backing-storage flag for a visible class property.
 pub(super) fn reflection_property_is_virtual(info: &crate::types::ClassInfo, property_name: &str) -> bool {
-    let get_method = php_symbol_key(&property_hook_get_method(property_name));
-    let set_method = php_symbol_key(&property_hook_set_method(property_name));
-    info.abstract_property_hooks.contains_key(property_name)
-        || info.methods.contains_key(&get_method)
-        || info.methods.contains_key(&set_method)
+    info.property_is_virtual(property_name)
 }
 
 /// Computes PHP's `ReflectionProperty::getModifiers()` bitmask.

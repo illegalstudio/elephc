@@ -16,6 +16,28 @@
 
 use crate::support::*;
 
+/// Rebased XML dispatch keeps argument leases through named binding and releases them on TypeError.
+/// Registry validation runs without libxml2, so this ownership regression needs no native package.
+#[test]
+fn test_core_xml_eval_argument_owners_are_released_after_type_errors() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$source = '
+for ($i = 0; $i < 2; $i++) {
+    try { xml_set_element_handler(null, str_repeat("start", 2), str_repeat("end", 2)); }
+    catch (TypeError $error) { echo "direct|"; unset($error); }
+    try { xml_parse_into_struct(parser: 1, data: str_repeat("text", 2), values: $rows); }
+    catch (TypeError $error) { echo "named|"; unset($error); }
+}
+unset($rows);
+// ' . $argc;
+eval($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "direct|named|direct|named|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A parser driven entirely from eval prints the same event stream as native code, and
 /// `xml_parse_into_struct()` writes its outputs back through eval's by-reference targets.
 /// Handlers are compiled callables named from eval (a function name, and an

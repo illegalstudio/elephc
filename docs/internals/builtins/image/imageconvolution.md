@@ -1,11 +1,11 @@
 ---
-title: "imageconvolution() — internals"
+title: "imageconvolution() - internals"
 description: "Compiler internals for imageconvolution(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 480
 ---
 
-## `imageconvolution()` — internals
+## `imageconvolution()` - internals
 
 ## Where it lives
 

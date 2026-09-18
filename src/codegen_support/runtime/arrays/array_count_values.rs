@@ -224,7 +224,7 @@ fn emit_hash_count_values_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_count_values_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // x0 = source hash pointer
     emitter.instruction("ldr x1, [sp, #16]");                                   // x1 = current insertion-order cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next source entry
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next source entry
     emitter.instruction("cmn x0, #1");                                          // did the iterator signal end-of-walk?
     emitter.instruction("b.eq __rt_hash_count_values_done");                    // yes - the destination hash is complete
     emitter.instruction("str x0, [sp, #16]");                                   // save the next insertion-order cursor
@@ -446,7 +446,7 @@ fn emit_hash_count_values_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_count_values_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // rdi = source hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // rsi = current insertion-order cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rax=cursor, rcx=value_lo, r8=value_hi, r9=value_tag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=cursor, rcx=value_lo, r8=value_hi, r9=value_tag
     emitter.instruction("cmp rax, -1");                                         // did the iterator signal end-of-walk?
     emitter.instruction("je __rt_hash_count_values_done_x86");                  // yes - the destination hash is complete
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the next insertion-order cursor

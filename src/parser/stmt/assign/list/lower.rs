@@ -136,10 +136,10 @@ impl ListLowerer {
     /// Returns a unique temporary variable name using the source span line/column and an
     /// incrementing counter. The format is `__elephc_list_{line}_{col}_{N}`.
     fn next_temp_name(&mut self) -> String {
-        let name = format!(
+        let name = crate::names::generated_local_name(&format!(
             "__elephc_list_{}_{}_{}",
             self.span.line, self.span.col, self.next_temp
-        );
+        ));
         self.next_temp += 1;
         name
     }

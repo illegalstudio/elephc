@@ -212,7 +212,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov x1, xzr");                                         // cursor 0 starts at the hash head entry
     emitter.label("__elephc_eval_value_array_iter_key_assoc_loop");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the hash pointer before advancing the hash iterator
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next insertion-order hash key
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next insertion-order hash key
     emitter.instruction("cmn x0, #1");                                          // did the iterator report the done sentinel?
     emitter.instruction("b.eq __elephc_eval_value_array_iter_key_null");        // out-of-range positions produce a null key
     emitter.instruction("ldr x10, [sp, #24]");                                  // load the current insertion-order position
@@ -341,7 +341,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov x1, xzr");                                         // cursor 0 starts at the property hash head entry
     emitter.label("__elephc_eval_value_object_property_iter_key_loop");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the hash pointer before advancing the iterator
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next insertion-order property key
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next insertion-order property key
     emitter.instruction("cmn x0, #1");                                          // did the iterator report the done sentinel?
     emitter.instruction("b.eq __elephc_eval_value_object_property_iter_key_null"); // out-of-range positions produce a null key
     emitter.instruction("ldr x10, [sp, #24]");                                  // load the current insertion-order property position

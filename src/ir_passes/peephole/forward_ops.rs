@@ -10,13 +10,15 @@
 //!   into the result slot). They are folded only when the result and operand
 //!   share ownership and ir/php type, so redirecting uses to the operand cannot
 //!   shift cleanup responsibility. Ownership-changing forwards are left intact.
-//! - Current lowering does not emit these opcodes; the rewrite keeps them correct
-//!   if a future lowering path introduces them, and is exercised by unit tests.
+//! - A `Borrow` directly wrapping `AcquireRefCell` is an explicit handoff marker:
+//!   it distinguishes EIR-ledger cleanup from ABI cleanup and must survive
+//!   identity folding even though both values are non-owning pointers.
 //! - The operand defines the forward, so it dominates every use of the result —
 //!   fold-to-operand is dominance-safe.
 
 use crate::ir::{Function, InstId, Op};
 
+use super::super::rewrite::defining_instruction;
 use super::Rewrites;
 
 /// Collects redundant `Move`/`Borrow` ops as fold-to-operand rewrites when the
@@ -32,6 +34,12 @@ pub(super) fn collect(function: &Function, rewrites: &mut Rewrites) {
         let Some(&source) = inst.operands.first() else {
             continue;
         };
+        if inst.op == Op::Borrow
+            && defining_instruction(function, source)
+                .is_some_and(|source| source.op == Op::AcquireRefCell)
+        {
+            continue;
+        }
         let (Some(source_value), Some(result_value)) =
             (function.value(source), function.value(result))
         else {

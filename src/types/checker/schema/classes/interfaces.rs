@@ -19,8 +19,8 @@ use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
-    declared_return_type_compatible, is_pdo_exception_get_code_contract,
-    late_static_return_compatible,
+    declaration_is_source, declared_return_type_compatible,
+    is_pdo_exception_get_code_contract, late_static_return_compatible,
     validate_signature_compatibility,
 };
 use super::state::ClassBuildState;
@@ -278,6 +278,17 @@ fn validate_static_interface_method(
         required_sig,
         "static method",
         "implementing interface",
+        state
+            .static_method_declaring_classes
+            .get(method_name)
+            .is_none_or(|owner| declaration_is_source(checker, owner))
+            && interface_info
+                .static_method_declaring_interfaces
+                .get(method_name)
+                .map_or_else(
+                    || declaration_is_source(checker, interface_name),
+                    |owner| declaration_is_source(checker, owner),
+                ),
     )?;
     let actual_method = class
         .methods
@@ -504,6 +515,17 @@ fn validate_interface_method(
         required_sig,
         "method",
         "implementing interface",
+        state
+            .method_declaring_classes
+            .get(method_name)
+            .is_none_or(|owner| declaration_is_source(checker, owner))
+            && interface_info
+                .method_declaring_interfaces
+                .get(method_name)
+                .map_or_else(
+                    || declaration_is_source(checker, interface_name),
+                    |owner| declaration_is_source(checker, owner),
+                ),
     )?;
     let actual_method = class
         .methods

@@ -11,7 +11,7 @@
 //!   it is taken over in place (retagged as an owned string) instead of being duplicated, so a
 //!   `$s .= ...` accumulation loop does not leave one oversized block behind per append.
 
-use crate::codegen_support::runtime::strings::concat_scratch::CONCAT_TEMP_HEAP_KIND;
+use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 
@@ -89,6 +89,7 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     emitter.instruction("mov x3, x0");                                          // x3 = destination (heap pointer)
     emitter.instruction("mov x4, x2");                                          // x4 = byte count for loop
 
+    emitter.raw(".p2align 6");
     emitter.label("__rt_str_persist_copy");
     emitter.instruction("cbz x4, __rt_str_persist_ret");                        // all bytes copied
     emitter.instruction("ldrb w5, [x1], #1");                                   // load byte from source, advance
@@ -159,6 +160,7 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the source byte length after the allocator helper returns
 
     // -- copy the source bytes into the owned heap allocation --
+    emitter.raw(".p2align 6");
     emitter.label("__rt_str_persist_copy");
     emitter.instruction("test rcx, rcx");                                       // stop copying once every source byte has been moved into owned storage
     emitter.instruction("jz __rt_str_persist_ret");                             // the destination payload is fully initialized once no bytes remain
@@ -185,6 +187,19 @@ mod tests {
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
     use super::*;
+
+    /// The quadratic concat-assignment copy loop keeps stable instruction-cache alignment.
+    #[test]
+    fn persist_copy_loop_is_cache_line_aligned_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_str_persist(&mut emitter);
+            assert!(
+                emitter.output().contains(".p2align 6\n__rt_str_persist_copy:"),
+                "{name}"
+            );
+        }
+    }
 
     /// Verifies emit str persist linux x86_64 uses heap helper.
     #[test]

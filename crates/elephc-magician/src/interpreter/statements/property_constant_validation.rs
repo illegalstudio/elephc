@@ -53,7 +53,8 @@ pub(super) fn validate_eval_declared_properties(
             return Err(EvalStatus::RuntimeFatal);
         }
         if (property.has_get_hook() || property.has_set_hook())
-            && (property.is_static() || property.is_readonly() || property.default().is_some())
+            && (property.is_static() || property.is_readonly()
+                || (property.is_virtual() && property.default().is_some()))
         {
             return Err(EvalStatus::RuntimeFatal);
         }

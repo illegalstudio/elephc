@@ -43,6 +43,7 @@ pub struct Usage {
 /// Runtime lookup shapes that require conservative keep-set widening.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Hazards {
+    pub enumerates_functions: bool,
     pub dynamic_function: bool,
     pub dynamic_method: bool,
     pub dynamic_class: bool,
@@ -69,6 +70,7 @@ impl Usage {
                 .or_default()
                 .extend(methods);
         }
+        self.hazards.enumerates_functions |= other.hazards.enumerates_functions;
         self.hazards.dynamic_function |= other.hazards.dynamic_function;
         self.hazards.dynamic_method |= other.hazards.dynamic_method;
         self.hazards.dynamic_class |= other.hazards.dynamic_class;
@@ -230,6 +232,7 @@ pub(super) fn scan_class_shell(stmt: &Stmt) -> Usage {
 struct Scanner<'a> {
     usage: Usage,
     variable_classes: HashMap<String, HashSet<String>>,
+    variable_callables: HashMap<String, HashSet<String>>,
     definitely_non_object_variables: HashSet<String>,
     invalidated_variables: HashSet<String>,
     current_class: Option<String>,

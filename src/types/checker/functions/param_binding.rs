@@ -16,6 +16,9 @@
 //! - The `declare(strict_types=1)` rejection runs *before* them instead, because the widenings
 //!   PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible`
 //!   already accepts on its own.
+//! - A tracked callable-array local or statically resolved two-element literal may bind to
+//!   `callable` only when lowering can materialize its target as a real descriptor at the same
+//!   parameter boundary.
 
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
@@ -63,6 +66,17 @@ impl Checker {
             return Ok(());
         }
         if by_ref {
+            // php binds `array &$p` to a `mixed` variable and checks the value at run time.
+            // The declared PHP-array union lowers to the same boxed `Mixed` cell the variable
+            // already holds, so the reference needs no storage change; only the compile-time
+            // contract stood in the way, and it refused a `mixed` return value handed straight
+            // to such a parameter.
+            if expected.is_php_array()
+                && matches!(actual.codegen_repr(), PhpType::Mixed)
+                && matches!(arg.kind, crate::parser::ast::ExprKind::Variable(_))
+            {
+                return Ok(());
+            }
             return self.require_compatible_arg_type(expected, actual, arg.span, context);
         }
         match classify_param_binding(expected, actual, arg) {
@@ -88,6 +102,30 @@ impl Checker {
                 expected, actual, arg, context, &detail,
             )),
             ParamBinding::Rejected => {
+                // A callable array keeps ordinary array storage until this exact boundary.
+                // Accept only a tracked local or a statically resolvable two-element literal,
+                // resolve its signature without invoking it, and let EIR materialize the
+                // corresponding descriptor.
+                if *expected == PhpType::Callable {
+                    let Some(target) = self.callable_array_param_target(arg, env)? else {
+                        return self.require_compatible_arg_type(
+                            expected, actual, arg.span, context,
+                        );
+                    };
+                    let sig = self
+                        .resolve_first_class_callable_sig(&target, arg.span, env)
+                        .map_err(|err| {
+                            Self::param_binding_error(
+                                expected,
+                                actual,
+                                arg,
+                                context,
+                                err.message.as_str(),
+                            )
+                        })?;
+                    self.register_bound_callable_param_sig(owner, sig);
+                    return Ok(());
+                }
                 self.require_compatible_arg_type(expected, actual, arg.span, context)
             }
         }
@@ -137,9 +175,12 @@ impl Checker {
         operation: impl FnOnce(&mut Self) -> T,
     ) -> T {
         let outer_strict_types = self.strict_types;
+        let outer_internal_callback_binding = self.internal_callback_binding;
         self.strict_types = false;
+        self.internal_callback_binding = true;
         let result = operation(self);
         self.strict_types = outer_strict_types;
+        self.internal_callback_binding = outer_internal_callback_binding;
         result
     }
 

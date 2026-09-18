@@ -141,6 +141,46 @@ pub(super) unsafe fn register_native_abstract_property_inner(
     ))
 }
 
+/// Runs native method shape registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_method_shape`; invalid handles, keys, or counts fail
+/// closed as `false`.
+pub(super) unsafe fn register_native_method_shape_inner(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    is_static: bool,
+    visible_regular_param_count: u64,
+    required_param_count: u64,
+    shape_flags: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(method_key) = abi_name_to_string(method_key_ptr, method_key_len) else {
+        return 0;
+    };
+    let Some((class_name, method_name)) = split_method_key(&method_key) else {
+        return 0;
+    };
+    let Some(shape) = NativeCallableShape::from_abi(
+        visible_regular_param_count,
+        required_param_count,
+        shape_flags,
+    ) else {
+        return 0;
+    };
+    if is_static {
+        i32::from(context.define_native_static_method_shape(class_name, method_name, shape))
+    } else {
+        i32::from(context.define_native_method_shape(class_name, method_name, shape))
+    }
+}
+
 /// Runs native method parameter registration after installing a panic boundary.
 ///
 /// # Safety
@@ -392,6 +432,38 @@ pub(super) unsafe fn register_native_method_param_default_scalar_inner(
     default_kind: u64,
     default_payload: u64,
 ) -> i32 {
+    if default_kind == NATIVE_DEFAULT_COMPILED {
+        let Some(context) = ctx.as_mut() else {
+            return 0;
+        };
+        if context.abi_version() != ABI_VERSION || default_payload == 0 {
+            return 0;
+        }
+        let Ok(method_key) = abi_name_to_string(method_key_ptr, method_key_len) else {
+            return 0;
+        };
+        let Some((class_name, method_name)) = split_method_key(&method_key) else {
+            return 0;
+        };
+        let Ok(param_index) = usize::try_from(param_index) else {
+            return 0;
+        };
+        return i32::from(if is_static {
+            context.define_native_static_method_compiled_param_default(
+                class_name,
+                method_name,
+                param_index,
+                default_payload as usize,
+            )
+        } else {
+            context.define_native_method_compiled_param_default(
+                class_name,
+                method_name,
+                param_index,
+                default_payload as usize,
+            )
+        });
+    }
     let Some(default) = native_callable_scalar_default(default_kind, default_payload) else {
         return 0;
     };

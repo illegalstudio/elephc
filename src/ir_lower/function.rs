@@ -27,8 +27,11 @@ use crate::names::Name;
 use crate::span::Span;
 use crate::types::{
     collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, FunctionSig,
-    PackedClassInfo, PhpType, TypeEnv,
+    PackedClassInfo, PhpType, ReturnArgAlias, TypeEnv,
 };
+
+mod builtin_wrappers;
+pub(crate) use builtin_wrappers::{lower_array_merge_callable, lower_boxed_usort_callable};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
 type AstParams = [(
@@ -38,16 +41,20 @@ type AstParams = [(
     bool,
 )];
 
-const EVAL_AOT_SCOPE_PARAM: &str = "__eir_eval_scope";
-
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
+/// Scope handle a scope-aware AOT eval fragment receives by value.
+///
+/// Both spellings live in `crate::names` so the EIR producer here and every backend
+/// exact-name lookup read one definition, and so both carry the generated-local marker
+/// that keeps them out of the fragment's `get_defined_vars()`.
+const EVAL_AOT_SCOPE_PARAM: &str = crate::names::EVAL_AOT_SCOPE_LOCAL;
 
 /// Compile-time callable binding to seed for a self-recursive closure capture.
 struct RecursiveClosureBinding {
     local_name: String,
     closure_name: String,
     signature: FunctionSig,
-    capture_names: Vec<String>,
+    captures: Vec<(String, bool)>,
+    return_alias: ReturnArgAlias,
 }
 
 /// Lowers the top-level statement list as the synthetic `main` EIR function.
@@ -62,9 +69,17 @@ pub(crate) fn lower_main(
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
     let all_global_var_names = collect_global_var_names(program);
+    let mut function_global_names =
+        crate::ir_lower::program::collect_function_global_names(program);
+    crate::ir_lower::program::close_function_global_names_over_calls(
+        &mut function_global_names,
+        &module.functions,
+        &module.data.function_names,
+    );
     let top_level_env = web_gated_global_env(&check_result.global_env, web);
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         program,
         top_level_env.clone(),
@@ -78,12 +93,17 @@ pub(crate) fn lower_main(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         "main".to_string(),
@@ -95,6 +115,7 @@ pub(crate) fn lower_main(
         None,
         true,
         all_global_var_names,
+        Some(function_global_names),
         module.source_path.clone(),
         None,
         web,
@@ -187,6 +208,7 @@ pub(crate) fn lower_user_function(
     attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         env_from_signature(&eir_signature, web),
@@ -200,12 +222,17 @@ pub(crate) fn lower_user_function(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         name.to_string(),
@@ -217,6 +244,7 @@ pub(crate) fn lower_user_function(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -267,7 +295,11 @@ pub(crate) fn lower_class_method(
     let mut env = env_from_signature(&signature, web);
     let mut body_params = signature.params.clone();
     if is_static {
-        let hidden_called_class = (CALLED_CLASS_ID_PARAM.to_string(), PhpType::Int);
+        // The hidden late-static-binding argument keeps its leading position and its `Int`
+        // type; only the NAME is the marked one from `crate::names`, so the slot stays
+        // invisible to `get_defined_vars()` and to eval scope synchronization.
+        let hidden_called_class =
+            (crate::names::CALLED_CLASS_ID_LOCAL.to_string(), PhpType::Int);
         function.params.push(FunctionParam {
             name: hidden_called_class.0.clone(),
             ir_type: value_ir_type(&hidden_called_class.1),
@@ -293,6 +325,7 @@ pub(crate) fn lower_class_method(
     attach_generator_source_if_needed(&mut function, body, body_params.len());
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         env,
@@ -306,12 +339,17 @@ pub(crate) fn lower_class_method(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         name.clone(),
@@ -323,6 +361,7 @@ pub(crate) fn lower_class_method(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -348,8 +387,12 @@ fn eval_aot_decision_maps() -> (
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    std::collections::HashMap<(String, Span), std::collections::HashSet<String>>,
 ) {
     (
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         std::collections::HashMap::new(),
@@ -386,9 +429,16 @@ pub(crate) fn lower_eval_aot_function(
     );
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
-    let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
+    let (
+        bind_kill_sites,
+        ref_detach_sites,
+        retype_sites,
+        mixed_storage_store_sites,
+        boxed_reference_promotion_sites,
+    ) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         TypeEnv::new(),
@@ -402,12 +452,17 @@ pub(crate) fn lower_eval_aot_function(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &bind_kill_sites,
+        &ref_detach_sites,
         &retype_sites,
         &mixed_storage_store_sites,
         "main".to_string(),
@@ -419,6 +474,7 @@ pub(crate) fn lower_eval_aot_function(
         None,
         false,
         collect_global_var_names(body),
+        None,
         module.source_path.clone(),
         None,
         module.web,
@@ -497,9 +553,16 @@ pub(crate) fn lower_eval_aot_scope_function(
             scope_flush_writes.clone(),
         )
     });
-    let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
+    let (
+        bind_kill_sites,
+        ref_detach_sites,
+        retype_sites,
+        mixed_storage_store_sites,
+        boxed_reference_promotion_sites,
+    ) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         env,
@@ -513,12 +576,17 @@ pub(crate) fn lower_eval_aot_scope_function(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &bind_kill_sites,
+        &ref_detach_sites,
         &retype_sites,
         &mixed_storage_store_sites,
         "main".to_string(),
@@ -530,6 +598,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         None,
         false,
         collect_global_var_names(body),
+        None,
         module.source_path.clone(),
         eval_scope_reads,
         module.web,
@@ -568,11 +637,10 @@ pub(crate) fn lower_property_init_thunk(
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
-    if !class_info.defaults.iter().any(|default| default.is_some()) {
+    if !super::property_initializers::needs_initializer(class_info) {
         return;
     }
     let web = module.web;
-    let body = property_init_body(class_info);
     let function_name = format!("_class_propinit_{}", class_info.class_id);
     let this_type = PhpType::Object(class_name.to_string());
     let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
@@ -604,8 +672,9 @@ pub(crate) fn lower_property_init_thunk(
     let params = vec![("this".to_string(), this_type)];
     let closures = lower_body_into_function(
         &mut function,
+        Some(class_info),
         &mut module.data,
-        &body,
+        &[],
         env,
         web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
@@ -617,12 +686,17 @@ pub(crate) fn lower_property_init_thunk(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         function_name.clone(),
@@ -634,6 +708,7 @@ pub(crate) fn lower_property_init_thunk(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -959,6 +1034,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     let web = module.web;
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         &body,
         env,
@@ -972,12 +1048,17 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         function_name.clone(),
@@ -989,6 +1070,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         None,
         false,
         std::collections::HashSet::new(),
+        None,
         module.source_path.clone(),
         None,
         web,
@@ -997,50 +1079,303 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     module.add_function(function);
 }
 
+/// Lowers one synthetic function belonging to the PHP 8.5 `clone()` override engine.
+///
+/// Both shapes go through here: the per-`(runtime class, invocation scope)` applicator, whose
+/// parameters are `(this: Object(<clone class>), __elephc_clone_overrides: mixed)`, and the
+/// per-`(declaring class, property)` scoped setter helper, whose `this` is typed with the
+/// ancestor that owns the private slot the scope selects.
+///
+/// `scope` becomes the body's lexical class, so property-slot resolution, set-hook routing and
+/// `__set()` selection inside the body see the PHP scope the statements were synthesized for.
+/// Visibility itself is decided BEFORE lowering, in `crate::ir_lower::clone_overrides::arms`,
+/// and is already baked into the statements as explicit assignment or denial arms.
+///
+/// The statements carry `Span::dummy()`. `CheckResult::throw_access_sites` is keyed by source
+/// span, so the checker's statically decided readonly REFUSAL never applies to these
+/// engine-owned stores, which is exactly the reinitialization `clone()` is specified to
+/// perform, while no process-global or fiber-visible allowance state is introduced anywhere.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lower_clone_override_function(
+    function_name: &str,
+    params: &[(String, PhpType)],
+    scope: Option<&str>,
+    body: &[Stmt],
+    module: &mut Module,
+    check_result: &CheckResult,
+    functions: &std::collections::HashMap<String, FunctionSig>,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) -> FunctionSig {
+    let sig = FunctionSig {
+        params: params.to_vec(),
+        param_type_exprs: vec![None; params.len()],
+        param_attributes: Vec::new(),
+        defaults: vec![None; params.len()],
+        return_type: PhpType::Void,
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: vec![false; params.len()],
+        declared_params: vec![false; params.len()],
+        variadic: None,
+        deprecation: None,
+    };
+    if module
+        .functions
+        .iter()
+        .any(|function| function.name == function_name)
+    {
+        return sig;
+    }
+    let mut function = Function::new(function_name.to_string(), IrType::Void, PhpType::Void);
+    function.flags.is_synthetic = true;
+    // The body is lowered AS IF it were written inside `scope`, so the EIR function has to carry
+    // that scope too. Leaving `lexical_class` at `None` made a nested `clone($o, [...])` inside an
+    // applicator or a scoped setter resolve its own invocation scope as global scope, both when
+    // `collect_sites` plans the candidate scopes and when the backend picks the applicator arm.
+    function.lexical_class = scope.map(str::to_string);
+    for (name, php_type) in params {
+        function.params.push(FunctionParam {
+            name: name.clone(),
+            ir_type: value_ir_type(php_type),
+            php_type: php_type.clone(),
+            by_ref: false,
+            variadic: false,
+        });
+    }
+    function.source_signature = Some(source_signature(function_name, &sig));
+    function.signature = Some(eir_runtime_metadata_signature(&sig));
+    let mut env = TypeEnv::new();
+    for (name, php_type) in params {
+        env.insert(name.clone(), php_type.clone());
+    }
+    let web = module.web;
+    let closures = lower_body_into_function(
+        &mut function,
+        None,
+        &mut module.data,
+        body,
+        env,
+        web_gated_global_env(&check_result.global_env, web),
+        functions,
+        &check_result.extern_functions,
+        &check_result.extern_globals,
+        &check_result.callable_param_sigs,
+        &check_result.return_alias_summaries,
+        fiber_return_sigs,
+        &module.class_infos,
+        &check_result.enums,
+        &check_result.interfaces,
+        &module.declared_trait_names,
+        &module.declared_trait_methods,
+        &module.declared_trait_properties,
+        &check_result.packed_classes,
+        &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.boxed_reference_promotion_sites,
+        &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
+        &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
+        &check_result.local_retype_sites,
+        &check_result.mixed_storage_store_sites,
+        function_name.to_string(),
+        constants,
+        scope.map(str::to_string),
+        PhpType::Void,
+        false,
+        params,
+        None,
+        false,
+        std::collections::HashSet::new(),
+        None,
+        module.source_path.clone(),
+        None,
+        web,
+    );
+    add_closures(module, closures);
+    module.add_function(function);
+    sig
+}
+
 /// The symbol a dynamic-new candidate calls when it has to pad the constructor with defaults.
 pub(crate) fn dynamic_constructor_thunk_name(class_id: u64, provided_args: usize) -> String {
     format!("_class_ctor_{}_{}", class_id, provided_args)
 }
 
-/// Builds `$this->property = <default>;` statements for property-default initialization.
+/// Returns the internal function name that materializes one native eval parameter default.
+pub(crate) fn eval_native_default_helper_name(
+    class_id: u64,
+    is_static: bool,
+    method_name: &str,
+    param_index: usize,
+) -> String {
+    format!(
+        "__elephc_eval_default\\{}\\{}\\{}\\{}",
+        class_id,
+        if is_static { "static" } else { "instance" },
+        method_name,
+        param_index,
+    )
+}
+
+/// Lowers safe literal defaults into zero-argument Mixed-returning helpers for native eval calls.
 ///
-/// A null default whose slot type cannot represent null (a scalar slot rebound by
-/// constructor-argument propagation) is skipped: those slots are always overwritten
-/// before an observable read, and the store would be unrepresentable.
-fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
-    let span = Span::dummy();
-    class_info
-        .defaults
-        .iter()
-        .enumerate()
-        .filter_map(|(index, default)| {
-            let default = default.as_ref()?;
-            let (name, php_type) = class_info.properties.get(index)?;
-            if matches!(default.kind, ExprKind::Null) && !php_type.null_property_default_required() {
-                return None;
-            }
-            let property = name.clone();
-            Some(Stmt::new(
-                StmtKind::ExprStmt(Expr::new(
-                    ExprKind::Assignment {
-                        target: Box::new(Expr::new(
-                            ExprKind::PropertyAccess {
-                                object: Box::new(Expr::new(ExprKind::This, span)),
-                                property,
-                            },
-                            span,
-                        )),
-                        value: Box::new(default.clone()),
-                        result_target: None,
-                        prelude: Vec::new(),
-                        conditional_value_temp: None,
-                    },
-                    span,
-                )),
-                span,
-            ))
+/// Compact eval metadata deliberately has a recursion bound. A finite source literal beyond that
+/// bound is still safe for the compiler to lower normally, so the binder calls one of these
+/// helpers when no compact value was registered. Defaults outside this side-effect-free literal
+/// subset remain unsupported instead of executing arbitrary PHP while Rust owns the eval stack.
+pub(crate) fn lower_eval_native_default_helpers(
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) {
+    let uses_eval = super::program::all_lowered_functions(module).any(|function| {
+        function.locals.iter().any(|local| {
+            matches!(
+                local.kind,
+                crate::ir::LocalKind::EvalContext
+                    | crate::ir::LocalKind::EvalScope
+                    | crate::ir::LocalKind::EvalGlobalScope
+            )
         })
-        .collect()
+    });
+    if !uses_eval {
+        return;
+    }
+    let mut specs = Vec::new();
+    let mut classes = module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, info)| info.class_id);
+    for (class_name, class_info) in classes {
+        for (is_static, methods) in [
+            (false, &class_info.methods),
+            (true, &class_info.static_methods),
+        ] {
+            let mut methods = methods.iter().collect::<Vec<_>>();
+            methods.sort_by_key(|(name, _)| name.as_str());
+            for (method_name, signature) in methods {
+                for (param_index, default) in signature.defaults.iter().enumerate() {
+                    let Some(default) = default else { continue };
+                    if eval_native_default_helper_literal(&default.kind)
+                        && crate::types::signatures::literal_default_exceeds_compact_depth(default)
+                    {
+                        specs.push((
+                            class_name.clone(),
+                            class_info.clone(),
+                            is_static,
+                            method_name.clone(),
+                            param_index,
+                            default.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for (class_name, class_info, is_static, method_name, param_index, default) in specs {
+        let function_name = eval_native_default_helper_name(
+            class_info.class_id,
+            is_static,
+            &method_name,
+            param_index,
+        );
+        if module.functions.iter().any(|function| function.name == function_name) {
+            continue;
+        }
+        let mut function = Function::new(
+            function_name.clone(),
+            value_ir_type(&PhpType::Mixed),
+            PhpType::Mixed,
+        );
+        function.flags.is_synthetic = true;
+        let signature = FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Mixed,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        };
+        function.source_signature = Some(source_signature(&function_name, &signature));
+        function.signature = Some(eir_runtime_metadata_signature(&signature));
+        let body = [Stmt::new(StmtKind::Return(Some(default)), Span::dummy())];
+        // The helper inherits class scope through `current_class` below. It must not enter the
+        // separate property-initializer path, which skips `body` and expects an object receiver.
+        let closures = lower_body_into_function(
+            &mut function,
+            None,
+            &mut module.data,
+            &body,
+            TypeEnv::new(),
+            web_gated_global_env(&check_result.global_env, module.web),
+            &check_result.functions,
+            &check_result.extern_functions,
+            &check_result.extern_globals,
+            &check_result.callable_param_sigs,
+            &check_result.return_alias_summaries,
+            fiber_return_sigs,
+            &module.class_infos,
+            &check_result.enums,
+            &check_result.interfaces,
+            &module.declared_trait_names,
+            &module.declared_trait_methods,
+            &module.declared_trait_properties,
+            &check_result.packed_classes,
+            &check_result.throw_access_sites,
+            &check_result.builtin_call_types,
+            &check_result.boxed_reference_promotion_sites,
+            &check_result.loop_storage_types,
+            &check_result.string_incdec_locals,
+            &check_result.local_bind_kill_sites,
+            &check_result.local_ref_detach_sites,
+            &check_result.local_retype_sites,
+            &check_result.mixed_storage_store_sites,
+            function_name.clone(),
+            constants,
+            Some(class_name),
+            PhpType::Mixed,
+            true,
+            &[],
+            None,
+            false,
+            std::collections::HashSet::new(),
+            None,
+            module.source_path.clone(),
+            None,
+            module.web,
+        );
+        add_closures(module, closures);
+        module.add_function(function);
+    }
+}
+
+/// Returns whether a default is a finite, side-effect-free literal tree.
+fn eval_native_default_helper_literal(expr: &ExprKind) -> bool {
+    match expr {
+        ExprKind::Null
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_) => true,
+        ExprKind::Negate(inner) => matches!(
+            &inner.kind,
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        ),
+        ExprKind::ArrayLiteral(items) => items
+            .iter()
+            .all(|item| eval_native_default_helper_literal(&item.kind)),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().all(|(key, value)| {
+            eval_native_default_helper_literal(&key.kind)
+                && eval_native_default_helper_literal(&value.kind)
+        }),
+        _ => false,
+    }
 }
 
 /// Lowers one closure literal into an EIR function plus any nested closure functions.
@@ -1053,6 +1388,7 @@ pub(crate) fn lower_closure_function(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    signature_captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
     loop_storage_scope: String,
@@ -1063,7 +1399,7 @@ pub(crate) fn lower_closure_function(
         variadic_by_ref,
         return_type,
         body,
-        captures,
+        signature_captures,
         parent.classes,
         parent.builtin_call_types,
     );
@@ -1079,7 +1415,15 @@ pub(crate) fn lower_closure_function(
     )
 }
 
-/// Lowers one closure literal using contextual types for unannotated parameters.
+/// Lowers one closure literal using contextual types for unannotated parameters and, when the
+/// binding context supplies one, for an undeclared result type.
+///
+/// The contextual result is applied BEFORE the body is lowered, because the body's `return`
+/// statements are lowered against the signature's return type: a by-reference `return
+/// $this->prop` decides there which payload representation it publishes to the caller. It is
+/// only a default: a closure that declares its own return type keeps it, so an explicit
+/// declaration is never silently overridden by the binding.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_closure_function_with_context(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -1089,7 +1433,9 @@ pub(crate) fn lower_closure_function_with_context(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    signature_captures: &[(String, PhpType, bool)],
     contextual_arg_types: &[PhpType],
+    contextual_return_type: Option<&PhpType>,
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
     loop_storage_scope: String,
@@ -1100,13 +1446,18 @@ pub(crate) fn lower_closure_function_with_context(
         variadic_by_ref,
         return_type,
         body,
-        captures,
+        signature_captures,
         parent.classes,
         parent.builtin_call_types,
     );
     signature.by_ref_return = by_ref_return;
-    for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
-        if type_ann.is_none() {
+    if let Some(contextual_return_type) = contextual_return_type {
+        if !signature.declared_return {
+            signature.return_type = contextual_return_type.clone();
+        }
+    }
+    for (idx, (_, type_ann, _, is_ref)) in params.iter().enumerate() {
+        if type_ann.is_none() && !is_ref {
             if let Some(contextual_ty) = contextual_arg_types.get(idx) {
                 if let Some((_, param_ty)) = signature.params.get_mut(idx) {
                     *param_ty = contextual_ty.clone();
@@ -1160,13 +1511,20 @@ fn lower_closure_function_with_signature(
         local_name: local_name.to_string(),
         closure_name: name.to_string(),
         signature: signature.clone(),
-        capture_names: captures
+        captures: captures
             .iter()
-            .map(|(capture_name, _, _)| capture_name.clone())
+            .map(|(capture_name, _, by_ref)| (capture_name.clone(), *by_ref))
             .collect(),
+        return_alias: crate::types::summarize_callable_return_alias(
+            signature.params.iter().map(|(name, _)| name.as_str()),
+            None,
+            signature.by_ref_return,
+            body,
+        ),
     });
     let closures = lower_body_into_function(
         &mut function,
+        None,
         parent.data,
         body,
         env,
@@ -1180,12 +1538,17 @@ fn lower_closure_function_with_signature(
         parent.classes,
         parent.enums,
         parent.interfaces,
+        parent.declared_trait_names,
+        parent.declared_trait_methods,
+        parent.declared_trait_properties,
         parent.packed_classes,
         parent.throw_access_sites,
         parent.builtin_call_types,
+        parent.boxed_reference_promotion_sites,
         parent.loop_storage_types,
         parent.string_incdec_locals,
         parent.bind_kill_sites,
+        parent.ref_detach_sites,
         parent.retype_sites,
         parent.mixed_storage_store_sites,
         loop_storage_scope,
@@ -1197,6 +1560,7 @@ fn lower_closure_function_with_signature(
         recursive_binding,
         false,
         collect_global_var_names(body),
+        None,
         parent.source_path().map(str::to_string),
         None,
         parent.web,
@@ -1208,6 +1572,7 @@ fn lower_closure_function_with_signature(
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
 fn lower_body_into_function(
     function: &mut Function,
+    property_initializers: Option<&ClassInfo>,
     data: &mut crate::ir::DataPool,
     body: &[Stmt],
     env: TypeEnv,
@@ -1221,12 +1586,23 @@ fn lower_body_into_function(
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
     enums: &std::collections::HashMap<String, crate::types::EnumInfo>,
     interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
+    declared_trait_names: &[String],
+    declared_trait_methods: &std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, crate::ir::TraitMethodInfo>,
+    >,
+    declared_trait_properties: &std::collections::HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    boxed_reference_promotion_sites: &std::collections::HashMap<
+        (String, Span),
+        std::collections::HashSet<String>,
+    >,
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
     bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    ref_detach_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     retype_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     mixed_storage_store_sites: &std::collections::HashMap<
         Span,
@@ -1241,6 +1617,9 @@ fn lower_body_into_function(
     recursive_closure_binding: Option<RecursiveClosureBinding>,
     in_main: bool,
     all_global_var_names: std::collections::HashSet<String>,
+    function_global_names: Option<
+        std::collections::HashMap<String, Option<std::collections::HashSet<String>>>,
+    >,
     source_path: Option<String>,
     eval_scope_reads: Option<(
         String,
@@ -1274,12 +1653,17 @@ fn lower_body_into_function(
         classes,
         enums,
         interfaces,
+        declared_trait_names,
+        declared_trait_methods,
+        declared_trait_properties,
         packed_classes,
         throw_access_sites,
         builtin_call_types,
+        boxed_reference_promotion_sites,
         loop_storage_types,
         string_incdec_locals,
         bind_kill_sites,
+        ref_detach_sites,
         retype_sites,
         mixed_storage_store_sites,
         loop_storage_scope,
@@ -1293,6 +1677,9 @@ fn lower_body_into_function(
         source_path,
         web,
     );
+    if let Some(function_global_names) = function_global_names {
+        ctx.set_function_global_names(function_global_names);
+    }
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
@@ -1313,26 +1700,29 @@ fn lower_body_into_function(
     // and closures, so every call flavour — including `call_user_func`, dynamic `$f(...)` and
     // recursion — is covered without any per-flavour code.
     //
+    // Mixed parameters also need an owning cell: native return values must outlive an eval
+    // caller's temporary arguments, and a boxed array mutation must not replace the caller's
+    // cell payload. The resource-aware clone preserves shared resource identity.
     // By-reference parameters are excluded by definition: `array &$a` must alias, not copy.
     // `$this` is excluded because it is an object, never a container.
     for (index, (name, php_type)) in params.iter().enumerate() {
-        if by_ref_params.get(index).copied().unwrap_or(false) {
-            continue;
-        }
         if name == "this" {
             continue;
         }
-        if !matches!(
-            php_type.codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. }
+        if !FunctionSig::parameter_needs_owned_shadow(
+            php_type, by_ref_params.get(index).copied().unwrap_or(false),
         ) {
             continue;
         }
         ctx.privatize_container_param(name, php_type, None);
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
-    for stmt in body {
-        crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
+    if let Some(class) = property_initializers {
+        super::property_initializers::lower(&mut ctx, class);
+    } else if !super::throwable_constructors::lower(&mut ctx) {
+        for stmt in body {
+            crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
+        }
     }
     terminate_open_block(&mut ctx);
     // Final storage types are now known: erase deferred loop-store releases that
@@ -1357,10 +1747,11 @@ fn seed_recursive_closure_binding(
         return;
     };
     let captures = binding
-        .capture_names
+        .captures
         .iter()
-        .map(|capture_name| ClosureCapture {
+        .map(|(capture_name, by_ref)| ClosureCapture {
             value: ctx.load_local(capture_name, None).value,
+            by_ref_local: by_ref.then(|| capture_name.clone()),
         })
         .collect();
     ctx.bind_static_callable_local(
@@ -1369,6 +1760,7 @@ fn seed_recursive_closure_binding(
             name: binding.closure_name,
             signature: binding.signature,
             captures,
+            return_alias: binding.return_alias,
         },
     );
 }
@@ -1433,6 +1825,18 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>) {
     if ctx.return_type == IrType::Void {
         ctx.emit_eval_scope_finalizer(None);
         ctx.builder.terminate(Terminator::Return { value: None });
+        return;
+    }
+    if ctx.by_ref_return {
+        // A by-reference result is a raw CELL ADDRESS the caller dereferences and may alias.
+        // A fallthrough has no accepted reference to transport, and the default placeholder
+        // would be a null or zero word the caller would read as a cell, so this path fails
+        // closed with the same catchable `Error` the run-time provenance guard raises.
+        crate::ir_lower::stmt::lower_throw_access_error(
+            ctx,
+            "Cannot return a reference from a path that has no by-reference return",
+            crate::span::Span::dummy(),
+        );
         return;
     }
     ctx.emit_eval_scope_finalizer(None);
@@ -1820,7 +2224,7 @@ fn direct_closure_return_type(
 /// the property's declared type, so a `fn &() => $o->items` closure returns the array type
 /// rather than the syntactic integer default. An array literal built out of those same
 /// variables resolves its element/value slots the same way (see
-/// `direct_closure_return_array_element_type`).
+/// `direct_closure_return_array_type`).
 fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
@@ -1838,13 +2242,13 @@ fn direct_closure_return_expr_type(
     // closure signature instead of the syntactic integer default.
     if let ExprKind::ArrayLiteral(items) = &expr.kind {
         if !items.is_empty() {
-            return PhpType::Array(Box::new(direct_closure_return_array_element_type(
+            return direct_closure_return_array_type(
                 items,
                 captures,
                 params,
                 classes,
                 builtin_call_types,
-            )));
+            );
         }
     }
     if let ExprKind::ArrayLiteralAssoc(pairs) = &expr.kind {
@@ -1899,22 +2303,39 @@ fn direct_closure_return_expr_type(
                         .find(|(param_name, _)| param_name == receiver_name)
                         .map(|(_, ty)| ty)
                 });
-            if let Some(PhpType::Object(class)) = receiver_ty {
-                if let Some(info) = classes.get(class.trim_start_matches('\\')) {
-                    if let Some((_, ty)) =
-                        info.properties.iter().find(|(name, _)| name == property)
-                    {
-                        return ty.clone();
+            match receiver_ty {
+                Some(PhpType::Object(class)) => {
+                    if let Some(info) = classes.get(class.trim_start_matches('\\')) {
+                        if let Some((_, ty)) =
+                            info.properties.iter().find(|(name, _)| name == property)
+                        {
+                            return ty.clone();
+                        }
+                    }
+                    if receiver_name == "this" {
+                        // A method-defined closure may later be rebound to an unrelated class.
+                        // Its signature keeps the enclosing `$this` type so ordinary known
+                        // properties remain precise, but a property absent from that class is
+                        // resolved against the eventual bound receiver and must stay boxed.
+                        return PhpType::Mixed;
                     }
                 }
+                Some(receiver_ty) if receiver_ty.codegen_repr() == PhpType::Mixed => {
+                    // A runtime-shaped receiver makes the property runtime-shaped too. Falling
+                    // through to syntactic inference stamps an otherwise unknown property read
+                    // as `int`; a later scoped `Closure::bind` clone can then find a string slot
+                    // correctly but coerce that string through the stale integer signature.
+                    return PhpType::Mixed;
+                }
+                _ => {}
             }
         }
     }
     crate::types::checker::infer_expr_type_syntactic(expr)
 }
 
-/// Returns the EIR storage element type for an indexed array literal returned directly
-/// from a closure, resolving every item against the closure's captures and parameters.
+/// Returns literal storage for a closure return, resolving elements and spread keys
+/// against the closure's captures and parameters.
 ///
 /// This mirrors `crate::ir_lower::expr::array_literal_type_for_ir`, which types the very
 /// same literal while lowering the body from `LoweringContext::local_types`. The two must
@@ -1924,7 +2345,7 @@ fn direct_closure_return_expr_type(
 /// { return [$a, $b]; }` called as `(1, "z")` produced `[1, 0]`. The syntactic fallback used
 /// before this helper existed types every unrecognized item `int`, which also mis-stamped
 /// `string`, `float`, `bool`, and `array` parameters.
-fn direct_closure_return_array_element_type(
+fn direct_closure_return_array_type(
     items: &[crate::parser::ast::Expr],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
@@ -1932,7 +2353,15 @@ fn direct_closure_return_array_element_type(
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 ) -> PhpType {
     let mut elem_ty = PhpType::Never;
+    let mut has_hash_spread = false;
     for item in items {
+        if let ExprKind::Spread(inner) = &item.kind {
+            has_hash_spread |= matches!(
+                direct_closure_return_expr_type(inner, captures, params, classes, builtin_call_types)
+                    .codegen_repr(),
+                PhpType::AssocArray { .. } | PhpType::Mixed
+            );
+        }
         elem_ty = crate::ir_lower::expr::merge_ir_indexed_element_type(
             elem_ty,
             direct_closure_return_array_item_type(
@@ -1944,7 +2373,11 @@ fn direct_closure_return_array_element_type(
             ),
         );
     }
-    elem_ty
+    if has_hash_spread {
+        PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(elem_ty) }
+    } else {
+        PhpType::Array(Box::new(elem_ty))
+    }
 }
 
 /// Returns the EIR storage element type contributed by one indexed array-literal item.
@@ -1972,6 +2405,7 @@ fn direct_closure_return_array_item_type(
                 PhpType::Void | PhpType::Never => PhpType::Mixed,
                 other => other,
             },
+            PhpType::AssocArray { value, .. } => value.codegen_repr(),
             _ => PhpType::Mixed,
         };
     }
@@ -2006,29 +2440,63 @@ fn direct_closure_return_assoc_literal_type(
     let mut key_ty = PhpType::Never;
     let mut value_ty = PhpType::Never;
     for (key, value) in pairs {
-        let next_key = crate::types::normalized_array_key_type(
-            key,
-            crate::types::checker::infer_expr_type_syntactic(key),
-        );
-        key_ty = if matches!(key_ty, PhpType::Never) {
-            next_key
-        } else {
-            crate::types::merge_array_key_types(key_ty, next_key)
-        };
-        value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(
-            value_ty,
-            direct_closure_return_array_item_type(
-                value,
+        // A spread entry carries no key of its own: the pair's key IS the spread and its value is
+        // an inert null placeholder. Typing that pair as an ordinary entry stamped the literal
+        // from the placeholder instead of from the source the lowering actually merges in.
+        let (next_key, next_value) = match crate::parser::ast::assoc_spread_source(key, value) {
+            Some(inner) => direct_closure_return_assoc_spread_entry_types(
+                inner,
                 captures,
                 params,
                 classes,
                 builtin_call_types,
             ),
-        );
+            None => (
+                crate::types::normalized_array_key_type(
+                    key,
+                    crate::types::checker::infer_expr_type_syntactic(key),
+                ),
+                direct_closure_return_array_item_type(
+                    value,
+                    captures,
+                    params,
+                    classes,
+                    builtin_call_types,
+                ),
+            ),
+        };
+        key_ty = if matches!(key_ty, PhpType::Never) {
+            next_key
+        } else {
+            crate::types::merge_array_key_types(key_ty, next_key)
+        };
+        value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(value_ty, next_value);
     }
     PhpType::AssocArray {
         key: Box::new(key_ty),
         value: Box::new(value_ty),
+    }
+}
+
+/// Returns the `(key, value)` storage types one spread entry of a directly returned associative
+/// literal contributes, resolved against the closure's captures and parameters.
+///
+/// Mirrors `crate::ir_lower::expr::assoc_array_literals`'s spread typing: an indexed source
+/// contributes integer keys, a hash source contributes its own key type, and a source this pass
+/// cannot name stays `Mixed` on both slots.
+fn direct_closure_return_assoc_spread_entry_types(
+    inner: &crate::parser::ast::Expr,
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+) -> (PhpType, PhpType) {
+    let source =
+        direct_closure_return_array_item_type(inner, captures, params, classes, builtin_call_types);
+    match source.codegen_repr() {
+        PhpType::Array(elem) => (PhpType::Int, elem.codegen_repr()),
+        PhpType::AssocArray { key, value } => (key.codegen_repr(), value.codegen_repr()),
+        _ => (PhpType::Mixed, PhpType::Mixed),
     }
 }
 

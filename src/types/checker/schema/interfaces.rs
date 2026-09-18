@@ -18,7 +18,8 @@ use crate::types::{InterfaceInfo, PhpType, PropertyHookContract};
 use super::super::Checker;
 use super::super::InterfaceDeclInfo;
 use super::validation::{
-    build_method_sig, late_static_return_compatible, validate_signature_compatibility,
+    build_method_sig, declaration_is_source, late_static_return_compatible,
+    validate_signature_compatibility,
 };
 use crate::types::traits::FlattenedClass;
 
@@ -69,12 +70,12 @@ pub(crate) fn build_interface_info_recursive(
 
     let mut methods = HashMap::new();
     let mut late_static_method_returns = HashMap::new();
-    let mut method_declaring_interfaces = HashMap::new();
+    let mut method_declaring_interfaces: HashMap<String, String> = HashMap::new();
     let mut method_order = Vec::new();
     let mut method_slots = HashMap::new();
     let mut static_methods = HashMap::new();
     let mut late_static_static_method_returns = HashMap::new();
-    let mut static_method_declaring_interfaces = HashMap::new();
+    let mut static_method_declaring_interfaces: HashMap<String, String> = HashMap::new();
     let mut static_method_order = Vec::new();
     let mut properties = HashMap::new();
     let mut property_order = Vec::new();
@@ -128,6 +129,16 @@ pub(crate) fn build_interface_info_recursive(
                     parent_sig,
                     "method",
                     "combining interface parent",
+                    method_declaring_interfaces
+                        .get(method_name)
+                        .is_none_or(|owner| declaration_is_source(checker, owner))
+                        && parent_info
+                            .method_declaring_interfaces
+                            .get(method_name)
+                            .map_or_else(
+                                || declaration_is_source(checker, parent_name),
+                                |owner| declaration_is_source(checker, owner),
+                            ),
                 )?;
                 if let Some(return_type) = parent_info.late_static_method_returns.get(method_name) {
                     methods.insert(method_name.clone(), parent_sig.clone());
@@ -176,6 +187,16 @@ pub(crate) fn build_interface_info_recursive(
                     parent_sig,
                     "static method",
                     "combining interface parent",
+                    static_method_declaring_interfaces
+                        .get(method_name)
+                        .is_none_or(|owner| declaration_is_source(checker, owner))
+                        && parent_info
+                            .static_method_declaring_interfaces
+                            .get(method_name)
+                            .map_or_else(
+                                || declaration_is_source(checker, parent_name),
+                                |owner| declaration_is_source(checker, owner),
+                            ),
                 )?;
                 if let Some(return_type) = parent_info
                     .late_static_static_method_returns
@@ -318,6 +339,9 @@ pub(crate) fn build_interface_info_recursive(
                     parent_sig,
                     "static method",
                     "redeclaring interface",
+                    static_method_declaring_interfaces
+                        .get(&method_key)
+                        .is_none_or(|owner| declaration_is_source(checker, owner)),
                 )?;
                 if late_static_return_compatible(
                     checker,
@@ -371,6 +395,9 @@ pub(crate) fn build_interface_info_recursive(
                 parent_sig,
                 "method",
                 "redeclaring interface",
+                method_declaring_interfaces
+                    .get(&method_key)
+                    .is_none_or(|owner| declaration_is_source(checker, owner)),
             )?;
             if late_static_return_compatible(
                 checker,

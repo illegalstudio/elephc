@@ -39,6 +39,7 @@ pub(super) fn lower_assignment_expr(
         _ => None,
     };
     if let Some(name) = assigned_name {
+        crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
         if is_compound_assignment_self_read(value, name, expr.span) && !ctx.has_local_slot(name) {
             let null_value = ctx.builder.emit_const_null();
             let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
@@ -254,7 +255,33 @@ pub(super) fn lower_dynamic_property_assign(
 ) {
     let object = lower_expr(ctx, object);
     let property = lower_expr(ctx, property);
+    let property = crate::ir_lower::expr::property_access::coerce_runtime_property_name(
+        ctx, property, span,
+    );
     let value = lower_expr(ctx, value);
+    // The NAME is only known at run time, so a statically known receiver can still land this
+    // value on any slot in its runtime-class subtree. Typed or representation-incompatible
+    // slots need the boxed runtime guard. An all-untyped subtree whose refined slots already
+    // share this concrete representation must keep that representation, because replacing a
+    // refined raw slot with a Mixed cell is not representation-safe.
+    let value = if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed)
+        || !runtime_name_value_needs_boxing(ctx, object.value, value.value)
+    {
+        value
+    } else {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
+    };
+    // The store CAN THROW now: a name this scope may not write raises php's catchable access
+    // `Error`, and a runtime class whose typed slot refuses the value raises a `TypeError`.
+    // Leaving all three owned temporaries as plain SSA across it meant a caught refusal skipped
+    // every release. Pinning parks them for the window the throwing instruction occupies, so the
+    // unwind path retires them through the record and the normal path unpins and retires them
+    // exactly once, which is the contract call lowering already applies.
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(
+        ctx,
+        &[object.value, property.value, value.value],
+        span,
+    );
     ctx.emit_void(
         Op::DynamicPropSet,
         vec![object.value, property.value, value.value],
@@ -262,6 +289,34 @@ pub(super) fn lower_dynamic_property_assign(
         Op::DynamicPropSet.default_effects(),
         Some(span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
+        ctx, &PhpType::Mixed, value, span,
+    );
+}
+
+/// Returns whether a runtime-name write needs a boxed value for a reachable fixed slot.
+fn runtime_name_value_needs_boxing(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+    value: ValueId,
+) -> bool {
+    let value_ty = ctx.builder.value_php_type(value).codegen_repr();
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return true;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    if !ctx.classes.contains_key(normalized) {
+        return true;
+    }
+    ctx.classes.iter().any(|(candidate, class_info)| {
+        (candidate == normalized
+            || crate::types::class_inherits_from(ctx.classes, candidate, normalized))
+            && class_info.properties.iter().enumerate().any(|(index, (property, slot_ty))| {
+                class_info.property_slot_is_declared(index, property)
+                    || slot_ty.codegen_repr() != value_ty
+            })
+    })
 }
 
 /// Lowers pre/post increment and decrement expressions.
@@ -283,6 +338,7 @@ pub(super) fn lower_inc_dec(
     post: bool,
     expr: &Expr,
 ) -> LoweredValue {
+    crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     let old = ctx.load_local(name, Some(expr.span));
     let existing_type = ctx.local_type(name);
     if matches!(existing_type.codegen_repr(), PhpType::Mixed | PhpType::Str) {
@@ -338,4 +394,3 @@ pub(super) fn lower_inc_dec(
         ctx.load_local(name, Some(expr.span))
     }
 }
-

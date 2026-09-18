@@ -1,11 +1,11 @@
 ---
-title: "_cairo_color() — internals"
+title: "_cairo_color() - internals"
 description: "Compiler internals for _cairo_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1059
+  order: 1088
 ---
 
-## `_cairo_color()` — internals
+## `_cairo_color()` - internals
 
 ## Where it lives
 

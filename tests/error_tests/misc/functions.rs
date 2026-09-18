@@ -212,6 +212,15 @@ fn test_error_named_arguments_reject_duplicate_assignment() {
     );
 }
 
+/// CUF forwards target names but still rejects assigning its callback parameter twice.
+#[test]
+fn test_error_named_arguments_cuf_rejects_duplicate_callback() {
+    expect_error(
+        "<?php call_user_func('strlen', callback: 'strlen', string: 'value');",
+        "Builtin 'call_user_func' parameter $callback is already assigned",
+    );
+}
+
 /// Verifies that spread arguments from associative arrays are subject to the same
 /// unknown-parameter checks as regular named arguments.
 #[test]
@@ -542,6 +551,104 @@ fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
     );
 }
 
+/// Mixed-local widening does not relabel an existing concrete reference set.
+#[test]
+fn test_error_mixed_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
+    for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
+        expect_error(
+            &format!("<?php function replaceScalar(mixed &$slot): void {{ $slot = 'changed'; }} $value = 1; $alias =& $value; {call}"),
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
+}
+
+/// An untyped reference parameter also uses canonical Mixed storage and cannot relabel aliases.
+#[test]
+fn test_error_untyped_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
+    for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
+        expect_error(
+            &format!("<?php function replaceScalar(&$slot): void {{ $slot = 'changed'; }} $value = 1; $alias =& $value; {call}"),
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
+}
+
+/// Rebinding a managed-entry alias to a concrete scalar cell clears the old boxed provenance.
+#[test]
+fn test_error_mixed_by_ref_rebound_scalar_alias_still_requires_boxed_storage() {
+    expect_error(
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; $scalar = 1; $alias =& $scalar; replaceScalar($alias);",
+        "requires a variable with mixed/union/nullable storage when passed by reference",
+    );
+}
+
+/// Managed provenance created on only one control-flow path cannot authorize the join binding.
+#[test]
+fn test_error_conditional_managed_alias_does_not_relabel_scalar_reference_cell() {
+    for source in [
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $scalar = 1; $alias =& $scalar; if ($argc > 1) { $items = ['k' => new stdClass()]; $alias =& $items['k']; } replaceScalar($alias);",
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; if ($argc > 1) { $scalar = 1; $alias =& $scalar; } replaceScalar($alias);",
+        "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; for ($i = 0; $i < 2; $i++) { replaceScalar($alias); $scalar = 1; $alias =& $scalar; }",
+    ] {
+        expect_error(
+            source,
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
+}
+
+// -- Include/require path expression errors --
+
+/// Verifies that a static closure cannot capture `$this` from the enclosing scope.
+#[test]
+fn test_error_static_closure_uses_this() {
+    expect_error(
+        "<?php class C { public int $count = 5; public function bad() { $f = static function() { return $this->count; }; return $f; } }",
+        "Cannot use $this inside a static closure",
+    );
+}
+
+/// Verifies that a static arrow function (`static fn()`) cannot capture `$this`
+/// from the enclosing scope.
+#[test]
+fn test_error_static_arrow_closure_uses_this() {
+    expect_error(
+        "<?php class C { public int $count = 5; public function bad() { $f = static fn() => $this->count; return $f; } }",
+        "Cannot use $this inside a static closure",
+    );
+}
+
+/// Verifies that `isset($this->prop)` in a static closure is still rejected
+/// because `$this->prop` is a real property access, not a bare existence probe
+/// (issue #359 regression guard).
+#[test]
+fn test_error_static_closure_isset_this_property_still_rejected() {
+    expect_error(
+        "<?php $f = static function(): bool { return isset($this->prop); };",
+        "Cannot use $this inside a static closure",
+    );
+}
+
+/// Verifies that a by-value self-capture (`use($f)`) is still rejected as
+/// undefined because the variable is not yet assigned (issue #382 guard).
+#[test]
+fn test_error_by_value_self_capture_still_undefined() {
+    expect_error(
+        "<?php $f = function() use($f) { return $f; };",
+        "Undefined variable in use()",
+    );
+}
+
+/// Verifies that a by-ref capture of a variable that is NOT the assignment
+/// target is still rejected as undefined (issue #382 guard).
+#[test]
+fn test_error_by_ref_capture_not_assignment_target_still_undefined() {
+    expect_error(
+        "<?php $g = function() use(&$h) { return $h; };",
+        "Undefined variable in use()",
+    );
+}
+
 /// Issue #892: the MIRROR of the test above — a NON-nullable by-reference parameter handed
 /// a variable that holds `null`.
 ///
@@ -596,56 +703,4 @@ fn test_by_ref_null_recovery_compiles() {
         "<?php function out(?int &$slot) { $slot = 7; } $value = null; out($value);"
     )
     .is_err());
-}
-
-// -- Include/require path expression errors --
-
-/// Verifies that a static closure cannot capture `$this` from the enclosing scope.
-#[test]
-fn test_error_static_closure_uses_this() {
-    expect_error(
-        "<?php class C { public int $count = 5; public function bad() { $f = static function() { return $this->count; }; return $f; } }",
-        "Cannot use $this inside a static closure",
-    );
-}
-
-/// Verifies that a static arrow function (`static fn()`) cannot capture `$this`
-/// from the enclosing scope.
-#[test]
-fn test_error_static_arrow_closure_uses_this() {
-    expect_error(
-        "<?php class C { public int $count = 5; public function bad() { $f = static fn() => $this->count; return $f; } }",
-        "Cannot use $this inside a static closure",
-    );
-}
-
-/// Verifies that `isset($this->prop)` in a static closure is still rejected
-/// because `$this->prop` is a real property access, not a bare existence probe
-/// (issue #359 regression guard).
-#[test]
-fn test_error_static_closure_isset_this_property_still_rejected() {
-    expect_error(
-        "<?php $f = static function(): bool { return isset($this->prop); };",
-        "Cannot use $this inside a static closure",
-    );
-}
-
-/// Verifies that a by-value self-capture (`use($f)`) is still rejected as
-/// undefined because the variable is not yet assigned (issue #382 guard).
-#[test]
-fn test_error_by_value_self_capture_still_undefined() {
-    expect_error(
-        "<?php $f = function() use($f) { return $f; };",
-        "Undefined variable in use()",
-    );
-}
-
-/// Verifies that a by-ref capture of a variable that is NOT the assignment
-/// target is still rejected as undefined (issue #382 guard).
-#[test]
-fn test_error_by_ref_capture_not_assignment_target_still_undefined() {
-    expect_error(
-        "<?php $g = function() use(&$h) { return $h; };",
-        "Undefined variable in use()",
-    );
 }

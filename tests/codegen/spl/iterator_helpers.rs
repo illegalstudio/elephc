@@ -1089,7 +1089,12 @@ $args = ["B"];
 echo run_traversable(new Range(), $args);
 echo ":";
 echo run_iterable(new Range(), $args);
+echo ":";
+$namedArgs = ["prefix" => "N"];
+echo run_traversable(new Range(), $namedArgs);
+echo ":";
+echo run_iterable(new Range(), $namedArgs);
 "#,
     );
-    assert_eq!(out, "BB2:BB2");
+    assert_eq!(out, "BB2:BB2:NN2:NN2");
 }

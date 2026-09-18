@@ -60,6 +60,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
     allow_unknown_named_variadic: bool,
 ) -> Result<CallArgPlan, CallArgPlanError> {
     validate_no_spread_after_named(args)?;
+    validate_positional_spread_order(args)?;
     let expanded = expand_static_assoc_spread_args_with_origins(args);
     let assoc_spread_sources = vec![false; expanded.args.len()];
     let (source_args, source_origins, assoc_spread_sources) =
@@ -83,6 +84,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
             spread_bounds_checks: Vec::new(),
             first_named_pos,
             prefix_has_dynamic_named_spread: false,
+            regular_param_count,
         });
     }
 
@@ -113,6 +115,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
     assoc_spread_sources: &[bool],
 ) -> Result<CallArgPlan, CallArgPlanError> {
     validate_no_spread_after_named(args)?;
+    validate_positional_spread_order(args)?;
     let expanded = expand_static_assoc_spread_args_with_origins(args);
     let expanded_assoc_spread_sources = (0..expanded.args.len())
         .map(|idx| assoc_spread_sources.get(idx).copied().unwrap_or(false))
@@ -138,6 +141,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
             spread_bounds_checks: Vec::new(),
             first_named_pos,
             prefix_has_dynamic_named_spread: false,
+            regular_param_count,
         });
     }
 
@@ -192,7 +196,7 @@ fn validate_positional_spread_order(args: &[Expr]) -> Result<(), CallArgPlanErro
     for arg in args {
         if matches!(arg.kind, ExprKind::Spread(_)) {
             seen_spread = true;
-        } else if seen_spread {
+        } else if seen_spread && !matches!(arg.kind, ExprKind::NamedArg { .. }) {
             return Err(CallArgPlanError::PositionalAfterSpread { span: arg.span });
         }
     }
@@ -257,6 +261,7 @@ fn plan_named_call_args(
                     Ok(NamedParamMatch::Variadic) => {
                         let expr = (**value).clone();
                         variadic_args.push(PlannedVariadicArg {
+                            source_index,
                             key: Some(name.clone()),
                             expr: expr.clone(),
                         });
@@ -287,6 +292,7 @@ fn plan_named_call_args(
                 }
                 seen_spread = true;
                 prefix_args.push(PrefixSourceArg::Spread {
+                    source_index,
                     expr: (**inner).clone(),
                     span: arg.span,
                     is_assoc_named_provider: assoc_spread_sources
@@ -346,6 +352,7 @@ fn plan_named_call_args(
                     });
                 } else {
                     variadic_args.push(PlannedVariadicArg {
+                        source_index,
                         key: None,
                         expr: expr.clone(),
                     });
@@ -358,10 +365,10 @@ fn plan_named_call_args(
                 positional_idx += 1;
             }
             PrefixSourceArg::Spread {
+                source_index,
                 expr,
                 span,
                 is_assoc_named_provider,
-                ..
             } => {
                 if is_assoc_named_provider {
                     continue;
@@ -411,6 +418,21 @@ fn plan_named_call_args(
                         guaranteed_present,
                     });
                     positional_idx += 1;
+                }
+                if sig.variadic.is_some() && !has_regular_named_bound && max_len == 0 {
+                    let spread = Expr::new(ExprKind::Spread(Box::new(expr)), span);
+                    variadic_args.push(PlannedVariadicArg {
+                        source_index,
+                        key: None,
+                        expr: spread.clone(),
+                    });
+                    if source_values[source_index].is_none() {
+                        source_values[source_index] = Some(PlannedSourceValue::Variadic {
+                            source_index,
+                            key: None,
+                            expr: spread,
+                        });
+                    }
                 }
             }
             PrefixSourceArg::StaticNamedCursor { param_idx } => {
@@ -477,6 +499,8 @@ fn plan_named_call_args(
         }
     }
 
+    variadic_args.sort_by_key(|arg| arg.source_index);
+
     Ok(CallArgPlan {
         source_args,
         regular_args,
@@ -486,6 +510,7 @@ fn plan_named_call_args(
         first_named_pos,
         prefix_has_dynamic_named_spread,
         passthrough_args: None,
+        regular_param_count,
     })
 }
 
@@ -507,6 +532,7 @@ enum PrefixSourceArg {
         expr: Expr,
     },
     Spread {
+        source_index: usize,
         expr: Expr,
         span: Span,
         is_assoc_named_provider: bool,

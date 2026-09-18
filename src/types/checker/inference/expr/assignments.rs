@@ -152,6 +152,16 @@ impl Checker {
             ));
         }
 
+        // A runtime name can miss every declared property, or resolve a strict ancestor's private
+        // name to a distinct dynamic property. The backend dispatches both answers per runtime
+        // class, so every admitted receiver shape records the reachable class subtree for hash
+        // reservation. See `crate::types::checker::scope_dynamic_storage`.
+        let receiver_ty = obj_ty.clone();
+        crate::types::checker::scope_dynamic_storage::record_scope_dynamic_runtime_name_receiver_mutation(
+            self,
+            &receiver_ty,
+        );
+
         self.infer_type(value, env)?;
         if let Some(result_target) = result_target {
             self.infer_type(result_target, env)?;

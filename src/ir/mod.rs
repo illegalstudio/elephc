@@ -33,18 +33,22 @@ pub use runtime_fn::{
     RuntimeFnTargetSupport,
 };
 pub use builder::Builder;
+pub(crate) use builder::local_load_types_share_storage;
+#[cfg(test)]
+pub(crate) use builder::local_load_coercion_owns_result;
 pub use effects::Effects;
 pub use function::{
     Function, FunctionFlags, FunctionId, FunctionParam, GeneratorSource, LocalKind, LocalSlot,
     LocalSlotId,
 };
 pub use instr::{
-    BuiltinId, CheckedNumericChainImmediate, CmpPredicate, Immediate, InstId, Instruction,
-    MixedNumericOp, Op, PassOrigin, PhpTypePredicate, RuntimeId,
+    BuiltinId, CheckedNumericChainImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,
+    InstId, Instruction, IterStartMetadata, MixedNumericOp, Op, PassOrigin, PhpTypePredicate,
+    PropertyFetchMode, RuntimeId,
 };
 pub use module::{
-    ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
-    Module, PackedLayoutTable, TraitMethodInfo,
+    ClassTable, CloneOverrideApplicator, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,
+    InterfaceTable, Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use pcntl_runtime::{PcntlRuntime, PcntlTargetSupport};
 pub use print::{print_function, print_module};

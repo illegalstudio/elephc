@@ -65,9 +65,9 @@ pub struct PreparedRuntimeObject {
 
 /// Builds (or retrieves from cache) the runtime object file for the given heap size, target, and features.
 /// On cache miss, generates runtime assembly, assembles it to an object file, and caches the result.
-/// The cache key includes compiler version, target, heap size, relocation and library-boundary
-/// modes, and the typed runtime feature shape. A sidecar checksum validates cache bytes before a
-/// hit is accepted.
+/// The cache key includes compiler version, target, PHP profile, heap size, relocation and
+/// library-boundary modes, and the typed runtime feature shape. A sidecar checksum validates
+/// cache bytes before a hit is accepted.
 /// `pic` selects position-independent emission for `--emit cdylib` artifacts so the runtime object can be
 /// linked into a shared library without text-segment relocations. The returned path remains valid until
 /// the `PreparedRuntimeObject` is dropped, even if another compiler prunes the canonical cache entry.
@@ -122,6 +122,7 @@ fn prepare_runtime_object_with_mode(
     let cache_key = identity::runtime_cache_key_with_build_identity_and_boundary(
         heap_size,
         target,
+        crate::codegen::compile_php_version().version_id(),
         features,
         pic,
         library_boundary,

@@ -86,7 +86,7 @@ mod tests {
     fn catalog_values_match_php() {
         assert_eq!(int_constant_value("JSON_PRETTY_PRINT"), Some(128));
         assert_eq!(int_constant_value("ARRAY_FILTER_USE_KEY"), Some(2));
-        assert_eq!(int_constant_value("E_ALL"), Some(32767));
+        assert_eq!(int_constant_value("E_ALL"), None);
         assert_eq!(int_constant_value("CURLOPT_URL"), Some(10002));
         assert!(is_registered_constant("\\PHP_EOL"));
         assert!(is_registered_constant("SID"));

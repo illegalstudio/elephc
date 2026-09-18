@@ -10,6 +10,26 @@
 use crate::ir::{IrHeapKind, IrType};
 use crate::types::PhpType;
 
+/// Synthetic PHP-array calls distinguish boxed projection results from packed array_values results.
+#[test]
+fn php_array_runtime_results_keep_their_actual_storage_layout() {
+    let input = [PhpType::php_array()];
+    let reverse = crate::ir::RuntimeFnId::ArrayReverse.fallback_result_type(&input, &PhpType::Mixed);
+    let values = crate::ir::RuntimeFnId::ArrayValues.fallback_result_type(&input, &PhpType::Mixed);
+    assert_eq!(reverse, PhpType::php_array());
+    assert_eq!(reverse.codegen_repr(), PhpType::Mixed);
+    assert_eq!(values, PhpType::Array(Box::new(PhpType::Mixed)));
+    for operands in [
+        [PhpType::php_array(), PhpType::Array(Box::new(PhpType::Str))],
+        [PhpType::Array(Box::new(PhpType::Int)), PhpType::php_array()],
+        [PhpType::php_array(), PhpType::php_array()],
+    ] {
+        let merged = crate::ir::RuntimeFnId::ArrayMerge.fallback_result_type(&operands, &PhpType::Mixed);
+        assert_eq!(merged, PhpType::php_array());
+        assert_eq!(merged.codegen_repr(), PhpType::Mixed);
+    }
+}
+
 /// Maps PHP integer values to one integer register.
 #[test]
 fn maps_int_to_i64() {

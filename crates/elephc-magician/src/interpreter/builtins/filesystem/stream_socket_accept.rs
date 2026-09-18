@@ -27,16 +27,10 @@ pub(in crate::interpreter) fn eval_stream_socket_accept_declared_call(
     if !(1..=3).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let socket = eval_expr(&args[0], context, scope, values)?;
-    for arg in &args[1..] {
-        eval_expr(arg, context, scope, values)?;
-    }
-    if args.len() >= 3 {
-        values.warning(
-            "stream_socket_accept(): Argument #3 ($peer_name) must be passed by reference, value given",
-        )?;
-    }
-    eval_stream_socket_accept_result(socket, context, values)
+    let args = args.iter().collect::<Vec<_>>();
+    with_eval_operands(&args, context, scope, values, |arguments, context, _, values| {
+        eval_stream_socket_accept_declared_values_result(arguments, context, values)
+    })
 }
 
 /// Accepts a socket from already evaluated by-value arguments.
@@ -63,22 +57,23 @@ pub(in crate::interpreter) fn eval_builtin_stream_socket_accept_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound, _) =
-        bind_evaluated_ref_builtin_args(&["socket", "timeout", "peer_name"], &evaluated_args, false)?;
-    let socket = required_evaluated_ref_arg(&bound, 0)?;
-    let peer_name_target = optional_evaluated_ref_arg(&bound, 2)
-        .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
-        .transpose()?;
-    let (result, peer_name) =
-        eval_stream_socket_accept_with_peer_result(socket.value, context, values)?;
-    super::fsockopen::eval_write_socket_output_ref_target(
-        peer_name_target.as_ref(),
-        peer_name,
-        context,
-        values,
-    )?;
-    Ok(result)
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+        let (bound, _) =
+            bind_evaluated_ref_builtin_args(&["socket", "timeout", "peer_name"], &evaluated_args, false)?;
+        let socket = required_evaluated_ref_arg(&bound, 0)?;
+        let peer_name_target = optional_evaluated_ref_arg(&bound, 2)
+            .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
+            .transpose()?;
+        let (result, peer_name) =
+            eval_stream_socket_accept_with_peer_result(socket.value, context, values)?;
+        super::fsockopen::eval_write_socket_output_ref_target(
+            peer_name_target.as_ref(),
+            peer_name,
+            context,
+            values,
+        )?;
+        Ok(result)
+    })
 }
 
 /// Accepts one pending TCP connection from a listener resource.

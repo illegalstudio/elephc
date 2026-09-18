@@ -98,3 +98,5 @@ mod never;
 mod attributes;
 #[path = "parser_tests/yield_parsing.rs"]
 mod yield_parsing;
+#[path = "parser_tests/generated_locals.rs"]
+mod generated_locals;

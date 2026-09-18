@@ -14,8 +14,8 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 ///
 /// dispatches to `emit_mixed_strict_eq_linux_x86_64` on x86_64, otherwise uses ARM64 SysV ABI.
 /// Saves both operand pointers and calls `__rt_mixed_unbox` on each to extract runtime tags.
-/// If tags match, dispatches on the shared tag: scalar/pointer payloads compare word-for-word;
-/// string payloads delegate to `__rt_str_eq` for byte-by-byte comparison.
+/// If tags match, strings compare by bytes and floats use IEEE numeric equality;
+/// other scalar/pointer payloads compare word-for-word.
 /// Returns 1 in `x0` (ARM64) or `rax` (x86_64) if strictly equal, 0 otherwise.
 /// Clobbers: x0–x12, lr. Preserves: x29 (frame pointer).
 pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
@@ -64,6 +64,8 @@ pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_strict_eq_true");                      // null identity depends only on the matching runtime tag
     emitter.instruction("cmp x0, #1");                                          // do both payloads hold strings?
     emitter.instruction("b.eq __rt_mixed_strict_eq_string");                    // strings need byte-by-byte comparison
+    emitter.instruction("cmp x0, #2");                                          // matching float tags require numerical rather than bitwise identity
+    emitter.instruction("b.eq __rt_mixed_strict_eq_float");                     // signed zero is equal and NaN is never equal
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the left payload low word
     emitter.instruction("cmp x10, x1");                                         // compare low payload words for scalar/pointer tags
     emitter.instruction("b.ne __rt_mixed_strict_eq_false");                     // mismatched payload low words are not equal
@@ -82,6 +84,13 @@ pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
     emitter.instruction("ldp x1, x2, [sp, #24]");                               // reload the left string pointer/length into the first two argument slots
     emitter.instruction("bl __rt_str_eq");                                      // compare the two string payloads byte-for-byte
     emitter.instruction("b __rt_mixed_strict_eq_done");                         // return the string comparison result
+
+    emitter.label("__rt_mixed_strict_eq_float");
+    emitter.instruction("ldr d0, [sp, #24]");                                   // restore the left IEEE double payload
+    emitter.instruction("fmov d1, x1");                                         // reinterpret the right IEEE payload without conversion
+    emitter.instruction("fcmp d0, d1");                                         // unordered NaN comparisons leave equality clear
+    emitter.instruction("cset x0, eq");                                         // both signed zeros compare equal
+    emitter.instruction("b __rt_mixed_strict_eq_done");                         // return the numerical equality result
 
     emitter.label("__rt_mixed_strict_eq_false");
     emitter.instruction("mov x0, #0");                                          // report that the mixed payloads are not strictly equal
@@ -140,6 +149,8 @@ fn emit_mixed_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_strict_eq_true");                        // null identity depends only on the matching runtime tag
     emitter.instruction("cmp rax, 1");                                          // do both payloads hold strings?
     emitter.instruction("je __rt_mixed_strict_eq_string");                      // strings need byte-by-byte comparison
+    emitter.instruction("cmp rax, 2");                                          // matching float tags require numerical rather than bitwise identity
+    emitter.instruction("je __rt_mixed_strict_eq_float");                       // signed zero is equal and NaN is never equal
     emitter.instruction("cmp QWORD PTR [rsp + 24], rdi");                       // compare low payload words for scalar or pointer tags
     emitter.instruction("jne __rt_mixed_strict_eq_false");                      // mismatched payload low words are not equal
     emitter.instruction("cmp QWORD PTR [rsp + 32], rdx");                       // compare high payload words for string/null padding
@@ -156,6 +167,15 @@ fn emit_mixed_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rsp + 32]");                       // reload the left string length into the second SysV integer argument register
     abi::emit_call_label(emitter, "__rt_str_eq");                               // compare the two string payloads byte-by-byte
     emitter.instruction("jmp __rt_mixed_strict_eq_done");                       // return the string comparison result
+
+    emitter.label("__rt_mixed_strict_eq_float");
+    emitter.instruction("movq xmm0, QWORD PTR [rsp + 24]");                     // restore the left IEEE double payload
+    emitter.instruction("movq xmm1, rdi");                                      // reinterpret the right IEEE payload without conversion
+    emitter.instruction("ucomisd xmm0, xmm1");                                  // compare numerically, including signed zero
+    emitter.instruction("jp __rt_mixed_strict_eq_false");                       // unordered NaN comparisons must not appear equal
+    emitter.instruction("sete al");                                             // materialize ordered numerical equality
+    emitter.instruction("movzx rax, al");                                       // normalize the boolean before returning
+    emitter.instruction("jmp __rt_mixed_strict_eq_done");                       // return the numerical equality result
 
     emitter.label("__rt_mixed_strict_eq_false");
     emitter.instruction("xor rax, rax");                                        // report that the mixed payloads are not strictly equal

@@ -156,16 +156,14 @@ pub(in crate::interpreter) fn eval_indexed_string_array_result(
     names: &[String],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(names.len())?;
+    let mut result = super::collection_builder::EvalArrayBuilder::indexed(values, names.len())?;
     for (index, name) in names.iter().enumerate() {
-        let key = values.int(index as i64)?;
-        let value = values.string(name)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.string(name))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
-/// Copies a runtime string array into Rust-owned strings for class metadata helpers.
+/// Borrows a runtime string array and releases temporary keys and element owners after decoding.
 pub(in crate::interpreter) fn eval_runtime_string_array_to_vec(
     array: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -174,10 +172,30 @@ pub(in crate::interpreter) fn eval_runtime_string_array_to_vec(
     let mut result = Vec::with_capacity(len);
     for position in 0..len {
         let key = values.int(position as i64)?;
-        let value = values.array_get(array, key)?;
-        result.push(eval_class_metadata_name(value, values)?);
+        let value = values.array_get(array, key);
+        let key_released = values.release(key);
+        let value = value?;
+        let name = eval_class_metadata_name(value, values);
+        let value_released = values.release(value);
+        key_released?;
+        value_released?;
+        result.push(name?);
     }
     Ok(result)
+}
+
+/// Decodes and then releases an owned runtime string array on success or failure.
+pub(in crate::interpreter) fn eval_owned_runtime_string_array_to_vec(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let result = eval_runtime_string_array_to_vec(array, values);
+    let released = values.release(array);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(_), Err(status)) => Err(status),
+        (Ok(names), Ok(())) => Ok(names),
+    }
 }
 
 /// Returns whether one normalized class-like name exists in eval or runtime metadata.

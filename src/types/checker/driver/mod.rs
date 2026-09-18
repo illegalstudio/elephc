@@ -394,6 +394,11 @@ pub(super) fn check_types_impl(
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
+    if checker.eval_native_callables_reachable {
+        if let Err(error) = checker.promote_eval_native_variadic_containers() {
+            errors.extend(error.flatten());
+        }
+    }
     // After every function has a signature and every direct call has been seen, so the pass can
     // tell a function the program only ever reaches dynamically from one a call site taught real
     // parameter types to (issue #576).

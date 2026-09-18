@@ -99,7 +99,7 @@ pub(super) fn store_eval_object_operand(ctx: &mut FunctionContext<'_>, object: V
     store_eval_mixed_operand_at(ctx, object, EVAL_TEMP_CELL_OFFSET)
 }
 
-/// Stores one operand as a boxed Mixed cell at an eval scratch offset.
+/// Stores one operand as a boxed Mixed cell; native representations create an owner to retire.
 pub(super) fn store_eval_mixed_operand_at(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -111,6 +111,26 @@ pub(super) fn store_eval_mixed_operand_at(
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, offset);
+    Ok(())
+}
+
+/// Retires metadata-query adapter boxes while preserving the C status or scalar predicate result.
+/// Existing Mixed operands remain borrowed; native payloads retain their original EIR owner.
+pub(super) fn retire_eval_metadata_operand_boxes(
+    ctx: &mut FunctionContext<'_>,
+    operands: &[(ValueId, usize)],
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    for &(value, offset) in operands {
+        if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            continue;
+        }
+        ctx.emitter.comment("retire temporary eval metadata operand box");
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, offset + 16);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(ctx.emitter, result);
+    }
     Ok(())
 }
 

@@ -32,9 +32,9 @@ pub(crate) use catalog::{
 pub(crate) use catalog::is_php_visible_builtin_function;
 pub(crate) use callables::{
     array_element_type, array_filter_callback_arg_types, array_key_type,
-    array_walk_callback_arg_types, callback_supports_complex_descriptor_env,
-    check_array_callback_builtin_call, check_call_user_func, check_call_user_func_array,
-    check_function_exists,
+    callback_supports_complex_descriptor_env, check_array_callback_builtin_call,
+    check_array_walk_callback_builtin_call,
+    check_call_user_func, check_call_user_func_array, check_function_exists,
     check_preg_replace_callback_first_class_call,
     contextual_callback_arg_positions,
     runtime_callable_array_type,
@@ -121,24 +121,54 @@ impl Checker {
             return Ok(None);
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
+        // CUF accepts named variadic entries, then checks them against the callback.
+        // Its own callback parameter must still obey duplicate and ordering rules.
+        let forwards_callback_names = builtin_key == "call_user_func";
         let normalized_args;
         let mut builtin_arg_plan = None;
         let args = if let Some(sig) =
             (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
         {
-            let plan = self.plan_builtin_call_args(
-                &sig,
-                args,
-                span,
-                &format!("Builtin '{}'", name),
-                env,
-            )?;
-            normalized_args = plan.normalized_args();
-            builtin_arg_plan = Some(plan);
+            normalized_args = if forwards_callback_names {
+                self.normalize_named_call_args(&sig, args, span, &format!("Builtin '{}'", name), env)?
+            } else {
+                let plan = self.plan_builtin_call_args(
+                    &sig,
+                    args,
+                    span,
+                    &format!("Builtin '{}'", name),
+                    env,
+                )?;
+                let normalized = plan.normalized_args();
+                builtin_arg_plan = Some(plan);
+                normalized
+            };
             normalized_args.as_slice()
         } else {
             args
         };
+        // The source planner keeps indexed unpacks visible for runtime checks.
+        // Builtin signatures count literal unpacked values instead of containers,
+        // but only after the planner has validated ordering and named arguments.
+        let static_positional_args = (!is_lazy_construct)
+            .then(|| crate::types::call_args::expand_planned_positional_spreads(args))
+            .flatten();
+        let args = static_positional_args.as_deref().unwrap_or(args);
+        let mut spread_type_error = None;
+        let indexed_spread_args = (!is_lazy_construct && !forwards_callback_names
+            && crate::types::builtin_call_sig(name)
+                .is_some_and(|sig| !sig.ref_params.iter().any(|by_ref| *by_ref)))
+            .then(|| crate::types::call_args::coalesce_planned_indexed_spreads(args, |source| {
+                match self.infer_type(source, env) {
+                    Ok(ty) => matches!(ty.codegen_repr(), PhpType::Array(_)),
+                    Err(error) => { spread_type_error = Some(error); false }
+                }
+            }))
+            .flatten();
+        if let Some(error) = spread_type_error {
+            return Err(error);
+        }
+        let args = indexed_spread_args.as_deref().unwrap_or(args);
 
         if name == "eval" {
             // eval is not registry-backed, and argument normalization tolerates
@@ -150,6 +180,11 @@ impl Checker {
             // The magician archive contains the encoding-aware `mb_strlen()` implementation;
             // macOS exposes iconv through a separate system library while Linux keeps it in libc.
             self.require_macos_builtin_library("iconv");
+            // Eval can select any generated method or constructor by a runtime string. Magician
+            // collects every source variadic in a boxed-Mixed array, so the native frame must use
+            // that same storage even when PHP declared a narrower element type. The declaration's
+            // type expression remains authoritative for per-element coercion and Reflection.
+            self.promote_eval_native_variadic_containers()?;
             self.infer_type(&args[0], env)?;
             return Ok(Some(PhpType::Mixed));
         }
@@ -158,7 +193,17 @@ impl Checker {
         // validation, and result typing. Only compiler-resident language
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
-            crate::builtins::registry::check_arity(name, args.len(), span)?;
+            // An unpack contributes its runtime entries, not one argument. Shared
+            // validators accept unknown argument types and leave dynamic bounds to
+            // EIR binding. Legacy checker hooks still require their fixed AST shape.
+            let runtime_arity = args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+                && !matches!(
+                    def.spec.semantics.validation,
+                    crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
+                );
+            if !runtime_arity {
+                crate::builtins::registry::check_arity(name, args.len(), span)?;
+            }
             if !catalog::builtin_is_available_for_target(name, self.target) {
                 return Err(CompileError::new(
                     span,

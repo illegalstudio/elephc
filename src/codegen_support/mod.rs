@@ -34,6 +34,7 @@ pub(crate) mod reflection;
 pub(crate) mod runtime;
 mod runtime_features;
 pub(crate) mod sentinels;
+pub(crate) mod source_method_adapters;
 pub(crate) mod stream_filters;
 pub(crate) mod tls;
 pub(crate) mod try_handlers;
@@ -66,7 +67,7 @@ pub(crate) use sentinels::NULL_SENTINEL;
 pub(crate) use value_boxing::{
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
-    runtime_value_tag,
+    mixed_unbox_payload_reg, runtime_value_tag,
 };
 pub(crate) use wrappers::{
     emit_callback_wrapper, emit_extern_callback_trampoline, emit_fiber_wrapper,

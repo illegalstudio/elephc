@@ -7,10 +7,11 @@
 //! Key details:
 //! - PHP's signature is `array_reverse(array $array, bool $preserve_keys = false)`; both the
 //!   positional and the `preserve_keys:` named form are accepted.
-//! - `preserve_keys` CHANGES THE RESULT SHAPE, so it must be a literal in AOT mode (same rule as
-//!   `class_exists()`'s autoload flag). With `false` the result is the input array type; with
+//! - For concrete indexed storage, `preserve_keys` changes the result shape and must be literal.
+//!   Boxed PHP array declarations preserve either shape and accept runtime flags.
+//!   With `false` the concrete result is the input array type; with
 //!   `true` an indexed `array<T>` becomes `AssocArray { key: Int, value: T }`, because PHP keeps
-//!   the original integer keys while reversing the iteration order — something elephc's dense
+//!   the original integer keys while reversing the iteration order, something elephc's dense
 //!   indexed representation cannot express.
 //! - `check` is required both to reject non-array arguments and to compute that shape.
 
@@ -33,10 +34,13 @@ builtin! {
 /// input array/assoc type is returned unchanged. With a literal `true` an indexed array keeps its
 /// integer keys in reversed insertion order, which is an `AssocArray` keyed by `Int`; a source
 /// that is already associative keeps its own shape because reordering a hash preserves its keys.
-/// Non-array arguments and a non-literal flag are rejected. Arity is pre-validated and every
-/// argument has already been inferred once by the registry's common path.
+/// Boxed PHP arrays keep their declared type and accept a runtime flag. Concrete storage
+/// requires a literal flag. Arity and argument inference run through the registry's common path.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if ty.is_php_array() {
+        return Ok(ty);
+    }
     if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(
             cx.span,

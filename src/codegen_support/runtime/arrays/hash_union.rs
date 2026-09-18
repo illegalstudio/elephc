@@ -19,7 +19,7 @@ use crate::codegen_support::platform::Arch;
 ///
 /// Input:  x0=left_hash_ptr, x1=right_hash_ptr
 /// Output: x0=result_hash_ptr
-/// Calls: `__rt_hash_clone_shallow`, `__rt_hash_iter_next`, `__rt_hash_get`, `__rt_str_persist`, `__rt_incref`, `__rt_hash_set`
+/// Calls: `__rt_hash_clone_shallow`, `__rt_hash_iter_next_value`, `__rt_hash_get`, `__rt_str_persist`, `__rt_incref`, `__rt_hash_set`
 pub fn emit_hash_union(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_union_linux_x86_64(emitter);
@@ -43,7 +43,7 @@ pub fn emit_hash_union(emitter: &mut Emitter) {
     emitter.label("__rt_hash_union_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right associative-array pointer
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload the insertion-order iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next right entry in insertion order
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next right entry in insertion order
     emitter.instruction("cmn x0, #1");                                          // did the iterator report the terminal sentinel?
     emitter.instruction("b.eq __rt_hash_union_done");                           // finish once every right entry has been considered
     emitter.instruction("str x0, [sp, #16]");                                   // save the next insertion-order iterator cursor
@@ -121,7 +121,7 @@ fn emit_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_union_x86_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the right associative-array pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the insertion-order iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next right entry in insertion order
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next right entry in insertion order
     emitter.instruction("cmp rax, -1");                                         // did the iterator report the terminal sentinel?
     emitter.instruction("je __rt_hash_union_x86_done");                         // finish once every right entry has been considered
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the next insertion-order iterator cursor

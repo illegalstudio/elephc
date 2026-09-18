@@ -21,8 +21,6 @@ use super::{
 };
 use crate::codegen::{CodegenIrError, Result};
 
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
-
 /// Lowers a string constant by materializing its data-section pointer and byte length.
 pub(super) fn lower_const_str(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data_id = expect_data(inst)?;
@@ -194,7 +192,7 @@ fn current_late_static_frame_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&
 
 /// Loads the late-static class id from the hidden static frame slot or `$this`.
 fn emit_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) -> Result<()> {
-    if let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) {
+    if let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) {
         let offset = ctx.local_offset(slot)?;
         abi::load_at_offset(ctx.emitter, reg, offset);
         return Ok(());
@@ -245,14 +243,10 @@ pub(super) fn lower_str_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let len_reg = abi::string_result_regs(ctx.emitter).1;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
-                &format!("mov {}, {}", result_reg, len_reg)
-            );                                                                  // return the byte length of the loaded PHP string
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
-                &format!("mov {}, {}", result_reg, len_reg)
-            );                                                                  // return the byte length of the loaded PHP string
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
         }
     }
     store_if_result(ctx, inst)

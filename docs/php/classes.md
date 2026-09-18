@@ -972,23 +972,23 @@ diagnostic instead of guessing.
 
 ### `unset()` limitations
 
-`unset()` on an **untyped** declared property (`public $foo = 1;`) is rejected at
-compile time with an unsupported-feature diagnostic naming that shape. PHP truly
-removes such a property: a later read emits `Warning: Undefined property: C::$foo`
-and answers `null`, and a later write recreates it. elephc gives every declared
-property a fixed, monomorphically typed slot — `public $foo = 1;` is stored as an
-`int` — and that slot has no encoding for "removed, and reading as null": every
-candidate encoding answers `int(0)` or a raw marker word instead. A loud compile
-error beats a wrong value. Declare a type (`public mixed $foo = 1;` keeps the
-"anything goes" storage) when the property needs to be unset, or make the property
-dynamic. Note that the typed form follows PHP's *typed* rules afterwards: the slot
-becomes uninitialized, so a later read raises `Error: Typed property … must not be
-accessed before initialization` instead of warning and answering `null`.
+`unset()` supports fixed declared properties with and without a PHP type. A typed
+property becomes uninitialized, so a later read raises `Error: Typed property ... must
+not be accessed before initialization`. An untyped fixed property selected by a
+reachable `unset()` uses boxed `mixed` storage with an internal removed marker. While
+removed, `isset()` answers `false`, object-property renderers omit the property, and a
+normal read emits `Warning: Undefined property: C::$foo` and answers `null`. A later
+assignment clears the marker and recreates the property with any supported PHP value.
 
 `unset()` on a **by-reference** property (`public function __construct(public int
 &$p) {}`) is rejected for the same reason: the slot holds an object-owned reference
 cell that the destructor still frees and that a later write would write *through*,
 which would revive the very alias `unset()` is supposed to break.
+
+Packed fields are also rejected because their native layout has no room for a removed
+marker. A dynamic name on a class that both permits dynamic properties and declares
+`__unset()` remains unsupported because PHP chooses between hash removal and the magic
+method from runtime property state.
 
 ## Static call interception (`__callStatic`)
 
@@ -1565,6 +1565,6 @@ Constants are inherited from parents and implemented interfaces (transitively). 
 ## Limitations
 - `readonly static` properties are rejected to match PHP. Static properties in a `readonly class` are still mutable.
 - Backed property hooks may read and write their own backing slot.
-- `unset()` is supported on typed declared properties (the slot becomes uninitialized) and on dynamic properties (`stdClass`, undeclared names on `#[AllowDynamicProperties]` classes, where the entry is removed). It is rejected on untyped declared properties, on by-reference properties, and on dynamic names of a class that also declares `__unset()`. See "`unset()` limitations" above.
+- `unset()` is supported on typed declared properties (the slot becomes uninitialized), untyped fixed properties selected by reachable removal paths (the slot carries an internal removed marker), and dynamic properties (`stdClass`, undeclared names on `#[AllowDynamicProperties]` classes, where the entry is removed). It is rejected on by-reference properties, packed fields, and dynamic names of a class that also declares `__unset()`. See "`unset()` limitations" above.
 - Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
 - Class and function attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionFunction`/`ReflectionMethod`/`ReflectionProperty`/`ReflectionClassConstant`/`ReflectionEnumUnitCase`/`ReflectionEnumBackedCase::getAttributes()` APIs; function and method parameter names, counts, positions, optional/variadic/by-reference flags, declared-type presence, simple named, union, and intersection type metadata, function and method parameter attributes, supported scalar/null/class-constant/array/object parameter defaults, parameter declaring-class/function metadata, and reflected member/constant declaring-class metadata are exposed through the supported Reflection APIs. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to stack traces.

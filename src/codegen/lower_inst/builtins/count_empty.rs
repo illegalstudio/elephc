@@ -8,6 +8,7 @@
 //! - Handles sentinel null markers and target-specific float truthiness without changing representation contracts.
 
 use super::*;
+use crate::codegen::lower_inst::runtime_class_messages;
 
 /// PHP's `count()` TypeError, which names the offending type — and a boolean by its VALUE.
 const COUNT_TYPE_ERROR_PREFIX: &str =
@@ -110,67 +111,23 @@ fn emit_non_countable_object_type_error(
     // Re-materialize the receiver: the count call clobbered the registers, and the class name has
     // to come from the object itself.
     ctx.load_value_to_result(value)?;
-    let (name_ptr_reg, name_len_reg) = abi::string_result_regs(ctx.emitter);
+    let receiver_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x0, [x0, #8]");                        // unbox the object payload from the Mixed cell
-            ctx.emitter.instruction("ldr x9, [x0]");                            // load the receiver class id
-            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
-            ctx.emitter.instruction("lsl x11, x9, #4");                         // scale the class id to the 16-byte class-name row
-            ctx.emitter.instruction("add x10, x10, x11");                       // address the receiver's class-name metadata
-            ctx.emitter.instruction(&format!("ldr {}, [x10]", name_ptr_reg));   // borrow the class-name pointer
-            ctx.emitter
-                .instruction(&format!("ldr {}, [x10, #8]", name_len_reg));      // borrow the class-name byte length
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");            // unbox the object payload from the Mixed cell
-            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // load the receiver class id
-            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to the 16-byte class-name row
-            ctx.emitter
-                .instruction(&format!("mov {}, QWORD PTR [r10 + r9]", name_ptr_reg)); // borrow the class-name pointer
-            ctx.emitter
-                .instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", name_len_reg)); // borrow the class-name byte length
         }
     }
-    emit_count_error_concat_prefix(ctx, COUNT_TYPE_ERROR_PREFIX);
-    emit_count_error_concat_suffix(ctx, " given");
+    runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, receiver_reg, "object");
+    runtime_class_messages::emit_concat_static_prefix(ctx, COUNT_TYPE_ERROR_PREFIX);
+    runtime_class_messages::emit_concat_static_suffix(ctx, " given");
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     super::super::exceptions::emit_type_error_from_string_result(ctx);
 
     ctx.emitter.label(&countable);
     Ok(())
-}
-
-/// Prepends a static fragment to the message held in the string-result registers.
-fn emit_count_error_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
-    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
-    let (right_ptr, right_len) = count_concat_right_operand_regs(ctx);
-    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", right_ptr, text_ptr));              // move the built text into the concat right operand
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", right_len, text_len));              // move its length into the concat right operand
-    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix_label);
-    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
-}
-
-/// Appends a static fragment to the message held in the string-result registers.
-fn emit_count_error_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
-    let (right_ptr, right_len) = count_concat_right_operand_regs(ctx);
-    let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
-    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
-    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
-}
-
-/// The register pair `__rt_concat` reads its right operand from.
-fn count_concat_right_operand_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ("x3", "x4"),
-        Arch::X86_64 => ("rdi", "rsi"),
-    }
 }
 
 /// Raises the `count()` TypeError naming `type_name`, exactly as php-src words it.

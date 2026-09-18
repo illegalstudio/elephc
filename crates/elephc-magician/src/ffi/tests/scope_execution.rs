@@ -85,6 +85,7 @@ fn scope_set_get_round_trips_cell_and_flags() {
             name.len() as u64,
             cell,
             SCOPE_FLAG_OWNED,
+            &mut std::ptr::null_mut(),
         )
     };
     let mut out_cell = std::ptr::null_mut();
@@ -148,9 +149,10 @@ fn scope_unset_and_clear_dirty_update_flags() {
             name.len() as u64,
             cell,
             SCOPE_FLAG_OWNED,
+            &mut std::ptr::null_mut(),
         );
         __elephc_eval_scope_clear_dirty(scope);
-        __elephc_eval_scope_unset(scope, name.as_ptr(), name.len() as u64);
+        __elephc_eval_scope_unset(scope, name.as_ptr(), name.len() as u64, &mut std::ptr::null_mut());
     }
     let mut out_cell = cell;
     let mut out_flags = 0;

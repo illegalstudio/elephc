@@ -16,6 +16,7 @@ use super::util::{clear_result, write_outcome};
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
 use crate::errors::EvalStatus;
 use crate::interpreter;
+use crate::interpreter::RuntimeValueOps;
 use crate::runtime_hooks::ElephcRuntimeOps;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
@@ -50,6 +51,72 @@ pub unsafe extern "C" fn __elephc_eval_callable_call_array(
         eval_callable_call_array_inner(ctx, callback, arg_array, out)
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Rebinds `$this` on an eval `Closure` object for the generated `Closure::bind` runtime.
+///
+/// Returns one with an owned boxed `Closure` in `out`, or zero when the value is not an eval
+/// closure or the binding failed. Installed into the generated runtime through
+/// `__elephc_eval_install_closure_bind_hook_v1`, so a callback-adapter descriptor reaching
+/// `__rt_closure_bind` can be rebound instead of aborting as an unsupported capture shape.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `closure` must point at the boxed callback cell
+/// the adapter descriptor captured; it stays borrowed. `new_this` must be a live raw elephc
+/// object pointer. `out` must point at a writable cell-pointer slot.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_closure_bind_this(
+    ctx: *mut ElephcEvalContext,
+    closure: *mut RuntimeCell,
+    new_this: *mut RuntimeCell,
+    out: *mut *mut RuntimeCell,
+) -> u64 {
+    std::panic::catch_unwind(|| unsafe { eval_closure_bind_this_inner(ctx, closure, new_this, out) })
+        .unwrap_or(0)
+}
+
+/// Runs the closure rebinding ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_closure_bind_this`.
+#[cfg(not(test))]
+unsafe fn eval_closure_bind_this_inner(
+    ctx: *mut ElephcEvalContext,
+    closure: *mut RuntimeCell,
+    new_this: *mut RuntimeCell,
+    out: *mut *mut RuntimeCell,
+) -> u64 {
+    if out.is_null() {
+        return 0;
+    }
+    unsafe { *out = std::ptr::null_mut(); }
+    let Some(context) = (unsafe { ctx.as_mut() }) else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION || closure.is_null() || new_this.is_null() {
+        return 0;
+    }
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let Ok(receiver) = ElephcRuntimeOps::object_from_raw(new_this) else {
+        return 0;
+    };
+    let bound = interpreter::execute_context_closure_bind_this(
+        context,
+        RuntimeCellHandle::from_raw(closure).borrowed(),
+        receiver,
+        &mut values,
+    );
+    // The bound closure retains the receiver as its own child, so this bridge's boxed owner
+    // must not outlive the call; keeping it pinned the receiver and the closure's metadata.
+    let released = values.release(receiver);
+    match (bound, released) {
+        (Ok(bound), Ok(())) => {
+            unsafe { *out = bound.as_ptr(); }
+            1
+        }
+        _ => 0,
+    }
 }
 
 /// Runs the eval callable-probe ABI body after installing a panic boundary.

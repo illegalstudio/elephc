@@ -58,7 +58,8 @@ pub(crate) fn runtime_builtin_wrapper_supported(
         crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {
             target.callable_accepts(source_arg_ty)
         }
-        crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => false,
+        crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(_)
+        | crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => false,
     }
 }
 
@@ -134,7 +135,16 @@ pub(crate) fn specialized_runtime_case_sig(
             *param_ty = source_ty.clone();
         }
     }
-    if sig.variadic.is_some() {
+    // The COLLECTOR is specialized only when its storage is not already dynamic. `array<mixed>`
+    // and the `iterable` marker are the storage shapes a descriptor invocation may fill with
+    // either an indexed block or a hash (`crate::types::signatures::descriptor_variadic_container`),
+    // and they are what a descriptor-reachable callee's own frame was compiled to read. Narrowing
+    // one of them to `array<source>` here would publish raw element slots to an invoker whose
+    // callee reads boxed Mixed ones, which is the same indexed-versus-associative disagreement
+    // this contract exists to prevent, only in the other direction.
+    if sig.variadic.is_some()
+        && !crate::types::signatures::variadic_storage_accepts_named_entries(&sig)
+    {
         let variadic_idx = visible_param_count.saturating_sub(1);
         if !sig
             .declared_params

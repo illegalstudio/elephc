@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Promoted by-reference parameters retain their original ref-cell aliasing.
+//! - Promoted properties cannot publish an active boxed-walk entry borrow.
 
 use super::*;
 
@@ -35,7 +36,7 @@ pub(super) fn emit_property_store(
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             release_previous_property_value(
                 ctx,
@@ -50,7 +51,7 @@ pub(super) fn emit_property_store(
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, float_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
@@ -58,7 +59,7 @@ pub(super) fn emit_property_store(
         PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Void | PhpType::Never => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
@@ -67,7 +68,7 @@ pub(super) fn emit_property_store(
             let int_reg = abi::int_result_reg(ctx.emitter);
             let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_to_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
@@ -75,7 +76,7 @@ pub(super) fn emit_property_store(
         ty if is_pointer_sized_property_type(&ty) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             release_previous_property_value(
                 ctx,
@@ -103,7 +104,7 @@ pub(super) fn emit_property_store(
 /// after the call. The property therefore retains the final array/hash pointer, releases its old
 /// physical container through heap-kind dispatch, and stores the replacement without consulting
 /// the declared packed representation. Reference properties perform the same transfer through
-/// their object-owned ref-cell.
+/// their object-owned ref-cell. Boxed PHP arrays retain the Mixed cell representation on both sides.
 pub(super) fn store_mutated_container_property(
     ctx: &mut FunctionContext<'_>,
     object: crate::ir::ValueId,
@@ -111,9 +112,11 @@ pub(super) fn store_mutated_container_property(
     value: crate::ir::ValueId,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
-    if !matches!(&value_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-        || !matches!(slot.php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
-    {
+    let target_ty = slot.php_type.codegen_repr();
+    let raw_pair = matches!(&value_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        && matches!(&target_ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+    let boxed_pair = value_ty == PhpType::Mixed && target_ty == PhpType::Mixed;
+    if !raw_pair && !boxed_pair {
         return Err(CodegenIrError::unsupported(format!(
             "mutated container store for {}::${} from PHP type {:?} to {:?}",
             slot.class_name, slot.property, value_ty, slot.php_type
@@ -130,8 +133,12 @@ pub(super) fn store_mutated_container_property(
     if slot.is_reference {
         let pointer_reg = reference_pointer_reg(ctx, base_reg);
         abi::emit_load_from_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
-        release_previous_referenced_value(ctx, pointer_reg, &slot.php_type, Some(&value_ty));
-        abi::emit_store_to_address(ctx.emitter, value_reg, pointer_reg, 0);
+        publish_reference_cell_result_then_release_previous(
+            ctx,
+            pointer_reg,
+            &slot.php_type,
+            &value_ty,
+        )?;
     } else {
         release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, Some(&value_ty));
         abi::emit_store_to_address(ctx.emitter, value_reg, base_reg, slot.offset);
@@ -147,9 +154,21 @@ pub(super) fn emit_reference_property_bind(
     base_reg: &str,
 ) -> Result<()> {
     super::super::materialize_local_ref_arg_address(ctx, value)?;
+    let pointer_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, base_reg);
+    abi::emit_push_reg(ctx.emitter, pointer_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
+    let safe = ctx.next_label("reference_property_bind_safe");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &safe);
+    abi::emit_pop_reg(ctx.emitter, pointer_reg);
+    abi::emit_pop_reg(ctx.emitter, base_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_unmanaged_reference_escape_error");
+    ctx.emitter.label(&safe);
+    abi::emit_pop_reg(ctx.emitter, pointer_reg);
+    abi::emit_pop_reg(ctx.emitter, base_reg);
     abi::emit_store_to_address(
         ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
+        pointer_reg,
         base_reg,
         slot.offset,
     );
@@ -241,30 +260,36 @@ pub(super) fn emit_reference_property_write(
     base_reg: &str,
 ) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, base_reg);
-    load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+    load_property_store_value_to_result(ctx, value, slot)?;
     abi::emit_pop_reg(ctx.emitter, base_reg);
     let pointer_reg = reference_pointer_reg(ctx, base_reg);
     abi::emit_load_from_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
-    release_previous_referenced_value(ctx, pointer_reg, &slot.php_type, Some(&slot.php_type));
-    store_current_result_to_reference_cell(ctx, pointer_reg, &slot.php_type)
+    publish_reference_cell_result_then_release_previous(
+        ctx,
+        pointer_reg,
+        &slot.php_type,
+        &slot.php_type,
+    )
 }
 
-/// Releases the old value held in a reference cell before overwriting it.
-pub(super) fn release_previous_referenced_value(
+/// Publishes a reference-property replacement before retiring the old pointee.
+///
+/// The incoming result and cell address are saved while the old pointer is snapshotted. The new
+/// value becomes visible to every alias before cleanup runs user code, and the old owner is then
+/// retired through the exception-preserving cleanup boundary.
+pub(super) fn publish_reference_cell_result_then_release_previous(
     ctx: &mut FunctionContext<'_>,
     pointer_reg: &str,
     prop_ty: &PhpType,
-    preserve_result_ty: Option<&PhpType>,
-) {
+    incoming_result_ty: &PhpType,
+) -> Result<()> {
     let prop_ty = prop_ty.codegen_repr();
     let releases_value =
         matches!(prop_ty, PhpType::Str | PhpType::Callable) || prop_ty.is_refcounted();
     if !releases_value {
-        return;
+        return store_current_result_to_reference_cell(ctx, pointer_reg, &prop_ty);
     }
-    if let Some(result_ty) = preserve_result_ty {
-        abi::emit_push_result_value(ctx.emitter, &result_ty.codegen_repr());
-    }
+    abi::emit_push_result_value(ctx.emitter, &incoming_result_ty.codegen_repr());
     abi::emit_push_reg(ctx.emitter, pointer_reg);
     abi::emit_load_from_address(
         ctx.emitter,
@@ -272,18 +297,30 @@ pub(super) fn release_previous_referenced_value(
         pointer_reg,
         0,
     );
-    match prop_ty {
-        PhpType::Str => abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe"),
-        PhpType::Callable => callable_descriptor::emit_release_current_descriptor(ctx.emitter),
-        PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-        }
-        ty => abi::emit_decref_if_refcounted(ctx.emitter, &ty),
-    }
+    let old_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, old_reg, abi::int_result_reg(ctx.emitter));
     abi::emit_pop_reg(ctx.emitter, pointer_reg);
-    if let Some(result_ty) = preserve_result_ty {
-        restore_property_store_result(ctx, &result_ty.codegen_repr());
+    restore_property_store_result(ctx, &incoming_result_ty.codegen_repr());
+    store_current_result_to_reference_cell(ctx, pointer_reg, &prop_ty)?;
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), old_reg);
+    if prop_ty == PhpType::Str {
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    } else {
+        // A declared Array or AssocArray slot can contain either packed or hash storage after
+        // by-reference promotion and key sorting. Retire that physical owner through heap-kind
+        // dispatch while preserving a destructor exception just like the typed cleanup helper.
+        if matches!(prop_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            abi::emit_unary_cleanup_preserving_exception(
+                ctx.emitter,
+                "__rt_decref_any",
+                abi::int_result_reg(ctx.emitter),
+            );
+        } else {
+            abi::emit_decref_preserving_exception(ctx.emitter, &prop_ty);
+        }
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
     }
+    Ok(())
 }
 
 /// Stores the current result registers into a reference cell.
@@ -400,6 +437,12 @@ pub(super) fn restore_property_store_result(ctx: &mut FunctionContext<'_>, resul
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        }
+        // Inline tagged storage is a PAIR. Popping one register for it would leave the tag
+        // word holding the payload and read every saved null back as a value.
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, abi::int_result_reg(ctx.emitter), tag_reg);
         }
         PhpType::Void | PhpType::Never => {}
         _ => {

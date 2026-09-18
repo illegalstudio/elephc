@@ -427,6 +427,9 @@ impl ElephcEvalContext {
         let mut seen = HashSet::new();
         for class in self.class_chain(class_name).into_iter().rev() {
             for method in class.methods() {
+                if class.properties().iter().any(|property| property.matches_hook_method(method.name())) {
+                    continue;
+                }
                 push_unique_method_name(method.name(), &mut names, &mut seen);
             }
             if let Some(enum_decl) = self.enum_decl(class.name()) {

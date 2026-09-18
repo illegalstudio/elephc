@@ -6,11 +6,11 @@
 //!
 //! Key details:
 //! - `shell_exec`, `system`, and `passthru` call the runner owned by this file.
-//! - A SPAWN FAILURE IS NOT AN EMPTY COMMAND. See [`EvalShellOutcome`] — this runner used to
-//!   collapse the two, which is a real bug and was also a CI flake.
+//! - Spawn failures and output failures remain distinct from successful empty output.
+//! - Only a failed spawn may be retried; a child that started is never executed again.
 
 use std::io::ErrorKind;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use super::*;
@@ -65,34 +65,17 @@ pub(in crate::interpreter) fn eval_process_command_result(
     eval_process_outcome_result(name, eval_shell_command_output(&command), values)
 }
 
-/// What one shell invocation actually did.
-///
-/// THE TWO ARMS USED TO BE ONE VALUE, and collapsing them was a genuine defect rather than a
-/// simplification: the runner ended in `.output().map(|o| o.stdout).unwrap_or_default()`, so a
-/// process that could not be created AT ALL produced the same empty byte string as a command
-/// that ran and printed nothing. `exec()` then answered `""` for a command it never executed.
-///
-/// That is also how it showed up in CI. On a loaded runner `fork`/`posix_spawn` fails with
-/// `EAGAIN`, and one `exec()` inside an otherwise-passing test silently returned `""` while
-/// its siblings succeeded — reproduced here directly: 2560 concurrent
-/// `/bin/sh -c "printf spread"` spawns under `ulimit -u 900` produced 1177 `EAGAIN` failures,
-/// every one of which this code would have reported as "the command printed nothing".
+/// Distinguishes successful output from errors before and after a child starts.
 pub(in crate::interpreter) enum EvalShellOutcome {
     /// The command ran. These are its stdout bytes, which may legitimately be empty.
     Ran(Vec<u8>),
     /// The process could not be created, so the command never ran at all.
-    SpawnFailed,
+    SpawnFailed(std::io::Error),
+    /// The process started, but its output or exit status could not be collected.
+    OutputFailed(std::io::Error),
 }
 
-/// Maps one shell outcome onto the PHP return value of the calling builtin.
-///
-/// Split out of [`eval_process_command_result`] so the failure arm is reachable from a test
-/// without having to induce a real spawn failure — inducing one needs process-table pressure,
-/// which is exactly the nondeterminism a regression test must not depend on.
-///
-/// `SpawnFailed` answers `false` for all four builtins, which is php-src's own documented
-/// failure value (`php_exec` returning `FAILURE` ends in `RETURN_FALSE`). The `Ran` arm is
-/// byte-for-byte the behaviour this file always had.
+/// Maps shell output to the builtin result, preserving operating-system errors in warnings.
 pub(in crate::interpreter) fn eval_process_outcome_result(
     name: &str,
     outcome: EvalShellOutcome,
@@ -101,8 +84,16 @@ pub(in crate::interpreter) fn eval_process_outcome_result(
     if !matches!(name, "exec" | "shell_exec" | "system" | "passthru") {
         return Err(EvalStatus::UnsupportedConstruct);
     }
-    let EvalShellOutcome::Ran(output) = outcome else {
-        return values.bool_value(false);
+    let output = match outcome {
+        EvalShellOutcome::Ran(output) => output,
+        EvalShellOutcome::SpawnFailed(error) => {
+            values.warning(&format!("{name}(): Unable to start process: {error}"))?;
+            return values.bool_value(false);
+        }
+        EvalShellOutcome::OutputFailed(error) => {
+            values.warning(&format!("{name}(): Unable to collect process output: {error}"))?;
+            return values.bool_value(false);
+        }
     };
     match name {
         "exec" | "shell_exec" => values.string_bytes_value(&output),
@@ -133,45 +124,51 @@ fn eval_shell_command_string(
 /// still terminates instead of spinning.
 const EVAL_SHELL_SPAWN_ATTEMPTS: u32 = 5;
 
-/// Executes a shell command, reporting whether it ran at all.
-///
-/// RETRIES A TRANSIENT SPAWN FAILURE, and that is safe precisely because it is a SPAWN
-/// failure: `EAGAIN`/`ENOMEM` from `posix_spawn` mean the child was never created, so nothing
-/// can have run twice. (A command that runs and then fails is `Ran` with whatever it wrote —
-/// never retried.) Backoff doubles from 1ms, so five attempts span ~15ms before giving up.
-///
-/// php-src does not retry, but php-src does not silently answer `""` either: it reports
-/// failure. Retrying first is what keeps `exec()` meaning "run this command" on a loaded
-/// machine, and [`EvalShellOutcome::SpawnFailed`] is the honest answer when it genuinely
-/// cannot.
+/// Spawns the shell with captured output and collects it once, outside the retry boundary.
 fn eval_shell_command_output(command: &str) -> EvalShellOutcome {
+    eval_shell_run_with(
+        || {
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(command)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        },
+        |child| child.wait_with_output().map(|output| output.stdout),
+        std::thread::sleep,
+    )
+}
+
+/// Retries only transient spawn errors, with injectable operations for deterministic tests.
+fn eval_shell_run_with<Child>(
+    mut spawn: impl FnMut() -> std::io::Result<Child>,
+    collect: impl FnOnce(Child) -> std::io::Result<Vec<u8>>,
+    mut sleep: impl FnMut(Duration),
+) -> EvalShellOutcome {
     let mut backoff = Duration::from_millis(1);
     for attempt in 1..=EVAL_SHELL_SPAWN_ATTEMPTS {
-        match Command::new("/bin/sh").arg("-c").arg(command).output() {
-            Ok(output) => return EvalShellOutcome::Ran(output.stdout),
+        match spawn() {
+            Ok(child) => {
+                return match collect(child) {
+                    Ok(output) => EvalShellOutcome::Ran(output),
+                    Err(error) => EvalShellOutcome::OutputFailed(error),
+                };
+            }
             Err(error) => {
                 if attempt == EVAL_SHELL_SPAWN_ATTEMPTS || !eval_shell_spawn_is_transient(&error) {
-                    return EvalShellOutcome::SpawnFailed;
+                    return EvalShellOutcome::SpawnFailed(error);
                 }
-                std::thread::sleep(backoff);
+                sleep(backoff);
                 backoff *= 2;
             }
         }
     }
-    EvalShellOutcome::SpawnFailed
+    EvalShellOutcome::SpawnFailed(std::io::Error::from(ErrorKind::WouldBlock))
 }
 
-/// Returns whether a spawn error is worth retrying — i.e. the OS declined to create the
-/// process right now, rather than refusing this command outright.
-///
-/// `EAGAIN` (process/thread limit) and `ENOMEM` are the two the kernel raises under pressure.
-/// Everything else — `ENOENT` for a missing `/bin/sh`, `EACCES`, `E2BIG` — is a standing
-/// condition that a retry cannot change, so it fails immediately.
-///
-/// Matched on the RAW OS ERROR as well as `ErrorKind`, because the `ErrorKind` spelling for
-/// these has changed across Rust releases (`WouldBlock` for `EAGAIN`, `OutOfMemory` for
-/// `ENOMEM` only since 1.53) and this must not silently stop retrying under a different
-/// toolchain than the one it was written against.
+/// Recognizes temporary process or memory exhaustion without retrying persistent errors.
 fn eval_shell_spawn_is_transient(error: &std::io::Error) -> bool {
     matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::OutOfMemory)
         || matches!(error.raw_os_error(), Some(libc::EAGAIN) | Some(libc::ENOMEM))
@@ -191,8 +188,77 @@ fn eval_echo_process_output(
 
 #[cfg(test)]
 mod tests {
-    use super::eval_shell_spawn_is_transient;
+    use super::{eval_shell_run_with, eval_shell_spawn_is_transient, EvalShellOutcome};
     use std::io::{Error, ErrorKind};
+    use std::time::Duration;
+
+    /// Retries failed spawns with bounded backoff and collects a successful child exactly once.
+    #[test]
+    fn transient_spawns_retry_before_collecting_output() {
+        let mut attempts = 0;
+        let mut collected = 0;
+        let mut delays = Vec::new();
+        let outcome = eval_shell_run_with(
+            || {
+                attempts += 1;
+                match attempts {
+                    1 => Err(Error::from_raw_os_error(libc::EAGAIN)),
+                    2 => Err(Error::from_raw_os_error(libc::ENOMEM)),
+                    _ => Ok(42),
+                }
+            },
+            |child| {
+                assert_eq!(child, 42);
+                collected += 1;
+                Ok(b"once".to_vec())
+            },
+            |delay| delays.push(delay),
+        );
+        assert!(matches!(outcome, EvalShellOutcome::Ran(bytes) if bytes == b"once"));
+        assert_eq!((attempts, collected), (3, 1));
+        assert_eq!(delays, [Duration::from_millis(1), Duration::from_millis(2)]);
+    }
+
+    /// Exhausted and permanent spawn failures preserve errno without collecting a child.
+    #[test]
+    fn failed_spawns_keep_the_original_error_and_retry_bound() {
+        for (errno, expected_attempts) in [(libc::EAGAIN, 5), (libc::EACCES, 1)] {
+            let mut attempts = 0;
+            let mut delays = Vec::new();
+            let outcome = eval_shell_run_with(
+                || {
+                    attempts += 1;
+                    Err::<(), _>(Error::from_raw_os_error(errno))
+                },
+                |_| panic!("a failed spawn has no child to collect"),
+                |delay| delays.push(delay),
+            );
+            assert!(matches!(outcome, EvalShellOutcome::SpawnFailed(error)
+                if error.raw_os_error() == Some(errno)));
+            assert_eq!(attempts, expected_attempts);
+            assert_eq!(delays.len(), expected_attempts - 1);
+            assert!(delays.iter().sum::<Duration>() <= Duration::from_millis(15));
+        }
+    }
+
+    /// A transient-looking output error must never start a second child or sleep.
+    #[test]
+    fn collecting_output_cannot_reexecute_a_started_command() {
+        for errno in [libc::EAGAIN, libc::ENOMEM, libc::ECHILD] {
+            let mut attempts = 0;
+            let outcome = eval_shell_run_with(
+                || {
+                    attempts += 1;
+                    Ok(())
+                },
+                |_| Err(Error::from_raw_os_error(errno)),
+                |_| panic!("output errors must not enter the spawn backoff"),
+            );
+            assert!(matches!(outcome, EvalShellOutcome::OutputFailed(error)
+                if error.raw_os_error() == Some(errno)));
+            assert_eq!(attempts, 1);
+        }
+    }
 
     /// The two errors a loaded kernel raises when it declines to create a process must be
     /// retryable — this is the classifier that turns a CI flake into a completed command.

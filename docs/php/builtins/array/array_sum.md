@@ -1,6 +1,6 @@
 ---
 title: "array_sum()"
-description: "Calculate the sum of values in an array."
+description: "Calculate an integer or float sum of array values; an empty array returns integer 0."
 sidebar:
   order: 40
 ---
@@ -8,22 +8,22 @@ sidebar:
 ## array_sum()
 
 ```php
-function array_sum(array $array): int
+function array_sum(array $array): int|float
 ```
 
-Calculate the sum of values in an array.
+Calculate an integer or float sum of array values; an empty array returns integer 0.
 
 **Parameters**:
 - `$array` (`array`)
 
-**Returns**: `int`
+**Returns**: `int|float`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_sum.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_sum.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_sum.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_sum.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -44,11 +44,26 @@ fn comm_alignment_operand(target: Target) -> usize {
 /// inline: the alignment operand is the one part of it that is not portable, and a hardcoded
 /// spelling is accepted by both assemblers while only being right for one of them.
 pub(crate) fn comm_directive(label: &str, size: usize, target: Target) -> String {
+    comm_directive_aligned(label, size, COMM_ALIGN_BYTES, target)
+}
+
+/// Renders a `.comm` directive with an explicit power-of-two byte alignment.
+pub(crate) fn comm_directive_aligned(
+    label: &str,
+    size: usize,
+    alignment_bytes: usize,
+    target: Target,
+) -> String {
+    debug_assert!(alignment_bytes.is_power_of_two());
+    let alignment = match target.platform {
+        Platform::MacOS => alignment_bytes.trailing_zeros() as usize,
+        Platform::Linux | Platform::Windows => alignment_bytes,
+    };
     format!(
         ".comm {}, {}, {}\n",
         label,
         size,
-        comm_alignment_operand(target)
+        alignment
     )
 }
 

@@ -62,10 +62,16 @@ pub(super) fn lower_yield_from_array(
     expr: &Expr,
 ) -> LoweredValue {
     let span = expr.span;
+    let iterator_state = ctx.declare_iterator_state();
     let iterator = ctx.emit_value(
         Op::IterStart,
         vec![source.value],
-        None,
+        Some(Immediate::IterStart(crate::ir::IterStartMetadata::new(
+            iterator_state,
+            false,
+            None,
+            None,
+        ))),
         PhpType::Iterable,
         Op::IterStart.default_effects(),
         Some(span),
@@ -164,4 +170,3 @@ pub(super) fn lower_yield_from_array(
         Some(span),
     )
 }
-

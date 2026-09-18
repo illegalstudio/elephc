@@ -126,17 +126,10 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Reaching this lowering means `crate::ir_lower::expr` could not turn the target
 /// into a slot clear, a hash/array removal, an `offsetUnset()` call, a `__unset()`
 /// call or a dynamic-property removal, so the message lists the shapes that do lower
-/// directly and then names the one shape users hit most.
-///
-/// THE UNTYPED FIXED SLOT is that shape. `unset($obj->untypedProp)` on a property
-/// declared without a type (`public $foo = 1;`) truly REMOVES it in PHP: a later read
-/// warns `Undefined property` and answers `null`, and a later write recreates it.
-/// elephc gives each declared property a fixed, monomorphically typed slot, so a
-/// property the checker typed `Int` has no encoding for "removed and reading as null"
-/// — every candidate encoding answers `int(0)` or a raw marker word instead. A loud
-/// error beats a wrong value, so the shape is refused here. Untyped properties whose
-/// storage is a DYNAMIC hash (`stdClass`, undeclared names on
-/// `#[AllowDynamicProperties]` classes) are genuinely removable and lower fine.
+/// directly. Fixed untyped slots selected by reachable property `unset()` operations
+/// are widened to boxed `Mixed` and lowered through `PropUnset`, so they do not reach
+/// this fallback. Packed fields, by-reference slots, and dynamic shapes whose magic
+/// behavior depends on runtime state remain deliberately unsupported.
 pub(super) fn lower_unset_builtin(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -144,9 +137,9 @@ pub(super) fn lower_unset_builtin(
     Err(CodegenIrError::unsupported(format!(
         "unset target shape with {} lowered operands (supported: variables, \
          array/hash elements, ArrayAccess offsets, __unset()-backed properties, \
-         declared typed object properties, and dynamic object properties). \
-         An UNTYPED declared property (`public $p = 1;`) is not supported: its fixed \
-         slot has no representation for PHP's removed-then-null read",
+         declared fixed object properties, and dynamic object properties). \
+         Packed fields, by-reference property slots, and runtime-dependent magic \
+         property shapes are not supported",
         inst.operands.len()
     )))
 }
@@ -443,6 +436,12 @@ pub(crate) fn lower_class_name_lookup(
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?;
     match &value_ty {
+        // A statically typed slot can still hold an eval-declared subclass, which owns no
+        // generated class id and would otherwise report its nearest emitted ancestor. Magician
+        // answers from dynamic-owner metadata first and falls back to the same class-name table.
+        PhpType::Object(_) if super::has_eval_context(ctx) => {
+            return super::lower_eval_object_class_name(ctx, inst, value, name);
+        }
         PhpType::Object(_) => {
             ctx.load_value_to_result(value)?;
             emit_dynamic_object_class_name(ctx, name);
@@ -564,6 +563,16 @@ fn emit_object_hash_projection(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_object_to_hash");
+    Ok(())
+}
+
+/// Projects every object property with PHP visibility-mangled keys and boxes the fresh hash.
+pub(crate) fn emit_mangled_object_vars(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    emit_object_hash_projection(ctx, value, true, -1)?;
     Ok(())
 }
 
@@ -806,10 +815,20 @@ pub(crate) fn lower_get_resource_type(
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_type", 1)?;
     let value = expect_operand(inst, 0)?;
+    let raw_ty = ctx.raw_value_php_type(value)?;
     ctx.load_value_to_result(value)?;
-    match resource_type_name_shape(&ctx.raw_value_php_type(value)?) {
+    match resource_type_name_shape(&raw_ty) {
         ResourceTypeNameShape::Boxed => emit_boxed_resource_type_name(ctx),
         ResourceTypeNameShape::Unboxed => {
+            let subtype = match raw_ty {
+                PhpType::Resource(Some(ref kind)) if kind == "stream filter" => 9,
+                _ => 0,
+            };
+            let subtype_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x3",
+                Arch::X86_64 => "rcx",
+            };
+            abi::emit_load_int_immediate(ctx.emitter, subtype_reg, subtype);
             abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
         }
         ResourceTypeNameShape::Constant => emit_string_result(ctx, b"stream"),
@@ -897,9 +916,11 @@ fn emit_boxed_resource_type_name_asm(
     emitter.label(resource_label);
     match emitter.target.arch {
         Arch::AArch64 => {
+            emitter.instruction("mov x3, x2");                                  // preserve the resource subtype for runtime name selection
             emitter.instruction("mov x0, x1");                                  // move the unboxed Mixed low payload into the integer result register
         }
         Arch::X86_64 => {
+            emitter.instruction("mov rcx, rdx");                                // preserve the resource subtype for runtime name selection
             emitter.instruction("mov rax, rdi");                                // move the unboxed Mixed low payload into the integer result register
         }
     }
@@ -1381,7 +1402,10 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
 }
 
 /// Allocates an indexed string array and appends every declaration name.
-fn emit_string_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
+pub(in crate::codegen::lower_inst) fn emit_string_array(
+    ctx: &mut FunctionContext<'_>,
+    names: &[String],
+) -> Result<()> {
     let capacity = names.len().max(1);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -1473,7 +1497,7 @@ fn parent_of_existing(ctx: &FunctionContext<'_>, class_name: &str) -> Option<Str
 /// Returns a string literal value defined by a `ConstStr` operand.
 fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<String> {
     optional_const_string_operand(ctx, value)?.ok_or_else(|| {
-        CodegenIrError::unsupported("get_parent_class with non-literal class name")
+        CodegenIrError::unsupported("builtin requires a compile-time string operand")
     })
 }
 
@@ -1493,7 +1517,7 @@ fn optional_const_string_operand(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::ConstStr {
+    if !matches!(inst_ref.op, Op::ConstStr | Op::ConstClassName) {
         return Ok(None);
     }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
@@ -1501,10 +1525,12 @@ fn optional_const_string_operand(
             "string literal operand has no data id",
         ));
     };
-    Ok(Some(ctx
-        .module
-        .data
-        .strings
+    let values = if inst_ref.op == Op::ConstClassName {
+        &ctx.module.data.class_names
+    } else {
+        &ctx.module.data.strings
+    };
+    Ok(Some(values
         .get(data.as_raw() as usize)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?))
@@ -1546,6 +1572,7 @@ mod get_resource_type_asm_tests {
             "    mov x2, #6\n",
             "    b _gt_done\n",
             "_gt_resource:\n",
+            "    mov x3, x2\n",
             "    mov x0, x1\n",
             "    bl __rt_resource_type_name\n",
             "_gt_done:\n",
@@ -1567,6 +1594,7 @@ mod get_resource_type_asm_tests {
             "    mov rdx, 6\n",
             "    jmp _gt_done\n",
             "_gt_resource:\n",
+            "    mov rcx, rdx\n",
             "    mov rax, rdi\n",
             "    call __rt_resource_type_name\n",
             "_gt_done:\n",

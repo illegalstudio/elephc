@@ -127,7 +127,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_unser_options_hash_list_loop_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // associative source hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // insertion-order iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // return next borrowed value tuple; ignore key registers
+    emitter.instruction("call __rt_hash_iter_next_value");                      // return next borrowed value tuple; ignore key registers
     emitter.instruction("cmp rax, -1");                                         // exhausted every associative value?
     emitter.instruction("je __rt_unser_options_done_x");                        // normalized policy is ready
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve next iterator cursor

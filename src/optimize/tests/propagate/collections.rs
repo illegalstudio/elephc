@@ -195,6 +195,34 @@ fn test_array_fact_folds_constant_index_access() {
     assert_eq!(propagated[1], Stmt::echo(Expr::int_lit(2)));
 }
 
+/// Compound reads of known-present scalar array elements still fold without warning invalidation.
+#[test]
+fn test_array_fact_folds_read_only_compound_expression() {
+    let program = vec![
+        Stmt::assign("a", int_array(&[1, 2, 3])),
+        Stmt::assign("index", Expr::int_lit(1)),
+        Stmt::echo(Expr::binop(
+            access(Expr::var("a"), Expr::var("index")), BinOp::Add, Expr::int_lit(5),
+        )),
+    ];
+    let propagated = propagate_constants(program);
+    assert_eq!(propagated[2], Stmt::echo(Expr::int_lit(7)));
+}
+
+/// A missing sibling read prevents folding a later fact that its warning handler could change.
+#[test]
+fn test_array_fact_does_not_fold_across_unknown_warning_in_same_expression() {
+    let expression = Expr::binop(
+        access(Expr::var("unknown"), Expr::int_lit(0)), BinOp::Add,
+        access(Expr::var("a"), Expr::int_lit(0)),
+    );
+    let program = vec![
+        Stmt::assign("a", int_array(&[7])), Stmt::echo(expression.clone()),
+    ];
+    let propagated = propagate_constants(program);
+    assert_eq!(propagated[1], Stmt::echo(expression));
+}
+
 /// An associative literal fact folds string-key reads.
 #[test]
 fn test_assoc_array_fact_folds_key_access() {

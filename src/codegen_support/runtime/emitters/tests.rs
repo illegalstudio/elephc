@@ -11,6 +11,61 @@ use super::*;
 use crate::codegen_support::platform::{Arch, Platform, Target};
 use crate::codegen_support::runtime::{arrays, buffers, pointers};
 
+/// Full and native-only eval runtimes define scope APIs once and gate every Rust scope dependency.
+#[test]
+fn eval_scope_exports_are_unique_and_native_fragments_do_not_require_rust() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        for bridge in [false, true] {
+            let mut emitter = Emitter::new(target);
+            emit_runtime(&mut emitter, RuntimeFeatures {
+                eval_scope: true,
+                eval_bridge: bridge,
+                ..RuntimeFeatures::none()
+            });
+            let asm = emitter.output();
+            for entry in ["__elephc_eval_scope_free", "__elephc_eval_scope_set"] {
+                let label = format!("{}:", target.extern_symbol(entry));
+                assert_eq!(asm.lines().filter(|line| *line == label).count(), 1,
+                    "{name}, bridge={bridge}: duplicate or missing {entry}");
+            }
+            for entry in ["__elephc_eval_scope_free_v2", "__elephc_eval_scope_set_v2", "__elephc_eval_scope_unset_v2"] {
+                assert_eq!(asm.contains(&target.extern_symbol(entry)), bridge,
+                    "{name}, bridge={bridge}: wrong dependency on {entry}");
+            }
+        }
+    }
+}
+
+/// Independently discovered clone and handler dependencies emit their native helper families.
+#[test]
+fn generated_wrapper_dependencies_emit_native_runtime_helpers() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit_runtime(&mut emitter, RuntimeFeatures {
+            handler_state: true,
+            object_clone: true,
+            ..RuntimeFeatures::none()
+        });
+        let asm = emitter.output();
+        for symbol in [
+            "__rt_object_clone_shallow_boxed",
+            "__rt_core_error_handler_pop",
+            "__rt_core_exception_handler_pop",
+        ] {
+            assert!(
+                asm.contains(&format!("{symbol}:")),
+                "{name}: generated-wrapper runtime is missing {symbol}"
+            );
+        }
+        assert!(
+            !asm.contains("__elephc_eval_value_object_clone_shallow"),
+            "{name}: native wrapper dependencies must not emit eval bridge exports"
+        );
+    }
+}
+
 /// Verifies that AArch64 runtime emits fiber routines.
 #[test]
 fn test_aarch64_runtime_emits_fiber_routines() {
@@ -231,7 +286,6 @@ fn test_macos_dead_strip_runtime_assembles() {
 /// (not `L`-localized) so they are correctly excluded; numeric local labels
 /// never start an atom and are ignored.
 #[test]
-#[cfg(target_os = "macos")]
 fn test_macos_dead_strip_no_cross_atom_internal_refs() {
     let asm = crate::codegen_support::generate_runtime_with_features_pic(
         8 * 1024 * 1024,

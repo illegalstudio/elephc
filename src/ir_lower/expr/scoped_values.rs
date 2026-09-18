@@ -461,15 +461,7 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
         );
     }
     let name = static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
-    let sig = constructor_signature(ctx, &Name::from(name.clone())).cloned();
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
-    emit_fixed_object_new(
-        ctx,
-        &name,
-        operands,
-        PhpType::Object(name.clone()),
-        expr.span,
-    )
+    lower_new_object(ctx, &Name::from(name), args, expr)
 }
 
 /// Lowers a residual magic constant.
@@ -477,4 +469,3 @@ pub(super) fn lower_magic_constant(ctx: &mut LoweringContext<'_, '_>, kind: &Mag
     let value = format!("__{:?}__", kind);
     lower_string_literal(ctx, &value, expr)
 }
-

@@ -8,7 +8,7 @@
 //! - Fixtures distinguish PHP's by-value `invoke()` forwarding from by-reference
 //!   `invokeArgs([&$value])` forwarding for eval-declared and generated/AOT callables.
 
-use crate::support::compile_and_run_capture;
+use crate::support::{compile_and_run, compile_and_run_capture};
 
 /// Verifies ReflectionFunction preserves PHP by-ref semantics for invoke and invokeArgs.
 #[test]
@@ -141,4 +141,52 @@ return $aotStatic->invokeArgs(null, [&$aotStaticArgsValue]) . ":" . gettype($aot
             out.stderr
         );
     }
+}
+
+/// AOT reflection over a class, a sorted loop-built local, and eval reflection over the same class
+/// terminate together (issue #1031's linux shape).
+///
+/// `$names` is appended in a loop and then sorted at the top level of a program that also calls
+/// `eval()`, so its frame slot is boxed Mixed and `sort()`'s receiver is an unboxed load that
+/// lowering releases after the call. The store-back used to MOVE that load's owner into the new
+/// box after `prepare_consuming_storeback` had dropped the previous one, which freed the sorted
+/// array under the box the slot kept; the eval's end-of-execution escape walk then iterated the
+/// reused block as an array with a garbage length until the heap ran out. The receiver store now
+/// retains (`FunctionContext::store_receiver_value_to_local`). Every ingredient is load-bearing:
+/// the class hierarchy, the AOT `getMethods()` loop leaving `$method` alive, the `sort()`, and all
+/// three reflection uses inside one `eval()`. Names go through `strtolower()` because reflection
+/// casing is tracked separately (#571).
+#[test]
+fn test_eval_reflection_after_aot_get_methods_and_sorted_local_terminates() {
+    let out = compile_and_run(
+        r#"<?php
+interface CasingContract { public function RunIt(int $Times): void; }
+trait CasingHelper      { public function HelpMe(): void {} }
+class CasingBase        { public function BaseThing(): void {} }
+class CasingBox extends CasingBase implements CasingContract {
+    use CasingHelper;
+    public function Match(): void {}
+    public static function StaticOne(): void {}
+    public function RunIt(int $Times): void {}
+}
+$names = [];
+foreach ((new ReflectionClass(CasingBox::class))->getMethods() as $method) {
+    $names[] = strtolower($method->getName());
+}
+sort($names);
+echo implode(",", $names), "|";
+eval('echo strtolower((new ReflectionMethod("CasingBox", "mAtCh"))->getName()), "|";
+      $c = new ReflectionClass("CasingBox");
+      echo strtolower($c->getMethod("match")->getName()), "|";
+      $n = []; foreach ($c->getMethods() as $m) { $n[] = strtolower($m->getName()); } sort($n);
+      echo implode(",", $n), "|";
+      $g = array_map("strtolower", get_class_methods("CasingBox")); sort($g);
+      echo implode(",", $g), "|";');
+echo "done";
+"#,
+    );
+    assert_eq!(
+        out,
+        "basething,helpme,match,runit,staticone|match|match|basething,helpme,match,runit,staticone|basething,helpme,match,runit,staticone|done"
+    );
 }

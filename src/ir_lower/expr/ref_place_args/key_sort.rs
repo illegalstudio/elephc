@@ -34,20 +34,23 @@ pub(super) fn lower_key_sort_ref_place_call(
         "krsort" => ArrayKeySort::Descending,
         _ => return None,
     };
-    if sort == ArrayKeySort::Descending {
-        if let Some(result) = lower_direct_property_krsort(ctx, name, sig, args, expr) {
-            return Some(result);
-        }
+    if let Some(result) = lower_direct_property_key_sort(ctx, name, sig, args, expr, sort) {
+        return Some(result);
+    }
+    if let Some(result) = lower_exact_php_array_place_key_sort(ctx, name, sig, args, expr, sort) {
+        return Some(result);
     }
     lower_mixed_array_element_key_sort(ctx, name, sig, args, expr, sort)
 }
 
-fn lower_direct_property_krsort(
+/// Sorts a direct property through its concrete container or declared-array boxed cell.
+fn lower_direct_property_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     sig: &FunctionSig,
     args: &[Expr],
     expr: &Expr,
+    sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
     let [arg] = args else {
         return None;
@@ -61,7 +64,17 @@ fn lower_direct_property_krsort(
     {
         return None;
     }
-    let property_ty = static_place_type(ctx, place)?.codegen_repr();
+    let property_ty = static_place_type(ctx, place)?;
+    if property_ty.is_php_array() {
+        let cell = super::super::lower_by_ref_foreach_property_source(
+            ctx, object, property, place,
+        );
+        return Some(sort_attached_mixed_cell(ctx, name, cell, expr, sort));
+    }
+    if sort != ArrayKeySort::Descending {
+        return None;
+    }
+    let property_ty = property_ty.codegen_repr();
     if !matches!(&property_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return None;
     }
@@ -104,6 +117,59 @@ fn lower_direct_property_krsort(
     ))
 }
 
+/// Sorts an exact PHP `array` local or general writable place through its boxed Mixed cell.
+///
+/// Plain locals already own their PHP value. General places clone one stable read into an
+/// ordinary local, sort that independent zval, then publish it through the existing place write.
+fn lower_exact_php_array_place_key_sort(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    sig: &FunctionSig,
+    args: &[Expr],
+    expr: &Expr,
+    sort: ArrayKeySort,
+) -> Option<LoweredValue> {
+    let [arg] = args else {
+        return None;
+    };
+    let place = ref_param_place(sig, 0, arg)?;
+    if !static_place_type(ctx, place)?.is_php_array() {
+        return None;
+    }
+    if let ExprKind::Variable(local) = &place.kind {
+        let cell = ctx.load_local(local, Some(place.span));
+        return Some(sort_attached_mixed_cell(ctx, name, cell, expr, sort));
+    }
+    if !super::is_candidate_place_shape(place) {
+        return None;
+    }
+
+    let place = super::stabilize_place(ctx, place);
+    let source = lower_expr(ctx, &place);
+    // A property or static-slot read borrows: the place keeps owning the cell, so the release
+    // inside the clone needs a reference of its own to balance against. An element read already
+    // hands over an owning temporary and must not be retained twice.
+    let source = acquire_place_read_owner(ctx, source, place.span);
+    let work_cell = clone_mixed_cell(ctx, source, expr);
+    let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    ctx.store_local(&temp, work_cell, PhpType::Mixed, Some(place.span));
+
+    let cell = ctx.load_local(&temp, Some(place.span));
+    let result = sort_attached_mixed_cell(ctx, name, cell, expr, sort);
+    let temp_value = Expr::new(ExprKind::Variable(temp.clone()), place.span);
+    super::lower_non_local_assignment_write(ctx, &place, &temp_value, place.span);
+
+    let slot = ctx.declare_local(&temp, PhpType::Mixed);
+    ctx.emit_void(
+        Op::ReleaseLocalSlot,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(),
+        Some(expr.span),
+    );
+    Some(result)
+}
+
 /// Reports whether hooks or readonly enforcement require the generic property write path.
 fn property_requires_generic_write_context(
     ctx: &LoweringContext<'_, '_>,
@@ -144,6 +210,11 @@ fn lower_mixed_array_element_key_sort(
     let ExprKind::ArrayAccess { array, index } = &place.kind else {
         return None;
     };
+    if static_place_type(ctx, array).is_some_and(|ty| ty.is_php_array()) {
+        return Some(lower_boxed_parent_element_key_sort(
+            ctx, name, place, expr, sort,
+        ));
+    }
     let ExprKind::Variable(parent_name) = &array.kind else {
         return lower_non_local_mixed_array_element_key_sort(
             ctx, name, sig, arg, place, array, index, expr, sort,
@@ -227,6 +298,37 @@ fn lower_mixed_array_element_key_sort(
         );
     }
     lower_attached_mixed_cell_key_sort(ctx, name, cell, expr, sort)
+}
+
+/// Sorts one child of an exact PHP `array` place through an owned Mixed work cell.
+fn lower_boxed_parent_element_key_sort(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    place: &Expr,
+    expr: &Expr,
+    sort: ArrayKeySort,
+) -> LoweredValue {
+    let place = super::stabilize_place(ctx, place);
+    let child = lower_expr(ctx, &place);
+    let child = acquire_place_read_owner(ctx, child, place.span);
+    let child = clone_mixed_cell(ctx, child, expr);
+    let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    ctx.store_local(&temp, child, PhpType::Mixed, Some(place.span));
+
+    let cell = ctx.load_local(&temp, Some(place.span));
+    let result = sort_attached_mixed_cell(ctx, name, cell, expr, sort);
+    let temp_value = Expr::new(ExprKind::Variable(temp.clone()), place.span);
+    super::lower_non_local_assignment_write(ctx, &place, &temp_value, place.span);
+
+    let slot = ctx.declare_local(&temp, PhpType::Mixed);
+    ctx.emit_void(
+        Op::ReleaseLocalSlot,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(),
+        Some(expr.span),
+    );
+    result
 }
 
 /// Sorts a Mixed child of a property or nested parent through a retained local parent copy.
@@ -459,6 +561,22 @@ fn lower_shared_mixed_array_element_key_sort(
     Some(result)
 }
 
+/// Gives a borrowed place read an owner the clone's release can balance against.
+///
+/// A property or static-slot read is a borrow — the place keeps owning the cell — while an
+/// element read already hands over an owning temporary. Retaining the second would leave one
+/// reference behind per sort.
+fn acquire_place_read_owner(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: crate::span::Span,
+) -> LoweredValue {
+    if ctx.value_is_owning_temporary(value) {
+        return value;
+    }
+    crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+}
+
 /// Clones a stored Mixed cell and releases the borrowed/owned source handle.
 fn clone_mixed_cell(
     ctx: &mut LoweringContext<'_, '_>,
@@ -531,15 +649,26 @@ fn lower_attached_mixed_cell_key_sort(
     expr: &Expr,
     sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
+    let result = sort_attached_mixed_cell(ctx, name, cell, expr, sort);
+    crate::ir_lower::ownership::release_if_owned(ctx, cell, Some(expr.span));
+    Some(result)
+}
+
+/// Sorts a hash borrowed from a Mixed cell whose owner is attached to writable storage.
+fn sort_attached_mixed_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    cell: LoweredValue,
+    expr: &Expr,
+    sort: ArrayKeySort,
+) -> LoweredValue {
     let hash = promote_attached_mixed_cell_to_hash(ctx, cell, expr, sort);
-    let result = super::super::emit_builtin_call_value(
+    super::super::emit_builtin_call_value(
         ctx,
         name,
         vec![hash.value],
         PhpType::Bool,
         expr.span,
         None,
-    );
-    crate::ir_lower::ownership::release_if_owned(ctx, cell, Some(expr.span));
-    Some(result)
+    )
 }

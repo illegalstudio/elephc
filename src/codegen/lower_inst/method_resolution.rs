@@ -27,11 +27,40 @@ pub(super) fn resolve_method_call_target(
             normalized, method_name
         ))
     })?;
-    let expected_args = callee_sig.params.len() + 1;
-    if operand_count != expected_args {
+    let physical_args = callee_sig.params.len() + 1;
+    let (call_sig, source_abi) = if operand_count == physical_args {
+        (
+            callee_sig.clone(),
+            !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(
+                callee_sig,
+            ),
+        )
+    } else {
+        let source = crate::codegen_support::source_method_adapters::source_visible_signature(
+            callee_sig,
+        )
+        .map_err(CodegenIrError::unsupported)?;
+        if operand_count != source.params.len() + 1 {
+            return Err(CodegenIrError::unsupported(format!(
+                "method call to {}::{} with {} operands for {} physical or {} source ABI params",
+                normalized,
+                method_name,
+                operand_count,
+                physical_args,
+                source.params.len() + 1
+            )));
+        }
+        (source, true)
+    };
+    if source_abi {
+        let actual = class_info.methods.get(&method_key).expect("method signature exists");
+        crate::codegen_support::source_method_adapters::plan_method_abi(&call_sig, actual)
+            .map_err(CodegenIrError::unsupported)?;
+    }
+    if operand_count != call_sig.params.len() + 1 {
         return Err(CodegenIrError::unsupported(format!(
-            "method call to {}::{} with {} operands for {} ABI params",
-            normalized, method_name, operand_count, expected_args
+            "method call to {}::{} has an unresolved ABI shape",
+            normalized, method_name
         )));
     }
     let impl_class = class_info
@@ -56,19 +85,24 @@ pub(super) fn resolve_method_call_target(
         impl_class,
         method_key,
         dynamic_slot,
-        params: callee_sig
+        params: call_sig
             .params
             .iter()
             .map(|(_, ty)| ty.codegen_repr())
             .collect(),
-        ref_params: callee_sig.ref_params.clone(),
+        ref_params: call_sig.ref_params.clone(),
         return_ty: callee_sig.return_type.clone(),
         by_ref_return: callee_sig.by_ref_return,
+        source_abi,
     })
 }
 
-/// Emits a runtime vtable dispatch for an instance method whose concrete override is late-bound.
-pub(super) fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, slot: usize) {
+/// Emits an indirect instance call through either the physical or source-ABI vtable.
+pub(super) fn emit_dynamic_instance_method_call_with_abi(
+    ctx: &mut FunctionContext<'_>,
+    slot: usize,
+    source_abi: bool,
+) {
     let class_id_reg = abi::temp_int_reg(ctx.emitter.target);
     let dispatch_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_load_from_address(
@@ -77,23 +111,76 @@ pub(super) fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, s
         abi::int_arg_reg_name(ctx.emitter.target, 0),
         0,
     );
-    abi::emit_symbol_address(ctx.emitter, dispatch_reg, "_class_vtable_ptrs");
+    let table = if source_abi {
+        "_class_source_vtable_ptrs"
+    } else {
+        "_class_vtable_ptrs"
+    };
+    abi::emit_symbol_address(ctx.emitter, dispatch_reg, table);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // load the class-specific instance-vtable pointer
                 "ldr {}, [{}, {}, lsl #3]",
                 dispatch_reg, dispatch_reg, class_id_reg
-            ));                                                                 // load the class-specific instance-vtable pointer
+            ));
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // load the class-specific instance-vtable pointer
                 "mov {}, QWORD PTR [{} + {} * 8]",
                 dispatch_reg, dispatch_reg, class_id_reg
-            ));                                                                 // load the class-specific instance-vtable pointer
+            ));
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_reg, dispatch_reg, slot * 8);
     abi::emit_call_reg(ctx.emitter, dispatch_reg);
+}
+
+/// Calls a resolved target through the ABI selected from its caller-visible signature.
+pub(super) fn emit_resolved_method_call(
+    ctx: &mut FunctionContext<'_>,
+    target: &MethodCallTarget,
+) -> Result<()> {
+    if let Some(slot) = target.dynamic_slot {
+        emit_dynamic_instance_method_call_with_abi(ctx, slot, target.source_abi);
+        return Ok(());
+    }
+    emit_direct_resolved_method_call(ctx, target)
+}
+
+/// Calls one statically selected implementation through its validated ABI entry.
+pub(super) fn emit_direct_resolved_method_call(
+    ctx: &mut FunctionContext<'_>,
+    target: &MethodCallTarget,
+) -> Result<()> {
+    let symbol = if target.source_abi {
+        let class_info = ctx.module.class_infos.get(&target.impl_class).ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "source method ABI target on unknown class {}",
+                target.impl_class
+            ))
+        })?;
+        let physical = class_info.methods.get(&target.method_key).ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "source method ABI target missing {}::{}",
+                target.impl_class, target.method_key
+            ))
+        })?;
+        if crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(physical) {
+            crate::codegen_support::source_method_adapters::source_method_entry_symbol(
+                &target.impl_class,
+                &target.method_key,
+                physical,
+                crate::codegen_support::source_method_adapters::MethodKind::Instance,
+            )
+            .map_err(CodegenIrError::unsupported)?
+        } else {
+            method_symbol(&target.impl_class, &target.method_key)
+        }
+    } else {
+        method_symbol(&target.impl_class, &target.method_key)
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
 }
 
 /// Returns true when the current EIR module includes the target class method body.

@@ -11,6 +11,7 @@
 mod builder_test;
 mod effects_test;
 mod function_test;
+mod local_load_ownership;
 mod print_test;
 mod types_test;
 mod validator_test;

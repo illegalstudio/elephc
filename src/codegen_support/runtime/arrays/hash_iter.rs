@@ -33,9 +33,15 @@ use crate::codegen_support::platform::Arch;
 /// - `x6`: value address (for by-reference foreach binding)
 ///
 /// Delegates to `emit_hash_iter_linux_x86_64` on x86_64.
+///
+/// Also emits the dereferencing sibling `__rt_hash_iter_next_value`, the borrowed value view
+/// `__rt_hash_entry_deref`, the reference promotion `__rt_hash_entry_make_reference` and the
+/// post-relocation cursor rebuild `__rt_hash_iter_resync`, so the raw and value walks of the same
+/// cursor protocol stay emitted together for every target.
 pub fn emit_hash_iter(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_iter_linux_x86_64(emitter);
+        super::hash_entry_reference::emit_hash_entry_reference(emitter);
         return;
     }
 
@@ -79,6 +85,16 @@ pub fn emit_hash_iter(emitter: &mut Emitter) {
     emitter.instruction("add x8, x0, x8");                                      // advance from the hash base to the selected slot
     emitter.instruction("add x8, x8, #40");                                     // skip the 40-byte hash header
 
+    // -- a saved cursor may name an entry deleted by the loop body --
+    emitter.instruction("ldr x10, [x8]");                                       // inspect the occupied marker before returning this slot
+    emitter.instruction("cmp x10, #2");                                         // is the saved successor now a tombstone?
+    emitter.instruction("b.ne __rt_hash_iter_live_entry");                      // live entries can be returned normally
+    emitter.instruction("ldr x6, [x8, #56]");                                   // tombstones retain their former next link for active cursors
+    emitter.instruction("cmp x6, #-1");                                         // did deletion remove the final pending entry?
+    emitter.instruction("b.eq __rt_hash_iter_end");                             // no live successor remains
+    emitter.instruction("b __rt_hash_iter_entry");                              // follow the preserved chain until a live entry is found
+    emitter.label("__rt_hash_iter_live_entry");
+
     // -- return the selected entry and encode the next cursor --
     emitter.instruction("ldr x9, [x8, #56]");                                   // x9 = next slot index from the insertion-order chain
     emitter.instruction("cmp x9, #-1");                                         // is this the tail entry?
@@ -101,6 +117,8 @@ pub fn emit_hash_iter(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #-1");                                         // return -1 to signal end of iteration
     emitter.instruction("mov x5, #8");                                          // value_tag = null when iteration is done
     emitter.instruction("ret");                                                 // return to caller
+
+    super::hash_entry_reference::emit_hash_entry_reference(emitter);
 }
 
 /// Emits `__rt_hash_iter_next` for the x86_64 Linux ABI.
@@ -147,6 +165,13 @@ fn emit_hash_iter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl r11, 6");                                          // convert the slot index into a 64-byte hash-entry offset
     emitter.instruction("add r11, rdi");                                        // advance from the hash-table base pointer to the selected entry block
     emitter.instruction("add r11, 40");                                         // skip the fixed 40-byte hash header to land on the selected entry
+    emitter.instruction("cmp QWORD PTR [r11], 2");                              // did the loop body delete the saved successor?
+    emitter.instruction("jne __rt_hash_iter_live_entry");                       // live entries can be returned normally
+    emitter.instruction("mov r10, QWORD PTR [r11 + 56]");                       // tombstones retain their former next link for active cursors
+    emitter.instruction("cmp r10, -1");                                         // did deletion remove the final pending entry?
+    emitter.instruction("je __rt_hash_iter_end");                               // no live successor remains
+    emitter.instruction("jmp __rt_hash_iter_entry");                            // follow the preserved chain until a live entry is found
+    emitter.label("__rt_hash_iter_live_entry");
     emitter.instruction("mov rax, QWORD PTR [r11 + 56]");                       // load the insertion-order next-slot index from the current entry
     emitter.instruction("cmp rax, -1");                                         // is this entry the insertion-order tail?
     emitter.instruction("je __rt_hash_iter_tail");                              // tail entries return the post-last cursor so the next probe yields done

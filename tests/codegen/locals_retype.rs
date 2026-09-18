@@ -1097,6 +1097,34 @@ fn test_same_name_same_position_collision_is_a_compile_error() {
     );
 }
 
+/// Reference detachment decisions also reject identical unset positions in different files.
+#[test]
+fn test_reference_detach_same_name_same_position_collision_is_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n$text = 'main' . $argc;\n$read = function() use (&$text): string { return $text; };\nunset($text);\necho $read();\n"),
+            ("lib.php", "<?php\n$text = 'lib' . $argc;\n$read = function() use (&$text): string { return $text; };\necho $read();\nunset($text);\n"),
+        ],
+        "main.php",
+    ).expect("ambiguous reference detachment must not compile");
+    assert!(error.contains("Cannot re-bind $text here"), "{error}");
+    assert!(error.contains("line 5 column 7"), "{error}");
+}
+
+/// A non-detachable body cannot silently erase another file's reference detach authorization.
+#[test]
+fn test_reference_detach_collision_with_typed_binding_is_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n$text = 'main' . $argc;\n$read = function() use (&$text): string { return $text; };\nunset($text);\nprobeDetachCollision($argc);\necho $read();\n"),
+            ("lib.php", "<?php\nfunction probeDetachCollision(int $seed): void {\nstring $text = 'lib' . $seed;\n$read = function() use (&$text): string { return $text; };\nunset($text);\necho $read();\n}\n"),
+        ],
+        "main.php",
+    ).expect("removed reference detach keys must still reject ambiguous source positions");
+    assert!(error.contains("Cannot re-bind $text here"), "{error}");
+    assert!(error.contains("line 5 column 7"), "{error}");
+}
+
 /// A collision that STRIPS another body's mixed-storage decisions is caught too, not just one
 /// that leaves two live keys behind.
 ///
@@ -1810,7 +1838,9 @@ echo $a, "|";"#,
         marked, unmarked,
         "marking must not change what a closure-declared `global` does to a top-level local"
     );
-    assert_eq!(marked, "hello|hello|");
+    // The closure's write reaches main's storage now that the shared walk sees closure bodies:
+    // both programs print PHP's answer.
+    assert_eq!(marked, "hello|42|");
 }
 
 /// A loop-carried marked local whose every iteration allocates a fresh heap string: the
@@ -2198,22 +2228,26 @@ fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
 /// `--strict-locals`). A compile error beats a silent wrong answer, so this shape stays an error
 /// until the global-in-closure write loss (tracked upstream) is closed — at which point the
 /// program should print `5` and this fixture should say so.
+///
+/// That hole is closed: the shared walk now descends into closure bodies and enum methods, so
+/// the veto keeps the binding, lowering keeps the shared symbol, and the program prints PHP's
+/// `5` exactly like the statement-body fixtures above.
 #[test]
-fn test_unset_then_read_of_a_closure_declared_global_is_a_compile_error() {
-    let error = compile_expect_type_error(
-        "<?php $a = 1; unset($a); $f = function() { global $a; $a = 5; }; $f(); echo $a;",
-    );
-    assert!(
-        error.contains("Undefined variable: $a"),
-        "expected the honest undefined-variable error, got: {error}"
+fn test_unset_then_read_of_a_closure_declared_global_prints_php_answer() {
+    assert_eq!(
+        compile_and_run(
+            "<?php $a = 1; unset($a); $f = function() { global $a; $a = 5; }; $f(); echo $a;",
+        ),
+        "5"
     );
 }
 
-/// The same for an ENUM method body, the other declaration the shared walk does not descend into.
+/// The same for an ENUM method body, the other declaration the shared walk now descends into.
 #[test]
-fn test_unset_then_read_of_an_enum_declared_global_is_a_compile_error() {
-    let error = compile_expect_type_error(
-        r#"<?php
+fn test_unset_then_read_of_an_enum_declared_global_prints_php_answer() {
+    assert_eq!(
+        compile_and_run(
+            r#"<?php
 enum E: int {
     case A = 1;
     public function go(): int { global $a; $a = 5; return 1; }
@@ -2222,10 +2256,8 @@ $a = 1;
 unset($a);
 E::A->go();
 echo $a;"#,
-    );
-    assert!(
-        error.contains("Undefined variable: $a"),
-        "expected the honest undefined-variable error, got: {error}"
+        ),
+        "5"
     );
 }
 
@@ -2454,7 +2486,7 @@ fn test_the_single_case_switch_rewrite_vetoes_itself_on_a_marked_default() {
             std::collections::HashSet::new()
         };
         let ast =
-            elephc::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
+            elephc::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
         let ast = elephc::optimize::prune_constant_control_flow(ast, spans.clone());
         elephc::optimize::normalize_control_flow(ast, spans)
     }
@@ -2558,17 +2590,16 @@ fn test_closure_in_an_assignment_expression_leaves_a_top_level_array_alone() {
     assert_eq!(out, "3,1,2|1");
 }
 
-/// An `unset` followed by a reassignment stays eligible when the only `global` naming that local
-/// sits in a NESTED body — a closure literal or an enum method.
+/// An `unset` followed by a reassignment is vetoed when the only `global` naming that local sits
+/// in a NESTED body — a closure literal or an enum method — exactly as it is for a function body.
 ///
-/// The counter-pin to the two `keeps_the_binding` fixtures above. Vetoing the kill for every name
-/// a nested body declares `global` costs this program its kill: `$a` never leaves the environment,
-/// so `$a = "s"` becomes an incompatible reassignment — a permissive warning, and a hard
-/// `cannot reassign $a from int to string` under `--strict-locals`, on a program base ACCEPTS in
-/// both modes and PHP runs. That is why the veto reads the same statement-only collector lowering
-/// does: a wider answer buys nothing here and takes acceptance away.
+/// The counter-pin to the two `keeps_the_binding` fixtures above, and the consistency pin for the
+/// shared walk: `$a` never leaves the environment, so `$a = "s"` is an incompatible reassignment —
+/// a permissive `changes type from` warning, and a hard `cannot reassign $a from int to string`
+/// under `--strict-locals` — the same diagnostics `$a = $argc; function f() { global $a; }
+/// unset($a); $a = "s";` gets. The permissive program still builds and prints PHP's `s`.
 #[test]
-fn test_nested_body_global_does_not_veto_an_unrelated_kill() {
+fn test_nested_body_global_vetoes_a_kill_like_a_function_body_global() {
     const CLOSURE: &str =
         "<?php $a = $argc; unset($a); $f = function () { global $a; }; $a = \"s\"; echo $a;";
     const ENUM: &str = r#"<?php
@@ -2580,26 +2611,29 @@ $a = $argc;
 unset($a);
 $a = "s";
 echo $a;"#;
+    const FUNCTION: &str =
+        "<?php $a = $argc; function f() { global $a; } unset($a); $a = \"s\"; echo $a;";
 
-    for source in [CLOSURE, ENUM] {
-        let strict = check_files_diagnostics(&[("main.php", source)], "main.php", true);
+    for source in [CLOSURE, ENUM, FUNCTION] {
+        let strict = check_files_diagnostics(&[("main.php", source)], "main.php", true)
+            .expect_err("the vetoed kill leaves an incompatible reassignment under --strict-locals");
         assert!(
-            strict.is_ok(),
-            "the kill must stay eligible under --strict-locals, got: {:?}",
-            strict.err()
+            strict.contains("cannot reassign $a from int to string"),
+            "source: {source}, got: {strict}"
         );
         let permissive = check_files_diagnostics(&[("main.php", source)], "main.php", false)
             .expect("the same program must type-check permissively");
         assert!(
-            !permissive
+            permissive
                 .iter()
-                .any(|warning| warning.contains("changes type from")),
-            "an eligible kill emits no retype warning, got: {permissive:?}"
+                .any(|warning| warning.contains("$a changes type from int to string")),
+            "a vetoed kill retypes with a warning, source: {source}, got: {permissive:?}"
         );
     }
 
     assert_eq!(compile_and_run(CLOSURE), "s");
     assert_eq!(compile_and_run(ENUM), "s");
+    assert_eq!(compile_and_run(FUNCTION), "s");
 }
 
 /// A branch-divergent local piped into a known BY-VALUE target is MARKED, lowers, and runs — the
@@ -2770,6 +2804,70 @@ fn test_typed_param_unset_then_rebind_leaves_a_clean_heap() {
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "v7");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Unsetting an incoming reference detaches only the callee's name before a fresh local rebind.
+#[test]
+fn test_unset_detaches_incoming_reference_parameters_and_captures() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rebind_untyped(&$value): string {
+    unset($value);
+    $value = "local";
+    return $value;
+}
+function rebind_typed(string &$value): int {
+    unset($value);
+    $value = 7;
+    return $value;
+}
+$untyped = "caller" . $argc;
+$typed = "typed" . $argc;
+$captured = "outer" . $argc;
+$callback = function () use (&$captured): string {
+    unset($captured);
+    $captured = "inner";
+    return $captured;
+};
+echo rebind_untyped($untyped), "|", $untyped, "|";
+echo rebind_typed($typed), "|", $typed, "|";
+echo $callback(), "|", $captured;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "local|caller1|7|typed1|inner|outer1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A conditional unset selects raw local storage only on the path that detached the caller cell.
+#[test]
+fn test_conditional_unset_of_incoming_reference_uses_runtime_binding_state() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe_rebind(string &$value, bool $detach): void {
+    if ($detach) {
+        unset($value);
+    }
+    $value = "local";
+}
+$detached = "detached" . $argc;
+$attached = "attached" . $argc;
+maybe_rebind($detached, true);
+maybe_rebind($attached, false);
+echo $detached, "|", $attached;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "detached1|local");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",

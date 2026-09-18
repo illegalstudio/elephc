@@ -47,6 +47,11 @@ pub(in crate::codegen) fn emit_mixed_string_for_persistent_store(ctx: &mut Funct
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the generic cast path after the direct string persist
             ctx.emitter.label(&non_string);
             abi::emit_pop_reg(ctx.emitter, mixed_arg);
+            // `__rt_mixed_cast_string` unboxes from the int RESULT register, which the probing
+            // `__rt_mixed_unbox` above overwrote with the runtime tag. Without restoring the
+            // boxed pointer the cast reads a tag as a Mixed cell and every non-string value
+            // lands in the destination as an empty string.
+            ctx.emitter.instruction("mov rax, rdi");                            // restore the boxed value in the cast helper's input register
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
         }
@@ -57,7 +62,8 @@ pub(in crate::codegen) fn emit_mixed_string_for_persistent_store(ctx: &mut Funct
 /// Resolves `value` into the canonical integer result register, unboxing a boxed `Mixed`/`Union`
 /// payload through `__rt_mixed_cast_int`.
 ///
-/// `Int`/`Bool` load directly; every other type is an `unsupported` diagnostic. The `Mixed` path
+/// `Int`/`Bool` load directly; tagged nullable integers normalize null to zero without boxing.
+/// Every other type is an `unsupported` diagnostic. The `Mixed` path
 /// emits a call that clobbers the caller-saved argument registers, so a caller that has already
 /// staged other arguments in those registers must spill across this resolution (the integer is left
 /// in the int result register on return).
@@ -69,6 +75,10 @@ pub(in crate::codegen) fn resolve_int_operand_to_result(
     match ctx.value_php_type(value)?.codegen_repr() {
         PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_result(value)?;
+        }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
         }
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, value)?;
@@ -110,4 +120,3 @@ pub(in crate::codegen) fn direct_call_stack_pad_bytes(
 ) -> usize {
     abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes)
 }
-

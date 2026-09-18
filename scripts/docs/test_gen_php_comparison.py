@@ -299,6 +299,10 @@ class RenderTests(unittest.TestCase):
         self.assertIn("functions **2 / 4**", first)
         self.assertIn("classes **1 / 2**", first)
         self.assertIn("constants **2 / 3**", first)
+        self.assertIn(
+            "The 62/62 Core inventory claim refers to elephc's own contract inventory",
+            first,
+        )
         # strrev is compiled-only, so the standard functions row diverges between backends.
         self.assertIn("- `standard` functions: 2 / 1", first)
 
