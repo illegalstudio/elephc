@@ -593,6 +593,28 @@ $args = ["b" => 20];
 show(...$args, a: 10);            // 10:20:0
 ```
 
+The same mapping applies when the call TARGET is only known at run time — a class
+name in a variable, a method name in a variable, or a static call through a
+variable class:
+
+```php
+<?php
+class Point {
+    public function __construct(public int $x = 0, public int $y = 0) {}
+    public function move(int $x = 0, int $y = 0): string { return "$x,$y"; }
+    public static function origin(int $x = 0, int $y = 0): string { return "$x,$y"; }
+}
+
+$class  = "Point";
+$method = "move";
+$named  = ["y" => 7];
+
+$p = new $class(...$named);       // y: 7, x keeps its default
+echo $p->y;                       // 7
+echo $p->$method(...$named);      // 0,7
+echo $class::origin(...$named);   // 0,7
+```
+
 ## echo
 
 `echo` is a PHP language construct statement. It writes each operand to stdout

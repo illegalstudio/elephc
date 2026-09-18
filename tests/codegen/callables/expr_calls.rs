@@ -1831,3 +1831,101 @@ echo call_user_func($f, [1, 2, 3]) + 1;
     );
     assert_eq!(out, "int(3)\n4");
 }
+
+
+/// Verifies a spread of a STRING-KEYED array binds by name through a dynamic CONSTRUCTOR
+/// (issue #685).
+///
+/// `new $class(...$named)` failed EIR validation:
+///
+///     OperandTypeMismatch { expected: "Heap(Array)", actual: Heap(Hash) }
+///
+/// The argument container was chosen from the SPELLING of the call — written-out named arguments
+/// got the hash, everything else got the indexed array — so a spread, which is not syntactically
+/// named, took the indexed container and the hash source had nowhere to go. The container now
+/// follows what the invoker will find in it: a spread whose operand is an associative array needs
+/// the hash, because those keys bind by name.
+///
+/// A literal `new $c(...["b" => 8])` escaped the bug because the spread is expanded into real
+/// named arguments before lowering; a variable operand cannot be, which is why the fixture always
+/// spreads a variable. The indexed rows are there to pin that the path which already worked still
+/// takes its own route.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_keyed_spread_binds_by_name_through_a_dynamic_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public function __construct($a = 'x', $b = 'y') { echo "$a/$b|"; } }
+$c = "P";
+$one = ["b" => 8];
+$both = ["a" => 1, "b" => 2];
+$ints = [4, 5];
+new $c(...$one);
+new $c(...$both);
+new $c(...$ints);
+new $c(1, ...$one);
+new $c(...["a" => 3], ...$one);
+for ($i = 0; $i < 3; $i++) { new $c(...$one); }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "x/8|1/2|4/5|1/8|3/8|x/8|x/8|x/8|\n");
+}
+
+/// Verifies the same spread binds by name through a dynamic METHOD and a dynamic STATIC target.
+///
+/// Both desugar into a `call_user_func`, whose container was chosen the same way and failed the
+/// same way. They are covered separately from the constructor because they reach a DIFFERENT
+/// builder — the one that also places by-reference argument markers — so a fix to one does not
+/// imply the other.
+#[test]
+fn test_keyed_spread_binds_by_name_through_a_dynamic_method_or_static() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    public function m($a = 'x', $b = 'y') { echo "$a/$b|"; }
+    public static function s($a = 'x', $b = 'y') { echo "$a/$b|"; }
+}
+$o = new P();
+$m = "m";
+$c = "P";
+$one = ["b" => 8];
+$both = ["a" => 1, "b" => 2];
+$ints = [4, 5];
+$o->$m(...$one);
+$o->$m(...$both);
+$o->$m(...$ints);
+$o->$m(1, ...$one);
+$c::s(...$one);
+$c::s(...$both);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "x/8|1/2|4/5|1/8|x/8|1/2|\n");
+}
+
+/// Verifies the binding survives the parameter shapes that decide what the invoker coerces.
+///
+/// A spread that names only SOME parameters has to leave the rest on their defaults, a typed
+/// parameter has to receive an int rather than the boxed cell the container carries, and a string
+/// value has to arrive as a string.
+#[test]
+fn test_keyed_spread_through_a_dynamic_target_binds_partial_and_typed_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public function __construct($a = 'x', $b = 'y', $d = 'z') { echo "$a/$b/$d|"; } }
+class L { public function __construct(int $a = 1, int $b = 2) { echo $a + $b, "|"; } }
+$t = "T";
+$l = "L";
+$skip = ["d" => 3, "b" => 2];
+$typed = ["b" => 40];
+$strings = ["b" => "s"];
+new $t(...$skip);
+new $l(...$typed);
+new $t(...$strings);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "x/2/3|41|x/s/z|\n");
+}

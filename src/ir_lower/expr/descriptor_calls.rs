@@ -63,15 +63,52 @@ pub(super) fn lower_expr_call_from_value(
 }
 
 /// Lowers explicit named arguments for signature-unknown descriptor invocations.
+///
+/// The container kind has to follow what the invoker will find in it, not just the spelling of
+/// the call. Named arguments obviously need the hash, but so does a SPREAD of a string-keyed
+/// array: `new $c(...$named)` binds those keys by name exactly as `new $c(b: 8)` does. Choosing
+/// on `has_named_args` alone sent that call down the indexed path, where the hash source hit
+/// `OperandTypeMismatch { expected: "Heap(Array)", actual: Heap(Hash) }` (issue #684's
+/// neighbour, #685). A literal `new $c(...["b" => 8])` escaped it only because the spread is
+/// expanded into real named arguments before lowering; a variable operand cannot be.
 pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
 ) -> Option<LoweredValue> {
-    if crate::types::call_args::has_named_args(args) {
+    if crate::types::call_args::has_named_args(args) || spreads_a_keyed_array(ctx, args) {
         return Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span));
     }
     Some(lower_untyped_descriptor_invoker_indexed_container(ctx, args, span))
+}
+
+/// Reports whether any argument spreads a value whose storage is an associative array.
+///
+/// Decided on the STATIC type, because the container is allocated before any argument runs. A
+/// spread whose type is only known as `Mixed` reads as "not keyed" and keeps the indexed
+/// container it has always had; that is the pre-existing behaviour for a boxed operand and is
+/// not what this predicate was added to change.
+pub(super) fn spreads_a_keyed_array(ctx: &LoweringContext<'_, '_>, args: &[Expr]) -> bool {
+    args.iter().any(|arg| {
+        let ExprKind::Spread(inner) = &arg.kind else {
+            return false;
+        };
+        matches!(
+            spread_operand_type(ctx, inner).codegen_repr(),
+            PhpType::AssocArray { .. }
+        )
+    })
+}
+
+/// Returns the static PHP type of a spread operand.
+///
+/// A local reads its slot type, which is what the checker recorded for it; anything else falls
+/// back to the syntactic inference the rest of this pass uses.
+fn spread_operand_type(ctx: &LoweringContext<'_, '_>, operand: &Expr) -> PhpType {
+    match &operand.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => infer_expr_type_syntactic(operand),
+    }
 }
 
 /// Builds an indexed descriptor-invoker container for signature-unknown calls.
@@ -143,13 +180,26 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             }
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
-                next_positional_key = lower_untyped_descriptor_invoker_spread_into_hash(
-                    ctx,
-                    hash,
-                    source,
-                    next_positional_key,
-                    arg.span,
-                );
+                if matches!(
+                    ctx.builder.value_php_type(source.value).codegen_repr(),
+                    PhpType::AssocArray { .. }
+                ) {
+                    // `__rt_hash_spread` preserves string keys and reindexes integer ones from
+                    // the destination's own largest integer key, which is exactly the argument
+                    // binding PHP performs. `next_positional_key` is deliberately left alone:
+                    // a positional argument after a string-keyed spread is invalid PHP
+                    // ("Cannot use positional argument after named argument"), so there is no
+                    // correct value to advance it to.
+                    lower_hash_spread_into_hash_from_value(ctx, hash, source, arg.span);
+                } else {
+                    next_positional_key = lower_untyped_descriptor_invoker_spread_into_hash(
+                        ctx,
+                        hash,
+                        source,
+                        next_positional_key,
+                        arg.span,
+                    );
+                }
             }
             _ => {
                 let key = next_positional_key;

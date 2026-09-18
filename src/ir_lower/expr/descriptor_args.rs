@@ -29,6 +29,12 @@ pub(super) fn descriptor_callback_php_type_supported(php_type: &PhpType) -> bool
 }
 
 /// Builds the descriptor-invoker argument container for `call_user_func()`.
+///
+/// A SPREAD of a string-keyed array needs the hash container just as written-out named arguments
+/// do: those keys bind by name. Choosing on `has_named_args` alone sent it to the indexed
+/// container, where the hash source raised `OperandTypeMismatch { expected: "Heap(Array)",
+/// actual: Heap(Hash) }` — which is what `$obj->$method(...$named)` and `$class::method(...$named)`
+/// both hit, because each desugars into a `call_user_func` through here (issue #685).
 pub(super) fn lower_descriptor_invoker_arg_container_for_call_user_func(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
@@ -39,6 +45,9 @@ pub(super) fn lower_descriptor_invoker_arg_container_for_call_user_func(
         if args.iter().any(is_spread_arg) {
             return None;
         }
+        return Some(lower_named_descriptor_invoker_arg_container(ctx, args, sig, span));
+    }
+    if super::descriptor_calls::spreads_a_keyed_array(ctx, args) {
         return Some(lower_named_descriptor_invoker_arg_container(ctx, args, sig, span));
     }
     Some(lower_indexed_descriptor_invoker_arg_array(ctx, args, sig, span))
@@ -129,6 +138,16 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                     Op::HashSet.default_effects(),
                     Some(arg.span),
                 );
+            }
+            ExprKind::Spread(inner) => {
+                // `__rt_hash_spread` preserves string keys and reindexes integer ones from the
+                // destination's own largest integer key, which is the argument binding PHP
+                // performs. `next_positional_key` is deliberately left alone: a positional
+                // argument AFTER a string-keyed spread is invalid PHP ("Cannot use positional
+                // argument after named argument"), so there is no correct value to advance it to,
+                // and leading positionals were already counted before the spread ran.
+                let source = lower_expr(ctx, inner);
+                lower_hash_spread_into_hash_from_value(ctx, hash, source, arg.span);
             }
             _ => {
                 let key = emit_i64_at_span(ctx, next_positional_key, arg.span);

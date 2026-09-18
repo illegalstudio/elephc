@@ -147,13 +147,25 @@ fn test_static_and_instance_calls_unaffected() {
 }
 
 /// Compiles and runs the checked-in `examples/dynamic-dispatch/main.php` fixture, covering
-/// dynamic instance method dispatch by name and a dynamic static call.
+/// dynamic instance method dispatch by name, a dynamic static call, and a string-keyed spread
+/// bound by name through each of the three dynamic targets (issue #685).
+///
+/// The expectation is verbatim host PHP 8.5.10 output for the whole example.
 #[test]
 fn test_example_dynamic_dispatch_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/dynamic-dispatch/main.php"));
     assert_eq!(
         out,
-        "Hello, world\nLOUD!\ncommands: greet, shout\nresult: effects\n"
+        concat!(
+            "Hello, world\n",
+            "LOUD!\n",
+            "commands: greet, shout\n",
+            "result: effects\n",
+            "dynamic new: 80x40\n",
+            "dynamic method: 80x40\n",
+            "dynamic static: viewport@40\n",
+            "mixed keys: 100\n",
+        )
     );
 }
 
