@@ -33,7 +33,11 @@ pub(crate) fn dce_method(method: ClassMethod, class_name: &str, parent_name: Opt
     let guards = GuardState::for_params(&method.params);
     ClassMethod {
         body: with_class_effect_context(Some(context), || {
-            with_function_scope(|| dce_block_with_guards(method.body, guards))
+            with_function_scope(|| {
+                crate::optimize::body_preserving_yields(method.body, |body| {
+                    dce_block_with_guards(body, guards)
+                })
+            })
         }),
         ..method
     }
@@ -46,7 +50,11 @@ pub(crate) fn dce_method_without_context(method: ClassMethod) -> ClassMethod {
     let guards = GuardState::for_params(&method.params);
     ClassMethod {
         body: with_class_effect_context(None, || {
-            with_function_scope(|| dce_block_with_guards(method.body, guards))
+            with_function_scope(|| {
+                crate::optimize::body_preserving_yields(method.body, |body| {
+                    dce_block_with_guards(body, guards)
+                })
+            })
         }),
         ..method
     }
