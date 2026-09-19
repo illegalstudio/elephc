@@ -556,6 +556,30 @@ fn lower_hash_link_sort(
     inst: &Instruction,
     helper: &str,
 ) -> Result<()> {
+    lower_hash_link_sort_with_flags(ctx, inst, helper, HashSortFlags::None)
+}
+
+/// How a `__rt_hash_*sort` helper learns which comparison to apply.
+pub(super) enum HashSortFlags {
+    /// A value sort: its entry stub already knows the whole mode word.
+    None,
+    /// A key sort whose `$flags` argument was omitted, which is PHP's `SORT_REGULAR`.
+    Regular,
+    /// A key sort with an evaluated `$flags` operand.
+    Value(crate::ir::ValueId),
+}
+
+/// Calls a `__rt_hash_*sort` helper, handing a key sort the PHP `$flags` word it resolves.
+///
+/// The register allocator only ever hands a value a callee-saved register, so loading the
+/// receiver into the first argument register and then the flag word into the second cannot
+/// overwrite either one.
+fn lower_hash_link_sort_with_flags(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    helper: &str,
+    flags: HashSortFlags,
+) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     if !hash_sort_source_is_attached_mixed_cell(ctx, array)? {
@@ -567,6 +591,16 @@ fn lower_hash_link_sort(
     }
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, array_arg_reg)?;
+    let flags_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    match flags {
+        HashSortFlags::None => {}
+        HashSortFlags::Regular => {
+            abi::emit_load_int_immediate(ctx.emitter, flags_arg_reg, 0);
+        }
+        HashSortFlags::Value(flags) => {
+            ctx.load_value_to_reg(flags, flags_arg_reg)?;
+        }
+    }
     abi::emit_call_label(ctx.emitter, helper);
     let result = if inst.result_php_type.codegen_repr() == PhpType::Bool {
         1

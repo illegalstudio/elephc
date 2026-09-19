@@ -478,6 +478,52 @@ return function_exists("asort") && function_exists("arsort") && function_exists(
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval key sorting applies PHP's `$flags` through every call shape.
+///
+/// The modes have to change the ANSWER, not just be accepted: `img2` sorts before `img10`
+/// only under `SORT_NATURAL`, `9` before `100` only under `SORT_STRING`, and `A`/`a` compare
+/// equal under `SORT_FLAG_CASE` so a stable sort leaves them in insertion order.
+///
+/// The `call_user_func_array` line covers the dynamic binder, which now has a second
+/// parameter name to bind. Its receiver is passed by value, so PHP warns and the array is
+/// left exactly as it was.
+#[test]
+fn execute_program_applies_key_sort_flags() {
+    let program = parse_fragment(
+        br#"$a = ["img12" => 1, "img10" => 1, "img2" => 1, "IMG1" => 1];
+echo ksort($a, SORT_NATURAL) . ":";
+foreach ($a as $key => $value) { echo $key . ";"; }
+echo ":";
+$b = [10 => 1, 9 => 1, 100 => 1];
+echo krsort($b, SORT_STRING) . ":";
+foreach ($b as $key => $value) { echo $key . ";"; }
+echo ":";
+$c = ["b" => 1, "A" => 1, "a" => 1, "B" => 1];
+echo ksort(flags: SORT_STRING | SORT_FLAG_CASE, array: $c) . ":";
+foreach ($c as $key => $value) { echo $key . ";"; }
+echo ":";
+$d = ["x10" => 1, "x9" => 1];
+echo call_user_func_array("ksort", ["array" => $d, "flags" => SORT_NATURAL]) . ":";
+foreach ($d as $key => $value) { echo $key . ";"; }
+echo ":";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "1:IMG1;img2;img10;img12;:1:9;100;10;:1:A;a;b;B;:1:x10;x9;:"
+    );
+    assert_eq!(
+        values.warnings,
+        vec!["ksort(): Argument #1 ($array) must be passed by reference, value given"]
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval natural sort builtins preserve keys and use natural string order.
 #[test]
 fn execute_program_dispatches_natural_sort_builtins() {

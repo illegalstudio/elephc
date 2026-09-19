@@ -495,13 +495,35 @@ fn test_error_arsort_wrong_args() {
 /// Verifies that error ksort wrong args.
 #[test]
 fn test_error_ksort_wrong_args() {
-    expect_error("<?php ksort();", "ksort() takes exactly 1 argument");
+    expect_error("<?php ksort();", "ksort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error krsort wrong args.
 #[test]
 fn test_error_krsort_wrong_args() {
-    expect_error("<?php krsort();", "krsort() takes exactly 1 argument");
+    expect_error("<?php krsort();", "krsort() takes 1 or 2 arguments");
+}
+
+/// Verifies the key sorts reject a third argument, so `$flags` did not open the arity up.
+#[test]
+fn test_error_key_sort_rejects_third_argument() {
+    expect_error(
+        "<?php $a = ['b' => 1]; ksort($a, SORT_STRING, 1);",
+        "ksort() takes 1 or 2 arguments",
+    );
+    expect_error(
+        "<?php $a = ['b' => 1]; krsort($a, SORT_STRING, 1);",
+        "krsort() takes 1 or 2 arguments",
+    );
+}
+
+/// Verifies the key sorts reject a `$flags` argument bound under the wrong parameter name.
+#[test]
+fn test_error_key_sort_rejects_unknown_named_argument() {
+    expect_error(
+        "<?php $a = ['b' => 1]; ksort($a, sort_flags: SORT_STRING);",
+        "sort_flags",
+    );
 }
 
 /// Verifies that error natsort wrong args.

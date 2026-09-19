@@ -266,12 +266,21 @@ fn eval_dynamic_array_sort_call(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let (bound, _) = bind_evaluated_ref_builtin_args(&["array"], evaluated_args, false)?;
+    let params: &[&str] = if matches!(name, "ksort" | "krsort") {
+        &["array", "flags"]
+    } else {
+        &["array"]
+    };
+    let (bound, _) = bind_evaluated_ref_builtin_args(params, evaluated_args, false)?;
     let array = required_evaluated_ref_arg(&bound, 0)?;
+    let flags = match optional_evaluated_ref_arg(&bound, 1) {
+        Some(flags) => eval_int_value(flags.value, values)?,
+        None => 0,
+    };
     let Some(target) = array.ref_target.as_ref() else {
         return Ok(None);
     };
-    let replacement = eval_array_sort_replacement(name, array.value, values)?;
+    let replacement = eval_array_sort_replacement(name, array.value, flags, values)?;
     let result = values.bool_value(true)?;
     eval_write_direct_ref_target(target, replacement, context, values, None)?;
     Ok(Some(result))

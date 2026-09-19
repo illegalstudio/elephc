@@ -1,6 +1,6 @@
 ---
 title: "ksort()"
-description: "Sorts an array by key in ascending SORT_REGULAR order; PHP sort flags are not yet supported."
+description: "Sorts an array by key in ascending order, comparing keys under $flags."
 sidebar:
   order: 58
 ---
@@ -8,13 +8,14 @@ sidebar:
 ## ksort()
 
 ```php
-function ksort(array $array): bool
+function ksort(array $array, int $flags = 0): bool
 ```
 
-Sorts an array by key in ascending SORT_REGULAR order; PHP sort flags are not yet supported.
+Sorts an array by key in ascending order, comparing keys under $flags.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

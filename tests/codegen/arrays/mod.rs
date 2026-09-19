@@ -17,6 +17,7 @@ mod by_ref_places;
 mod indexed;
 mod internal_pointer;
 mod key_sort;
+mod key_sort_flags;
 mod assoc_helpers;
 mod nested;
 mod callbacks;

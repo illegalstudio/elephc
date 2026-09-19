@@ -38,6 +38,7 @@ mod strrev;
 mod chr;
 mod strcmp;
 mod strcasecmp;
+mod strnatcmp;
 mod strncmp;
 mod strncasecmp;
 mod str_starts_with;
@@ -164,6 +165,8 @@ pub use chr::emit_chr;
 pub use strcmp::emit_strcmp;
 /// Emit case-sensitive string comparison.
 pub use strcasecmp::emit_strcasecmp;
+/// Emit PHP natural-order string comparison.
+pub use strnatcmp::emit_strnatcmp;
 /// Emit length-limited case-sensitive string comparison.
 pub use strncmp::emit_strncmp;
 /// Emit length-limited case-insensitive string comparison.

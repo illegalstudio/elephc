@@ -152,3 +152,24 @@ echo "Kept:       " . implode(", ", array_keys(array_slice($numbered, 1, 2, true
 // A mixed-key array shows the rule directly: only the integer entries move.
 $mixed = [5 => "a", "k" => "b", 9 => "c"];
 echo "Mixed keys: " . implode(", ", array_keys(array_slice($mixed, 0, 3))) . "\n";
+// ksort() and krsort() take PHP's $flags argument, which chooses how two keys are
+// compared. The mode changes the answer, not just the path.
+$builds = ["build10" => "ok", "build9" => "ok", "build2" => "ok"];
+ksort($builds, SORT_STRING);
+echo "\nAs text:    " . implode(", ", array_keys($builds)) . "\n";
+ksort($builds, SORT_NATURAL);
+echo "Naturally:  " . implode(", ", array_keys($builds)) . "\n";
+
+// An integer key has no bytes of its own, so a byte-comparing mode spells it out
+// as decimal text first: SORT_STRING puts 100 between 10 and 9.
+$sizes = [10 => "l", 9 => "m", 100 => "xl"];
+ksort($sizes, SORT_NUMERIC);
+echo "By number:  " . implode(", ", array_keys($sizes)) . "\n";
+ksort($sizes, SORT_STRING);
+echo "By text:    " . implode(", ", array_keys($sizes)) . "\n";
+
+// SORT_FLAG_CASE folds ASCII case. Keys that compare equal keep their insertion
+// order, which is why IMG1 stays ahead of img1 here.
+$shots = ["IMG1" => 1, "img1" => 2, "IMG10" => 3, "img2" => 4];
+ksort($shots, SORT_NATURAL | SORT_FLAG_CASE);
+echo "Ignoring case: " . implode(", ", array_keys($shots)) . "\n";

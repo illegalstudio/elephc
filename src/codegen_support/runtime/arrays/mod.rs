@@ -131,6 +131,7 @@ mod hash_iter;
 mod hash_new;
 mod hash_set;
 mod hash_key_compare;
+mod key_compare_flags;
 mod hash_sort;
 mod hash_spread;
 mod hash_sum_mixed;

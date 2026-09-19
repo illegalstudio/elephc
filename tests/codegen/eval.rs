@@ -6217,6 +6217,56 @@ foreach ($dynamic as $key => $value) { echo $key, "=", $value, ";"; }');
     );
 }
 
+/// Verifies eval key sorting applies PHP's `$flags` the way the compiled backend does.
+///
+/// The interpreter has its own Rust comparison, so the modes are covered here as behaviour
+/// rather than shared code: `10` before `9` under `SORT_STRING`, after it under
+/// `SORT_NUMERIC`, `img2` before `img10` only under `SORT_NATURAL`, and `A`/`a` equal under
+/// `SORT_FLAG_CASE` and therefore left in insertion order.
+#[test]
+fn test_eval_key_sort_applies_php_sort_flags() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = ["img12" => 1, "img10" => 1, "img2" => 1, "IMG1" => 1];
+echo ksort($a, SORT_NATURAL) . ":";
+foreach ($a as $key => $value) { echo "[", $key, "]"; }
+echo ":";
+$b = [10 => 1, 9 => 1, "100" => 1];
+echo krsort($b, SORT_STRING) . ":";
+foreach ($b as $key => $value) { echo "[", $key, "]"; }
+echo ":";
+$c = ["b" => 1, "A" => 1, "a" => 1, "B" => 1];
+echo ksort(flags: SORT_STRING | SORT_FLAG_CASE, array: $c) . ":";
+foreach ($c as $key => $value) { echo "[", $key, "]"; }
+echo ":";
+$d = ["0x10" => 1, "1e2" => 1, "2" => 1];
+echo ksort(array: $d, flags: SORT_NUMERIC) . ":";
+foreach ($d as $key => $value) { echo "[", $key, "]"; }
+echo ":";
+class EvalFlagBox { public array $items = ["img12" => 1, "img2" => 1, "img10" => 1]; }
+$box = new EvalFlagBox();
+echo ksort($box->items, SORT_NATURAL) . ":";
+foreach ($box->items as $key => $value) { echo "[", $key, "]"; }
+echo ":";
+$mode = SORT_NATURAL;
+$e = ["x10" => 1, "x9" => 1];
+echo ksort($e, $mode) . ":";
+foreach ($e as $key => $value) { echo "[", $key, "]"; }');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "1:[IMG1][img2][img10][img12]:",
+            "1:[9][100][10]:",
+            "1:[A][a][b][B]:",
+            "1:[0x10][2][1e2]:",
+            "1:[img2][img10][img12]:",
+            "1:[x9][x10]",
+        )
+    );
+}
+
 /// Verifies eval natural sort builtins preserve keys and use natural string order.
 #[test]
 fn test_eval_dispatches_natural_sort_builtin_calls() {

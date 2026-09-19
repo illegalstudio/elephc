@@ -20881,6 +20881,12 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: true,
             },
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
         ],
         variadic: None,
         variadic_by_ref: false,
@@ -20889,7 +20895,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "Sorts an array by key in descending SORT_REGULAR order; PHP sort flags are not yet supported.",
+        summary: "Sorts an array by key in descending order, comparing keys under $flags.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.krsort.php"),
@@ -20912,6 +20918,12 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: true,
             },
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
         ],
         variadic: None,
         variadic_by_ref: false,
@@ -20920,7 +20932,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "Sorts an array by key in ascending SORT_REGULAR order; PHP sort flags are not yet supported.",
+        summary: "Sorts an array by key in ascending order, comparing keys under $flags.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.ksort.php"),

@@ -67,8 +67,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`end()`](./builtins/array/end.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`in_array()`](./builtins/array/in_array.md) | `(mixed $needle, array $haystack, bool $strict = false): bool` | `bool` | ✓ | ✓ |
 | [`key()`](./builtins/array/key.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
-| [`krsort()`](./builtins/array/krsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
-| [`ksort()`](./builtins/array/ksort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
+| [`krsort()`](./builtins/array/krsort.md) | `(array $array, int $flags = 0): bool` | `bool` | ✓ | ✓ |
+| [`ksort()`](./builtins/array/ksort.md) | `(array $array, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`natcasesort()`](./builtins/array/natcasesort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`natsort()`](./builtins/array/natsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`next()`](./builtins/array/next.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |

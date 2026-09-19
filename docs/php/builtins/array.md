@@ -65,8 +65,8 @@ sidebar:
 | [`end()`](./array/end.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`in_array()`](./array/in_array.md) | `(mixed $needle, array $haystack, bool $strict = false): bool` | `bool` | ✓ | ✓ |
 | [`key()`](./array/key.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
-| [`krsort()`](./array/krsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
-| [`ksort()`](./array/ksort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
+| [`krsort()`](./array/krsort.md) | `(array $array, int $flags = 0): bool` | `bool` | ✓ | ✓ |
+| [`ksort()`](./array/ksort.md) | `(array $array, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`natcasesort()`](./array/natcasesort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`natsort()`](./array/natsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`next()`](./array/next.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |

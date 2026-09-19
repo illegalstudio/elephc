@@ -520,15 +520,25 @@ pub(super) fn lower_array_key_sort(
     name: &str,
     order: KeySortOrder,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 1 or 2 args, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
     let array = expect_operand(inst, 0)?;
+    let flags = match inst.operands.get(1) {
+        Some(flags) => super::HashSortFlags::Value(*flags),
+        None => super::HashSortFlags::Regular,
+    };
     match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::AssocArray { .. } => {
             let helper = match order {
                 KeySortOrder::Ascending => "__rt_hash_ksort",
                 KeySortOrder::Descending => "__rt_hash_krsort",
             };
-            lower_hash_link_sort(ctx, inst, helper)
+            lower_hash_link_sort_with_flags(ctx, inst, helper, flags)
         }
         PhpType::Array(elem)
             if order == KeySortOrder::Ascending

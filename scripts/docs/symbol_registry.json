@@ -21446,6 +21446,150 @@
       },
       "bundled": true,
       "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SORT_ASC",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SORT_DESC",
+      "route": "predefined",
+      "since": null,
+      "value": 3
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SORT_FLAG_CASE",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SORT_LOCALE_STRING",
+      "route": "predefined",
+      "since": null,
+      "value": 5
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SORT_NATURAL",
+      "route": "predefined",
+      "since": null,
+      "value": 6
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SORT_NUMERIC",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SORT_REGULAR",
+      "route": "predefined",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SORT_STRING",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
         "reason": "eval-implementation-pending",
         "supported": false
       },

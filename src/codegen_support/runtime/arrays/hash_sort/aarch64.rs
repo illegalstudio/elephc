@@ -22,14 +22,62 @@ pub(super) fn emit(emitter: &mut Emitter) {
 }
 
 /// Emits the four entry stubs that select a mode and tail-branch into the shared engine.
+///
+/// A value sort knows its whole mode word at emit time. A key sort carries PHP's `$flags` in
+/// `x1`, so its stub only picks the direction and lets the shared resolver fold the flag word
+/// into the same register before the engine sees it.
 fn emit_entry_points(emitter: &mut Emitter) {
-    for (label, mode, description) in super::entry_points() {
+    for (label, mode, description) in super::value_entry_points() {
         emitter.blank();
         emitter.comment(&format!("--- runtime: {} ({}) ---", label, description));
         emitter.label_global(label);
         emitter.instruction(&format!("mov x1, #{}", mode));                     // select the sort mode
         emitter.instruction("b __rt_hash_sort_links");                          // enter the shared relinking engine
     }
+    for (label, mode, description) in super::key_entry_points() {
+        emitter.blank();
+        emitter.comment(&format!("--- runtime: {} ({}) ---", label, description));
+        emitter.label_global(label);
+        emitter.instruction(&format!("mov x2, #{}", mode));                     // select the key-sort direction
+        emitter.instruction("b __rt_hash_key_sort_enter");                      // resolve PHP $flags into the mode word
+    }
+    emit_key_sort_entry(emitter);
+}
+
+/// Emits the shared key-sort prologue that resolves PHP's `$flags` into a comparator selector.
+///
+/// PHP picks the comparator from `$flags & ~SORT_FLAG_CASE`, and every value outside the four
+/// it recognizes, including `3`, `4` and `999`, falls back to `SORT_REGULAR` rather than
+/// raising. The resolution happens once per call rather than once per comparison, and it is a
+/// straight-line `csel` chain so the stub stays a tail branch with no frame of its own.
+fn emit_key_sort_entry(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_key_sort_enter (resolve PHP sort flags) ---");
+    emitter.label_global("__rt_hash_key_sort_enter");
+    emitter.instruction("mov x9, #-9");                                         // the complement of SORT_FLAG_CASE
+    emitter.instruction("and x9, x1, x9");                                      // the comparison family PHP selects on
+    emitter.instruction("ands x10, x1, #8");                                    // isolate SORT_FLAG_CASE
+    emitter.instruction("cset x10, ne");                                        // 1 when case folding was requested
+    emitter.instruction(&format!("mov x11, #{}", super::KEY_COMPARATOR_REGULAR));
+    emitter.instruction("cmp x9, #1");                                          // SORT_NUMERIC
+    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_NUMERIC));
+    emitter.instruction("csel x11, x12, x11, eq");                              // adopt the numeric selector
+    emitter.instruction("cmp x9, #2");                                          // SORT_STRING
+    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_STRING));
+    emitter.instruction("add x12, x12, x10");                                   // case folding picks the adjacent selector
+    emitter.instruction("csel x11, x12, x11, eq");                              // adopt the binary-string selector
+    emitter.instruction("cmp x9, #5");                                          // SORT_LOCALE_STRING
+    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_LOCALE));
+    emitter.instruction("csel x11, x12, x11, eq");                              // adopt the locale selector
+    emitter.instruction("cmp x9, #6");                                          // SORT_NATURAL
+    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_NATURAL));
+    emitter.instruction("add x12, x12, x10");                                   // case folding picks the adjacent selector
+    emitter.instruction("csel x11, x12, x11, eq");                              // adopt the natural-order selector
+    emitter.instruction(&format!(
+        "orr x1, x2, x11, lsl #{}",
+        super::KEY_COMPARATOR_SHIFT
+    ));                                                                         // publish direction plus resolved comparator
+    emitter.instruction("b __rt_hash_sort_links");                              // enter the shared relinking engine
 }
 
 /// Emits the allocation-free bottom-up merge sort over a hash table's order links.
@@ -230,6 +278,15 @@ fn emit_compare_entries(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #32]");                                   // pass the left key length or integer sentinel
     emitter.instruction("ldr x2, [sp, #48]");                                   // pass the right normalized key payload
     emitter.instruction("ldr x3, [sp, #56]");                                   // pass the right key length or integer sentinel
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the mode word for its comparator selector
+    emitter.instruction(&format!(
+        "lsr x4, x9, #{}",
+        super::KEY_COMPARATOR_SHIFT
+    ));                                                                         // nothing rides above the selector, so a shift isolates it
+    emitter.instruction("cbz x4, __rt_hsort_cmp_key_regular");                  // an omitted or SORT_REGULAR flag keeps the original comparator
+    emitter.instruction("bl __rt_key_compare_flagged");                         // apply the ordering PHP's $flags selected
+    emitter.instruction("b __rt_hsort_cmp_done");                               // skip the general value comparator
+    emitter.label("__rt_hsort_cmp_key_regular");
     emitter.instruction("bl __rt_key_compare_regular");                         // apply exact SORT_REGULAR key ordering
     emitter.instruction("b __rt_hsort_cmp_done");                               // skip the general value comparator
     emitter.label("__rt_hsort_cmp_value");

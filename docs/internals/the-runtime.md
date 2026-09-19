@@ -433,11 +433,14 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
 | `__rt_random_u32` / `__rt_random_uniform` / `__rt_random_u64` / `__rt_random_uniform64` | Target-aware random primitives used by `rand()`, `random_int()`, `shuffle()`, and `array_rand()` |
 | `__rt_asort` / `__rt_arsort` | Sort an indexed array by value, ascending or descending |
-| `__rt_hash_ksort` / `__rt_hash_krsort` | Sort an associative array by key, ascending or descending |
+| `__rt_hash_ksort` / `__rt_hash_krsort` | Sort an associative array by key, ascending or descending. Both take PHP's `$flags` word in the second argument register |
+| `__rt_hash_key_sort_enter` | Shared key-sort prologue: resolves PHP's `$flags` into a small comparator selector once per call, the way `php_get_key_compare_func` does, and parks it clear of the direction and key/value mode bits |
 | `__rt_hash_asort` / `__rt_hash_arsort` | Sort an associative array by value while preserving keys, ascending or descending |
 | `__rt_hash_sort_links` | Shared engine behind the four hash sorts: an allocation-free, stable bottom-up merge sort with `O(n log n)` comparisons that relinks the table's `prev`/`next`/`head`/`tail` chain, so buckets never move, key/value association is preserved, and no refcount changes |
-| `__rt_hash_sort_compare_entries` | Reads and compares the heads of two merge runs with exact `SORT_REGULAR` key semantics or PHP's general value comparison table |
+| `__rt_hash_sort_compare_entries` | Reads and compares the heads of two merge runs with exact `SORT_REGULAR` key semantics, a flag-selected key comparison, or PHP's general value comparison table |
 | `__rt_key_compare_regular` / `__rt_key_compare_exact_decimal_integers` / `__rt_key_parse_i64_decimal` | Key-comparison family behind the hash sorts: `SORT_REGULAR` key ordering with PHP's exact numeric-string rules, including overflow-safe decimal-integer comparison |
+| `__rt_key_compare_flagged` / `__rt_key_sort_int_bytes` / `__rt_key_sort_clip_nul` | The key comparisons `ksort()`/`krsort()` select with `$flags` other than `SORT_REGULAR`. Every byte-comparing mode spells an integer key out as decimal digits into the comparator's own frame first, then reuses `__rt_strcmp`, `__rt_strcasecmp` or `__rt_strnatcmp`; `SORT_NUMERIC` reads each key through `__rt_str_to_number` but compares two integer keys exactly rather than through a double; `SORT_LOCALE_STRING` clips both operands at the first NUL, which is `strcoll` in the C locale |
+| `__rt_strnatcmp` | PHP natural order (`strnatcmp_ex`) over two pointer/length strings, with an ASCII case-folding flag. A leaf with no calls: it runs once per comparison inside an `O(n log n)` sort |
 | `__rt_hash_sort_triple` | Reads a hash entry's key or value as a `__rt_php_compare` `(tag, lo, hi)` triple, peeling boxed Mixed cells |
 | `__rt_natsort` / `__rt_natcasesort` | Natural-order sort, case-sensitive or case-insensitive |
 | `__rt_array_map` | Apply callback to each scalar element, return new array; an optional third argument carries a captured-closure environment for generated callback wrappers |

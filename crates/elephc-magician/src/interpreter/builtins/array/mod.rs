@@ -52,6 +52,7 @@ mod iterator_apply;
 mod iterator_count;
 mod iterator_to_array;
 mod key;
+mod key_sort_flags;
 mod krsort;
 mod ksort;
 mod mutating_dispatch;

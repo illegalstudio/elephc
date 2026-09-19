@@ -1,5 +1,19 @@
 # PHP sort flags for `ksort()` and `krsort()`
 
+> **Implemented.** This plan is kept as the design record; the sections below describe the
+> state BEFORE the change. Three things landed differently, and each is documented where it
+> lives:
+>
+> - The constants went into the shared catalog (`crates/elephc-builtin-contract/src/
+>   catalog_constants.rs`), not `src/types/array_constants.rs`, which no longer exists.
+> - `$flags` renders as `int $flags = 0` in the generated signature rather than
+>   `SORT_REGULAR`: a symbolic default cannot reach an eval registry binding, and both key
+>   sorts have one.
+> - `SORT_LOCALE_STRING` clips each operand at the first NUL and compares bytes instead of
+>   calling libc `strcoll`. That IS `strcoll` in the C locale, which is the only locale a
+>   program without a PHP-visible `setlocale()` can be in, and calling libc would mean two
+>   heap allocations per comparison to manufacture the NUL-terminated operands it wants.
+
 ## Context
 
 Elephc currently exposes unary key-sort signatures:

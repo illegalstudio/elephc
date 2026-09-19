@@ -7,6 +7,8 @@
 //! Key details:
 //! - Concrete arrays are accepted directly; boxed cells of heterogeneous array places defer
 //!   runtime tag validation to the shared nested key-sort lowering path.
+//! - Only the receiver is checked here. `$flags` is an ordinary optional `int` parameter, so
+//!   the registry's own arity and type checks own it.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;

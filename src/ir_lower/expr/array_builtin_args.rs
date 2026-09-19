@@ -350,16 +350,105 @@ fn lower_reverse_key_sort_args(
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
-    if args.len() == 1 && !args.iter().any(is_spread_arg) {
-        let arg = match &args[0].kind {
-            ExprKind::NamedArg { value, .. } => value.as_ref(),
-            _ => &args[0],
-        };
-        if let Some(value) = lower_indexed_array_ref_arg_to_hash(ctx, sig, 0, arg) {
-            return vec![value];
+    let Some(plan) = plan_key_sort_args(sig, args) else {
+        return lower_args_with_signature(ctx, Some(sig), args);
+    };
+    let receiver = plan
+        .iter()
+        .find_map(|(slot, arg)| (*slot == 0).then_some(arg));
+    let Some(receiver) = receiver else {
+        return lower_args_with_signature(ctx, Some(sig), args);
+    };
+    if !is_indexed_array_ref_arg(ctx, sig, 0, receiver) {
+        return lower_args_with_signature(ctx, Some(sig), args);
+    }
+    let mut receiver_value = None;
+    let mut flags_value = None;
+    for (slot, arg) in &plan {
+        if *slot == 0 {
+            receiver_value = lower_indexed_array_ref_arg_to_hash(ctx, sig, 0, arg);
+        } else {
+            flags_value = Some(lower_arg_with_signature(ctx, sig, *slot, arg));
         }
     }
-    lower_args_with_signature(ctx, Some(sig), args)
+    let Some(receiver_value) = receiver_value else {
+        return lower_args_with_signature(ctx, Some(sig), args);
+    };
+    match flags_value {
+        Some(flags) => vec![receiver_value, flags],
+        None => vec![receiver_value],
+    }
+}
+
+/// Binds each written argument of a key sort to its parameter slot, keeping SOURCE order.
+///
+/// The promotion below has to know which argument is the receiver before it evaluates
+/// anything, because `krsort(flags: f(), array: $a)` writes the flag expression first and a
+/// late fallback would evaluate `f()` twice.
+///
+/// The binding itself comes from the shared planner in `src/types/call_args/` rather than
+/// being rebuilt here -- named matching, duplicate detection and spread expansion all live
+/// there, and a second copy of those rules is free to drift away from what the checker
+/// accepted. This only re-reads the plan in source order, which is the one thing the
+/// promotion needs that a parameter-indexed plan does not already say.
+///
+/// Anything the plan does not resolve to written arguments -- a spread that lands on the
+/// receiver slot, or a call the planner rejects outright -- returns `None` and falls back to
+/// the shared argument path, which owns those shapes and their diagnostics.
+fn plan_key_sort_args(sig: &FunctionSig, args: &[Expr]) -> Option<Vec<(usize, Expr)>> {
+    let span = args.first()?.span;
+    let plan = crate::types::call_args::plan_call_args(sig, args, span, false, false).ok()?;
+    // A spread has to be evaluated before anything can be said about which element lands on
+    // the receiver slot, so it goes to the shared argument path whole.
+    if plan.has_spread_args() {
+        return None;
+    }
+
+    // With no named argument the plan is a passthrough: written order IS parameter order.
+    if plan.first_named_pos.is_none() {
+        let bound: Vec<(usize, Expr)> = plan.normalized_args().into_iter().enumerate().collect();
+        return bound.iter().any(|(slot, _)| *slot == 0).then_some(bound);
+    }
+
+    // With one, the plan says which written argument filled each slot; `source_index` is what
+    // puts them back in the order they were written, which is the order they must be
+    // evaluated in.
+    let mut bound: Vec<(usize, usize, Expr)> = Vec::with_capacity(plan.regular_args.len());
+    for (slot, planned) in plan.regular_args.iter().enumerate() {
+        match planned {
+            crate::types::call_args::PlannedRegularArg::Source { source_index, expr } => {
+                bound.push((*source_index, slot, expr.clone()));
+            }
+            // An omitted `$flags` is materialized by the shared default handling below.
+            crate::types::call_args::PlannedRegularArg::Default(_) => {}
+            crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => return None,
+        }
+    }
+    bound.sort_by_key(|(source_index, _, _)| *source_index);
+    let bound: Vec<(usize, Expr)> = bound
+        .into_iter()
+        .map(|(_, slot, expr)| (slot, expr))
+        .collect();
+    bound.iter().any(|(slot, _)| *slot == 0).then_some(bound)
+}
+
+/// Reports whether `arg` is the packed by-reference local that `krsort()` must promote.
+///
+/// This mirrors, without evaluating anything, the shape `lower_indexed_array_ref_arg_to_hash`
+/// accepts.
+fn is_indexed_array_ref_arg(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> bool {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return false;
+    }
+    let ExprKind::Variable(name) = &arg.kind else {
+        return false;
+    };
+    matches!(ctx.local_type(name).codegen_repr(), PhpType::Array(_))
 }
 
 /// Converts one packed by-reference local argument into key-preserving associative storage.

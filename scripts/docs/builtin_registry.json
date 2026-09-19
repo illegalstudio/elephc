@@ -72353,6 +72353,13 @@
           "name": "array",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -72362,7 +72369,7 @@
     },
     "area": "Array",
     "canonical_name": "krsort",
-    "description": "Sorts an array by key in descending SORT_REGULAR order; PHP sort flags are not yet supported.",
+    "description": "Sorts an array by key in descending order, comparing keys under $flags.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "array",
@@ -72379,6 +72386,13 @@
           "name": "array",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -72475,6 +72489,13 @@
           "name": "array",
           "optional": false,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",
@@ -72494,6 +72515,13 @@
           "name": "array",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -72503,7 +72531,7 @@
     },
     "area": "Array",
     "canonical_name": "ksort",
-    "description": "Sorts an array by key in ascending SORT_REGULAR order; PHP sort flags are not yet supported.",
+    "description": "Sorts an array by key in ascending order, comparing keys under $flags.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "array",
@@ -72520,6 +72548,13 @@
           "name": "array",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -72616,6 +72651,13 @@
           "name": "array",
           "optional": false,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",

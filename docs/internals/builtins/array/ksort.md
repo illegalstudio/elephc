@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function ksort(array $array): bool
+function ksort(array $array, int $flags = 0): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 - **By-reference parameters**: `$array`.
 
 ## Eval interpreter (magician)
