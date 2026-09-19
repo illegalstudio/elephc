@@ -26,7 +26,7 @@ mod reflection;
 mod stmt;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) use expr::body_contains_eval_call;
 

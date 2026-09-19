@@ -243,6 +243,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::MixedUnbox => lower_mixed_unbox(ctx, &inst),
         Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
+        Op::ArrayCloneShallow => arrays::lower_array_clone_shallow(ctx, &inst),
         Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
         Op::StrConcat => strings::lower_str_concat(ctx, &inst),
         Op::StrLen => strings::lower_str_len(ctx, &inst),

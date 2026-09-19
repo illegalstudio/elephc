@@ -93,6 +93,13 @@ $mixed = [1, 2, 3];
 array_splice($mixed, 1, 1, ["two", 2.5]);
 echo "Promoted: " . implode(", ", $mixed) . "\n";
 
+// The replacement may even be the receiver itself. PHP evaluates it into its own array
+// BEFORE the removal runs, so what gets spliced in is the array as it was on the way in --
+// not the shortened one the removal leaves behind.
+$self = [1, 2, 3];
+array_splice($self, 1, 1, $self);
+echo "Self-spliced: " . implode(", ", $self) . "\n";
+
 // A by-reference parameter is the caller's storage, so a builtin that relocates the array
 // while prepending still reaches the original variable.
 function prepend_all(array &$target): void

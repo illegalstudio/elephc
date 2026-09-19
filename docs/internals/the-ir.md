@@ -585,6 +585,28 @@ All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
 
+`ArrayCloneShallow` also carries the one aliasing case a by-reference builtin cannot
+resolve at runtime: a `$replacement` that IS the receiver. `array_splice($a, 1, 1, $a)`
+lowers both arguments to loads of the same slot, so the backend would pass one pointer
+twice and the insertion would re-read slots the removal had already overwritten
+(`[1,2,3]` came back as `[1,1,1,3]` instead of PHP's `[1,1,2,3,3]`, issue #676).
+`ir_lower::expr::snapshot_array_splice_self_replacement` decides that on the LOWERED
+OPERANDS, which are already in parameter order, and emits an `ArrayCloneShallow` for the
+replacement operand before the call — codegen then sees two distinct arrays and a call
+that cannot alias pays no runtime compare. Operands rather than source arguments because
+every spelling then costs one test: positional, named in any order, and a named
+`$replacement` with `$length` omitted all arrive at the same operand slot, and so do the
+hidden temporaries a property, a static property or a container element is rewritten
+into. Two loads of one local slot — or one ref cell, which is how a by-reference
+parameter reaches the caller's array — are the same array, and a `&$x` binding is
+followed through the function's `AliasLocalRefCell` instructions, an over-approximation
+whose only cost when wrong is a redundant copy. The clone is an owned value, so the
+ordinary temporary-release machinery frees it; the rewrite runs before the
+receiver-widening one so the copy holds the pre-splice payload rather than a re-boxed
+version of it. `codegen::lower_inst::arrays::lower_array_clone_shallow` is the backend
+side, and this is its first user: until issue #676 the opcode was declared and validated
+but never emitted, so every target rejected it as an unsupported feature.
+
 With a typed result, `ArrayGetForWrite` and `HashGetForWrite` are also the read
 side of that rule for a container element that is about to be mutated through an
 alias — today, the source of a by-reference `foreach` (issue #580). Unlike the

@@ -38,7 +38,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
 }
 
 /// Runs the corpus frontend for a selected target, including precheck availability folding.
-fn lower_source_at_for_target(
+pub(crate) fn lower_source_at_for_target(
     source: &str,
     main_file_path: &Path,
     parent: &Path,

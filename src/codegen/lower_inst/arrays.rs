@@ -126,6 +126,59 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
     store_if_result(ctx, inst)
 }
 
+/// Lowers an indexed array's copy into a fresh owner.
+///
+/// `__rt_array_clone_shallow` byte-copies scalar payloads, re-persists string payloads for the
+/// new owner and retains refcounted children, so the result is an independent array that the
+/// caller owns and the temporary-release machinery frees.
+///
+/// Null and in-band null-container-sentinel inputs pass through unconverted, on the same
+/// reasoning as `lower_array_to_mixed`: the helper dereferences the source header immediately,
+/// so the sentinel has to be filtered here rather than helper-side.
+pub(super) fn lower_array_clone_shallow(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects exactly one operand",
+            inst.op.name()
+        )));
+    }
+    let array = expect_operand(inst, 0)?;
+    require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
+    require_indexed_array(inst.result_php_type.codegen_repr(), inst)?;
+    let done = ctx.next_label("array_clone_shallow_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- reject the two pointers the clone helper cannot dereference --
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", done));              // null containers have no header or slots to clone
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x9");                              // does the array carry the in-band null-container sentinel?
+            ctx.emitter.instruction(&format!("b.eq {}", done));                 // missed-read sentinels pass through uncloned
+
+            // -- copy the array into an owner of its own --
+            abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+        }
+        Arch::X86_64 => {
+            // -- reject the two pointers the clone helper cannot dereference --
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov rax, rdi");                            // default to passing null/sentinel containers through uncloned
+            ctx.emitter.instruction("test rdi, rdi");                           // null containers have no header or slots to clone
+            ctx.emitter.instruction(&format!("je {}", done));                   // keep the null container as the passthrough result
+            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rdi, r10");                            // does the array carry the in-band null-container sentinel?
+            ctx.emitter.instruction(&format!("je {}", done));                   // missed-read sentinels pass through uncloned
+
+            // -- copy the array into an owner of its own --
+            abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers indexed-array promotion to associative hash storage.
 pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 1 {
@@ -2668,4 +2721,56 @@ fn lower_slot_detach_indexed_x86_64(
     ctx.emitter.instruction("xor edx, edx");                                    // payload = null: release the old element, store nothing
     abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen::generate_user_asm_from_ir;
+    use crate::codegen::platform::{Arch, Target};
+    use std::path::Path;
+
+    /// `array_splice($a, …, $a)` copies its replacement on EVERY supported target.
+    ///
+    /// The self-replacement snapshot (issue #676) is the first user of `Op::ArrayCloneShallow`,
+    /// so `lower_array_clone_shallow` is the only thing standing between the copy and the
+    /// aliased pointer that produced the wrong answer. The executable codegen shards run on
+    /// `macos-aarch64`, `linux-aarch64` and `linux-x86_64`; `ios-arm64` and `ios-sim-arm64` are
+    /// covered by compile tests like this one, so a target whose lowering stopped emitting the
+    /// call — or rejected the opcode outright, as every target did before this change — would
+    /// otherwise only surface as a wrong answer on a device.
+    #[test]
+    fn test_array_splice_self_replacement_clones_on_every_supported_target() {
+        let source = r#"<?php
+$a = [1, 2, 3];
+array_splice($a, 1, 1, $a);
+echo implode(",", $a);
+"#;
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(target).expect("target");
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                source,
+                Path::new("main.php"),
+                Path::new("."),
+                target,
+            );
+            let asm = generate_user_asm_from_ir(&module, false, false)
+                .unwrap_or_else(|error| panic!("{}: {error:?}", target.as_str()));
+            let call = match target.arch {
+                Arch::AArch64 => "bl __rt_array_clone_shallow",
+                Arch::X86_64 => "call __rt_array_clone_shallow",
+            };
+            let call = target.transform_assembly(call);
+            assert!(
+                asm.contains(&call),
+                "{} must copy the self-replacement before the splice ({call})",
+                target.as_str()
+            );
+        }
+    }
 }
