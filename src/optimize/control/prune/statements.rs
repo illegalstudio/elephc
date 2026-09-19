@@ -464,7 +464,7 @@ pub(crate) fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
 /// reports their implicit `null` differently, and generators keep it so the generator pipeline
 /// sees the body it validated.
 pub(crate) fn prune_function_body(body: Vec<Stmt>, by_ref_return: bool) -> Vec<Stmt> {
-    let body = prune_block(body);
+    let body = prune_body_preserving_yields(body);
     if by_ref_return
         || !tail_carries_terminator(&body, TailTerminator::FunctionReturn)
         || crate::types::checker::yield_validation::body_contains_yield(&body)
@@ -472,6 +472,29 @@ pub(crate) fn prune_function_body(body: Vec<Stmt>, by_ref_return: bool) -> Vec<S
         return body;
     }
     strip_trailing_terminator(body, TailTerminator::FunctionReturn)
+}
+
+/// Prunes a function, method, or closure body, keeping it intact when pruning would delete its
+/// last `yield`.
+///
+/// PHP decides generator-ness SYNTACTICALLY, at declaration: a body holding a `yield` token is a
+/// generator even when no `yield` can ever run, so `function g(): iterable { while (false) {
+/// yield 1; } }` returns an empty `Generator`. Constant-folding that branch away deletes the
+/// token, and every later stage then sees an ordinary function: it returns a boxed null where
+/// its caller expects a `Generator`, `valid()` answers `true` forever and `foreach` never
+/// terminates (issue #1085).
+///
+/// Keeping the dead branch is what preserves the property, and it is the only place the two
+/// downstream readers of it can be kept in agreement. `generator_body_return_type` and
+/// `attach_generator_source_if_needed` in `src/ir_lower/function.rs` both ask whether this is a
+/// generator; one of them can also fall back to a declared `Generator` return type, and that
+/// fallback is NOT the same question — a function that merely forwards someone else's generator
+/// declares the same type without holding a `yield` token.
+///
+/// The clone is paid only by bodies that contain a yield at all, and only those whose yields are
+/// ALL statically dead give up their pruning.
+pub(crate) fn prune_body_preserving_yields(body: Vec<Stmt>) -> Vec<Stmt> {
+    crate::optimize::body_preserving_yields(body, prune_block)
 }
 
 /// Prunes a for-loop clause (init/condition/update) by applying prune_stmt and
