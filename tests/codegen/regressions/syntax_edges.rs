@@ -135,3 +135,31 @@ fn test_class_used_only_in_multi_value_echo_is_emitted() {
     let out = compile_and_run(r#"<?php echo "x", (new SplObjectStorage())->count();"#);
     assert_eq!(out, "x0");
 }
+
+
+/// Verifies the whole IN-PROCESS pipeline survives deep nesting, not only the binary
+/// (issue #686).
+///
+/// Every recursive phase carries its own stack budget through
+/// `compiler_stack::with_compiler_stack`, so an embedder calling one of them is safe on its own
+/// thread. This harness additionally wraps the whole run, for the AST handling BETWEEN the
+/// phases: moving, cloning and dropping a tree this deep recurses through derived code no guard
+/// can be placed inside.
+///
+/// This goes through `compile_and_run` rather than a type-check helper ON PURPOSE. Checking stops
+/// at the front end, and the passes after it recurse just as deep: constant propagation, control
+/// flow normalization, dead-code elimination and EIR lowering all walk every nesting level. A
+/// checker-only fixture would pass while a real compile still aborted.
+///
+/// A regression aborts the test PROCESS rather than failing an assertion, which is exactly why
+/// this is worth pinning: an abort is not something a reviewer reads as a test failure.
+#[test]
+fn test_deeply_nested_literal_compiles_and_runs_in_process() {
+    let depth = 1024;
+    let source = format!(
+        "<?php\n$a = {}1{};\necho count($a);\n",
+        "[".repeat(depth),
+        "]".repeat(depth)
+    );
+    assert_eq!(compile_and_run(&source), "1");
+}

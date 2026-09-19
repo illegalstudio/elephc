@@ -76,6 +76,19 @@ pub(crate) fn lower(
     source_path: Option<&Path>,
     web: bool,
 ) -> Result<Module, LoweringError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        lower_on_compiler_stack(program, check_result, target, source_path, web)
+    })
+}
+
+/// The lowering body, running on the stack [`lower`] established.
+fn lower_on_compiler_stack(
+    program: &Program,
+    check_result: &CheckResult,
+    target: Target,
+    source_path: Option<&Path>,
+    web: bool,
+) -> Result<Module, LoweringError> {
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;

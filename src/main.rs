@@ -14,6 +14,7 @@ mod builtins;
 mod cli;
 mod codegen;
 mod codegen_support;
+mod compiler_stack;
 mod conditional;
 mod curl_prelude;
 mod errors;
@@ -98,6 +99,12 @@ mod web_prelude;
 ///   ([`emit_ini_override_warnings`]) for compile commands.
 /// - May create temporary files during assembly and linking.
 fn main() {
+    compiler_stack::with_compiler_stack(main_inner)
+}
+
+/// The real entry point, running on the stack established by
+/// [`compiler_stack::with_compiler_stack`].
+fn main_inner() {
     let args: Vec<String> = std::env::args().collect();
     if cli::wants_mascotte(&args) {
         cli::print_mascotte();

@@ -95,8 +95,10 @@ pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
 /// placed here cannot be forgotten by one of them. It runs FIRST so the literal it
 /// prepends folds like any other.
 pub fn fold_constants(program: Program) -> Program {
-    let program = crate::superglobals::seed_cli_populated_superglobals(program);
-    fold_block(program)
+    crate::compiler_stack::with_compiler_stack(|| {
+        let program = crate::superglobals::seed_cli_populated_superglobals(program);
+        fold_block(program)
+    })
 }
 
 /// Folds one standalone constant expression without adding program-level runtime metadata.
@@ -203,7 +205,9 @@ fn collect_top_level_user_functions_from_block(
 /// back to this call. The test tree shadows this with a no-set wrapper for hand-built ASTs.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
 pub fn propagate_constants(program: Program, mixed_storage_locals: HashSet<String>) -> Program {
-    PostTypecheckOptimizer::new(&program).propagate(program, mixed_storage_locals)
+    crate::compiler_stack::with_compiler_stack(|| {
+        PostTypecheckOptimizer::new(&program).propagate(program, mixed_storage_locals)
+    })
 }
 
 /// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
@@ -214,7 +218,9 @@ pub fn propagate_constants(program: Program, mixed_storage_locals: HashSet<Strin
 /// an empty set would let that clone hand one span-keyed checker decision to two statements.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
 pub fn normalize_control_flow(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-    PostTypecheckOptimizer::new(&program).normalize(program, binding_decision_spans)
+    crate::compiler_stack::with_compiler_stack(|| {
+        PostTypecheckOptimizer::new(&program).normalize(program, binding_decision_spans)
+    })
 }
 
 /// Prunes branches with constant conditions that cannot be reached.
@@ -226,7 +232,9 @@ pub fn prune_constant_control_flow(
     program: Program,
     binding_decision_spans: HashSet<Span>,
 ) -> Program {
-    PostTypecheckOptimizer::new(&program).prune(program, binding_decision_spans)
+    crate::compiler_stack::with_compiler_stack(|| {
+        PostTypecheckOptimizer::new(&program).prune(program, binding_decision_spans)
+    })
 }
 
 /// A fact the propagation environment records for a local variable.
@@ -429,7 +437,9 @@ impl PostTypecheckOptimizer {
 /// invisible until the resulting program printed the wrong answer.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
 pub fn eliminate_dead_code(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-    PostTypecheckOptimizer::new(&program).eliminate_dead_code(program, binding_decision_spans)
+    crate::compiler_stack::with_compiler_stack(|| {
+        PostTypecheckOptimizer::new(&program).eliminate_dead_code(program, binding_decision_spans)
+    })
 }
 
 /// Returns true when the named builtin can invoke user code through a callback

@@ -118,6 +118,11 @@ pub fn parse_with_recovery_in_mode(
 /// Implements recovery parsing after the source-mode scope has been installed.
 fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
     reject_excessive_nesting(tokens)?;
+    crate::compiler_stack::with_compiler_stack(|| parse_checked_tokens(tokens))
+}
+
+/// Parses tokens whose nesting depth is already known to be within the compiler's limit.
+fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
     let mut pos = 0;
     let mut stmts = Vec::new();
     let mut errors = Vec::new();

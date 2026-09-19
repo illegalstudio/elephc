@@ -18,6 +18,8 @@ pub mod codegen;
 /// Shared target/runtime support used by the EIR backend.
 #[doc(hidden)]
 pub mod codegen_support;
+/// The stack depth a compiler run needs, and the wrapper that supplies it.
+pub mod compiler_stack;
 /// Conditional compilation directives.
 pub mod conditional;
 /// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).

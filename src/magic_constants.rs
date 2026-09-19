@@ -44,8 +44,10 @@ pub fn substitute_file_constants(stmts: Vec<Stmt>, file_path: &Path) -> Vec<Stmt
 /// source file. Resolver calls this before inlining included files so lexical
 /// scopes from one file cannot leak into another.
 pub fn substitute_file_and_scope_constants(stmts: Vec<Stmt>, file_path: &Path) -> Vec<Stmt> {
-    let stmts = substitute_file_constants(stmts, file_path);
-    substitute_scope_constants_in_file(stmts, file_path)
+    crate::compiler_stack::with_compiler_stack(|| {
+        let stmts = substitute_file_constants(stmts, file_path);
+        substitute_scope_constants_in_file(stmts, file_path)
+    })
 }
 
 /// Resolves scope-dependent magic constants (`__FUNCTION__`, `__CLASS__`, `__METHOD__`,

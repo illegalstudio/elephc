@@ -228,3 +228,66 @@ fn deeply_nested_unserialize_is_rejected_before_runtime_recursion() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "bool(false)\n");
     let _ = fs::remove_dir_all(&dir);
 }
+
+
+/// Verifies nesting BELOW the documented limit compiles and runs instead of aborting the
+/// compiler (issue #686).
+///
+/// `MAX_COMPILER_NESTING` allows 1024 levels and the parser reports anything past it, but the
+/// front end could not survive the walk: every recursive AST pass costs one frame per level, and
+/// the default main-thread stack ran out around 140. `$a = [[[…1…]]]` at 200 levels aborted with
+///
+///     thread 'main' has overflowed its stack
+///     fatal runtime error: stack overflow, aborting
+///
+/// — no diagnostic, no file, no position, and a source PHP itself compiles.
+///
+/// The compiler now runs inside `compiler_stack::with_compiler_stack`, sized against that
+/// limit, so this fixture checks the two ends of it: 1000 levels produce a working program, and
+/// the depth-limit test above still gets its diagnostic rather than an abort. The exit STATUS is
+/// asserted too, because a stack overflow and a rejection both fail — only the message tells
+/// them apart.
+///
+/// This one drives the BINARY. Its in-process twin is
+/// `codegen::regressions::syntax_edges::test_deeply_nested_literal_compiles_and_runs_in_process`,
+/// which runs the same depth through the crate's phases on a libtest worker thread: the two
+/// together pin both the CLI and the embedding path.
+#[test]
+fn nesting_below_the_limit_compiles_and_runs() {
+    let _guard = LIMIT_TEST_LOCK.lock().unwrap();
+    let dir = make_test_dir("compiler-depth-ok");
+    let depth = 1000;
+    let source = format!(
+        "<?php\n$a = {}1{};\necho count($a);\n",
+        "[".repeat(depth),
+        "]".repeat(depth)
+    );
+    let php = dir.join("main.php");
+    fs::write(&php, source).expect("write deeply nested PHP fixture");
+
+    let compile = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .arg("-q")
+        .arg(&php)
+        .output()
+        .expect("spawn compiler depth probe");
+    let stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        !stderr.contains("overflowed its stack") && !stderr.contains("stack overflow"),
+        "the compiler must not abort below its own nesting limit: {stderr}"
+    );
+    assert!(
+        compile.status.success(),
+        "nesting below the limit must compile, got {:?}: {stderr}",
+        compile.status
+    );
+
+    let program = dir.join("main");
+    let run = Command::new(&program).output().expect("run nested fixture");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "1",
+        "host PHP prints 1 for the same source"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

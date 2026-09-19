@@ -761,6 +761,19 @@ pub fn check_types_with_options(
     target: Target,
     options: CheckOptions,
 ) -> Result<CheckResult, CompileError> {
+    // Every `check*` spelling funnels through here, so this is the one place the checker needs
+    // the stack its own recursion depth implies (issue #686).
+    crate::compiler_stack::with_compiler_stack(|| {
+        check_types_on_compiler_stack(program, target, options)
+    })
+}
+
+/// The checker body, running on the stack [`check_types_with_options`] established.
+fn check_types_on_compiler_stack(
+    program: &Program,
+    target: Target,
+    options: CheckOptions,
+) -> Result<CheckResult, CompileError> {
     let (mut checker, global_env) = driver::check_types_impl(program, target, options)?;
 
     propagate_abstract_return_types(&mut checker);

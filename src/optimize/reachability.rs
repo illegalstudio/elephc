@@ -36,6 +36,17 @@ pub fn prune_unreachable_declarations(
     check_result: &mut CheckResult,
     options: PruneOptions<'_>,
 ) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        prune_on_compiler_stack(program, check_result, options)
+    })
+}
+
+/// The pruning body, running on the stack its entry point established.
+fn prune_on_compiler_stack(
+    program: Program,
+    check_result: &mut CheckResult,
+    options: PruneOptions<'_>,
+) -> Program {
     let original_builtin_libraries = usage::scan_program(&program).required_libraries;
     let reachability = graph::compute(&program, check_result, &options);
     let declaration_index = graph::DeclarationIndex::build(&program, check_result);

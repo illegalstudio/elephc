@@ -17,5 +17,5 @@ use crate::parser::ast::Program;
 
 /// Removes inactive `ifdef` branches from the program based on CLI-defined symbols.
 pub fn apply(program: Program, defines: &HashSet<String>) -> Program {
-    stmts::apply_stmts(program, defines)
+    crate::compiler_stack::with_compiler_stack(|| stmts::apply_stmts(program, defines))
 }

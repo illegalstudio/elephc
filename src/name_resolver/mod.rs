@@ -67,6 +67,17 @@ pub(crate) fn resolve_with_additional_global_symbols(
     global_functions: &[&str],
     global_classes: &[&str],
 ) -> Result<Program, CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        resolve_on_compiler_stack(program, global_functions, global_classes)
+    })
+}
+
+/// The resolver body, running on the stack its entry point established.
+fn resolve_on_compiler_stack(
+    program: Program,
+    global_functions: &[&str],
+    global_classes: &[&str],
+) -> Result<Program, CompileError> {
     let mut symbols = Symbols::default();
     symbols::collect_symbols(&program, None, &mut symbols);
     for function in global_functions {
