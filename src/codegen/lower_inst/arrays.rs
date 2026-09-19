@@ -2022,7 +2022,21 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the runtime setter after marker write-through
 
     ctx.emitter.label(&mixed_cell_label);
+    // The cell is the caller variable's storage and OWNS the box it holds, so overwriting it
+    // has to release the old one exactly as `__rt_array_set_mixed` does for an ordinary slot.
+    // Without this the caller's previous box — and the payload it pins — is orphaned at
+    // refcount 1 on every write-back, which is the leak reported in issue #1062.
+    //
+    // Safe to release AFTER the store and not before: this whole emitter runs only when the
+    // incoming value was freshly boxed here (`fresh_boxed_value`), so the handle in `x2` is a
+    // refcount-1 cell allocated at this store and can never be the occupant being released,
+    // not even for `$items[0] = $items[0]`.
+    ctx.emitter.instruction("ldr x11, [x10]");                                  // load the boxed Mixed the caller ref-cell currently owns
     ctx.emitter.instruction("str x2, [x10]");                                   // transfer the fresh boxed Mixed handle into the caller ref-cell
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result across the replaced-box release
+    ctx.emitter.instruction("mov x0, x11");                                     // pass the replaced boxed Mixed to the release helper
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the array pointer as the ArraySet result
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the runtime setter after handle transfer
 
     ctx.emitter.label(&runtime_label);
@@ -2064,8 +2078,14 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the runtime setter after marker write-through
 
     ctx.emitter.label(&mixed_cell_label);
+    // See the AArch64 arm: the cell owns the box it holds, so the replaced one is released
+    // here rather than orphaned (issue #1062), after the store rather than before it.
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the boxed Mixed the caller ref-cell currently owns
     ctx.emitter.instruction("mov QWORD PTR [r10], rdx");                        // transfer the fresh boxed Mixed handle into the caller ref-cell
-    ctx.emitter.instruction("mov rax, rdi");                                    // return the unchanged indexed array after marker handle transfer
+    abi::emit_push_reg(ctx.emitter, "rdi");
+    ctx.emitter.instruction("mov rax, r11");                                    // pass the replaced boxed Mixed to the release helper
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, "rax");
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the runtime setter after handle transfer
 
     ctx.emitter.label(&runtime_label);

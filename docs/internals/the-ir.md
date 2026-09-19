@@ -349,6 +349,69 @@ independent, explicit argument-alias, and may-alias storage, including scratch-b
 results that are not fresh heap blocks. That contract feeds direct-call cleanup,
 optimizer reasoning, and summaries for source wrappers.
 
+### A reference cell must be as wide as what the callee may write
+
+`InvokerRefArg` aliases a caller local so a callee can write back through it. The
+cell is the local's own frame storage, which keeps the write cheap and keeps every
+alias of the local in agreement — but it also means the callee writes at the
+slot's declared type. Whether that is sound depends on which by-reference form
+the argument is bound to, and the two forms differ:
+
+- A NAMED by-reference parameter (`function f(&$v)`) declares what it writes, and
+  the checker holds the caller's local to a compatible type. Both sides agree on
+  the representation, so the local keeps concrete storage and the marker points
+  straight at it.
+- A by-reference VARIADIC tail (`function f(&...$items)`) declares nothing. The
+  callee writes through `$items[n]`, an untyped element of an `array<mixed>`, so
+  PHP lets it store a value of any type into a local currently holding something
+  else. `$p = 1; f($p);` against `$items[0] = "s"` is ordinary PHP.
+
+Pointing the marker at concrete storage in the second case is silent corruption
+rather than a diagnostic: the string is written into a slot sized and typed for an
+`I64`, and the next read hands back the string's pointer as an integer. So the
+variadic form promotes the local to a boxed `Mixed` reference cell BEFORE taking
+its address (`promote_local_mixed_ref_cell`, the same helper `PDO::bindColumn()`
+and `bindParam()` use), and the callee's write lands in storage wide enough for
+whatever it chose.
+
+The widening is confined to that form deliberately. Applying it to a named
+by-reference parameter hands the callee a box pointer where it expects the value
+itself, which is the same corruption with the sides reversed. `src/ir_lower/expr/descriptor_args.rs`
+keeps the two entry points separate for that reason, and only the by-reference
+variadic tail in `src/ir_lower/expr/variadic_args.rs` reaches the widening one.
+
+The cell also OWNS what it holds, the same way a plain slot does, so a write
+through it has to release the occupant it replaces. The callee's `$items[n] = ...`
+does not reach `__rt_array_set_mixed`, which does exactly that for an ordinary
+slot: the element is an invoker ref-cell marker, so the array setter recognises
+the marker tag and transfers the fresh boxed Mixed handle straight into the
+caller's cell (`emit_mixed_array_set_ref_marker_writeback_*` in
+`src/codegen/lower_inst/arrays.rs`). That hand-written transfer was a bare store,
+which orphaned the previous box and the payload it pinned on every call — one
+block per call in the reported shape, two once the replaced value was itself a
+heap string. It now reads the old handle, stores the new one, and releases the
+old, in that order: releasing first would free the box a self-assignment is about
+to store back.
+
+The concrete-source arm of the same write-back still does not release its
+occupant. It is selected by any non-`Mixed` source tag, and for a `Str`-tagged
+cell the occupant can be a `.rodata` pointer that the ownership analysis knows not
+to free and this slot-typed cleanup does not model, so releasing there would trade
+a leak for a free of read-only memory. That reason does not cover the array- and
+object-tagged cells the same arm also serves, which do own heap storage and do
+still leak it; releasing those needs the tag-aware `__rt_heap_free_safe` treatment
+rather than a blanket decref, and is left for its own change.
+
+A third gap bounds both: this write-back emitter is reached only when the assigned
+value was freshly boxed at the store, which is every CONCRETE source type. A
+`Mixed` or union-typed right-hand side (`$items[0] = $m;`, or `$items[0] =
+$items[1];`) skips it and calls `__rt_array_set_mixed` directly, and that helper
+has no marker-tag check: it decrefs the slot's occupant — the marker itself — and
+stores an ordinary box, severing the alias so the caller never sees the write. It
+is memory-safe, because `__rt_mixed_free_deep` routes the marker's tag to a
+box-only free and never follows the payload into the caller's frame, but it is a
+silent semantic divergence from PHP.
+
 ## Effects
 
 Each instruction and terminator carries an `Effects` summary. The builder

@@ -31,6 +31,8 @@ mod assoc_rebind_release;
 mod object_supertype_rebind;
 #[path = "runtime_gc/by_ref_place_args.rs"]
 mod by_ref_place_args;
+#[path = "runtime_gc/by_ref_variadic_writeback.rs"]
+mod by_ref_variadic_writeback;
 #[path = "runtime_gc/omitted_by_ref_default_args.rs"]
 mod omitted_by_ref_default_args;
 #[path = "runtime_gc/foreach_object_source.rs"]
