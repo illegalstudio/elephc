@@ -265,6 +265,10 @@ Property default values are applied both for the normal `new ClassName()` form a
 
 An `array`-typed (or untyped) property may take an associative literal default such as `['a' => 1]`. The property is then stored as an associative array, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run like any other associative array. A positional literal default (`[1, 2, 3]`) keeps integer-keyed list storage.
 
+A **nullable or union** array property takes either literal too — `public ?array $x = [1, 2];` and `public ?array $x = ['k' => 1];` both initialize, as do the `mixed` and `array|string` spellings. The value is boxed the way any other `mixed` payload is, so the slot can later hold `null` or a non-array without changing representation.
+
+A default whose ELEMENTS are themselves array literals (`public array $x = [[1], [2]];`) is not supported yet and reports a compile error; assign it in the constructor instead. The same literal is accepted everywhere else — as a local, a parameter default, or a class constant.
+
 ```php
 <?php
 class Bag {

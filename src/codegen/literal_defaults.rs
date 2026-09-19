@@ -82,6 +82,16 @@ pub(crate) enum LiteralDefaultValue {
         enum_name: String,
         case_name: String,
     },
+    /// An ASSOCIATIVE array literal stored into a `mixed`/union slot, boxed into a Mixed cell.
+    ///
+    /// The `BoxedArray` sibling covers the positional spelling; this covers the keyed one.
+    /// `class C { public ?array $x = ["k" => 1]; }` had no default form and was refused outright
+    /// with `object_new for default value of property $x with PHP type Union([Array(Mixed),
+    /// Void])` -- the same message the positional spelling used to produce (issue #688).
+    BoxedAssocArray {
+        value_type: PhpType,
+        entries: Vec<LiteralAssocEntry>,
+    },
 }
 
 /// Literal indexed-array element that can be materialized without evaluating code.
@@ -195,6 +205,30 @@ pub(crate) fn literal_default_value(
             Ok(LiteralDefaultValue::BoxedArray {
                 elem_type,
                 elements,
+            })
+        }
+        // The keyed spelling of the arm above. PHP has no separate associative array type, so
+        // `["k" => 1]` in a `?array` slot is the same default as `[1, 2]` is; only the storage
+        // the literal needs differs, and hash storage is what a string key requires.
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::ArrayLiteralAssoc(items)) => {
+            let value_type = PhpType::Mixed;
+            let entries = items
+                .iter()
+                .map(|(key, value_expr)| {
+                    Ok(LiteralAssocEntry {
+                        key: literal_array_key(context, &key.kind, op_name)?,
+                        value: literal_array_element(
+                            context,
+                            &value_type,
+                            &value_expr.kind,
+                            op_name,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::BoxedAssocArray {
+                value_type,
+                entries,
             })
         }
         (PhpType::Void | PhpType::Never, ExprKind::Null) => Ok(LiteralDefaultValue::NullSentinel),

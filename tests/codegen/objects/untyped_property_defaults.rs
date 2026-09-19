@@ -251,3 +251,69 @@ var_dump($c->s);
     );
     assert_eq!(out, "int(1)\nstring(1) \"a\"\n");
 }
+
+
+/// Verifies an ARRAY LITERAL default on a `?array`, `mixed` or other union property compiles and
+/// reads back (issue #688).
+///
+/// Declaring the class was enough to be refused — no read, no write, no iteration:
+///
+///     class C { public ?array $x = [1, 2]; }
+///     EIR backend error: unsupported EIR backend feature:
+///     object_new for default value of property $x with PHP type Union([Array(Mixed), Void])
+///
+/// The positional spelling was fixed when the `mixed` slot learned to box an indexed literal; the
+/// KEYED spelling had no default form at all and kept failing with the same message. PHP has no
+/// separate associative array type, so `["k" => 1]` in a `?array` slot is the same default as
+/// `[1, 2]` is — only the storage a string key needs differs.
+///
+/// The matrix keeps the two spellings beside the shapes that already worked, so a future change
+/// cannot fix one and lose the other: a plain `array` slot, a `mixed` slot holding a scalar, an
+/// explicit `null` default, and the constructor-assignment workaround the issue documented.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_literal_defaults_on_union_and_mixed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public ?array $x = [1, 2]; }
+class B { public ?array $x = []; }
+class C { public mixed $x = [1, 2]; }
+class D { public ?array $x = null; }
+class E { public array $x = [1, 2]; }
+class F { public mixed $x = 5; }
+class G { public ?array $x = null; public function __construct() { $this->x = [1, 2]; } }
+class H { public ?array $x = ["k" => 1, "j" => "s"]; }
+class I { public static ?array $x = [1, 2]; }
+class J { public array|string $x = [1, 2]; }
+class K { public mixed $x = ["k" => 1]; }
+$a = new A(); echo count($a->x), ":", implode(",", $a->x), "\n";
+$b = new B(); echo count($b->x), "\n";
+$c = new C(); echo count($c->x), ":", implode(",", $c->x), "\n";
+$d = new D(); var_dump($d->x);
+$e = new E(); echo count($e->x), "\n";
+$f = new F(); var_dump($f->x);
+$g = new G(); echo count($g->x), "\n";
+$h = new H(); echo count($h->x), ":", $h->x["k"], ":", $h->x["j"], "\n";
+echo count(I::$x), "\n";
+$j = new J(); echo count($j->x), "\n";
+$k = new K(); echo count($k->x), ":", $k->x["k"], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "2:1,2\n",
+            "0\n",
+            "2:1,2\n",
+            "NULL\n",
+            "2\n",
+            "int(5)\n",
+            "2\n",
+            "2:1:s\n",
+            "2\n",
+            "2\n",
+            "1:1\n",
+        )
+    );
+}

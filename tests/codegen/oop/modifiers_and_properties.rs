@@ -478,12 +478,28 @@ fn test_example_final_classes_compiles_and_runs() {
     assert_eq!(out, "invoice:42\n");
 }
 
-/// End-to-end smoke test using the checked-in `examples/typed-properties/main.php`
-/// fixture. Verifies the example compiles, runs, and produces `"Ada:42\nmissing email\n"`.
+/// End-to-end smoke test using the checked-in `examples/typed-properties/main.php` fixture.
+///
+/// The trailing rows cover array-literal defaults on NULLABLE and union properties, in both the
+/// keyed and positional spellings (issue #688) — declaring such a class used to be a compile
+/// error on its own, before any read.
+///
+/// The expectation is verbatim host PHP 8.5.10 output for the whole example.
 #[test]
 fn test_example_typed_properties_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/typed-properties/main.php"));
-    assert_eq!(out, "Ada:42\nmissing email\n");
+    assert_eq!(
+        out,
+        concat!(
+            "Ada:42\n",
+            "missing email\n",
+            "query: 1/name\n",
+            "tags: new, featured\n",
+            "meta: web\n",
+            "body is null: yes\n",
+            "query after clear: null\n",
+        )
+    );
 }
 
 /// Verifies PHP 8.4 asymmetric visibility at runtime: a `public private(set)` property is
