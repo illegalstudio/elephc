@@ -810,7 +810,10 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
-    if needs_runtime_ordering_compare(&lhs_ty) || needs_runtime_ordering_compare(&rhs_ty) {
+    if needs_runtime_ordering_compare(&lhs_ty)
+        || needs_runtime_ordering_compare(&rhs_ty)
+        || is_string_ordering_pair(&lhs_ty, &rhs_ty)
+    {
         emit_runtime_ordering_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
         return store_if_result(ctx, inst);
     }
@@ -839,9 +842,12 @@ pub(super) fn lower_php_rel_cmp(
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
-    if !needs_runtime_ordering_compare(&lhs_ty) && !needs_runtime_ordering_compare(&rhs_ty) {
+    if !needs_runtime_ordering_compare(&lhs_ty)
+        && !needs_runtime_ordering_compare(&rhs_ty)
+        && !is_string_ordering_pair(&lhs_ty, &rhs_ty)
+    {
         return Err(CodegenIrError::invalid_module(format!(
-            "php_rel_cmp requires a runtime-tagged operand, got {:?} and {:?}",
+            "php_rel_cmp requires a runtime-tagged operand or two strings, got {:?} and {:?}",
             lhs_ty, rhs_ty
         )));
     }
@@ -853,6 +859,18 @@ pub(super) fn lower_php_rel_cmp(
 /// Returns true when PHP ordering must inspect an operand's runtime tag.
 fn needs_runtime_ordering_compare(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
+}
+
+/// Returns true when both operands are plain strings, which order through the same runtime
+/// rule without either side carrying a tag.
+///
+/// `<` on two strings compares them NUMERICALLY when both are numeric strings and
+/// byte-wise otherwise, so it cannot use `StrCmp`'s lexicographic `__rt_strcmp`. The
+/// ordering helper implements that rule already; `emit_runtime_ordering_compare` boxes the
+/// plain operands on the way in (issue #507).
+fn is_string_ordering_pair(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
+    matches!(lhs_ty.codegen_repr(), PhpType::Str)
+        && matches!(rhs_ty.codegen_repr(), PhpType::Str)
 }
 
 /// Compares runtime-tagged operands through PHP's shared ordering table.

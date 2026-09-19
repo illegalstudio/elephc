@@ -148,10 +148,16 @@ impl Checker {
                     is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                // Two strings order by PHP's own rule — numeric comparison when BOTH sides
+                // are numeric strings, byte comparison otherwise — which
+                // `__rt_php_compare`'s two-string leg already implements. Rejecting them
+                // made the ordinary character-range idiom (`$c >= '0' && $c <= '9'`) a
+                // compile error and pushed callers onto `ord()` (issue #507).
+                let strings_ok = lt == PhpType::Str && rt == PhpType::Str;
+                if !numeric_ok && !datetime_ok && !strings_ok {
                     return Err(CompileError::new(
                         expr.span,
-                        "Comparison operators require numeric operands",
+                        "Comparison operators require numeric or string operands",
                     ));
                 }
                 Ok(PhpType::Bool)
@@ -178,10 +184,14 @@ impl Checker {
                     is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                // `<=>` is the same ordering as `<` and `>`, only reported as -1/0/1, so it
+                // accepts the same two-string pair rather than leaving `"a" <=> "b"` a
+                // compile error while `"a" < "b"` works (issue #507).
+                let strings_ok = lt == PhpType::Str && rt == PhpType::Str;
+                if !numeric_ok && !datetime_ok && !strings_ok {
                     return Err(CompileError::new(
                         expr.span,
-                        "Spaceship operator requires numeric operands",
+                        "Spaceship operator requires numeric or string operands",
                     ));
                 }
                 Ok(PhpType::Int)

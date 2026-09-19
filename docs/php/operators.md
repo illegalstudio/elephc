@@ -49,9 +49,52 @@ runtime-value case.
 
 This coercion is scoped to the arithmetic operators above. Unary negation (`-"5"`) and the
 bitwise operators (`"6" << 1`, `&`, `|`, `^`) still require a numeric or integer operand and
-reject `string` at compile time, and relational comparison (`< > <= >= <=>`) does **not** widen
-to string operands either — see
+reject `string` at compile time.
+
+### Relational comparison between two strings
+
+`<`, `<=`, `>` and `>=` accept **two string operands** and follow PHP's own ordering rule:
+when *both* sides are numeric strings they compare numerically, otherwise they compare
+byte-wise. That is not the same as `strcmp()`, which is always lexicographic:
+
+```php
+var_dump("10" > "9");        // true  — both numeric, so 10 > 9
+var_dump("10" < "9a");       // true  — "9a" is not numeric, so bytes: "1" < "9"
+var_dump("1e2" == "100");    // true  — exponent notation counts as numeric
+var_dump("1.5" <= "1.50");   // true  — numerically equal
+var_dump("0x1A" < "26");     // true  — hex is NOT numeric, so bytes: "0" < "2"
+
+$c = "5";
+if ($c >= '0' && $c <= '9') { echo "digit\n"; }   // the character-range idiom
+```
+
+Mixing a string with a *number* (`$s < 1`) is still rejected at compile time: PHP casts the
+number to a string when the string is non-numeric, and elephc does not implement that
+conversion — see
 [Known incompatibilities with PHP](types.md#known-incompatibilities-with-php).
+
+Two **integer** strings compare exactly, as `int`, not by rounding both through a `float`
+first. That is what makes a difference past 2^53 survive, and it applies to `==` as well:
+
+```php
+var_dump("9007199254740993" > "9007199254740992");    // true  — both round to the same float
+var_dump("9007199254740993" == "9007199254740992");   // false
+```
+
+Integer text too large for `int` follows PHP's own fallbacks rather than the float value.
+Two sides that overflowed the same way and round to the same float compare **by bytes**, and
+an in-range integer against an overflowed one is ordered by the overflow's sign alone:
+
+```php
+var_dump("99999999999999999999" > "100000000000000000000");   // true  — byte order decides
+var_dump("9223372036854775807" == "9223372036854775808");     // false — the right side overflowed
+```
+
+One inherited gap is left, and it is in the shared numeric scanner rather than in this rule:
+`is_numeric()` still reads a numeric prefix followed by an embedded NUL (`"2\0"`) as numeric,
+where PHP does not. Comparison is not affected — it measures the byte length itself, so
+`"2\0" > "10"` is `true` as in PHP — but `is_numeric("2\0")` answers `true` where PHP answers
+`false`.
 
 ## Comparison
 
