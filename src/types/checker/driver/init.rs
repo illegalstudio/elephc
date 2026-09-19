@@ -110,6 +110,7 @@ impl Checker {
             strict_locals: false,
             local_conditional_depth: 0,
             local_binding_depth: HashMap::new(),
+            narrowed_local_origins: HashMap::new(),
             ref_aliased_locals: HashSet::new(),
             static_local_names: HashSet::new(),
             typed_local_names: HashSet::new(),
