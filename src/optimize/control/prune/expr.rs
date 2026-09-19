@@ -9,7 +9,7 @@
 //! - Loop exits, empty bodies, and effectful conditions must be handled before removing structural statements.
 
 use super::super::*;
-use super::statements::{prune_block, prune_stmt};
+use super::statements::{prune_body_preserving_yields, prune_stmt};
 
 /// Recursively rewrites an expression tree, pruning constant subexpressions while
 /// preserving side effects. Applies to all expression variants including literals,
@@ -144,7 +144,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             variadic_by_ref,
             variadic_type,
             return_type,
-            body: prune_block(body),
+            body: prune_body_preserving_yields(body),
             is_arrow,
             is_static,
             captures,
