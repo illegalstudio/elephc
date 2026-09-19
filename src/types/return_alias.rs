@@ -10,11 +10,18 @@
 //! - `Unknown` is deliberately conservative; only proven non-aliasing paths
 //!   allow cleanup that the previous type-only guard suppressed.
 //! - Local provenance is merged across branches and to a fixed point in loops.
+//! - A cast only passes storage through when EIR lowering elides it, which is why the
+//!   analysis carries WHICH PARAMETERS are declared `string`: `(string)` over one of those is
+//!   the only cast `lower_cast` removes entirely, because only such a parameter has a bare
+//!   `Str` slot. Every other cast COPIES, including one over a local that merely holds a
+//!   `string` parameter's value -- locals are boxed Mixed (issue #700).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{
+    CastType, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
+};
 
 /// Describes which visible parameters a callable result may reuse as storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +64,57 @@ impl ReturnArgAlias {
     /// Returns whether analysis proved the result aliases `parameter_index`.
     pub(crate) fn proven_aliases_parameter(&self, parameter_index: usize) -> bool {
         matches!(self, Self::Parameters(parameters) if parameters.contains(&parameter_index))
+    }
+}
+
+/// Local alias provenance plus the parameter facts a cast decision needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AliasState<'a> {
+    /// Provenance of every live local name.
+    locals: HashMap<String, ReturnArgAlias>,
+    /// The names of the visible parameters declared exactly `string`. Only those have a bare
+    /// `Str` slot, which is the one operand shape a `(string)` cast passes through.
+    string_parameters: &'a BTreeSet<String>,
+    /// The same parameters by position, to ask the question of a provenance rather than of a
+    /// name: a `string` parameter assigned from a wider one no longer has a bare `Str` slot.
+    string_parameter_indices: &'a BTreeSet<usize>,
+    /// The locals whose slot is still a bare `Str` RIGHT HERE, which is the only operand shape
+    /// `lower_cast` elides. It starts as the `string` parameters and shrinks as they are
+    /// assigned: a declaration says what a slot began as, not what it holds now.
+    str_slot_locals: HashSet<String>,
+}
+
+impl<'a> AliasState<'a> {
+    /// Creates an empty state for a callable with these `string`-declared parameters.
+    fn new(
+        string_parameters: &'a BTreeSet<String>,
+        string_parameter_indices: &'a BTreeSet<usize>,
+    ) -> Self {
+        Self {
+            locals: HashMap::new(),
+            string_parameters,
+            string_parameter_indices,
+            str_slot_locals: string_parameters.iter().cloned().collect(),
+        }
+    }
+
+    /// Returns whether `name` is a visible parameter declared exactly `string`.
+    ///
+    /// Only such a parameter is ever given a bare `Str` slot; a local is boxed regardless of
+    /// what is written into it, which is why an assignment can preserve the slot but never
+    /// create one.
+    fn is_string_parameter(&self, name: &str) -> bool {
+        self.string_parameters.contains(name)
+    }
+
+    /// Returns whether the parameter at `index` was declared exactly `string`.
+    fn is_string_parameter_index(&self, index: usize) -> bool {
+        self.string_parameter_indices.contains(&index)
+    }
+
+    /// Returns whether `name`'s slot is still a bare `Str` at this point in the body.
+    fn has_str_slot(&self, name: &str) -> bool {
+        self.str_slot_locals.contains(name)
     }
 }
 
@@ -104,7 +162,9 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
                 summaries.functions.insert(
                     name.clone(),
                     summarize_callable(
-                        params.iter().map(|(name, _, _, _)| name.as_str()),
+                        params
+                            .iter()
+                            .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
                         variadic.as_deref(),
                         *by_ref_return,
                         body,
@@ -134,7 +194,10 @@ fn collect_method_summaries(
     for method in methods {
         let summary = if method.has_body {
             summarize_callable(
-                method.params.iter().map(|(name, _, _, _)| name.as_str()),
+                method
+                    .params
+                    .iter()
+                    .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
                 method.variadic.as_deref(),
                 method.by_ref_return,
                 &method.body,
@@ -154,7 +217,7 @@ fn collect_method_summaries(
 
 /// Summarizes one function-like body from its parameter names and statements.
 fn summarize_callable<'a>(
-    params: impl Iterator<Item = &'a str>,
+    params: impl Iterator<Item = (&'a str, Option<&'a TypeExpr>)>,
     variadic: Option<&str>,
     by_ref_return: bool,
     body: &[Stmt],
@@ -162,13 +225,30 @@ fn summarize_callable<'a>(
     if by_ref_return {
         return ReturnArgAlias::Unknown;
     }
-    let mut state = HashMap::new();
-    for (index, name) in params.enumerate() {
-        state.insert(name.to_string(), ReturnArgAlias::parameter(index));
+    let params: Vec<(&str, Option<&TypeExpr>)> = params.collect();
+    // A variadic is deliberately absent: it collects its arguments into a fresh array, whose
+    // slot is never a bare `Str`.
+    let string_parameters: BTreeSet<String> = params
+        .iter()
+        .filter(|(_, hint)| matches!(hint, Some(TypeExpr::Str)))
+        .map(|(name, _)| (*name).to_string())
+        .collect();
+    let string_parameter_indices: BTreeSet<usize> = params
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, hint))| matches!(hint, Some(TypeExpr::Str)))
+        .map(|(index, _)| index)
+        .collect();
+    let mut state = AliasState::new(&string_parameters, &string_parameter_indices);
+    for (index, (name, _)) in params.iter().enumerate() {
+        state
+            .locals
+            .insert((*name).to_string(), ReturnArgAlias::parameter(index));
     }
     if let Some(name) = variadic {
-        let index = state.len();
-        state.insert(name.to_string(), ReturnArgAlias::parameter(index));
+        state
+            .locals
+            .insert(name.to_string(), ReturnArgAlias::parameter(params.len()));
     }
     let mut returned = ReturnArgAlias::None;
     analyze_body(body, &mut state, &mut returned);
@@ -178,7 +258,7 @@ fn summarize_callable<'a>(
 /// Applies statement provenance effects and accumulates every reachable return path.
 fn analyze_body(
     body: &[Stmt],
-    state: &mut HashMap<String, ReturnArgAlias>,
+    state: &mut AliasState<'_>,
     returned: &mut ReturnArgAlias,
 ) {
     for stmt in body {
@@ -189,18 +269,35 @@ fn analyze_body(
 /// Applies one statement to the local alias-provenance state.
 fn analyze_stmt(
     stmt: &Stmt,
-    state: &mut HashMap<String, ReturnArgAlias>,
+    state: &mut AliasState<'_>,
     returned: &mut ReturnArgAlias,
 ) {
     match &stmt.kind {
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
             let alias = expr_alias(value, state);
+            // A bare `Str` slot can only be KEPT by a parameter that was declared `string`;
+            // it is never gained. A local is boxed Mixed even when everything written to it was
+            // a string -- `$x = $s` over a `string` parameter still lowers through `mixed_box`
+            // -- so assigning into one never makes it a passthrough operand.
+            //
+            // For a `string` parameter the slot survives only while what is written into it is
+            // itself bare-`Str`: from a `mixed` parameter, or from a boxed local such as
+            // `$c ? $p : $q`, it widens and `lower_cast` stops eliding. Reading the declaration
+            // alone leaked one copy per call for both of those.
+            let keeps_str_slot =
+                state.is_string_parameter(name) && expr_keeps_str_slot(value, state);
             apply_expr_effects(value, state);
-            state.insert(name.clone(), alias);
+            state.locals.insert(name.clone(), alias);
+            if keeps_str_slot {
+                state.str_slot_locals.insert(name.clone());
+            } else {
+                state.str_slot_locals.remove(name);
+            }
         }
         StmtKind::RefAssign { target, source } => {
             apply_expr_effects(source, state);
-            state.insert(target.clone(), ReturnArgAlias::Unknown);
+            state.locals.insert(target.clone(), ReturnArgAlias::Unknown);
+            state.str_slot_locals.remove(target);
             // The new ref cell can connect either name to storage whose later
             // writes are not represented by ordinary assignment statements.
             invalidate_all_aliases(state);
@@ -282,11 +379,11 @@ fn analyze_stmt(
             apply_expr_effects(array, state);
             let mut iteration = state.clone();
             if let Some(key) = key_var {
-                iteration.insert(key.clone(), ReturnArgAlias::None);
+                iteration.locals.insert(key.clone(), ReturnArgAlias::None);
             }
             // A by-value element can still borrow nested refcounted storage from
             // the iterated parameter, so only the container itself is known fresh.
-            iteration.insert(value_var.clone(), ReturnArgAlias::Unknown);
+            iteration.locals.insert(value_var.clone(), ReturnArgAlias::Unknown);
             analyze_body(body, &mut iteration, returned);
             *state = merge_states(vec![state.clone(), iteration]);
         }
@@ -331,7 +428,7 @@ fn analyze_stmt(
                 // writes that happened immediately before the throw.
                 invalidate_all_aliases(&mut catch_state);
                 if let Some(variable) = &catch.variable {
-                    catch_state.insert(variable.clone(), ReturnArgAlias::Unknown);
+                    catch_state.locals.insert(variable.clone(), ReturnArgAlias::Unknown);
                 }
                 analyze_body(&catch.body, &mut catch_state, returned);
                 paths.push(catch_state);
@@ -353,11 +450,17 @@ fn analyze_stmt(
         } => {
             apply_expr_effects(index, state);
             apply_expr_effects(value, state);
-            state.entry(array.clone()).or_insert(ReturnArgAlias::Unknown);
+            state
+                .locals
+                .entry(array.clone())
+                .or_insert(ReturnArgAlias::Unknown);
         }
         StmtKind::ArrayPush { array, value } => {
             apply_expr_effects(value, state);
-            state.entry(array.clone()).or_insert(ReturnArgAlias::Unknown);
+            state
+                .locals
+                .entry(array.clone())
+                .or_insert(ReturnArgAlias::Unknown);
         }
         StmtKind::NestedArrayAssign { target, value } => {
             apply_expr_effects(target, state);
@@ -389,17 +492,17 @@ fn analyze_stmt(
         StmtKind::ListUnpack { vars, value } => {
             apply_expr_effects(value, state);
             for name in vars {
-                state.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
             }
         }
         StmtKind::Global { vars } => {
             for name in vars {
-                state.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
             }
         }
         StmtKind::StaticVar { name, init } => {
             apply_expr_effects(init, state);
-            state.insert(name.clone(), ReturnArgAlias::Unknown);
+            state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
         }
         StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) | StmtKind::Throw(expr) => {
             apply_expr_effects(expr, state);
@@ -422,11 +525,11 @@ fn analyze_stmt(
 }
 
 /// Runs one branch body from a cloned incoming state.
-fn analyzed_path(
+fn analyzed_path<'a>(
     body: &[Stmt],
-    incoming: &HashMap<String, ReturnArgAlias>,
+    incoming: &AliasState<'a>,
     returned: &mut ReturnArgAlias,
-) -> HashMap<String, ReturnArgAlias> {
+) -> AliasState<'a> {
     let mut state = incoming.clone();
     analyze_body(body, &mut state, returned);
     state
@@ -437,7 +540,7 @@ fn analyze_loop(
     body: &[Stmt],
     updates: &[&Stmt],
     condition: Option<&Expr>,
-    state: &mut HashMap<String, ReturnArgAlias>,
+    state: &mut AliasState<'_>,
     returned: &mut ReturnArgAlias,
 ) {
     let entry = state.clone();
@@ -461,19 +564,32 @@ fn analyze_loop(
 }
 
 /// Merges local provenance across mutually exclusive control-flow paths.
-fn merge_states(
-    states: Vec<HashMap<String, ReturnArgAlias>>,
-) -> HashMap<String, ReturnArgAlias> {
+fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
+    static NO_PARAMETERS: std::sync::LazyLock<BTreeSet<String>> =
+        std::sync::LazyLock::new(BTreeSet::new);
+    static NO_PARAMETER_INDICES: std::sync::LazyLock<BTreeSet<usize>> =
+        std::sync::LazyLock::new(BTreeSet::new);
+    let string_parameters = states
+        .first()
+        .map(|state| state.string_parameters)
+        .unwrap_or(&NO_PARAMETERS);
+    let string_parameter_indices = states
+        .first()
+        .map(|state| state.string_parameter_indices)
+        .unwrap_or(&NO_PARAMETER_INDICES);
     let mut keys = BTreeSet::new();
     for state in &states {
-        keys.extend(state.keys().cloned());
+        keys.extend(state.locals.keys().cloned());
     }
-    keys.into_iter()
+    let locals = keys
+        .into_iter()
         .map(|key| {
-            let mut aliases = states.iter().filter_map(|state| state.get(&key));
+            let mut aliases = states.iter().filter_map(|state| state.locals.get(&key));
             let first = aliases.next().cloned().unwrap_or(ReturnArgAlias::Unknown);
             let merged = aliases.fold(first, |current, alias| current.merge(alias));
-            let missing_on_path = states.iter().any(|state| !state.contains_key(&key));
+            let missing_on_path = states
+                .iter()
+                .any(|state| !state.locals.contains_key(&key));
             (
                 key,
                 if missing_on_path {
@@ -483,20 +599,33 @@ fn merge_states(
                 },
             )
         })
-        .collect()
+        .collect();
+    // A slot is only still a bare `Str` if it is one on every path into here.
+    let str_slot_locals = states
+        .iter()
+        .map(|state| state.str_slot_locals.clone())
+        .reduce(|acc, next| acc.intersection(&next).cloned().collect())
+        .unwrap_or_default();
+    AliasState {
+        locals,
+        string_parameters,
+        string_parameter_indices,
+        str_slot_locals,
+    }
 }
 
 /// Computes the argument provenance of one expression's resulting storage.
-fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArgAlias {
+fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
     match &expr.kind {
         ExprKind::Variable(name) => state
+            .locals
             .get(name)
             .cloned()
             .unwrap_or(ReturnArgAlias::Unknown),
         ExprKind::ErrorSuppress(inner)
         | ExprKind::NamedArg { value: inner, .. }
-        | ExprKind::Spread(inner)
-        | ExprKind::Cast { expr: inner, .. } => expr_alias(inner, state),
+        | ExprKind::Spread(inner) => expr_alias(inner, state),
+        ExprKind::Cast { expr: inner, target } => cast_alias(target, inner, state),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
             expr_alias(value, state).merge(&expr_alias(default, state))
@@ -570,8 +699,85 @@ fn builtin_result_is_proven_independent(name: &str) -> bool {
     })
 }
 
+/// Computes the argument provenance of a cast's result.
+///
+/// Only a cast EIR lowering ELIDES can hand an argument's storage back, and `lower_cast` elides
+/// exactly one shape: `(string)` over a value whose IR type is already `Str`. Everything else
+/// emits `Op::Cast`, whose backend helpers write into storage independent of the source -- a
+/// `mixed` holding a string is copied into a fresh allocation, and an `(array)` cast allocates
+/// even when its operand is already an array.
+///
+/// The only operand with a bare `Str` slot is a parameter DECLARED `string`. A local is boxed
+/// Mixed even when everything written to it was a string -- `$x = $c ? $a : $b` over two
+/// `string` parameters lowers through `mixed_box` -- so a cast over one allocates. Asking about
+/// the declared type of the parameters a local's provenance names would be answering a
+/// different question, and the answer would be wrong for exactly those merged locals.
+///
+/// Calling a copy an alias of the parameter tells the caller its result is borrowed, so the
+/// caller never releases it and one block leaks per call (issue #700). Getting it wrong the
+/// other way frees the caller's string underneath it, which is why anything this cannot prove
+/// answers `None` rather than guessing: `None` costs a release the caller can always make.
+fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
+    if !matches!(target, CastType::String) {
+        return ReturnArgAlias::None;
+    }
+    if !expr_keeps_str_slot(inner, state) {
+        return ReturnArgAlias::None;
+    }
+    // The parameter's own provenance, not its index: `function f(string $a, string $b)
+    // { $a = $b; return (string)$a; }` still has a `Str` slot, but it now holds $b's storage.
+    let alias = expr_alias(inner, state);
+    match alias {
+        // ...and that storage has to be another `Str` slot, or the assignment widened the one
+        // the declaration promised and the cast allocates after all. `function f(string $a,
+        // mixed $b) { $a = $b; return (string)$a; }` boxes `$a`, so `lower_cast` emits
+        // `Op::Cast` and the caller owns the copy; calling it borrowed leaks it per call.
+        ReturnArgAlias::Parameters(ref parameters)
+            if parameters
+                .iter()
+                .all(|index| state.is_string_parameter_index(*index)) =>
+        {
+            alias
+        }
+        ReturnArgAlias::Parameters(_) => ReturnArgAlias::None,
+        // `Unknown` stays unknown: a provenance nobody could follow is the one case where
+        // claiming independence would be a use-after-free rather than a leak.
+        other => other,
+    }
+}
+
+/// Reports whether `expr` still has the bare `Str` slot that makes `lower_cast` elide a
+/// `(string)` cast over it.
+///
+/// This asks about the slot as it stands HERE, not about how the variable was declared. A
+/// `string` parameter starts with a bare `Str`, and keeps it only while everything written into
+/// it is itself bare-`Str`: assigned from a `mixed` parameter, or from a boxed local such as
+/// `$c ? $p : $q`, the slot widens and the cast starts allocating. Reading the declaration alone
+/// leaked one copy per call for both of those shapes.
+///
+/// It has to see through exactly what `expr_alias` sees through, or the two disagree about
+/// which expression "the operand" is, and the disagreement is a use-after-free rather than a
+/// leak: `return (string)@$s` over a `string` parameter is elided just as `return (string)$s`
+/// is, so calling its result independent has the caller release the argument's own string.
+/// An already-elided inner `(string)` cast leaves a `Str` behind too, so `(string)(string)$s`
+/// nests the same way.
+fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
+    match &inner.kind {
+        ExprKind::Variable(name) => state.has_str_slot(name),
+        // The wrappers `expr_alias` treats as transparent, which produce no value of their own.
+        ExprKind::ErrorSuppress(inner)
+        | ExprKind::NamedArg { value: inner, .. }
+        | ExprKind::Spread(inner) => expr_keeps_str_slot(inner, state),
+        ExprKind::Cast {
+            target: CastType::String,
+            expr: inner,
+        } => expr_keeps_str_slot(inner, state),
+        _ => false,
+    }
+}
+
 /// Conservatively invalidates locals that an expression can rewrite by reference.
-fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) {
+fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
     match &expr.kind {
         ExprKind::Assignment {
             target,
@@ -732,7 +938,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
         }
         ExprKind::Closure { capture_refs, .. } => {
             for name in capture_refs {
-                state.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
             }
         }
         ExprKind::StringLiteral(_)
@@ -757,7 +963,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
 }
 
 /// Visits a slice of expressions for nested call or assignment effects.
-fn visit_expr_effects(exprs: &[Expr], state: &mut HashMap<String, ReturnArgAlias>) {
+fn visit_expr_effects(exprs: &[Expr], state: &mut AliasState<'_>) {
     for expr in exprs {
         apply_expr_effects(expr, state);
     }
@@ -782,21 +988,21 @@ fn named_call_can_rebind_unlisted_locals(name: &str) -> bool {
 }
 
 /// Replaces every tracked provenance with the conservative top element.
-fn invalidate_all_aliases(state: &mut HashMap<String, ReturnArgAlias>) {
-    for alias in state.values_mut() {
+fn invalidate_all_aliases(state: &mut AliasState<'_>) {
+    for alias in state.locals.values_mut() {
         *alias = ReturnArgAlias::Unknown;
     }
 }
 
 /// Marks direct variable call arguments unknown because the callee may accept them by reference.
-fn invalidate_call_variables(args: &[Expr], state: &mut HashMap<String, ReturnArgAlias>) {
+fn invalidate_call_variables(args: &[Expr], state: &mut AliasState<'_>) {
     for arg in args {
         let value = match &arg.kind {
             ExprKind::NamedArg { value, .. } | ExprKind::Spread(value) => value.as_ref(),
             _ => arg,
         };
         if let ExprKind::Variable(name) = &value.kind {
-            state.insert(name.clone(), ReturnArgAlias::Unknown);
+            state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
         }
     }
 }

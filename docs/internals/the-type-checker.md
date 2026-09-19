@@ -539,6 +539,46 @@ The result is that a hint-less union return is byte-identical to writing the hin
 `codegen_repr()` maps it to the boxed representation that carries the sentinel rather than
 coercing it into the other arm's zero value.
 
+### Return-to-argument alias summaries
+
+After checking, a lightweight AST pass (`src/types/return_alias.rs`) records, for every
+source-declared function and method, whether its result can be storage the CALLER still owns.
+The answer is one of three things: `None` (every return path is independent of the arguments),
+`Parameters({i, ...})` (a return path can hand parameter `i`'s storage back), or `Unknown`.
+
+EIR lowering reads it at the call site. A result proven to alias an argument is BORROWED, so
+the caller must not release it; anything else is owned, and the caller releases it once it is
+consumed. Getting that backwards costs one leaked block per call in one direction and a
+use-after-free in the other, so the pass is deliberately conservative: it merges provenance
+across branches, runs loop bodies to a fixed point, and answers `Unknown` for any storage path
+it cannot follow.
+
+The rule that is easy to get wrong is the cast. A cast is only alias-transparent when EIR
+lowering ELIDES it, and `lower_cast` elides exactly one shape: `(string)` over a value whose IR
+type is already `Str`, which compiles to nothing at all. Every other cast emits `Op::Cast`,
+whose backend helpers write into storage independent of the source — `(string)` over a boxed
+`mixed` COPIES the payload into a fresh allocation, and `(array)` allocates even when its
+operand is already an array. The pass therefore carries which parameters are declared exactly
+`string` and keeps a cast's alias only when the operand resolves to one of them. Treating every
+cast as transparent is what made `function f($v) { return (string)$v; }` leak a full copy of
+the string on every call (issue #700).
+
+The declaration is the start of the answer, not all of it. A `string` parameter can be assigned
+a wider value, and the slot widens with it, so the pass also checks the provenance the operand
+actually carries:
+
+```php
+function f(string $a, string $b): string { $a = $b; return (string)$a; }  // borrowed from $b
+function g(string $a, mixed  $b): string { $a = $b; return (string)$a; }  // a fresh copy
+```
+
+Both operands name a parameter declared `string`. In `f` the storage now in `$a` came from
+another bare `Str` slot, the cast is still elided, and the result is `$b`'s storage. In `g` the
+assignment boxed `$a` into a Mixed, so `lower_cast` emits `Op::Cast` and the caller owns the
+copy. Only a provenance whose every parameter was declared `string` keeps the passthrough;
+anything else answers `None`, and an `Unknown` provenance stays `Unknown`, because that is the
+one case where claiming independence would be a use-after-free rather than a leak.
+
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 
 **File:** `src/types/checker/stmt_check/narrowing.rs`
