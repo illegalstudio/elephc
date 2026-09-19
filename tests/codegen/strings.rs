@@ -13,6 +13,8 @@ use crate::support::*;
 mod search;
 #[path = "strings/transform.rs"]
 mod transform;
+#[path = "strings/implode_boxed.rs"]
+mod implode_boxed;
 #[path = "strings/encoding.rs"]
 mod encoding;
 #[path = "strings/iconv.rs"]

@@ -102,6 +102,17 @@ $csv = "one,two,three";
 $parts = explode(",", $csv);
 echo "explode: " . count($parts) . " parts\n";
 echo "implode: " . implode(" | ", $parts) . "\n";
+// implode() takes the array through any slot, including one whose shape is only known at run
+// time -- a ?array, a mixed, a union -- and renders each element type the way echo does:
+// ints and floats as their decimal text, true as "1" and false as the empty string.
+function joined(?array $values): string { return implode(",", $values); }
+echo "implode(?array ints): " . joined([1, 2, 3]) . "\n";
+echo "implode(?array floats): " . joined([1.5, 2.5]) . "\n";
+echo "implode(?array bools): [" . joined([true, false]) . "]\n";
+// Keys are ignored, values are joined in insertion order.
+echo "implode(?array hash): " . joined(["a" => 1, "b" => "x", "c" => 2.5]) . "\n";
+// A value that is not an array is PHP's TypeError, not a crash.
+try { joined(null); } catch (TypeError $e) { echo "implode(null): " . $e->getMessage() . "\n"; }
 
 // Character functions
 echo "\n--- Char ---\n";

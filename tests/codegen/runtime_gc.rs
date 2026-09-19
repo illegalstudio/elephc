@@ -43,6 +43,8 @@ mod cow_and_cycles;
 mod growth;
 #[path = "runtime_gc/heap.rs"]
 mod heap;
+#[path = "runtime_gc/implode_boxed_operand.rs"]
+mod implode_boxed_operand;
 #[path = "runtime_gc/heap_codegen.rs"]
 mod heap_codegen;
 #[path = "runtime_gc/resource_scope_cleanup.rs"]

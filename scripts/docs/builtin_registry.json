@@ -64873,8 +64873,7 @@
         "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
-        "kind": "static",
-        "names": []
+        "kind": "shared"
       },
       "lowering": {
         "kind": "runtime_call",
@@ -71278,8 +71277,7 @@
         "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
-        "kind": "static",
-        "names": []
+        "kind": "shared"
       },
       "lowering": {
         "kind": "runtime_call",

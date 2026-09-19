@@ -304,6 +304,13 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         )));
     }
     let array_index = inst.operands.len() - 1;
+    let array = expect_operand(inst, array_index)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        emit_boxed_implode_array_type_guard(ctx, array)?;
+    }
     let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
     let hash_copy = implode_hash_value_type(ctx, inst, array_index)?;
     match ctx.emitter.target.arch {
@@ -591,6 +598,12 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
         // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
         PhpType::Bool => Ok("__rt_implode_bool"),
         PhpType::Int => Ok("__rt_implode_int"),
+        // `__rt_implode` dispatches on the array's element value_type tag, and the float arm
+        // is the one that renders a raw double through `__rt_ftoa`. There is deliberately no
+        // dedicated `__rt_implode_float`: a standalone one would have to republish the live
+        // destination cursor before every conversion, which is exactly what the generic loop
+        // already does for its boxed-Mixed elements (issue #640).
+        PhpType::Float => Ok("__rt_implode"),
         // An empty array literal carries an uninhabited element type (`Never`, or
         // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
         // dereference an element, so the generic string helper is the safe choice and
@@ -616,6 +629,11 @@ fn implode_hash_value_type(
     let array = expect_operand(inst, array_index)?;
     match ctx.value_php_type(array)? {
         PhpType::AssocArray { value, .. } => Ok(Some(value.codegen_repr())),
+        // A boxed operand is materialized by `emit_boxed_implode_array_source`, which answers
+        // with an owned array in BOTH of its accepting branches -- the hash conversion allocates
+        // one and the indexed branch retains the borrowed payload -- precisely so this release
+        // needs no run-time flag.
+        PhpType::Mixed | PhpType::Union(_) => Ok(Some(PhpType::Mixed)),
         _ => Ok(None),
     }
 }
@@ -676,11 +694,11 @@ pub(super) fn load_implode_array_aarch64(
     array: ValueId,
 ) -> Result<()> {
     match ctx.value_php_type(array)?.codegen_repr() {
+        // The declared type says nothing about the payload's shape, so the source is decided at
+        // run time: hash, indexed array, or not an array at all (issue #689).
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_reg(array, "x0")?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed array payload to implode()
-            Ok(())
+            emit_boxed_implode_array_source(ctx)
         }
         // A hash has no dense payload for the renderers to walk, so its values are copied
         // into a fresh indexed array first — the same extraction `array_values()` uses.
@@ -702,11 +720,10 @@ pub(super) fn load_implode_array_x86_64(
     array: ValueId,
 ) -> Result<()> {
     match ctx.value_php_type(array)?.codegen_repr() {
+        // See the AArch64 loader: the payload's shape is a run-time question here.
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_reg(array, "rax")?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed array payload to implode()
-            Ok(())
+            emit_boxed_implode_array_source(ctx)
         }
         // See the AArch64 loader: a hash operand is copied into an indexed array first.
         PhpType::AssocArray { value, .. } => {
