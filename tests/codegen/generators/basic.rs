@@ -331,3 +331,155 @@ foreach (gen() as $v) { echo "got "; }
     );
     assert_eq!(out, "got got ");
 }
+
+// --- Issue #1086: a declared `Generator` return is not the same as holding a `yield` ---------
+//
+// PHP decides generator-ness by the `yield` TOKEN and nothing else. A function that merely
+// FORWARDS someone else's generator declares exactly the same return type while holding no
+// token, and is an ordinary function returning that object:
+//
+//     function inner(): Generator { yield 1; }
+//     function factory(): Generator { return inner(); }   // NOT a generator
+//
+// Treating the declared type as proof compiled `factory` as a coroutine, so `return inner()`
+// became the value `getReturn()` hands back rather than the function's result — iterating it
+// never terminated, and driving it by hand reported a valid generator with no current value.
+//
+// Each fixture asserts a FINITE result, because the failure was a hang rather than a wrong
+// value; the by-hand form is included so a regression fails fast instead of spinning.
+
+/// The issue's own shape: a factory forwarding another function's generator.
+#[test]
+fn test_a_function_returning_another_generator_is_not_itself_a_generator() {
+    let out = compile_and_run(
+        r#"<?php
+function inner(): Generator { yield 1; yield 2; }
+function factory(): Generator { return inner(); }
+$n = 0;
+foreach (factory() as $v) { $n = $n + $v; }
+echo "factory:", $n, "\n";
+"#,
+    );
+    assert_eq!(out, "factory:3\n");
+}
+
+/// The same through a method, and through a local rather than straight from the call.
+#[test]
+fn test_a_generator_factory_works_through_a_method_and_a_local() {
+    let out = compile_and_run(
+        r#"<?php
+function inner(): Generator { yield 5; }
+class C { public function make(): Generator { return inner(); } }
+function viaLocal(): Generator { $g = inner(); return $g; }
+$n = 0;
+foreach ((new C())->make() as $v) { $n = $n + $v; }
+foreach (viaLocal() as $v) { $n = $n + $v; }
+echo "both:", $n, "\n";
+"#,
+    );
+    assert_eq!(out, "both:10\n");
+}
+
+/// Driving a factory's result by hand. This is the shape that fails FAST when the property is
+/// lost: the coroutine reported `valid() === true` with an empty `current()`, where the
+/// `foreach` fixtures above hang instead.
+#[test]
+fn test_a_generator_factorys_result_is_the_inner_generator() {
+    let out = compile_and_run(
+        r#"<?php
+function inner(): Generator { yield 7; }
+function factory(): Generator { return inner(); }
+$it = factory();
+echo "byhand:", var_export($it->valid(), true), ",", $it->current(), "\n";
+"#,
+    );
+    assert_eq!(out, "byhand:true,7\n");
+}
+
+/// The `iterable` spelling of the same factory. It already worked — `iterable` is not rewritten
+/// to `Generator` for a body with no yield, so the declared type never stood in for the token
+/// here. It is the control that says the fix did not simply move the problem.
+#[test]
+fn test_an_iterable_returning_generator_factory_is_unaffected() {
+    let out = compile_and_run(
+        r#"<?php
+function inner(): Generator { yield 4; }
+function factory(): iterable { return inner(); }
+$n = 0;
+foreach (factory() as $v) { $n = $n + $v; }
+echo "iterable:", $n, "\n";
+"#,
+    );
+    assert_eq!(out, "iterable:4\n");
+}
+
+/// The negative side: a function that DOES hold a yield and declares `: Generator` is still a
+/// generator, and its `return` is still what `getReturn()` reports — including when the only
+/// yield in the body is statically dead, which is the shape the declared-type proxy existed to
+/// rescue before a prune could no longer delete it.
+#[test]
+fn test_a_declared_generator_that_holds_a_yield_is_still_a_generator() {
+    let out = compile_and_run(
+        r#"<?php
+function live(): Generator { yield 1; return 9; }
+function dead(): Generator { if (false) { yield 1; } return 8; }
+$a = live();
+foreach ($a as $v) { echo $v; }
+$b = dead();
+foreach ($b as $v) { echo $v; }
+echo ":", $a->getReturn(), ",", $b->getReturn(), "\n";
+"#,
+    );
+    assert_eq!(out, "1:9,8\n");
+}
+
+/// Reflection already answered this correctly, and still does.
+///
+/// `ReflectionFunction::isGenerator()` reads `flags.is_generator`, which was ALWAYS set from the
+/// token — the disjunct removed from `attach_generator_source_if_needed` tested a field that had
+/// by then been rewritten to the coroutine's `Mixed` body return, so it could never fire. That is
+/// the shape of the bug: the flag said "not a generator" while `generator_body_return_type` said
+/// "generator", and the factory got a coroutine's body return type without the coroutine.
+///
+/// So this is a CONTROL: it asserts that removing the other reader did not disturb the one that
+/// was right, in the only place the property is observable from PHP without running the
+/// function.
+#[test]
+fn test_reflection_reports_a_generator_factory_as_not_a_generator() {
+    let out = compile_and_run(
+        r#"<?php
+function inner(): Generator { yield 1; }
+function factory(): Generator { return inner(); }
+function real(): Generator { yield 2; }
+$a = new ReflectionFunction("factory");
+$b = new ReflectionFunction("real");
+var_dump($a->isGenerator(), $b->isGenerator());
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\n");
+}
+
+/// Everything that consumes a generator accepts a factory's result, which is an ordinary
+/// `Generator` object and not a coroutine frame of the factory's own.
+///
+/// A factory no longer emits the three generator symbols (`_fn_<f>`, `__genbody`, `__gencb`), so
+/// any consumer reaching for the body by name rather than driving the returned object would
+/// break here rather than in the plain `foreach` the other fixtures use.
+#[test]
+fn test_a_generator_factorys_result_works_with_every_consumer() {
+    let out = compile_and_run(
+        r#"<?php
+function inner(): Generator { yield 1; yield 2; }
+function factory(): Generator { return inner(); }
+function outer(): Generator { yield from factory(); }
+function one(): Generator { yield 4; }
+function oneFactory(): Generator { return one(); }
+$n = 0;
+foreach (outer() as $v) { $n = $n + $v; }
+$c = oneFactory(...);
+foreach ($c() as $v) { $n = $n + $v; }
+echo "consumers:", count(iterator_to_array(factory())), ",", $n, "\n";
+"#,
+    );
+    assert_eq!(out, "consumers:2,7\n");
+}

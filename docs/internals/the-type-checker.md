@@ -881,6 +881,17 @@ When checking `new ClassName(...)`, it also rejects interfaces and abstract clas
 
 `Iterator`, `IteratorAggregate`, and the final built-in `Generator` class are injected by `src/types/checker/builtin_iterators.rs`. `Generator` implements `Iterator` and carries placeholder method bodies for `current`, `key`, `next`, `valid`, `rewind`, `send`, `throw`, and `getReturn`; codegen intercepts those methods and routes them to `__rt_gen_*` helpers. `yield_validation` marks any function or closure body containing `yield` as returning `Object("Generator")`, while still allowing declared return types compatible with `Generator`, `Iterator`, `Traversable`, or `iterable`.
 
+That coercion is one-way, and reading it backwards is a bug. A checked return type of `Object("Generator")` means *either* that the body holds a `yield` *or* that the author declared `: Generator` — and the second is not a generator at all:
+
+```php
+function inner(): Generator { yield 1; yield 2; }
+function factory(): Generator { return inner(); }   // an ordinary function
+```
+
+`factory` holds no token, so PHP runs its body to completion and hands back the object `inner()` produced. Lowering used the checked return type as its generator-ness signal and compiled `factory` as a coroutine, which made `return inner()` the value `getReturn()` reports rather than the function's result: iterating it never terminated (issue #1086). `ir_lower::function` now asks `body_contains_yield` and only that.
+
+The token is a reliable signal because no optimizer pass may delete a body's last `yield` (`optimize::body_preserving_yields`). Before that guard existed it was not, and the declared type was the fallback that recovered generator-ness after a fold had removed the token — which is how the two questions came to be conflated.
+
 ## Output: CheckResult
 
 The type checker produces a `CheckResult` (defined in `src/types/result.rs`):
