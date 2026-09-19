@@ -1065,6 +1065,7 @@ pub(crate) fn lower_closure_function(
         body,
         captures,
         parent.classes,
+        parent.functions,
         parent.builtin_call_types,
     );
     signature.by_ref_return = by_ref_return;
@@ -1102,6 +1103,7 @@ pub(crate) fn lower_closure_function_with_context(
         body,
         captures,
         parent.classes,
+        parent.functions,
         parent.builtin_call_types,
     );
     signature.by_ref_return = by_ref_return;
@@ -1763,6 +1765,7 @@ fn closure_signature_from_ast(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 ) -> FunctionSig {
     let mut signature =
@@ -1778,6 +1781,7 @@ fn closure_signature_from_ast(
                 captures,
                 &signature.params,
                 classes,
+                functions,
                 builtin_call_types,
             )
         {
@@ -1795,6 +1799,7 @@ fn direct_closure_return_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 ) -> Option<PhpType> {
     let [stmt] = body else {
@@ -1808,6 +1813,7 @@ fn direct_closure_return_type(
         captures,
         params,
         classes,
+        functions,
         builtin_call_types,
     ))
 }
@@ -1826,11 +1832,28 @@ fn direct_closure_return_expr_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 ) -> PhpType {
-    if matches!(expr.kind, ExprKind::FunctionCall { .. }) {
+    if let ExprKind::FunctionCall { name, .. } = &expr.kind {
         if let Some(ty) = builtin_call_types.get(&expr.span) {
             return ty.clone();
+        }
+        // A USER function is not in `builtin_call_types` -- that map only records builtin call
+        // results -- so without this the call fell all the way to the syntactic fallback at the
+        // end of this function, whose `FunctionCall` arm answers `Int` for anything it does not
+        // recognize. `$f = function ($v) { return tag($v); }` therefore returned a declared
+        // `: string` through an int slot and printed 0, with no diagnostic (issue #1028). The
+        // checker gets this right; only this re-derivation did not.
+        // Through `eir_user_function_return_type`, NOT the raw signature type, because that is
+        // what ordinary call lowering hands back and the two have to agree. A callee with an
+        // untyped by-value parameter receives it as a boxed Mixed, so a container it builds out
+        // of that parameter has Mixed elements whatever the signature's inferred element type
+        // says. Copying the raw type here stamped `array<string>` on a call that really produces
+        // `array<mixed>`, and the caller then read the boxed element with the wrong layout: the
+        // element came back as its own pointer printed as an integer. Raised in review.
+        if let Some(sig) = functions.get(name.as_str()) {
+            return crate::ir_lower::expr::eir_user_function_return_type(sig);
         }
     }
     // An array literal returned directly is stamped with this inferred type and its elements
@@ -1843,6 +1866,7 @@ fn direct_closure_return_expr_type(
                 captures,
                 params,
                 classes,
+                functions,
                 builtin_call_types,
             )));
         }
@@ -1854,6 +1878,7 @@ fn direct_closure_return_expr_type(
                 captures,
                 params,
                 classes,
+                functions,
                 builtin_call_types,
             );
         }
@@ -1929,6 +1954,7 @@ fn direct_closure_return_array_element_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 ) -> PhpType {
     let mut elem_ty = PhpType::Never;
@@ -1940,6 +1966,7 @@ fn direct_closure_return_array_element_type(
                 captures,
                 params,
                 classes,
+                functions,
                 builtin_call_types,
             ),
         );
@@ -1957,6 +1984,7 @@ fn direct_closure_return_array_item_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 ) -> PhpType {
     if let ExprKind::Spread(inner) = &item.kind {
@@ -1965,6 +1993,7 @@ fn direct_closure_return_array_item_type(
             captures,
             params,
             classes,
+            functions,
             builtin_call_types,
         );
         return match source.codegen_repr() {
@@ -1985,6 +2014,7 @@ fn direct_closure_return_array_item_type(
         captures,
         params,
         classes,
+        functions,
         builtin_call_types,
     ))
 }
@@ -2001,6 +2031,7 @@ fn direct_closure_return_assoc_literal_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 ) -> PhpType {
     let mut key_ty = PhpType::Never;
@@ -2022,6 +2053,7 @@ fn direct_closure_return_assoc_literal_type(
                 captures,
                 params,
                 classes,
+                functions,
                 builtin_call_types,
             ),
         );

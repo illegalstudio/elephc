@@ -176,6 +176,7 @@ pub(super) use assoc_array_literals::{
     property_access_expr_type_for_ir,
 };
 pub(super) use call_return_types::call_return_type;
+pub(super) use call_return_types::eir_user_function_return_type;
 pub(super) use merge_temps::coerce_container_to_mixed_payload;
 pub(super) use nullable_method_calls::lower_dynamic_method_call_with_receiver;
 pub(super) use static_method_calls::static_method_call_expr_type_for_ir;

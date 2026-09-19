@@ -9,6 +9,7 @@
 
 mod callable_strings;
 mod closure_array_returns;
+mod closure_call_returns;
 mod closures;
 mod expr_calls;
 mod func_args;
