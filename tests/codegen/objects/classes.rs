@@ -1085,3 +1085,85 @@ echo "survived";
     );
     assert_eq!(out, "bool(false)\nsurvived");
 }
+
+
+/// Verifies a single declaration may introduce SEVERAL properties or class constants, separated
+/// by commas (issue #684).
+///
+/// Every declarator list was a parse error, so one such line made the whole file uncompilable:
+/// `public int $w = 40, $h = 22;` reported `Expected ';' or property hook block after property
+/// declaration` — pointing at the comma and talking about hooks, which sends the reader looking
+/// in the wrong place — and `const A = 1, B = 2;` reported `Expected ';'`.
+///
+/// The type and every modifier are SHARED by the whole list while each declarator carries its own
+/// initializer, so the matrix walks the modifier combinations that have to survive the split:
+/// typed and untyped, `private static`, a trait, `readonly` assigned in the constructor, typed
+/// class constants, a visibility-qualified constant list, three or more declarators, a list where
+/// only some declarators are initialized, and a list sitting beside a hooked property.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_comma_separated_property_and_constant_declarations_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public int $w = 40, $h = 22; }
+$a = new A(); echo $a->w + $a->h, "\n";
+class B { public $a = 1, $b = 2; }
+$b = new B(); echo $b->a + $b->b, "\n";
+class C {
+    private static int $x = 5, $y = 6;
+    public static function sum(): int { return self::$x + self::$y; }
+}
+echo C::sum(), "\n";
+class D { const A = 1, B = 2; }
+echo D::A + D::B, "\n";
+class E { const int P = 3, Q = 4; }
+echo E::P + E::Q, "\n";
+class F { protected const string S = "a", T = "b"; public static function j(): string { return self::S . self::T; } }
+echo F::j(), "\n";
+class G { public int $p = 7, $q = 8, $r = 9; }
+$g = new G(); echo $g->p, ",", $g->q, ",", $g->r, "\n";
+class H { public int $one = 1, $two = 2, $three = 3, $four = 4; }
+$h = new H(); echo $h->one + $h->two + $h->three + $h->four, "\n";
+class I {
+    public readonly int $m, $n;
+    public function __construct() { $this->m = 3; $this->n = 4; }
+}
+$i = new I(); echo $i->m + $i->n, "\n";
+trait T1 { public int $t1 = 1, $t2 = 2; }
+class J { use T1; }
+$j = new J(); echo $j->t1 + $j->t2, "\n";
+class K { public int $u = 8; public int $v = 9; const X = 10; const Y = 11; }
+$k = new K(); echo $k->u + $k->v + K::X + K::Y, "\n";
+interface Limits { const MIN = 1, MAX = 10; }
+class M implements Limits {}
+echo Limits::MIN + Limits::MAX + M::MAX, "\n";
+class N { public int $p = 7, $q, $r = 9; public function __construct() { $this->q = 8; } }
+$n = new N(); echo $n->p, ",", $n->q, ",", $n->r, "\n";
+class L {
+    public int $c1 = 1, $c2 = 2;
+    public int $hooked { get => 42; }
+}
+$l = new L(); echo $l->c1 + $l->c2 + $l->hooked, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "62\n",
+            "3\n",
+            "11\n",
+            "3\n",
+            "7\n",
+            "ab\n",
+            "7,8,9\n",
+            "10\n",
+            "7\n",
+            "3\n",
+            "38\n",
+            "21\n",
+            "7,8,9\n",
+            "45\n",
+        )
+    );
+}

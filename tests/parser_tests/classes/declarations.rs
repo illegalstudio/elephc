@@ -491,3 +491,104 @@ fn test_parse_anonymous_class_with_ctor_extends_implements() {
     assert_eq!(anon.0.as_deref(), Some("P"));
     assert_eq!(anon.1.len(), 1);
 }
+
+
+/// Verifies a comma-separated PROPERTY list produces one `ClassProperty` per name, all sharing
+/// the declaration's type and modifiers while keeping independent defaults (issue #684).
+///
+/// The mixed-default row is the one the codegen fixtures cannot show: `$b` has no initializer
+/// between two that do, so a loop that carried the previous declarator's default forward, or that
+/// attached the type to only the first name, fails here and nowhere else.
+#[test]
+fn test_parse_property_declarator_list_shares_modifiers_and_type() {
+    let stmts = parse_source(
+        "<?php class C { private static ?int $a = 1, $b, $c = 3; }",
+    );
+    let StmtKind::ClassDecl { properties, .. } = &stmts[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(properties.len(), 3);
+    for property in properties {
+        assert_eq!(property.visibility, Visibility::Private, "{}", property.name);
+        assert!(property.is_static, "{}", property.name);
+        assert!(property.type_expr.is_some(), "{}", property.name);
+    }
+    assert_eq!(properties[0].name, "a");
+    assert!(properties[0].default.is_some());
+    assert_eq!(properties[1].name, "b");
+    assert!(
+        properties[1].default.is_none(),
+        "an uninitialized declarator must not inherit its neighbour's default"
+    );
+    assert_eq!(properties[2].name, "c");
+    assert!(properties[2].default.is_some());
+}
+
+/// Verifies a comma-separated CONSTANT list produces one `ClassConst` per name, sharing the
+/// declared type and visibility while each keeps its own value.
+#[test]
+fn test_parse_class_constant_declarator_list_shares_type_and_visibility() {
+    let stmts = parse_source("<?php class C { protected const int A = 1, B = 2; }");
+    let StmtKind::ClassDecl { constants, .. } = &stmts[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(constants.len(), 2);
+    for constant in constants {
+        assert_eq!(constant.visibility, Visibility::Protected, "{}", constant.name);
+        assert!(constant.type_expr.is_some(), "{}", constant.name);
+    }
+    assert_eq!(constants[0].name, "A");
+    assert_eq!(constants[1].name, "B");
+}
+
+/// Verifies an INTERFACE constant list parses the same way as a class one.
+///
+/// The interface body has its own parser, and it kept a copy of the single-declarator constant
+/// rule after the class parser learned the list — so `interface Limits { const MIN = 1, MAX = 10; }`
+/// still reported `Expected ';'`. Both now share one helper; this pins that they stay shared.
+#[test]
+fn test_parse_interface_constant_declarator_list() {
+    let stmts = parse_source("<?php interface Limits { const MIN = 1, MAX = 10; }");
+    let StmtKind::InterfaceDecl { constants, .. } = &stmts[0].kind else {
+        panic!("Expected InterfaceDecl");
+    };
+    assert_eq!(constants.len(), 2);
+    assert_eq!(constants[0].name, "MIN");
+    assert_eq!(constants[1].name, "MAX");
+}
+
+/// Verifies an ATTRIBUTE on a declaration list reaches every member of it.
+///
+/// The attributes are parsed once for the member and then cloned per declarator, so a list that
+/// dropped them after the first name would still compile and still run — reflection would simply
+/// stop seeing them.
+#[test]
+fn test_parse_declarator_list_attributes_reach_every_member() {
+    let stmts = parse_source(
+        "<?php class C { #[Marker] public int $a = 1, $b = 2; #[Marker] const X = 1, Y = 2; }",
+    );
+    let StmtKind::ClassDecl {
+        properties,
+        constants,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(properties.len(), 2);
+    assert_eq!(constants.len(), 2);
+    for property in properties {
+        assert!(
+            !property.attributes.is_empty(),
+            "property ${} lost its attribute",
+            property.name
+        );
+    }
+    for constant in constants {
+        assert!(
+            !constant.attributes.is_empty(),
+            "constant {} lost its attribute",
+            constant.name
+        );
+    }
+}

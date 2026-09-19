@@ -896,3 +896,35 @@ fn test_error_a_descendants_own_private_constructor_hides_the_ancestors_for_a_na
         "Cannot access private constructor: NamedHideChild::__construct",
     );
 }
+
+
+/// Verifies the malformed declarator lists PHP rejects are still rejected, each by its own cause.
+///
+/// Accepting `public int $w = 40, $h = 22;` (issue #684) must not turn the comma into a place
+/// where anything goes. The four shapes here are the ones a looping parser gets wrong most
+/// easily: a duplicate name inside one list, a trailing comma, a constant declarator with no
+/// value, and a HOOK block on a list — which php-src rejects outright, because a hook block
+/// belongs to one property (`unexpected token "{", expecting "," or ";"`).
+#[test]
+fn test_malformed_declarator_lists_are_rejected() {
+    expect_error(
+        "<?php class A { public int $a = 1, $a = 2; }",
+        "Cannot redeclare property $a",
+    );
+    expect_error(
+        "<?php class B { const X = 1, X = 2; }",
+        "Cannot redeclare class constant X",
+    );
+    expect_error(
+        "<?php class C { public int $a = 1, ; }",
+        "Expected a property name after ',' in the declaration list",
+    );
+    expect_error(
+        "<?php class E { const X = 1, Y; }",
+        "Expected '=' after class constant name",
+    );
+    expect_error(
+        "<?php class G { public int $a = 1, $b { get => 1; } }",
+        "A property hook block needs a declaration of its own",
+    );
+}
