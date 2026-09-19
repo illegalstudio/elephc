@@ -26,3 +26,36 @@ echo '"10" / 3 = ' . ("10" / 3) . "\n";
 // so the magnitude survives instead of saturating at PHP_INT_MAX.
 $wide = "99999999999999999999" + 1;
 echo '"99999999999999999999" + 1 type = ' . gettype($wide) . "\n";
+
+// ++ and -- on a property or an array element read as expressions, not just as statements.
+// The postfix form yields what the place held BEFORE the update, the prefix form what it holds
+// after.
+class Tally
+{
+    public int $hits = 0;
+    public array $per_page = [0, 0];
+
+    public function record(): int
+    {
+        return $this->hits++;   // the count BEFORE this hit
+    }
+}
+
+$tally = new Tally();
+echo "record() returns " . $tally->record() . ", hits is now " . $tally->hits . "\n";
+echo "++per_page[0] = " . ++$tally->per_page[0] . "\n";
+
+$totals = ["a" => 10];
+$sum = 0;
+$sum += $totals["a"]++;
+echo "sum = " . $sum . ", totals[a] = " . $totals["a"] . "\n";
+
+// The place is evaluated ONCE, so an index with side effects runs a single time.
+function pick_index(): int
+{
+    echo "picking ";
+    return 0;
+}
+
+$scores = [7, 8];
+echo "scores[pick_index()]++ = " . $scores[pick_index()]++ . ", now " . $scores[0] . "\n";

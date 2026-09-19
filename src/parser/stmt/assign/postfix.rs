@@ -274,6 +274,9 @@ pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
     if incdec_pos < start + 3 {
         return Ok(None);
     }
+    if assignment_precedes(tokens, start, incdec_pos) {
+        return Ok(None);
+    }
 
     let lhs = &tokens[start..incdec_pos];
     let mut lhs_pos = 0;
@@ -309,6 +312,9 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
     if incdec_pos < start + 3 {
         return Ok(None);
     }
+    if assignment_precedes(tokens, start, incdec_pos) {
+        return Ok(None);
+    }
 
     let lhs = &tokens[start..incdec_pos];
     let contains_complex_target = lhs
@@ -329,6 +335,18 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
     expect_semicolon(tokens, pos)?;
 
     lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
+}
+
+/// Reports whether a top-level assignment operator comes BEFORE `incdec_pos`.
+///
+/// When it does, the `++`/`--` belongs to the assignment's right-hand side, not to the statement:
+/// `$t += $b[0]++;` increments `$b[0]`, it does not increment `$t += $b[0]`. Both postfix-incdec
+/// statement parsers used to claim such a statement anyway, parse the whole `$t += $b[0]` as their
+/// target, and reject it with `Invalid assignment target` (issue #682). Declining here hands the
+/// statement to the assignment parsers, which lower the increment inside the value expression.
+fn assignment_precedes(tokens: &[SpannedToken], start: usize, incdec_pos: usize) -> bool {
+    find_top_level_assignment(tokens, start)
+        .is_some_and(|(assign_pos, _)| assign_pos < incdec_pos)
 }
 
 /// Parses a scoped (static class member) postfix assignment, handling targets like

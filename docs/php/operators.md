@@ -327,9 +327,9 @@ Nullsafe access cannot be used as an assignment target or combined with first-cl
 | `--$i` | Pre-decrement | New value |
 | `$i--` | Post-decrement | Old value |
 
-In statement position the target can be a local variable, an object property
-(including `$this->prop`), an array element, or a static property, in either the
-prefix or the postfix spelling:
+The target can be a local variable, an object property (including `$this->prop`), an
+array element, or a static property, in either spelling and in either position —
+statement or expression:
 
 ```php
 $this->count++;
@@ -338,12 +338,25 @@ $this->items[0]++;
 $obj->count--;
 --$obj->items[2];
 $totals["a"]++;
+
+echo $obj->n++;               // the OLD value, then $obj->n is one higher
+return ++$this->count;        // the NEW value
+$x = $totals["a"]++;
+$sum += $counts[$key]++;
 ```
 
 Statement position discards the operator's result, so `++$x;` and `$x++;` compile to
-the same read-modify-write. Reading the result of an increment on a property or array
-element — `echo $obj->n++;` — is not supported yet; assign through the statement form
-first.
+the same read-modify-write.
+
+The place is evaluated **once**, as PHP does it, so a receiver or an index with side
+effects runs a single time:
+
+```php
+function ix(): int { echo "ix "; return 0; }
+$b = [10, 20];
+echo $b[ix()]++;   // prints "ix 10" — one call, not two
+echo $b[0];        // 11
+```
 
 `int`, `float`, `bool`, and `null` values all increment like PHP. Floats add or
 subtract exactly `1.0` and stay floats:

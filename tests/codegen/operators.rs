@@ -1599,3 +1599,134 @@ fn test_runtime_non_numeric_string_coerces_to_zero() {
     let out = compile_and_run(r#"<?php $x = $argc > 99 ? "1" : "hi"; var_dump($x + 1);"#);
     assert_eq!(out, "int(1)\n");
 }
+
+
+/// Verifies `++`/`--` on a property or an array element works in EXPRESSION position, not only as
+/// a statement (issue #682).
+///
+/// Three separate parser gaps kept these out:
+///
+/// - The prefix parser took its fast path on seeing `Token::Variable` alone, consuming the name
+///   and leaving the place suffix behind, so `++$o->n` incremented the OBJECT and the checker
+///   rejected it with `Cannot increment/decrement $o of type Object("C")`. `++$this->n` escaped
+///   it only because `$this` is its own token.
+/// - The postfix desugaring replayed its target verbatim, so a computed index disqualified it and
+///   the operator was left unconsumed: `echo $b[ix()]++;` reported `Expected ';'`. It stabilizes
+///   the place now, exactly as a compound assignment does, which is also what makes `ix()` run
+///   ONCE.
+/// - The postfix-incdec STATEMENT parsers claimed any statement with a top-level `++`, including
+///   `$t += $b[0]++;`, then parsed `$t += $b[0]` as their target and rejected it with `Invalid
+///   assignment target`.
+///
+/// The matrix covers each gap, both operators, the receiver forms (`$this`, any object, indexed
+/// and associative elements, an element of a property, a static property), the value the
+/// expression yields — NEW for prefix, OLD for postfix — and the postfix forms that already
+/// worked, which must keep working.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_incdec_on_places_works_in_expression_position() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public int $n = 5;
+    public array $items = [1, 2];
+    public static int $s = 5;
+    public function post(): int { return $this->n++; }
+    public function pre(): int { return ++$this->n; }
+}
+$o = new Counter(); echo ++$o->n, ",", $o->n, "\n";
+$o = new Counter(); echo --$o->n, ",", $o->n, "\n";
+$o = new Counter(); echo $o->pre(), ",", $o->n, "\n";
+$b = [10, 20]; echo ++$b[0], ",", $b[0], "\n";
+$b = [10, 20]; echo --$b[0], ",", $b[0], "\n";
+$m = ["k" => 5]; echo ++$m["k"], ",", $m["k"], "\n";
+$m = ["k" => 5]; echo --$m["k"], ",", $m["k"], "\n";
+$o = new Counter(); echo ++$o->items[0], ",", $o->items[0], "\n";
+$o = new Counter(); $x = ++$o->n; echo $x, ",", $o->n, "\n";
+$b = [10]; $x = ++$b[0]; echo $x, ",", $b[0], "\n";
+function ix(): int { echo "ix "; return 0; }
+$b = [10, 20]; echo $b[ix()]++, ",", $b[0], "\n";
+$b = [10, 20]; echo ++$b[ix()], ",", $b[0], "\n";
+$b = [1, 2]; $t = 0; $t += $b[0]++; echo $t, ",", $b[0], "\n";
+$o = new Counter(); $t = 0; $t += $o->n++; echo $t, ",", $o->n, "\n";
+$b = [1, 2]; $t = 10; $t -= ++$b[0]; echo $t, ",", $b[0], "\n";
+$o = new Counter(); echo $o->n++, ",", $o->n, "\n";
+$o = new Counter(); echo $o->post(), ",", $o->n, "\n";
+$b = [10, 20]; echo $b[0]++, ",", $b[0], "\n";
+echo Counter::$s++, ",", Counter::$s, "\n";
+echo ++Counter::$s, ",", Counter::$s, "\n";
+$y = 1; echo $y++, ",", ++$y, ",", $y, "\n";
+$o = new Counter(); $o->n++; ++$o->n; echo $o->n, "\n";
+$b = [10]; $b[0]++; ++$b[0]; echo $b[0], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "6,6\n",
+            "4,4\n",
+            "6,6\n",
+            "11,11\n",
+            "9,9\n",
+            "6,6\n",
+            "4,4\n",
+            "2,2\n",
+            "6,6\n",
+            "11,11\n",
+            "ix 10,11\n",
+            "ix 11,11\n",
+            "1,2\n",
+            "5,6\n",
+            "8,2\n",
+            "5,6\n",
+            "5,6\n",
+            "10,11\n",
+            "5,6\n",
+            "7,7\n",
+            "1,3,3\n",
+            "7\n",
+            "12\n",
+        )
+    );
+}
+
+/// Verifies the place increments the expression parser now accepts release their temporaries.
+///
+/// The rewrite binds the stabilized receiver, the index, the captured old value and the result
+/// into named temporaries, so an unreleased one would accumulate per evaluation. The loop makes
+/// that visible instead of hiding it in a single-iteration total.
+///
+/// Two receiver forms are deliberately absent, because both leak on their own with no increment
+/// anywhere: `Counter::$s += 1;` reports `allocs=50 frees=0` over 50 iterations, and
+/// `$o->items[0] += 1;` reports `allocs=401 frees=351`. Plain assignment to either is clean, so
+/// the leak belongs to the shared read-modify-write path, which this fixture does not touch.
+/// Asserting clean here would pin that bug to increments it has nothing to do with.
+#[test]
+fn test_incdec_on_places_in_expression_position_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Counter { public int $n = 5; }
+function ix(): int { return 0; }
+for ($i = 0; $i < 32; $i++) {
+    $o = new Counter();
+    $a = ++$o->n;
+    $b = $o->n++;
+    $m = ["k" => 5];
+    $c = ++$m["k"];
+    $arr = [10, 20];
+    $d = $arr[ix()]++;
+    $e = ++$arr[1];
+    $t = 0;
+    $t += $arr[0]++;
+}
+echo $a, ",", $b, ",", $c, ",", $d, ",", $e, ",", $t, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "6,6,6,10,21,11\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "place increment in expression position leaked: {}",
+        out.stderr
+    );
+}

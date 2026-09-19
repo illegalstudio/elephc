@@ -343,9 +343,18 @@ fn parse_unary(
     Ok(Expr::new(ctor(Box::new(inner)), span))
 }
 
-/// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,
-/// then expects a `Variable` token next. Returns `PreIncrement` or `PreDecrement` with the
-/// variable name. Returns an error if a variable does not follow the operator.
+/// Parses a prefix `++` or `--` increment/decrement operator.
+///
+/// A BARE variable takes the dedicated `PreIncrement`/`PreDecrement` node, which names the local
+/// directly and is what every checker and optimizer pass understands. Anything else — a property,
+/// an array element, a static property, and their nesting — is parsed as an l-value and desugared,
+/// because those nodes carry a `String` and have nowhere to put a place.
+///
+/// The variable has to be checked for a FOLLOWING place suffix, not just for being a variable.
+/// `++$o->n` starts with `Token::Variable("o")`, and taking the fast path on that alone consumed
+/// the name and left `->n` behind, so the increment landed on the object and the checker rejected
+/// it with `Cannot increment/decrement $o of type Object("C")` (issue #682). The same happened to
+/// `++$b[0]` and `++$m["k"]`. `++$this->n` escaped it only because `$this` is its own token.
 fn parse_prefix_inc_dec(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -355,16 +364,18 @@ fn parse_prefix_inc_dec(
     *pos += 1;
     if *pos < tokens.len() {
         if let Token::Variable(name) = &tokens[*pos].0 {
-            let name = name.clone();
-            *pos += 1;
-            return Ok(Expr::new(
-                if increment {
-                    ExprKind::PreIncrement(name)
-                } else {
-                    ExprKind::PreDecrement(name)
-                },
-                span,
-            ));
+            if !place_suffix_follows(tokens, *pos + 1) {
+                let name = name.clone();
+                *pos += 1;
+                return Ok(Expr::new(
+                    if increment {
+                        ExprKind::PreIncrement(name)
+                    } else {
+                        ExprKind::PreDecrement(name)
+                    },
+                    span,
+                ));
+            }
         }
     }
     // Not a bare variable: it may still be an l-value the increment node cannot name,
@@ -389,6 +400,17 @@ fn parse_prefix_inc_dec(
             "Expected variable after '--'"
         },
     ))
+}
+
+/// Reports whether the token at `index` continues a variable into a larger l-value.
+///
+/// `->`, `?->`, `::` and `[` are the four ways a place extends past its base variable. Seeing one
+/// means the prefix increment's real target is that larger place, not the variable itself.
+fn place_suffix_follows(tokens: &[SpannedToken], index: usize) -> bool {
+    matches!(
+        tokens.get(index).map(|token| &token.0),
+        Some(Token::Arrow | Token::QuestionArrow | Token::DoubleColon | Token::LBracket)
+    )
 }
 
 /// Parses a variable expression starting with a `Variable` token. Consumes the variable name,
