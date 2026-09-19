@@ -117,6 +117,13 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
             }
+            // A builtin is in neither map, and the syntactic fallback below answers `Int` for
+            // every name outside its hand-written allowlist -- which stamps the literal
+            // `array<int>` and makes lowering cast the element to match (#1096). The checker
+            // already asked the registry contract about this very call.
+            if let Some(resolved) = builtin_call_result_type_for_ir(ctx, value.span) {
+                return resolved;
+            }
             ir_array_storage_type(infer_expr_type_syntactic(value))
         }
         ExprKind::MethodCall { object, method, .. } => {

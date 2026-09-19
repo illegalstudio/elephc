@@ -157,6 +157,59 @@ pub struct Value {
 `Callable`, `Str`, and refcounted heap values can be owned even when their
 storage type is not `Heap(...)`. Ownership is a separate value property.
 
+### Array Literal Element Types
+
+`Array(inner)` and `AssocArray { key, value }` carry an element type in
+`php_type`, and array-literal lowering converts every element it inserts to match
+that stamp. The stamp is load-bearing: a wrong one does not produce a
+diagnostic, it produces a conversion.
+
+`array_literal_element_type_for_ir` and its associative twin
+`assoc_array_literal_value_type_for_ir` decide it per element:
+
+| element expression | source of the element type |
+|---|---|
+| a nested array literal | the nested literal's own stamp, recursively |
+| a spread | the spread source's element type, widened to `Mixed` when it is `Void`/`Never` |
+| a local variable | `ctx.local_types` |
+| a constant or class constant | the resolved constant/enum-case metadata |
+| a call to a user or extern function | `ctx.functions` / `ctx.extern_functions`, the declared return type |
+| a call to a **builtin** | `ctx.builtin_call_types`, keyed by the call's own span |
+| a method, static-method, property, or element read | the matching `*_expr_type_for_ir` resolver |
+| anything else | `infer_expr_type_syntactic` |
+
+The builtin row is the one with a history. A builtin is in neither function map,
+so before issue #1096 it fell through to `infer_expr_type_syntactic`, which
+answers a call from a hand-written allowlist of builtin names and returns `Int`
+for every name it does not list. `[array_slice($a, 0, 2)]` was stamped
+`array<int>`; lowering converted the returned array to match, and `(int)` of a
+non-empty array is `1`, so the element read back as `int(1)` with no warning.
+The same fallback made every `bool`-returning builtin outside the allowlist
+`int(1)`/`int(0)`. Adding one non-call element widened the merge and hid it.
+
+The checker has already asked the registry contract about that exact call and
+recorded the answer under the call's own span, which is the node lowering is
+looking at. Keying on the span is safe here for the reason it is *not* safe for a
+callable: `call_user_func($f, ...)` records the OUTER call's span, so a different
+callee can sit under it — see "Two maps of builtin call results" in
+[the type checker](the-type-checker.md). A synthesized node (line `0`) keeps the
+syntactic fallback rather than risk sharing a key with an unrelated prelude call.
+
+A **scalar** result is taken precisely; anything else is stamped `Mixed`. That map
+holds the *checker's* type, while the value the call produces is typed by
+`resolve_registry_builtin_result_type`, which overrides the checker for a `Declared`
+or `Shared` result contract and re-derives its own for a `Checked` one whose runtime
+target rejects the checked type against the operands it was really given. A stamp
+that disagrees is harmless only where the push CONVERTS, and
+`coerce_array_literal_element_to_storage_type` converts exactly `Int`, `Bool`,
+`Float` and `Str`; a heap stamp is stored as-is. `array_map()`'s hook answers
+`array<int>` for a callback declared `: int` while its EIR result is a boxed `Mixed`
+cell, so taking the checked type verbatim read that box's header as an array.
+`Mixed` is the one element type that is right whatever the call's own contract
+answers — a concrete value is boxed into it on the way in, a `Mixed` value is stored
+as-is — and it is what a literal mixing a builtin call with a plain element already
+merged to.
+
 ### Parsed Type Expressions
 
 `TypeExpr` maps into `PhpType` during type checking before EIR lowering. EIR
