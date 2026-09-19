@@ -1808,6 +1808,86 @@ echo implode(",", call_user_func_array($f, [$a, 1, 2]));
     assert_eq!(out, "2,3:2,3:2,3:2,3:2,3");
 }
 
+/// Verifies the same dispatch agreement for an ASSOCIATIVE source, whose slice keeps its keys.
+///
+/// `array_slice()`'s result depends on what it was given: an associative source yields an
+/// associative slice, an indexed one an indexed slice. The registry DECLARES `array` for both,
+/// and a first-class or `call_user_func` call site took that declaration instead of the
+/// contract's answer — so lowering saw an associative source arriving at a result typed
+/// `array<mixed>` and refused the call outright, `array_slice of an associative array into
+/// result PHP type Array(Mixed)` (issue #1092). The direct call had been fixed already, which
+/// is what made the forms disagree.
+///
+/// Keys rather than values are compared, because the keys are the whole difference between the
+/// two result shapes: `preserve_keys` renumbers integer keys and leaves string keys alone, so
+/// the int-keyed source is included in both modes to pin that the mode reaches the helper.
+///
+/// Expected output is verbatim `LC_ALL=C php` 8.5.10.
+#[test]
+fn test_array_slice_dispatch_forms_agree_on_an_associative_source() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$fn = array_slice(...);
+echo implode(",", array_keys(array_slice($h, 1, 2))), ":";
+echo implode(",", array_keys($fn($h, 1, 2))), ":";
+echo implode(",", array_keys(call_user_func("array_slice", $h, 1, 2))), ":";
+echo implode(",", array_keys($fn($h, 1, 2, true))), ":";
+$ints = [5 => "x", 9 => "y", 12 => "z"];
+echo implode(",", array_keys($fn($ints, 1, 2))), ":";
+echo implode(",", array_keys($fn($ints, 1, 2, true))), "\n";
+"#,
+    );
+    assert_eq!(out, "b,c:b,c:b,c:b,c:0,1:9,12\n");
+}
+
+/// Pins the two `call_user_func()` callback spellings that the first fix for #1092 missed.
+///
+/// The literal-name spelling recorded the contract's answer for lowering; the first-class
+/// callable node and the local bound to one did not, so `call_user_func(array_slice(...),
+/// $assoc, 1, 2)` kept the original refusal while `call_user_func("array_slice", $assoc, 1, 2)`
+/// worked. Both are as resolved as the literal — the checker and lowering read the same
+/// syntax — so both now ask the contract.
+///
+/// Expected output is verbatim `LC_ALL=C php` 8.5.10.
+#[test]
+fn test_call_user_func_resolved_callbacks_slice_an_associative_source() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$fn = array_slice(...);
+echo implode(",", array_keys(call_user_func(array_slice(...), $h, 1, 2))), ":";
+echo implode(",", array_keys(call_user_func($fn, $h, 1, 2))), ":";
+echo implode(",", array_keys(call_user_func($fn, $h, 1, 2, true))), "\n";
+"#,
+    );
+    assert_eq!(out, "b,c:b,c:b,c\n");
+}
+
+/// `call_user_func_array()` reaches the same lowering entry point as `call_user_func()`, so all
+/// three of its resolved callback spellings need the same recording — the existing coverage
+/// used an INDEXED source and a variable callee, which passes for two independent reasons and
+/// masked the gap.
+///
+/// Only a LITERAL argument array is covered, because that is the only shape whose element
+/// expressions lowering can hand to the builtin; a dynamic array keeps the declared type.
+///
+/// Expected output is verbatim `LC_ALL=C php` 8.5.10.
+#[test]
+fn test_call_user_func_array_callbacks_slice_an_associative_source() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$fn = array_slice(...);
+echo implode(",", array_keys(call_user_func_array("array_slice", [$h, 1, 2]))), ":";
+echo implode(",", array_keys(call_user_func_array(array_slice(...), [$h, 1, 2]))), ":";
+echo implode(",", array_keys(call_user_func_array($fn, [$h, 1, 2]))), ":";
+echo implode(",", array_keys(call_user_func_array($fn, [$h, 1, 2, true]))), "\n";
+"#,
+    );
+    assert_eq!(out, "b,c:b,c:b,c:b,c\n");
+}
+
 /// Regression: a `bool`-returning builtin dispatched through a variable-held callback name
 /// must return a raw bool, not a boxed Mixed cell.
 ///
