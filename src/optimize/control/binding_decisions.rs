@@ -271,6 +271,10 @@ fn expr_carries_decision(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items
             .iter()
             .any(|(key, value)| expr_carries_decision(key) || expr_carries_decision(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_carries_decision),
         ExprKind::ArrayAccess { array, index } => {
             expr_carries_decision(array) || expr_carries_decision(index)
         }

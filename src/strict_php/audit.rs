@@ -544,6 +544,13 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
                 audit_expr(value, errors);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    audit_expr(expr, errors);
+                }
+            }
+        }
         ExprKind::Match {
             subject,
             arms,

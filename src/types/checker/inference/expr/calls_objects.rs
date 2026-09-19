@@ -363,7 +363,11 @@ impl Checker {
                 // (`[5 => "x", "s" => "y"]`, `[$i * 10 => "L"]`) the same way an
                 // indexed one is accepted; PHP accepts both.
                 let supported = match &inner.kind {
-                    ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => true,
+                    // A mixed literal lowers to the same `AssocArray`, so the loop that
+                    // re-yields its pairs handles it exactly as it handles a keyed one.
+                    ExprKind::ArrayLiteral(_)
+                    | ExprKind::ArrayLiteralAssoc(_)
+                    | ExprKind::ArrayLiteralMixed(_) => true,
                     ExprKind::FunctionCall { .. } | ExprKind::Variable(_) => {
                         matches!(inner_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                             || self

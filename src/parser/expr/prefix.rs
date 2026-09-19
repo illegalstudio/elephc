@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
+use crate::parser::ast::{ArrayEntry, Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
 use super::calls::{parse_scoped_static_call, peek_cast};
@@ -504,6 +504,9 @@ fn parse_array_literal_with_terminator(
     *pos += 1;
     let mut elems = Vec::new();
     let mut assoc_elems = Vec::new();
+    // Non-empty only once a literal is found to mix a spread with an explicit key, which is the
+    // one shape neither `ArrayLiteral` nor `ArrayLiteralAssoc` can hold.
+    let mut mixed_elems: Vec<ArrayEntry> = Vec::new();
     let mut is_assoc = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
@@ -525,8 +528,16 @@ fn parse_array_literal_with_terminator(
             let spread_span = tokens[*pos].1.span;
             *pos += 1;
             let inner = parse_expr(tokens, pos)?;
-            if !is_assoc {
-                elems.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+            let spread = Expr::new(ExprKind::Spread(Box::new(inner)), spread_span);
+            if is_assoc {
+                // The literal already has explicit keys, so it becomes an entry list. The pairs
+                // collected so far have to move across with it: leaving them behind is what made
+                // `["c" => 8, ...$v]` come out as just the spread. Dropping the spread instead
+                // is what made `[...$v, "c" => 8]` come out as just the key (issue #1049).
+                migrate_assoc_pairs_to_mixed(&mut assoc_elems, &mut mixed_elems);
+                mixed_elems.push(ArrayEntry::Spread(spread));
+            } else {
+                elems.push(spread);
             }
             first = false;
             continue;
@@ -535,7 +546,7 @@ fn parse_array_literal_with_terminator(
         let expr = parse_expr(tokens, pos)?;
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
             if !is_assoc {
-                promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems);
+                promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems, &mut mixed_elems);
             }
             is_assoc = true;
             *pos += 1;
@@ -546,10 +557,20 @@ fn parse_array_literal_with_terminator(
                 &mut next_auto_key,
                 &mut auto_key_initialized,
             );
-            assoc_elems.push((expr, value));
+            if mixed_elems.is_empty() {
+                assoc_elems.push((expr, value));
+            } else {
+                mixed_elems.push(ArrayEntry::Keyed(expr, value));
+            }
         } else if is_assoc {
-            let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
-            assoc_elems.push((key, expr));
+            if mixed_elems.is_empty() {
+                let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
+                assoc_elems.push((key, expr));
+            } else {
+                // A bare element after a spread cannot be given a key here: the spread decides
+                // how many integer slots it consumed, and only the runtime knows that.
+                mixed_elems.push(ArrayEntry::Value(expr));
+            }
             next_auto_key += 1;
             auto_key_initialized = true;
         } else {
@@ -566,7 +587,9 @@ fn parse_array_literal_with_terminator(
         ));
     }
     *pos += 1;
-    if is_assoc {
+    if !mixed_elems.is_empty() {
+        Ok(Expr::new(ExprKind::ArrayLiteralMixed(mixed_elems), span))
+    } else if is_assoc {
         Ok(Expr::new(ExprKind::ArrayLiteralAssoc(assoc_elems), span))
     } else {
         Ok(Expr::new(ExprKind::ArrayLiteral(elems), span))
@@ -626,18 +649,48 @@ fn skip_to_array_literal_end(tokens: &[SpannedToken], pos: &mut usize, closing: 
 }
 
 /// Converts positional items parsed before a keyed array entry into integer-keyed pairs.
+/// Moves the already-collected `key => value` pairs into the ordered entry list.
+///
+/// Called the first time a spread appears in a literal that had already turned associative. The
+/// entry list is the only one the node is built from once it is non-empty, so anything left in
+/// `assoc_elems` at that point would be silently dropped.
+fn migrate_assoc_pairs_to_mixed(
+    assoc_elems: &mut Vec<(Expr, Expr)>,
+    mixed_elems: &mut Vec<ArrayEntry>,
+) {
+    for (key, value) in std::mem::take(assoc_elems) {
+        mixed_elems.push(ArrayEntry::Keyed(key, value));
+    }
+}
+
+/// Re-files the items collected so far once the literal turns out to have explicit keys.
+///
+/// Without a spread among them the pairs go to `assoc_elems` with their automatic keys, which is
+/// the common case and keeps the plain associative node. A spread cannot be given a key -- how
+/// many integer slots it consumes is a runtime fact -- so its presence moves EVERY item to the
+/// ordered entry list instead. Silently skipping it here is what dropped the elements of
+/// `[...$v, "c" => 8]` (issue #1049).
 fn promote_indexed_array_items_to_assoc(
     elems: &mut Vec<Expr>,
     assoc_elems: &mut Vec<(Expr, Expr)>,
+    mixed_elems: &mut Vec<ArrayEntry>,
 ) {
-    let mut auto_key = 0i64;
-    for elem in std::mem::take(elems) {
-        if matches!(elem.kind, ExprKind::Spread(_)) {
-            continue;
+    let taken = std::mem::take(elems);
+    if !taken.iter().any(|elem| matches!(elem.kind, ExprKind::Spread(_))) {
+        let mut auto_key = 0i64;
+        for elem in taken {
+            let key = Expr::new(ExprKind::IntLiteral(auto_key), elem.span);
+            assoc_elems.push((key, elem));
+            auto_key += 1;
         }
-        let key = Expr::new(ExprKind::IntLiteral(auto_key), elem.span);
-        assoc_elems.push((key, elem));
-        auto_key += 1;
+        return;
+    }
+    for elem in taken {
+        if matches!(elem.kind, ExprKind::Spread(_)) {
+            mixed_elems.push(ArrayEntry::Spread(elem));
+        } else {
+            mixed_elems.push(ArrayEntry::Value(elem));
+        }
     }
 }
 

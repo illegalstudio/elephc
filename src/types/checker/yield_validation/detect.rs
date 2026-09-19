@@ -195,6 +195,10 @@ fn expr_contains_yield(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(k, v)| expr_contains_yield(k) || expr_contains_yield(v)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_contains_yield),
         ExprKind::Match {
             subject,
             arms,

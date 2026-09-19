@@ -415,6 +415,13 @@ fn collect_arrow_expr_captures(
                 collect_arrow_expr_captures(value, bound, seen, captures);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    collect_arrow_expr_captures(expr, bound, seen, captures);
+                }
+            }
+        }
         ExprKind::Match {
             subject,
             arms,

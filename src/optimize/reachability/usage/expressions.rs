@@ -172,6 +172,7 @@ impl Scanner<'_> {
                 self.scan_exprs(values);
             }
             ExprKind::ArrayLiteralAssoc(values) => { for (key, value) in values { self.scan_expr(key); self.scan_expr(value); } }
+            ExprKind::ArrayLiteralMixed(entries) => { for entry in entries { for expr in entry.exprs() { self.scan_expr(expr); } } }
             ExprKind::Match { subject, arms, default } => {
                 self.scan_expr(subject);
                 for (patterns, value) in arms { self.scan_exprs(patterns); self.scan_expr(value); }
@@ -746,6 +747,7 @@ impl Scanner<'_> {
             | ExprKind::Null
             | ExprKind::ArrayLiteral(_)
             | ExprKind::ArrayLiteralAssoc(_)
+            | ExprKind::ArrayLiteralMixed(_)
             | ExprKind::ClassConstant { .. }
             | ExprKind::ObjectClassName { .. }
             | ExprKind::BufferNew { .. }

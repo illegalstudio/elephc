@@ -152,3 +152,17 @@ echo "Kept:       " . implode(", ", array_keys(array_slice($numbered, 1, 2, true
 // A mixed-key array shows the rule directly: only the integer entries move.
 $mixed = [5 => "a", "k" => "b", 9 => "c"];
 echo "Mixed keys: " . implode(", ", array_keys(array_slice($mixed, 0, 3))) . "\n";
+
+// A spread can sit beside explicit keys, in any order. A spread's elements take the next free
+// INTEGER key at the position the spread occupies, so the order is observable in the result.
+$ports = [8080, 8081];
+$withDefault = [...$ports, "fallback" => 9000];
+$defaultFirst = ["fallback" => 9000, ...$ports];
+$surrounded = ["lo" => 1, ...$ports, "hi" => 2];
+
+echo "\nspread then key: " . implode(",", array_keys($withDefault)) . "\n";
+echo "key then spread: " . implode(",", array_keys($defaultFirst)) . "\n";
+echo "spread between:  " . implode(",", array_keys($surrounded)) . "\n";
+
+// Spreading reads the source; it is unchanged afterwards and can be spread again.
+echo "source intact:   " . implode(",", $ports) . "\n";

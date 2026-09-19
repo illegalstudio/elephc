@@ -89,6 +89,12 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
                 .map(|(k, v)| (walk_expr(k, pass), walk_expr(v, pass)))
                 .collect(),
         ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries
+                .into_iter()
+                .map(|entry| entry.map_exprs(|expr| walk_expr(expr, pass)))
+                .collect(),
+        ),
         ExprKind::Match {
             subject,
             arms,

@@ -9,7 +9,7 @@
 //! - PHP builtin fallback applies to unqualified function calls without breaking explicit namespace references.
 
 use crate::names::php_symbol_key;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
+use crate::parser::ast::{ArrayEntry, CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
 
 use super::names::{
     resolve_constant_name, resolve_function_name, resolve_function_reference, resolve_special_or_class_name,
@@ -128,6 +128,29 @@ pub(super) fn resolve_expr(
                         resolve_expr(key, current_namespace, imports, symbols),
                         resolve_expr(value, current_namespace, imports, symbols),
                     )
+                })
+                .collect(),
+        ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries
+                .iter()
+                .map(|entry| match entry {
+                    ArrayEntry::Spread(source) => ArrayEntry::Spread(resolve_expr(
+                        source,
+                        current_namespace,
+                        imports,
+                        symbols,
+                    )),
+                    ArrayEntry::Value(value) => ArrayEntry::Value(resolve_expr(
+                        value,
+                        current_namespace,
+                        imports,
+                        symbols,
+                    )),
+                    ArrayEntry::Keyed(key, value) => ArrayEntry::Keyed(
+                        resolve_expr(key, current_namespace, imports, symbols),
+                        resolve_expr(value, current_namespace, imports, symbols),
+                    ),
                 })
                 .collect(),
         ),

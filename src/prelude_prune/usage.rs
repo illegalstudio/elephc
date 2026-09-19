@@ -740,6 +740,13 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 scan_expr(value, usage);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    scan_expr(expr, usage);
+                }
+            }
+        }
         ExprKind::Match {
             subject,
             arms,

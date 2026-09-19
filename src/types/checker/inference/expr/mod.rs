@@ -50,6 +50,7 @@ impl Checker {
             | ExprKind::PostIncrement(_)
             | ExprKind::PostDecrement(_)
             | ExprKind::ArrayLiteralAssoc(_)
+            | ExprKind::ArrayLiteralMixed(_)
             | ExprKind::Match { .. }
             | ExprKind::ArrayLiteral(_)
             | ExprKind::ArrayAccess { .. }

@@ -346,6 +346,12 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 .iter()
                 .map(|(key, value)| expr_effect(key).combine(expr_effect(value))),
         ),
+        ExprKind::ArrayLiteralMixed(entries) => combine_effects(
+            entries
+                .iter()
+                .flat_map(|entry| entry.exprs())
+                .map(expr_effect),
+        ),
         ExprKind::Match {
             subject,
             arms,

@@ -333,6 +333,13 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
                 collect_expr_scope_access(value, access);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    collect_expr_scope_access(expr, access);
+                }
+            }
+        }
         ExprKind::Match {
             subject,
             arms,

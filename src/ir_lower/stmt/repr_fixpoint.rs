@@ -780,6 +780,13 @@ impl<'a> ConversionScan<'a> {
                     self.expr(value);
                 }
             }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                for entry in entries.iter() {
+                    for expr in entry.exprs() {
+                        self.expr(expr);
+                    }
+                }
+            }
             ExprKind::ArrayAccess { array, index } => {
                 self.expr(array);
                 self.expr(index);

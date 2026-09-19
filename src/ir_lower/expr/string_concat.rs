@@ -154,6 +154,10 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items
             .iter()
             .any(|(key, value)| expr_can_reset_concat_storage(key) || expr_can_reset_concat_storage(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_can_reset_concat_storage),
         ExprKind::Match {
             subject,
             arms,

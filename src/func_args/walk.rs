@@ -426,6 +426,13 @@ impl Rewriter {
                     self.walk_expr(value);
                 }
             }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                for entry in entries.iter_mut() {
+                    for expr in entry.exprs_mut() {
+                        self.walk_expr(expr);
+                    }
+                }
+            }
             ExprKind::Match {
                 subject,
                 arms,

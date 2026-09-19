@@ -1192,6 +1192,13 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 collect_expr(checker, value, depth, facts);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    collect_expr(checker, expr, depth, facts);
+                }
+            }
+        }
         ExprKind::ArrayAccess { array, index } => {
             collect_expr(checker, array, depth, facts);
             collect_expr(checker, index, depth, facts);

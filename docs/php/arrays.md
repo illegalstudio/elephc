@@ -215,6 +215,22 @@ $b = [0, ...$a, 4];   // [0, 1, 2, 3, 4]
 
 Spreading an associative array preserves string keys and reindexes integer-keyed entries to fresh sequential keys (continuing from the current largest integer key). Later spread operands overwrite earlier ones on string-key collision.
 
+A spread can sit beside explicit keys in the same literal, in any order, and the order is
+observable: a spread's elements take the next free integer key at the position the spread
+occupies.
+
+```php
+<?php
+$idx = [3, 4];
+$a = [...$idx, 'c' => 8];          // [0 => 3, 1 => 4, 'c' => 8]
+$b = ['c' => 8, ...$idx];          // ['c' => 8, 0 => 3, 1 => 4]
+$c = ['a' => 1, ...$idx, 'b' => 2]; // ['a' => 1, 0 => 3, 1 => 4, 'b' => 2]
+$d = [...$idx, 7 => 8];            // [0 => 3, 1 => 4, 7 => 8] — an explicit integer key is kept
+```
+
+Spreading reads the source; it never consumes it, so the source array is unchanged afterwards
+and can be spread again.
+
 ```php
 <?php
 $defaults = ['host' => '0.0.0.0', 'timeout' => 30];

@@ -190,6 +190,10 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_ve(key) || expr_refs_ve(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_ve),
         ExprKind::Match {
             subject,
             arms,

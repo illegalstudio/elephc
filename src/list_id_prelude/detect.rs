@@ -203,6 +203,10 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_listid(key) || expr_refs_listid(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_listid),
         ExprKind::Match {
             subject,
             arms,

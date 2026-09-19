@@ -137,6 +137,11 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 .map(|(key, value)| (propagate_expr(key, env), propagate_expr(value, env)))
                 .collect(),
         ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries.into_iter()
+                .map(|entry| entry.map_exprs(|expr| propagate_expr(expr, env)))
+                .collect(),
+        ),
         ExprKind::Match {
             subject,
             arms,

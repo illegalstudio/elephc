@@ -194,6 +194,13 @@ fn scan_expr(expr: &Expr, receivers: &mut Vec<String>) {
                 scan_expr(value, receivers);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    scan_expr(expr, receivers);
+                }
+            }
+        }
         ExprKind::ArrayAccess { array, index } => {
             scan_expr(array, receivers);
             scan_expr(index, receivers);

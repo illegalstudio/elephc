@@ -277,6 +277,10 @@ fn expr_refs_xml(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_xml(key) || expr_refs_xml(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_xml),
         ExprKind::Match {
             subject,
             arms,

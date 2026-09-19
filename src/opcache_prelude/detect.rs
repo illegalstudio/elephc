@@ -516,6 +516,10 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs.iter().find_map(|(key, value)| {
             expr_refs(key, target).or_else(|| expr_refs(value, target))
         }),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .find_map(|expr| expr_refs(expr, target)),
         ExprKind::Match {
             subject,
             arms,

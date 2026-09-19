@@ -433,6 +433,10 @@ fn expr_refs_image(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_image(key) || expr_refs_image(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_image),
         ExprKind::Match {
             subject,
             arms,

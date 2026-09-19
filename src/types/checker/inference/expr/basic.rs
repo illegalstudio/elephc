@@ -11,7 +11,7 @@ use super::{
     is_valid_string_offset_index, merge_match_arm_result_type, Checker,
 };
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{ArrayEntry, Expr, ExprKind};
 use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv};
 
 impl Checker {
@@ -137,6 +137,39 @@ impl Checker {
                 Ok(PhpType::AssocArray {
                     key: Box::new(key_ty),
                     value: Box::new(val_ty),
+                })
+            }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                // A literal that mixes a spread with explicit keys is always associative: the
+                // explicit key rules out packed storage, and the spread means the key set is
+                // not a compile-time fact. The KEY type is therefore `Mixed` regardless of how
+                // the written keys look -- a spread contributes integer keys of its own, which
+                // are renumbered, on top of whatever string keys its source carries.
+                let mut val_ty: Option<PhpType> = None;
+                for entry in entries {
+                    let next = match entry {
+                        ArrayEntry::Spread(source) => {
+                            match self.infer_type(source, env)?.codegen_repr() {
+                                PhpType::Array(elem) => elem.codegen_repr(),
+                                PhpType::AssocArray { value, .. } => value.codegen_repr(),
+                                _ => PhpType::Mixed,
+                            }
+                        }
+                        ArrayEntry::Keyed(key, value) => {
+                            self.infer_type(key, env)?;
+                            self.infer_type(value, env)?
+                        }
+                        ArrayEntry::Value(value) => self.infer_type(value, env)?,
+                    };
+                    val_ty = Some(match val_ty {
+                        Some(acc) if acc == next => acc,
+                        Some(_) => PhpType::Mixed,
+                        None => next,
+                    });
+                }
+                Ok(PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(val_ty.unwrap_or(PhpType::Mixed)),
                 })
             }
             ExprKind::Match {

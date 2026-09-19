@@ -519,6 +519,7 @@ fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArg
         ExprKind::Assignment { value, .. } => expr_alias(value, state),
         ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayLiteralMixed(_)
         | ExprKind::Closure { .. }
         | ExprKind::FirstClassCallable(_)
         | ExprKind::NewObject { .. }
@@ -681,6 +682,13 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
             for (key, value) in items {
                 apply_expr_effects(key, state);
                 apply_expr_effects(value, state);
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    apply_expr_effects(expr, state);
+                }
             }
         }
         ExprKind::Match {

@@ -118,6 +118,12 @@ fn rewrite_expr(
                 })
                 .collect::<Result<Vec<_>, CompileError>>()?,
         ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries
+                .iter()
+                .map(|entry| entry.try_map_exprs(|expr| rewrite_expr(expr, class_name, parent_name)))
+                .collect::<Result<Vec<_>, CompileError>>()?,
+        ),
         ExprKind::Match {
             subject,
             arms,

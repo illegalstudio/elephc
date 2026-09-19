@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use crate::parser::ast::ArrayEntry;
 
 /// Distinguishes pre-lowered array-literal items between plain elements and spread operands.
 pub(super) enum SpreadItem {
@@ -208,6 +209,108 @@ pub(super) fn lower_array_literal_as_hash_from_lowered(
     hash
 }
 
+/// Lowers an array literal that mixes spreads with explicit keys.
+///
+/// The destination is always a hash: an explicit key means the result cannot be packed storage,
+/// and a spread means the entry count is not known until it runs. Each entry is lowered where it
+/// appears, because the ORDER is observable -- a spread's elements take the next free integer
+/// key at the point the spread sits, so `["a" => 1, ...$v, 2]` and `[...$v, "a" => 1, 2]` do not
+/// agree on which key the trailing `2` gets.
+///
+/// The three entry forms reuse what the two single-shape paths already do: a spread goes through
+/// `lower_hash_spread_into_hash_from_value` (which promotes an indexed source first), a keyed
+/// entry emits `Op::HashSet` as `lower_assoc_array_literal` does, and a bare value appends
+/// through the same runtime call the hash path uses for a spread-literal element.
+pub(super) fn lower_mixed_array_literal(
+    ctx: &mut LoweringContext<'_, '_>,
+    entries: &[ArrayEntry],
+    expr: &Expr,
+) -> LoweredValue {
+    let hash_ty = assoc_array_literal_type_from_entries(ctx, entries, expr);
+    let value_ty = match hash_ty.codegen_repr() {
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        _ => PhpType::Mixed,
+    };
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(entries.len() as u32)),
+        hash_ty,
+        Op::HashNew.default_effects(),
+        Some(expr.span),
+    );
+    for entry in entries {
+        match entry {
+            ArrayEntry::Spread(source) => {
+                let span = source.span;
+                let source = lower_expr(ctx, source);
+                lower_hash_spread_into_hash_from_value(ctx, hash, source, span);
+            }
+            ArrayEntry::Keyed(key, value) => {
+                let span = key.span;
+                let key = lower_expr(ctx, key);
+                let value = lower_expr(ctx, value);
+                ctx.emit_void(
+                    Op::HashSet,
+                    vec![hash.value, key.value, value.value],
+                    None,
+                    Op::HashSet.default_effects(),
+                    Some(span),
+                );
+            }
+            ArrayEntry::Value(value) => {
+                let span = value.span;
+                let value = lower_expr(ctx, value);
+                ctx.emit_void(
+                    Op::RuntimeCall,
+                    vec![hash.value, value.value],
+                    None,
+                    effects_lookup::runtime_effects(),
+                    Some(span),
+                );
+                release_value_after_retaining_insert(ctx, Some(&value_ty), value, span);
+            }
+        }
+    }
+    hash
+}
+
+/// Returns the hash type for a mixed literal, merging every entry's value type.
+///
+/// A spread contributes its SOURCE's element type, exactly as it does for a spread-only literal;
+/// a keyed entry and a bare value contribute the value's own type.
+pub(super) fn assoc_array_literal_type_from_entries(
+    ctx: &LoweringContext<'_, '_>,
+    entries: &[ArrayEntry],
+    expr: &Expr,
+) -> PhpType {
+    let mut value_ty = PhpType::Never;
+    for entry in entries {
+        let next = match entry {
+            ArrayEntry::Spread(inner) => {
+                match infer_expr_type_syntactic(inner).codegen_repr() {
+                    PhpType::Array(elem) => elem.codegen_repr(),
+                    PhpType::AssocArray { value, .. } => value.codegen_repr(),
+                    _ => PhpType::Mixed,
+                }
+            }
+            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
+                array_literal_element_type_for_ir(ctx, value).codegen_repr()
+            }
+        };
+        value_ty = crate::ir_lower::expr::assoc_array_literals::merge_ir_assoc_value_type(
+            value_ty, next,
+        );
+    }
+    if matches!(value_ty, PhpType::Never) {
+        return fallback_expr_type(expr);
+    }
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(value_ty),
+    }
+}
+
 /// Lowers a single already-lowered spread operand into a hash destination, handling both
 /// associative and indexed source storage. Associative sources flatten directly through
 /// `__rt_hash_spread`; indexed sources are first promoted to hash storage so the same
@@ -225,9 +328,22 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     let spread_source = if source_is_hash {
         source
     } else {
+        // `Op::ArrayToHash` CONSUMES its operand: its promote path abandons the source indexed
+        // array for a freshly built hash and decrefs it (`lower_array_to_hash`). A spread source
+        // is usually a borrowed LOCAL, so handing it over unowned releases the caller's only
+        // reference -- `[...$idx, ...$assoc]` left `$idx` reading `array(0) {}` while its
+        // elements were still intact, and reusing it crashed. Acquiring first is the same ledger
+        // `lower_array_set_mixed_key` documents: the promote path consumes the `+1`, and the
+        // local keeps the reference it started with.
+        //
+        // The acquire stays unconditional; an OWNING TEMPORARY source is balanced by releasing it
+        // after the spread instead (below). Skipping the acquire for a temporary is the wrong half
+        // of the ledger -- the promotion's decref then consumes the only reference a BORROWED
+        // local has, which segfaults -- so the two cases are separated at the release, not here.
+        let owned_source = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
         let promoted = ctx.emit_value(
             Op::ArrayToHash,
-            vec![source.value],
+            vec![owned_source.value],
             None,
             PhpType::AssocArray {
                 key: Box::new(PhpType::Int),
@@ -250,6 +366,15 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     );
     if ctx.value_is_owning_temporary(spread_source) {
         crate::ir_lower::ownership::release_if_owned(ctx, spread_source, Some(span));
+    }
+    // The promoted hash is a DIFFERENT value from the one the caller handed us, so releasing it
+    // above says nothing about the original array. An owning temporary source -- a call result, a
+    // nested literal -- has no other owner once the promotion has consumed the reference the
+    // acquire added, so it is released here, exactly as the indexed sibling releases its own
+    // source. Without this, `[...f(), "k" => 1]` leaked one array per evaluation while the
+    // borrowed-local form stayed clean.
+    if spread_source.value != source.value && ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
 }
 

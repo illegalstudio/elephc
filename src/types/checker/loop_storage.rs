@@ -949,6 +949,13 @@ fn visit_child_expressions<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)
                 visitor(value);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    visitor(expr);
+                }
+            }
+        }
         ExprKind::NamedArg { value, .. }
         | ExprKind::Spread(value)
         | ExprKind::ErrorSuppress(value)

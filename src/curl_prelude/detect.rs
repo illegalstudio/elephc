@@ -307,6 +307,10 @@ fn expr_refs_curl(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_curl(key) || expr_refs_curl(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_curl),
         ExprKind::Match {
             subject,
             arms,

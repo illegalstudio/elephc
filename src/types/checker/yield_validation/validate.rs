@@ -355,6 +355,13 @@ fn visit_expr(expr: &Expr, st: &mut State) {
                 visit_expr(v, st);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    visit_expr(expr, st);
+                }
+            }
+        }
         ExprKind::Match {
             subject,
             arms,

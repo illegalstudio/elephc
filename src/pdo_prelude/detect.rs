@@ -249,6 +249,10 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_pdo(key) || expr_refs_pdo(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_pdo),
         ExprKind::Match {
             subject,
             arms,

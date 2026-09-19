@@ -497,6 +497,13 @@ fn count_expr(expr: &Expr, tally: &mut Tally) {
                 count_expr(value, tally);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    count_expr(expr, tally);
+                }
+            }
+        }
         ExprKind::ArrayAccess { array, index } => {
             count_expr(array, tally);
             count_expr(index, tally);

@@ -549,6 +549,13 @@ fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
                 collect_refs_expr(v, out);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    collect_refs_expr(expr, out);
+                }
+            }
+        }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. }
         | ExprKind::ObjectClassName { object } => collect_refs_expr(object, out),

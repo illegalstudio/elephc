@@ -244,7 +244,10 @@ pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason>
         | ExprKind::ObjectClassName { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::This => Some(EvalAotFallbackReason::ObjectOrMemberAccess),
-        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::Spread(_) => {
+        ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayLiteralMixed(_)
+        | ExprKind::Spread(_) => {
             Some(EvalAotFallbackReason::ArrayOrIterable)
         }
         ExprKind::Assignment { .. }

@@ -250,6 +250,10 @@ fn expr_refs_hash(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_hash(key) || expr_refs_hash(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_hash),
         ExprKind::Match {
             subject,
             arms,

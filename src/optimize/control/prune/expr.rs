@@ -82,6 +82,11 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
                 .map(|(key, value)| (prune_expr(key), prune_expr(value)))
                 .collect(),
         ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries.into_iter()
+                .map(|entry| entry.map_exprs(prune_expr))
+                .collect(),
+        ),
         ExprKind::Match {
             subject,
             arms,

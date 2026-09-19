@@ -206,6 +206,10 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
             expr_has_dynamic_instanceof(key) || expr_has_dynamic_instanceof(value)
         }),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_has_dynamic_instanceof),
         ExprKind::Match {
             subject,
             arms,

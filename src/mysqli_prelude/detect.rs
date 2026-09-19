@@ -272,6 +272,10 @@ fn expr_refs_mysqli(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_mysqli(key) || expr_refs_mysqli(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_mysqli),
         ExprKind::Match {
             subject,
             arms,

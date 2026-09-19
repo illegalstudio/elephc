@@ -170,6 +170,12 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                     .union(expr_invalidation(value))
             })
         }
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .fold(Invalidation::none(), |acc, expr| {
+                acc.union(expr_invalidation(expr))
+            }),
         ExprKind::Match {
             subject,
             arms,

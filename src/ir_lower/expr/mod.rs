@@ -232,6 +232,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::FunctionCall { name, args } => lower_function_call(ctx, name, args, expr),
         ExprKind::ArrayLiteral(items) => lower_array_literal(ctx, items, expr),
         ExprKind::ArrayLiteralAssoc(pairs) => lower_assoc_array_literal(ctx, pairs, expr),
+        ExprKind::ArrayLiteralMixed(entries) => lower_mixed_array_literal(ctx, entries, expr),
         ExprKind::Match { subject, arms, default } => lower_match(ctx, subject, arms, default.as_deref(), expr),
         ExprKind::ArrayAccess { array, index } => lower_array_access(ctx, array, index, expr),
         ExprKind::Ternary { condition, then_expr, else_expr } => {

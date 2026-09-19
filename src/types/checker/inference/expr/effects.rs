@@ -185,6 +185,14 @@ impl Checker {
                 }
                 self.infer_type(expr, env)
             }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                for entry in entries {
+                    for inner in entry.exprs() {
+                        self.infer_type_with_assignment_effects(inner, env)?;
+                    }
+                }
+                self.infer_type(expr, env)
+            }
             ExprKind::Match {
                 subject,
                 arms,

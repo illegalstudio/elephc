@@ -185,6 +185,10 @@ fn expr_has_includes(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(entries) => entries
             .iter()
             .any(|(key, value)| expr_has_includes(key) || expr_has_includes(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_has_includes),
         ExprKind::Match {
             subject,
             arms,

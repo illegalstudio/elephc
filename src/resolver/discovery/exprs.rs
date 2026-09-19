@@ -135,6 +135,13 @@ pub(super) fn discover_expr(
                 discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    discover_expr(expr, base_dir, loaded_paths, include_chain, state, output)?;
+                }
+            }
+        }
         ExprKind::Match { subject, arms, default } => {
             discover_expr(subject, base_dir, loaded_paths, include_chain, state, output)?;
             for (patterns, value) in arms {

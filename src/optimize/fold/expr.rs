@@ -241,6 +241,12 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 .map(|(key, value)| (fold_expr(key), fold_expr(value)))
                 .collect(),
         ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries
+                .into_iter()
+                .map(|entry| entry.map_exprs(fold_expr))
+                .collect(),
+        ),
         ExprKind::Match {
             subject,
             arms,

@@ -329,6 +329,13 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 collect_required_class_names_in_expr(value, names);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    collect_required_class_names_in_expr(expr, names);
+                }
+            }
+        }
         ExprKind::Match {
             subject,
             arms,

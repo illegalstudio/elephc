@@ -913,6 +913,19 @@ fn test_error_pointer_loose_comparison_is_rejected() {
 
 // --- FFI error tests ---
 
+/// Verifies `$this` inside a static closure is rejected when it sits in a MIXED array literal.
+///
+/// The check is a traversal, so a literal shape it does not visit lets forbidden PHP through.
+/// `[...$this->items, "k" => 1]` reached lowering instead of the diagnostic, and failed there
+/// with an EIR validation error rather than the message the user needs.
+#[test]
+fn test_error_static_closure_uses_this_inside_a_mixed_array_literal() {
+    expect_error(
+        "<?php class C { public array $items = [1, 2]; public function bad() { return static function () { return [...$this->items, \"k\" => 1]; }; } }",
+        "Cannot use $this inside a static closure",
+    );
+}
+
 /// Verifies that using `$this` inside a static closure via a short ternary expression is rejected.
 /// Input: `class C { public int $count = 5; public function bad() { $f = static fn($x) => $x ?: $this->count; } }`
 #[test]

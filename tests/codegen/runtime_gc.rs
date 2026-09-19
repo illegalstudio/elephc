@@ -35,6 +35,8 @@ mod by_ref_place_args;
 mod omitted_by_ref_default_args;
 #[path = "runtime_gc/foreach_object_source.rs"]
 mod foreach_object_source;
+#[path = "runtime_gc/spread_promotion.rs"]
+mod spread_promotion;
 #[path = "runtime_gc/stack_args.rs"]
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]

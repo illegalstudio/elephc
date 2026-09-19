@@ -169,6 +169,9 @@ fn expr_uses_this(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => {
             pairs.iter().any(|(k, v)| expr_uses_this(k) || expr_uses_this(v))
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            entries.iter().flat_map(|entry| entry.exprs()).any(expr_uses_this)
+        }
         ExprKind::ArrayAccess { array, index } => expr_uses_this(array) || expr_uses_this(index),
         ExprKind::Ternary {
             condition,
@@ -439,6 +442,14 @@ fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
             for (k, v) in pairs {
                 expr_must_not_use_this(k, span)?;
                 expr_must_not_use_this(v, span)?;
+            }
+            Ok(())
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    expr_must_not_use_this(expr, span)?;
+                }
             }
             Ok(())
         }
