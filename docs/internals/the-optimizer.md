@@ -225,6 +225,58 @@ The second generation of the pass (control-flow normalization v2) adds shell can
 - leading `if (g) { break; } [else { E }]` guards folded into the loop test: `while (c) { if (g) break; rest }` becomes `while (c && !g) { rest }` (`while (true)` / `for (;;)` become plain `while (!g)`), with the guard's `else` body leading the remaining body; the fold repeats while the body still starts with such a guard, and `for` loops with an update clause receive the same test without changing shape
 - an endless loop that ends in `if (g) { break; }` rotated into `do { body } while (!g)`, refused when the body carries a `continue` targeting that loop (it skips the guard today but would reach the rotated test); nested loops and `switch` bodies raise the `continue` level the check looks for
 - trailing terminators that transfer exactly where falling off the block would are dropped: a `continue` ending a loop body, the `break` ending the body that runs last in a `switch` (the `default` body when it is written last, else the last case; a `default` written between cases keeps its `break`, since EIR lowering places it at its source position), and a bare `return;` ending a function or method body. The walk follows only the tail path — the last statement, then recursively the last statement of each `if` / `ifdef` / `try` branch — and never enters loops, `switch` bodies, or `finally` blocks; a shell whose branch was emptied is re-pruned so it collapses like fresh input. By-reference-returning functions and generators keep their `return;`, and a `break`-only last case is kept when a `default` follows it
+
+### A generator must still look like one
+
+Constant propagation and pruning rewrite callable bodies through
+`optimize::generator_bodies::rewrite_preserving_yield`, which keeps the original body when a
+rewrite would leave it with NO `yield` at all. (DCE is **not** wrapped yet — see the note at the
+end of this section.)
+
+Generator-ness itself is not re-derived from the body afterwards. The checker records it on
+`FunctionSig::is_generator` from the SOURCE body, before any pass runs, and lowering reads that
+bit.
+
+PHP decides whether a declaration is a **generator** syntactically, before any folding, and the
+type checker does the same — it types `g()` as `Generator` from the `yield` it can see. These
+passes run *after* checking, and both the propagation and pruning walks stop at a block's first
+terminator, so an unreachable `yield` was deleted. The two classifications then disagreed: the
+caller still drove a `Generator` while EIR lowering saw an ordinary function, and the driving
+`foreach` spun forever on a boxed null (issue #673).
+
+Both of PHP's ways to spell an immediately-complete generator hit it, and they are destroyed by
+different passes:
+
+```php
+function g() { if (false) { yield 1; } return; }   // constant-branch pruning
+function g() { return; yield; }                     // the stop-at-terminator rule
+```
+
+Keeping the un-rewritten body is the conservative answer: the retained `yield` is unreachable by
+construction, so the cost is one unexecuted statement in a body that is now lowered as the
+coroutine it is — and only a body whose every `yield` is dead pays it.
+
+It is also whole-body: one dead `yield` blocks *all* propagation and pruning in that callable.
+A surgical "keep one yield, apply the rest" would be tighter, and is worth doing if a real body
+ever pays for it.
+
+**DCE is deliberately NOT wrapped.** `dce_block_with_guards` / `dce_method` rewrite bodies
+without going through this helper, so a named function can lose its last `yield` there. That is
+allowed, and it is safe for a specific reason: generator-ness is no longer re-derived from the
+body at all. `FunctionSig::is_generator` is recorded from the source before any pass runs, and
+lowering reads that bit, so a body DCE has emptied of yields still lowers as the coroutine it
+is — and a coroutine whose yields were all unreachable correctly produces nothing.
+
+Wrapping it would cost real optimization for no correctness gain: the helper reverts the WHOLE
+body, so one dead `yield` would block every DCE rewrite in that callable. Propagation and
+pruning are wrapped only because they run *before* the bit is consulted in the same way and
+because reverting them is cheap by comparison.
+
+The invariant to preserve is therefore "generator-ness is decided once, syntactically, at check
+time" — not "every pass keeps a yield in the body". A future pass may freely delete an
+unreachable `yield`; what it must never do is become the thing that *answers* whether a callable
+is a generator.
+
 ### Example
 
 ```php

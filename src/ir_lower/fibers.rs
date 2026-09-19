@@ -218,6 +218,7 @@ fn callback_sig_for_binding(
                 declared_params: vec![true; sig.params.len()],
                 variadic: None,
                 deprecation: None,
+                is_generator: false,
             })
         }
         StaticCallableBinding::Builtin(_) => None,
@@ -340,6 +341,7 @@ fn callback_sig_from_closure_params(
         declared_params: params.iter().map(|(_, ty, _, _)| ty.is_some()).collect(),
         variadic: variadic.map(str::to_string),
         deprecation: None,
+        is_generator: false,
     };
     if let Some(variadic_name) = variadic {
         if !sig.params.iter().any(|(name, _)| name == variadic_name) {
@@ -375,5 +377,6 @@ fn start_sig_from_callback_sig(sig: &FunctionSig) -> Option<FunctionSig> {
         declared_params: vec![false; sig.params.len()],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     })
 }

@@ -83,6 +83,7 @@ fn dummy_check_result() -> CheckResult {
             declared_params: vec![true],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         },
     );
 
@@ -161,6 +162,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         declared_params: Vec::new(),
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     let mut methods = HashMap::new();
     methods.insert("m".to_string(), method_sig.clone());

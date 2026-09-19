@@ -322,6 +322,7 @@ mod tests {
                 declared_params: vec![true; len],
                 variadic: None,
                 deprecation: None,
+                is_generator: false,
             },
             span: Span::dummy(),
         }

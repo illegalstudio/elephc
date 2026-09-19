@@ -110,6 +110,7 @@ pub(crate) fn build_method_sig(
             .collect(),
         variadic: method.variadic.clone(),
         deprecation: extract_deprecation(&method.attributes),
+        is_generator: false,
     });
     // A declared element type on the variadic (`int ...$xs`) constrains every collected argument.
     // `callable_wrapper_sig` defaults the variadic container to `array<mixed>`; refine it to the

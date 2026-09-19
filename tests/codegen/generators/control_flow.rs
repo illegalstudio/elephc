@@ -274,3 +274,191 @@ foreach (fib(10) as $v) { echo $v; echo " "; }
     );
     assert_eq!(out, "0 1 1 2 3 5 8 13 21 34 ");
 }
+
+
+/// Regression for #673: a generator whose every `yield` is unreachable is still a generator, and
+/// iterating it finishes instead of hanging.
+///
+/// PHP decides "is this a generator" SYNTACTICALLY, before any folding, and so does the checker —
+/// it types `g()` as `Generator` from the `yield` it can see. The AST passes run after checking
+/// and stop rewriting a block at its first terminator, so an unreachable `yield` was dropped.
+/// That left the two classifications disagreeing: the caller still drove a `Generator` while
+/// lowering had produced an ordinary function returning boxed null, and the `foreach` spun
+/// forever. The binary never exited — this test hanging IS the regression.
+///
+/// Both of PHP's ways to spell an immediately-complete generator are here, because they are
+/// destroyed by different passes: `if (false) { yield 1; }` by constant-branch pruning, and the
+/// idiomatic `return; yield;` by the stop-at-terminator rule the propagation pass applies first.
+///
+/// All four declaration forms are covered — function, instance method, static method, closure —
+/// because each has its own body-rewriting site and its own signature path, and the closure's
+/// return type is re-derived at lowering time rather than read from the checker.
+///
+/// The rows that must NOT change are asserted alongside: a live generator still yields, a
+/// conditional `yield` still runs when its branch is taken, and `getReturn()` still carries a
+/// value returned before an unreachable `yield`.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_generator_with_only_unreachable_yields_completes_immediately() {
+    let out = compile_and_run(
+        r#"<?php
+function folded() { if (false) { yield 1; } return; }
+function idiomatic() { return; yield; }
+function dead_after_return() { return 7; yield 1; }
+function declared(): Generator { if (false) { yield 1; } return; }
+function live() { yield 1; yield 2; }
+function conditional(bool $on) { if ($on) { yield 1; } return; }
+
+class Box {
+    public function folded() { if (false) { yield 1; } return; }
+    public static function idiomatic() { return; yield; }
+}
+
+$closure = function () { if (false) { yield 1; } return; };
+$closure2 = function () { return; yield; };
+
+function drain(string $label, $gen): void {
+    $seen = [];
+    foreach ($gen as $v) { $seen[] = $v; }
+    echo $label, "=[", implode(",", $seen), "] ret=", var_export($gen->getReturn(), true), "\n";
+}
+
+drain("folded", folded());
+drain("idiomatic", idiomatic());
+drain("dead_after_return", dead_after_return());
+drain("declared", declared());
+drain("method", (new Box())->folded());
+drain("static", Box::idiomatic());
+drain("closure", $closure());
+drain("closure2", $closure2());
+drain("live", live());
+drain("cond-off", conditional(false));
+drain("cond-on", conditional(true));
+
+var_dump(iterator_to_array(folded()));
+$manual = idiomatic();
+var_dump($manual->valid());
+var_dump($manual->current());
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "folded=[] ret=NULL\n",
+            "idiomatic=[] ret=NULL\n",
+            "dead_after_return=[] ret=7\n",
+            "declared=[] ret=NULL\n",
+            "method=[] ret=NULL\n",
+            "static=[] ret=NULL\n",
+            "closure=[] ret=NULL\n",
+            "closure2=[] ret=NULL\n",
+            "live=[1,2] ret=NULL\n",
+            "cond-off=[] ret=NULL\n",
+            "cond-on=[1] ret=NULL\n",
+            "array(0) {\n}\n",
+            "bool(false)\n",
+            "NULL\n",
+        )
+    );
+}
+
+/// A FACTORY declaring `: Generator` is not a generator function.
+///
+/// PHP decides generator-ness syntactically: a body containing `yield` is a generator, and a
+/// body that merely declares and RETURNS a `Generator` is an ordinary function. Inferring it
+/// from `return_type == Generator` instead conflates the two — the factory's public symbol
+/// became a generator constructor, its `return inner()` lowered to `Generator::getReturn()`,
+/// and the `foreach` over it saw nothing. Raised in review on the #673 fix (issue #1086).
+///
+/// The three shapes here are the ones that must disagree with each other: a factory with no
+/// yield at all, a factory whose returned generator is built inline, and a real generator that
+/// also declares `: Generator` and must stay one.
+#[test]
+fn test_generator_factory_is_not_itself_a_generator() {
+    let out = compile_and_run(
+        r#"<?php
+function inner() { yield 1; yield 2; }
+function factory(): Generator { return inner(); }
+function declaredGenerator(): Generator { yield 8; yield 9; }
+
+class Build {
+    public function make(): Generator { return inner(); }
+    public static function makeStatic(): Generator { return inner(); }
+}
+
+$f = "";
+foreach (factory() as $v) { $f .= $v . ","; }
+$d = "";
+foreach (declaredGenerator() as $v) { $d .= $v . ","; }
+$m = "";
+$b = new Build();
+foreach ($b->make() as $v) { $m .= $v . ","; }
+$s = "";
+foreach (Build::makeStatic() as $v) { $s .= $v . ","; }
+$c = "";
+$closure = function (): Generator { return inner(); };
+foreach ($closure() as $v) { $c .= $v . ","; }
+echo "factory=", $f, " declared=", $d, " method=", $m, " static=", $s, " closure=", $c;
+"#,
+    );
+    assert_eq!(
+        out,
+        "factory=1,2, declared=8,9, method=1,2, static=1,2, closure=1,2,"
+    );
+}
+
+/// The remaining ways to spell a generator whose every `yield` is dead.
+///
+/// Raised as #1085 after the #673 fix: the original fixture covered `if (false)`, `return;
+/// yield;` and `return 7; yield`, leaving `while (false)`, a dead `switch` arm, a dead
+/// `yield from` and trait methods untested. They are the same mechanism rather than new logic,
+/// but each reaches it through a different pass, so each is a place the classification could
+/// have been lost.
+///
+/// All of them are generators that complete immediately: PHP iterates nothing and `getReturn()`
+/// answers whatever the body returned. `traitLive` is the control — a trait method that really
+/// yields must still yield.
+#[test]
+fn test_every_dead_yield_shape_stays_a_generator() {
+    let out = compile_and_run(
+        r#"<?php
+function whileFalse() { while (false) { yield 1; } return; }
+function deadSwitch() { switch (0) { case 1: yield 1; break; } return; }
+function deadYieldFrom() { if (false) { yield from [1, 2]; } return; }
+function deadWithReturnValue() { if (false) { yield 1; } return 7; }
+
+trait Yielder {
+    public function traitDead() { if (false) { yield 1; } return; }
+    public function traitLive() { yield 5; }
+}
+class Holder { use Yielder; }
+
+function show(string $label, $gen) {
+    $vals = [];
+    foreach ($gen as $v) { $vals[] = $v; }
+    echo $label, "=[", implode(",", $vals), "] ret=";
+    var_dump($gen->getReturn());
+}
+
+show("whileFalse", whileFalse());
+show("deadSwitch", deadSwitch());
+show("deadYieldFrom", deadYieldFrom());
+show("deadWithReturnValue", deadWithReturnValue());
+$h = new Holder();
+show("traitDead", $h->traitDead());
+show("traitLive", $h->traitLive());
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "whileFalse=[] ret=NULL\n",
+            "deadSwitch=[] ret=NULL\n",
+            "deadYieldFrom=[] ret=NULL\n",
+            "deadWithReturnValue=[] ret=int(7)\n",
+            "traitDead=[] ret=NULL\n",
+            "traitLive=[5] ret=NULL\n",
+        )
+    );
+}

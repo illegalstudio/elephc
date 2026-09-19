@@ -160,6 +160,8 @@ fn trait_method_reflection_sig(method: &ClassMethod) -> FunctionSig {
             .collect(),
         variadic: method.variadic.clone(),
         deprecation: None,
+        // Taken from the SOURCE body, as for free functions and closures.
+        is_generator: crate::types::checker::yield_validation::body_contains_yield(&method.body),
     })
 }
 

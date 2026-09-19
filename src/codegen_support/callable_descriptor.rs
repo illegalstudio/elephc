@@ -607,6 +607,7 @@ mod tests {
             declared_params: vec![true, true, false],
             variadic: Some("rest".to_string()),
             deprecation: None,
+            is_generator: false,
         };
         let captures = vec![("offset".to_string(), PhpType::Int, false)];
         let hidden = vec![("receiver".to_string(), PhpType::Object("Box".to_string()), false)];
@@ -653,6 +654,7 @@ mod tests {
             declared_params: vec![false],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         };
 
         let descriptor = static_descriptor_with_optional_invoker_meta(
