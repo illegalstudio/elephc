@@ -81,6 +81,90 @@ pub fn emit_php_float_to_int(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the PHP integer value in x9
 }
 
+/// Emits the `__rt_php_float_to_int_cap` runtime helper for the active target.
+///
+/// PHP has TWO double-to-int rules, and which one applies depends on where the double came
+/// from. A float VALUE is reduced modulo 2^64, which is [`emit_php_float_to_int`]. A numeric
+/// STRING is CAPPED: `(int)1e19` is negative in PHP, `(int)"1e19"` is `PHP_INT_MAX`. This is the
+/// second rule, kept beside the first so neither is open-coded at a call site -- a bare
+/// `fcvtzs` / `cvttsd2si` is what produced the per-target `(int)NAN` divergence the sibling
+/// helper exists to prevent.
+///
+/// # Input
+/// - AArch64: the source double in `d0`; x86_64: the source double in `xmm0`.
+///
+/// # Output
+/// - AArch64: the PHP integer value in `x9`; x86_64: the PHP integer value in `r11`.
+///
+/// # Clobbers
+/// - Only the output register (plus `x30` on AArch64, as for any `bl`).
+pub fn emit_php_float_to_int_cap(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_php_float_to_int_cap_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: php_float_to_int_cap ---");
+    emitter.label_global("__rt_php_float_to_int_cap");
+
+    emitter.instruction("stp x10, x11, [sp, #-16]!");                           // preserve the scratch registers this leaf helper needs
+    emitter.instruction("fmov x9, d0");                                         // raw IEEE-754 bit pattern of the source double
+    emitter.instruction("lsl x10, x9, #1");                                     // drop the sign bit: NaN and both infinities compare alike
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x11",
+        0xffe0_0000_0000_0000u64 as i64,
+    );                                                                          // twice the exponent-all-ones pattern
+    emitter.instruction("cmp x10, x11");                                        // is the magnitude infinite or NaN?
+    emitter.instruction("b.hs __rt_php_float_to_int_cap_zero");                 // yes: PHP casts it to 0
+    // Every remaining value is finite, so `fcvtzs` is fully defined here: it truncates toward
+    // zero and SATURATES at PHP_INT_MAX/MIN, which is exactly the cap PHP applies.
+    emitter.instruction("fcvtzs x9, d0");                                       // truncate toward zero, saturating on overflow
+    emitter.instruction("b __rt_php_float_to_int_cap_done");                    // share the epilogue
+
+    emitter.label("__rt_php_float_to_int_cap_zero");
+    emitter.instruction("mov x9, #0");                                          // NaN and +-INF cast to 0
+
+    emitter.label("__rt_php_float_to_int_cap_done");
+    emitter.instruction("ldp x10, x11, [sp], #16");                             // restore the preserved scratch registers
+    emitter.instruction("ret");                                                 // return the capped PHP integer value in x9
+}
+
+/// Emits the x86_64 variant of `__rt_php_float_to_int_cap`.
+///
+/// `cvttsd2si` reports the "integer indefinite" pattern (0x8000000000000000) when the value does
+/// not fit, which is already the right answer for a negative overflow; a positive one has to
+/// become PHP_INT_MAX instead.
+fn emit_php_float_to_int_cap_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: php_float_to_int_cap ---");
+    emitter.label_global("__rt_php_float_to_int_cap");
+
+    emitter.instruction("push r10");                                            // preserve the scratch register this leaf helper needs
+    emitter.instruction("movq r11, xmm0");                                      // raw IEEE-754 bit pattern of the source double
+    emitter.instruction("add r11, r11");                                        // drop the sign bit: NaN and both infinities compare alike
+    emitter.instruction("mov r10, 0xffe0000000000000");                         // twice the exponent-all-ones pattern
+    emitter.instruction("cmp r11, r10");                                        // is the magnitude infinite or NaN?
+    emitter.instruction("jae __rt_php_float_to_int_cap_zero");                  // yes: PHP casts it to 0
+    emitter.instruction("cvttsd2si r11, xmm0");                                 // truncate toward zero
+    emitter.instruction("mov r10, 0x8000000000000000");                         // the indefinite pattern cvttsd2si reports on overflow
+    emitter.instruction("cmp r11, r10");                                        // did the conversion overflow?
+    emitter.instruction("jne __rt_php_float_to_int_cap_done");                  // no: the truncated value stands
+    emitter.instruction("movq r10, xmm0");                                      // reload the bit pattern to read its sign
+    emitter.instruction("test r10, r10");                                       // was the source negative?
+    emitter.instruction("js __rt_php_float_to_int_cap_done");                   // yes: PHP_INT_MIN is already in r11
+    emitter.instruction("mov r11, 0x7fffffffffffffff");                         // positive overflow caps at PHP_INT_MAX
+    emitter.instruction("jmp __rt_php_float_to_int_cap_done");                  // share the epilogue
+
+    emitter.label("__rt_php_float_to_int_cap_zero");
+    emitter.instruction("xor r11d, r11d");                                      // NaN and +-INF cast to 0
+
+    emitter.label("__rt_php_float_to_int_cap_done");
+    emitter.instruction("pop r10");                                             // restore the preserved scratch register
+    emitter.instruction("ret");                                                 // return the capped PHP integer value in r11
+}
+
 /// Emits the x86_64 variant of `__rt_php_float_to_int`.
 ///
 /// Mirrors the AArch64 decode exactly: `r11` holds the result, `r10` the raw bit pattern and

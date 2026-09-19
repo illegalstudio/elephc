@@ -176,3 +176,54 @@ fn test_runtime_float_consumers_call_the_shared_helper() {
         );
     }
 }
+
+/// Verifies the numeric-STRING cap lives in its own shared helper, not open-coded at the call.
+///
+/// PHP has two double-to-int rules and which applies depends on where the double came from: a
+/// float VALUE wraps modulo 2^64, a numeric STRING caps. `__rt_str_to_int` needs the second, so
+/// it must not call `__rt_php_float_to_int` -- and it must not reach for a bare `fcvtzs` /
+/// `cvttsd2si` either, which is the open-coding this module exists to prevent: those two
+/// disagree with each other on NaN and on overflow, which is where the original per-target
+/// divergence came from.
+#[test]
+fn test_string_to_int_routes_through_the_capping_helper() {
+    for (arch, call, bare) in [
+        (Arch::AArch64, "bl __rt_php_float_to_int_cap", "fcvtzs x0, d0"),
+        (Arch::X86_64, "call __rt_php_float_to_int_cap", "cvttsd2si rax, xmm0"),
+    ] {
+        let asm = runtime_asm_for(arch, Platform::Linux);
+        let (_, after) = asm
+            .split_once("__rt_str_to_int:")
+            .unwrap_or_else(|| panic!("{arch:?} runtime should define __rt_str_to_int"));
+        let body = after.split("__rt_str_to_number").next().unwrap_or(after);
+        assert!(
+            body.contains(call),
+            "{arch:?} __rt_str_to_int should apply the cap through the shared helper"
+        );
+        assert!(
+            !body.contains(bare),
+            "{arch:?} __rt_str_to_int should not open-code the conversion with `{bare}`"
+        );
+    }
+}
+
+/// Verifies the capping helper is defined for both targets, with the non-finite arm first.
+///
+/// The cap is only well defined once NaN and the infinities are out of the way: `fcvtzs`
+/// saturates them and `cvttsd2si` reports its indefinite pattern, so a helper that capped first
+/// and checked afterwards would answer PHP_INT_MAX for `(int)"1e309"` instead of 0.
+#[test]
+fn test_runtime_defines_the_capping_helper() {
+    for (arch, expected) in [
+        (Arch::AArch64, vec!["__rt_php_float_to_int_cap:", "fcvtzs x9, d0"]),
+        (Arch::X86_64, vec!["__rt_php_float_to_int_cap:", "cvttsd2si r11, xmm0"]),
+    ] {
+        let asm = runtime_asm_for(arch, Platform::Linux);
+        for needle in expected {
+            assert!(
+                asm.contains(needle),
+                "{arch:?} capping helper is missing `{needle}`"
+            );
+        }
+    }
+}

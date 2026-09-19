@@ -207,6 +207,36 @@ Parses a decimal string into a 64-bit integer. Handles optional leading `-` sign
 **Input:** `x1` = string pointer, `x2` = length
 **Output:** `x0` = integer value
 
+### `__rt_php_float_to_int` and `__rt_php_float_to_int_cap` — the TWO double-to-int rules
+
+**File:** `numeric.rs`
+
+PHP has two different rules for turning a double into an int, and which applies depends on
+**where the double came from**. Both live here so neither is ever open-coded at a call site.
+
+| source | rule | helper | `(int)` of `1e19` |
+|---|---|---|---|
+| a float VALUE (`(int)1e19`) | reduce modulo 2^64 | `__rt_php_float_to_int` | `-8446744073709551616` |
+| a numeric STRING (`(int)"1e19"`) | CAP at the integer range | `__rt_php_float_to_int_cap` | `9223372036854775807` |
+
+Both answers are what php-src produces; they differ because the string path runs through
+`strtol`-style saturation while the value path is a C cast. `__rt_str_to_int` therefore calls
+the *capping* helper, not the wrapping one — using the sibling turned `(int)"1e19"` into the
+negative wrapped value.
+
+Both helpers check for NaN and the infinities **before** converting, because the conversion
+instructions disagree there and that disagreement is the reason these are shared helpers at
+all: AArch64's `fcvtzs` saturates by definition, while x86_64's `cvttsd2si` answers with the
+"integer indefinite" pattern `0x8000000000000000`. A bare conversion at a call site therefore
+made `(int)NAN` differ between targets. With the non-finite arm taken first, both helpers
+answer `0` for NaN and both infinities on both architectures, and the capping helper's
+remaining work is well defined: every value reaching `fcvtzs`/`cvttsd2si` is finite, so
+AArch64 saturates to exactly PHP's cap and x86_64 only has to correct a positive overflow to
+`PHP_INT_MAX`.
+
+**Input:** `d0` / `xmm0` = source double
+**Output:** `x9` / `r11` = PHP integer value (the cap helper); `x0` / `rax` (the wrapping helper)
+
 ### `__rt_str_eq` — String equality
 
 **File:** `strings/str_eq.rs`
