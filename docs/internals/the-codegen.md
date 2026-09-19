@@ -315,6 +315,53 @@ x86_64. `substr_count()` copies the tag to `x7` or `r11` only after conversion
 calls have finished, then restores the subject, needle, and offset ABI
 registers before window validation.
 
+## Property Writes Through a Runtime-Typed Receiver
+
+A property write resolves its slot at compile time from the receiver's class. When the receiver is
+statically `mixed` or an object union there is no class to resolve, so the class is read at runtime
+and the slot chosen from it.
+
+Both spellings of the write dispatch the same way, on the payload's **class id** — the object
+header's first word:
+
+| write | lowering | chain |
+|---|---|---|
+| `$o->name = $v` | `lower_mixed_static_prop_set` | one compare per class in the build that declares `name` and can hold this value |
+| `$o->{$expr} = $v` | `lower_runtime_mixed_prop_set` | the same compare, then a name comparison per candidate |
+
+A match stores straight into that class's declared slot. A **stdClass** payload and a **non-object**
+payload both fall through to `__rt_mixed_property_set`, which writes a dynamic property for the
+first and drops the write for the second — PHP's *attempt to assign property on non-object*.
+
+Until issue #1094 only the runtime-name spelling dispatched. The static-name spelling went straight
+to `__rt_mixed_property_set`, whose class-id check only admits stdClass, so `$o->n = 9` through a
+`mixed` receiver was discarded in silence for every other class while `$o->{$p} = 9` on the same
+object wrote. The receiver does not have to be spelled `mixed` to reach it: a local the checker
+widened across a loop back-edge (`$o = null; for (...) { $o = new T(); $o->n = 9; }`) is boxed too.
+
+### Ownership: the release belongs to lowering
+
+`emit_property_store` **retains** what it stores, on both of these paths — the class-id dispatch
+and `materialize_dynamic_property_mixed_value`'s fresh Mixed cell — so `PropSet` never consumes its
+source. A declared-receiver write is therefore followed by an explicit EIR release
+(`release_property_assignment_source_after_retaining_store`), gated on the source being an owning
+temporary.
+
+A runtime-typed receiver never got one: `object_property_type` answers only for a statically known
+class, so the gate returned `None` and an owning temporary assigned through a `mixed` receiver
+leaked once per write — three blocks for an array literal and its two boxed elements.
+`release_runtime_typed_property_assignment_source` closes that, with the same ownership gate.
+
+The property's declared type is the one fact lowering does not have, because the payload's class is
+not known until runtime. It matters only for the transfer `property_store_keeps_independent_ref`
+excludes — a `Mixed` value into a `Mixed` slot, where the backend hands the source's own cell to the
+property instead of retaining — so a `Mixed`-typed source is left alone.
+
+Doing this in the backend instead does not work, and the reason is worth keeping: whether the SSA
+source owns a reference is not a property of its type. A backend release gated on types alone
+destroyed the property's own reference for a *borrowed* source, which reads back as a pointer and
+trips `heap debug detected bad refcount`.
+
 ## Backend Contract
 
 - PHP-visible behavior belongs in `src/ir_lower/` and `src/codegen/`.
