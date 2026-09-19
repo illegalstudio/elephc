@@ -1,13 +1,11 @@
 //! Purpose:
 //! Emits the shared PHP `$offset`/`$length` normalization prologue used by every slice-like
-//! indexed-array runtime helper (`__rt_array_slice`, `__rt_array_slice_refcounted`,
-//! `__rt_array_splice`, `__rt_array_splice_refcounted`).
+//! runtime helper, indexed or hash-backed.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::arrays::array_slice`,
-//!   `crate::codegen_support::runtime::arrays::array_slice_refcounted`,
-//!   `crate::codegen_support::runtime::arrays::array_splice` and
-//!   `crate::codegen_support::runtime::arrays::array_splice_refcounted`.
+//!   `array_slice_refcounted`, `array_slice_to_hash`, `array_splice`,
+//!   `array_splice_refcounted`, `array_splice_str` and `hash_slice`.
 //!
 //! Key details:
 //! - There is no out-of-band `i64` a PHP `$length` cannot take, so "no `$length` given" travels in a
@@ -27,7 +25,7 @@ use crate::codegen_support::platform::Arch;
 /// unique string.
 ///
 /// # ABI
-/// - **ARM64** — in: `x0` = source indexed-array pointer, `x1` = raw `$offset`, `x2` = raw `$length`,
+/// - **ARM64** — in: `x0` = source array pointer, `x1` = raw `$offset`, `x2` = raw `$length`,
 ///   `x3` = 1 when the caller passed a `$length` and 0 when it was omitted or `null`.
 ///   Out: `x1` = normalized offset in `[0, n]`, `x2` = clamped window length in `[0, n - offset]`,
 ///   `x9` = source length `n`, `x10` = elements available from the normalized offset. Clobbers

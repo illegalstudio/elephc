@@ -66,12 +66,17 @@ pub fn emit_hash_slice(emitter: &mut Emitter) {
     emitter.instruction("stp x19, x20, [sp, #80]");                             // save callee-saved x19/x20 for the source and destination tables
     emitter.instruction("stp x21, x22, [sp, #96]");                             // save callee-saved x21/x22 for the preserve flag and the position
 
+    // -- take the mode flag out of the argument registers before the window prologue runs --
+    // It survives `emit_slice_bounds` today, whose documented clobbers are x9/x10 only, but the
+    // x86_64 side spills its flag first and this one should not be the one that has to re-read
+    // that list when the prologue changes (issue #1093).
+    emitter.instruction("mov x21, x4");                                         // x21 = preserve_keys flag, live across every helper call
+
     // -- normalize the PHP window before anything else clobbers the argument registers --
     // The prologue reads the source length from [x0], which for a hash is the entry count, and
     // leaves x1 = start position and x2 = element count.
     emit_slice_bounds(emitter, "__rt_hash_slice");
     emitter.instruction("mov x19, x0");                                         // x19 = source hash pointer, live across every helper call
-    emitter.instruction("mov x21, x4");                                         // x21 = preserve_keys flag, live across every helper call
     emitter.instruction("str x1, [sp, #48]");                                   // save the window start position
     emitter.instruction("add x9, x1, x2");                                      // x9 = one past the last position the window takes
     emitter.instruction("str x9, [sp, #56]");                                   // save the window end position

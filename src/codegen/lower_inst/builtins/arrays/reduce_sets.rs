@@ -243,13 +243,6 @@ pub(crate) fn lower_array_intersect_key(
 /// start at key 0, so the key-preserving form lowers to `__rt_array_slice_to_hash`, which builds an
 /// owned hash. The checker guarantees the flag is a literal (it decides the result's static
 /// shape), so a non-literal operand can only mean the checker and the backend disagree.
-/// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
-///
-/// PHP's `bool $preserve_keys = false` keeps the source integer keys of the selected window
-/// instead of renumbering it from zero. A dense indexed array cannot hold a window that does not
-/// start at key 0, so the key-preserving form lowers to `__rt_array_slice_to_hash`, which builds an
-/// owned hash. The checker guarantees the flag is a literal (it decides the result's static
-/// shape), so a non-literal operand can only mean the checker and the backend disagree.
 pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_slice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
