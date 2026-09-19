@@ -103,6 +103,20 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         ExprKind::ScopedConstantAccess { receiver, name } => {
             scoped_constant_value_type_for_ir(ctx, receiver, name, value)
         }
+        // A nested literal must be typed by the same context-aware function that will lower
+        // it, not by the syntactic fallback: `infer_expr_type_syntactic` cannot see a local's
+        // type, so it types every `$v` element `Int`. The outer hash then stamped its value
+        // type `array<string, int>` over an inner hash really holding `array<string>`, and a
+        // read through both levels returned the inner array pointer as an integer (issue
+        // #984). These are the two arms `array_literal_element_type_for_ir` already carries
+        // for an INDEXED outer literal, which is why `[["k" => $v]]` was always correct and
+        // only `["j" => ["k" => $v]]` was wrong.
+        ExprKind::ArrayLiteral(items) => {
+            array_literal_type_for_ir(ctx, items, value).codegen_repr()
+        }
+        ExprKind::ArrayLiteralAssoc(inner_pairs) => {
+            assoc_array_literal_type_for_ir(ctx, inner_pairs, value)
+        }
         ExprKind::Variable(name) => ir_array_storage_type(
             ctx.local_types
                 .get(name)

@@ -157,6 +157,22 @@ pub struct Value {
 `Callable`, `Str`, and refcounted heap values can be owned even when their
 storage type is not `Heap(...)`. Ownership is a separate value property.
 
+Because the element and key/value types "stay in `php_type`", an array literal's stamp is
+load-bearing: `ArrayGet`/`HashGet` read an element back in the shape the container's
+`php_type` claims. A stamp that does not match what was actually stored is not a lost
+optimization but a miscompile — a container stamped `array<string, int>` over a hash really
+holding `array<string>` returns the inner array's pointer read back as an integer.
+
+Two functions compute that stamp, `array_literal_element_type_for_ir` for an indexed literal
+and `assoc_array_literal_value_type_for_ir` for an associative one, and both must stay
+context-aware for every element shape they can meet — including a nested array literal, which
+they each type by recursing into the same pair of functions. The context-free
+`infer_expr_type_syntactic` is only a last-resort fallback: it cannot see a local's type and
+answers `Int` for any variable, so reaching it for an element that a local reaches through
+fabricates the stamp. Keep the two functions' element-shape arms in step; an arm present in
+one and missing in the other is a bug that only shows up in the nesting order that routes
+through the incomplete one.
+
 ### Parsed Type Expressions
 
 `TypeExpr` maps into `PhpType` during type checking before EIR lowering. EIR

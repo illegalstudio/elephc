@@ -153,6 +153,82 @@ unset($users);
     assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
 }
 
+/// An assoc literal nested inside an assoc literal keeps its own element type.
+///
+/// The outer literal stamps a value type on its hash, and for a nested literal it used to take
+/// the context-free syntactic guess, which types every variable `int`. The outer hash therefore
+/// claimed to hold `array<string, int>` while the inner hash really held `array<string>`, and a
+/// read through both levels returned the inner array POINTER read back as an integer -- the
+/// `int(...)` symptom in issue #984. `$v` has to come from a local: a literal spelled out in
+/// place is the one case the syntactic guess gets right on its own.
+#[test]
+fn test_nested_assoc_literal_keeps_a_local_arrays_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+$v = ["p", "q"];
+$a = ["outer" => ["inner" => $v]];
+var_dump($a["outer"]["inner"][1]);
+"#,
+    );
+    assert_eq!(out, "string(1) \"q\"\n");
+}
+
+/// The same nesting through an intermediate local, and with an int-valued inner array.
+///
+/// Reading `$a["outer"]` into its own local first goes through a different read path than the
+/// chained `$a["outer"]["inner"]` above, but both consume the same fabricated stamp, so both
+/// answered the pointer-as-integer before the fix.
+#[test]
+fn test_nested_assoc_literal_element_type_survives_an_intermediate_local() {
+    let out = compile_and_run(
+        r#"<?php
+$s = ["p", "q"];
+$a = ["outer" => ["inner" => $s]];
+$mid = $a["outer"];
+echo $mid["inner"][1], "|", count($mid["inner"]);
+"#,
+    );
+    assert_eq!(out, "q|2");
+}
+
+/// An INDEXED outer literal was always correct, and has to stay that way.
+///
+/// `array_literal_element_type_for_ir` already carried the nested-literal arms that the
+/// associative sibling was missing, which is exactly why `[["k" => $v]]` worked while
+/// `["j" => ["k" => $v]]` did not. This pins the working half against a later change that
+/// unifies the two.
+#[test]
+fn test_indexed_outer_literal_still_types_a_nested_assoc_literal() {
+    let out = compile_and_run(
+        r#"<?php
+$v = ["p", "q"];
+$g = [["inner" => $v]];
+echo $g[0]["inner"][1], "|", count($g[0]["inner"]);
+"#,
+    );
+    assert_eq!(out, "q|2");
+}
+
+/// A nested literal holding a loop-grown array, iterated rather than indexed.
+///
+/// `foreach` builds its iterator from the same stamped element type, so a fabricated `int`
+/// value type made the loop read scalars out of an array pointer. The loop-grown source also
+/// covers the case where the element type is only known from the local's inferred storage.
+#[test]
+fn test_nested_assoc_literal_array_iterates_its_real_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [];
+for ($i = 0; $i < 3; $i++) { $items[] = "e" . $i; }
+$doc = ["body" => ["items" => $items]];
+$seen = "";
+foreach ($doc["body"]["items"] as $it) { $seen .= $it . ","; }
+echo $seen, "|", count($doc["body"]["items"]);
+"#,
+    );
+    assert_eq!(out, "e0,e1,e2,|3");
+}
+
 /// Verifies that `array_column()` creating copied sub-arrays survives `unset` of the source rows, and that individual nested elements are still accessible.
 #[test]
 fn test_gc_array_column_borrowed_array_survives_source_unset() {
