@@ -376,6 +376,80 @@ echo count($g), "\n";
 }
 
 
+/// Verifies the growth republish through a BY-REFERENCE parameter, where the new pointer has to
+/// travel back out to the caller's storage rather than into a local slot.
+///
+/// `test_array_push_variadic_growth_is_heap_clean` above covers a plain local, whose republish
+/// is `store_value_to_raw_local`. A by-reference parameter is a different write: the receiver is
+/// a reference cell, loaded with `LoadRefCell` and published with `store_value_to_ref_cell_local`
+/// THROUGH the cell pointer into the caller's frame. Nothing pinned that second store — the
+/// by-ref fixture in `test_array_push_accepts_phps_full_variadic_signature` pushes two values
+/// onto `[1]`, reaching `__rt_array_grow` once, which is not enough to catch a dropped republish
+/// (issue #1088).
+///
+/// That this fixture catches it is measured rather than argued: disabling ONLY the reference-cell
+/// arm of `store_value_to_local`, leaving the plain-local arm intact, makes this the single
+/// failing test out of the 745 in `arrays::`. Disabling both arms fails six, so the suite covers
+/// the local path thoroughly and covered this one not at all. It reaches `__rt_array_grow` 39
+/// times, all of them through `__rt_array_push_int` / `_str` — the typed lowering, not the boxed
+/// `__rt_mixed_array_append` path, which would republish inside the Mixed cell and pin nothing
+/// here.
+///
+/// The variants are the ways the receiver can be shaped when growth hits: pushed all at once;
+/// one per call, which is the hedge against a future bulk-append lowering that would drain the
+/// first variant of reallocations while keeping it green; shared with a copy, so growth follows a
+/// copy-on-write split and `count($copy)` pins it; a run of string values, where a stale pointer
+/// is a use-after-free of the elements rather than only of the buffer; and a forwarding wrapper,
+/// so the reference crosses two frames.
+///
+/// The STDOUT assertion is the load-bearing one. `__rt_array_grow` frees the old buffer right
+/// after publishing the new pointer, so a dropped republish is a use-after-free rather than a
+/// leak: the caller reads a stale count instead of 33. The heap assertion catches the
+/// copy-on-write variant's orphan and any double release, which reports as a fatal before the
+/// summary prints.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_push_growth_through_a_by_ref_parameter_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function pushMany(array &$a): int { return array_push($a, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); }
+function pushOne(array &$a, int $v): int { return array_push($a, $v); }
+function pushStrings(array &$a): int {
+    return array_push($a, "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s");
+}
+function forward(array &$b): int { return pushMany($b); }
+$x = [1];
+$n = pushMany($x);
+$y = [1];
+for ($i = 2; $i < 34; $i++) { pushOne($y, $i); }
+$z = [1];
+$copy = $z;
+$m = pushMany($z);
+$s = ["a"];
+$k = pushStrings($s);
+$f = [1];
+$p = forward($f);
+echo $n, ",", count($x), ",", $x[32], "|",
+     count($y), ",", $y[32], "|",
+     $m, ",", count($z), ",", count($copy), "|",
+     $k, ",", $s[0], $s[18], "|",
+     $p, ",", count($f), "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "33,33,33|33,33|33,33,1|19,as|33,33\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "by-reference array_push growth leaked: {}",
+        out.stderr
+    );
+}
+
 /// Verifies a variadic `array_push()` evaluates EVERY value before it appends any of them.
 ///
 /// PHP evaluates a call's arguments and only then enters the function, so nothing an argument
