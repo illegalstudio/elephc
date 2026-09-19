@@ -1361,6 +1361,93 @@ echo $c . "|" . $d;
     assert_eq!(out, "hello world|HELLO");
 }
 
+/// Issue #510: `$x = substr($x, …)` where `$x` holds a NON-LITERAL string.
+///
+/// Reported on v0.26.0 as a use-after-free: the first eight bytes of the result came back as
+/// allocator header/free-list metadata that changed on every call, so a `--web` page served
+/// eight different garbage bytes per request in front of otherwise correct text. The source
+/// had to be "boxed" — a function return or an object property — and assigning to a DIFFERENT
+/// variable was always clean, which is what pinned it to the self-aliasing store.
+///
+/// Every shape the issue isolated is here: a user function's return, an object property, a
+/// non-zero offset, and a positive length with no size reduction at all. Each runs in a loop so
+/// the allocator is handing back blocks it has already freed — a first-iteration-only assertion
+/// would read untouched memory and pass whatever the ownership rules did.
+///
+/// Both expectations are the host PHP 8.5.10 output for the same fixture, and this shape is
+/// already correct on HEAD; the test is what keeps it that way. Existing fixtures never caught
+/// it because they asserted substring PRESENCE, never the exact text of the first token.
+#[test]
+fn test_substr_self_reassignment_of_a_boxed_buffer_keeps_its_leading_bytes() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+function body(): string { return "private function foo() {}\n"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+for ($i = 0; $i < 8; $i++) {
+    $code = body();
+    $code = substr($code, 0, -1);
+    echo $code, "|";
+
+    $p = new Paste("second body here\n");
+    $t = $p->body;
+    $t = substr($t, 0, -1);
+    echo $t, "|";
+
+    $o = body();
+    $o = substr($o, 1, -1);
+    echo $o, "|";
+
+    $n = body();
+    $n = substr($n, 0, strlen($n));
+    echo $n;
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let expected = "private function foo() {}|second body here|rivate function foo() {}|private function foo() {}\n".repeat(8);
+    assert_eq!(out.stdout, expected);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Issue #510, symptom 2: a NEGATIVE length on a non-literal buffer must truncate, with no
+/// self-reassignment involved.
+///
+/// `substr($code, 0, -1)` on an 80-byte boxed buffer returned all 80 bytes on v0.26.0, while
+/// the same call with an explicitly computed `strlen($code) - 1` returned 79 — so the clamp
+/// was reached on one path and not the other. The two bugs shared a line in the reporter's
+/// program but are independent, hence the separate fixture.
+#[test]
+fn test_substr_negative_length_truncates_a_boxed_buffer() {
+    let out = compile_and_run(
+        r#"<?php
+function body(): string { return "private function foo() {}\n"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+$fromReturn = body();
+echo strlen(substr($fromReturn, 0, -1)), "|";
+echo strlen(substr($fromReturn, 0, strlen($fromReturn) - 1)), "|";
+echo strlen(substr($fromReturn, 0, -3)), "|";
+
+$p = new Paste(body());
+echo strlen(substr($p->body, 0, -1)), "|";
+
+// A literal source took a different path and was always correct; assert the two agree.
+$literal = "private function foo() {}\n";
+echo strlen(substr($literal, 0, -1)), "|";
+echo substr($fromReturn, 0, -1) === substr($literal, 0, -1) ? "same" : "DIFF";
+"#,
+    );
+    assert_eq!(out, "25|25|23|25|25|same");
+}
+
 /// Verifies str_replace returns correct result when called repeatedly in a loop.
 /// Fixture: 100 iterations of str_replace("x", "y", "xox"), expects "yoy".
 #[test]

@@ -1034,13 +1034,13 @@ fn web_post_superglobal_parsed() {
 /// Issue #513: a urlencoded POST body far past the old ~73 KB ceiling reaches the handler.
 ///
 /// The worker used to die with `heap memory exhausted` and an empty response (curl exit 52)
-/// somewhere past 73 KB, *before* the handler ran — so an application-level size check never
+/// somewhere past 73 KB, *before* the handler ran -- so an application-level size check never
 /// got the chance to reject the request itself. The threshold was fixed: identical at an 8 MB
 /// and a 64 MB heap, which is what made it a parser limit rather than a heap one.
 ///
 /// 300 KB here is four times the old ceiling and still the default 8 MB heap, and the handler
 /// is what answers. Measured while revalidating: 74 KB, 100 KB, 200 KB and 300 KB all round-trip
-/// at 8 MB, and a 4 MB body round-trips at 64 MB — so what is left scales with the heap the way
+/// at 8 MB, and a 4 MB body round-trips at 64 MB -- so what is left scales with the heap the way
 /// the issue asked for.
 #[test]
 fn web_post_body_past_the_old_parser_ceiling_reaches_the_handler() {
@@ -1061,6 +1061,55 @@ fn web_post_body_past_the_old_parser_ceiling_reaches_the_handler() {
     let _ = child.kill();
     let _ = child.wait();
     assert!(resp.ends_with("len=300000"), "body: {:?}", resp);
+}
+
+/// Issue #510, raised in review on the CLI regression: the reported corruption was seen across
+/// repeated `--web` requests, so the `--web` lifecycle needs its own coverage.
+///
+/// `$x = substr($x, ...)` on a non-literal buffer returned eight bytes of allocator metadata in
+/// front of otherwise correct text, and they changed on every request -- which is what pointed
+/// at the worker's reused heap rather than at the expression. A one-shot native program
+/// repeats the operation but never repeats request setup, teardown, or worker reuse.
+///
+/// One worker, so every request lands on the same process and the same heap, and the response
+/// is compared byte for byte each time: the failure was never in the length.
+#[test]
+fn web_substr_self_reassignment_is_stable_across_requests() {
+    let dir = make_test_dir("web_substr_alias");
+    let src = r#"<?php
+function body(): string { return "private function foo() {}
+"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+$code = body();
+$code = substr($code, 0, -1);
+
+$p = new Paste("second body here
+");
+$t = $p->body;
+$t = substr($t, 0, -1);
+
+echo $code, "|", $t, "|", strlen($code);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        seen.push(http_request(&addr, "GET", "/", &[], ""));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    for (i, resp) in seen.iter().enumerate() {
+        assert!(
+            resp.ends_with("private function foo() {}|second body here|25"),
+            "request {i} came back corrupted: {resp:?}"
+        );
+    }
 }
 
 /// Verifies echoing a superglobal value directly (a boxed Mixed string) reaches
