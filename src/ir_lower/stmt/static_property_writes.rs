@@ -15,20 +15,26 @@ use super::*;
 /// reference to a refcounted value. There are two storage disciplines, matched
 /// to what the codegen store actually does:
 ///
-/// - **Boxing store** (a Mixed/Union slot receiving a non-Mixed value, e.g.
-///   `Class::$h = new C()`): codegen boxes the value with `__rt_mixed_from_value`,
-///   which takes its *own* retained reference to the child. The slot therefore
-///   keeps a reference independent of the source, so an owning temporary must be
-///   *released* after the store (its reference is not the one the slot holds), and
-///   a borrowed source must be left untouched. Acquiring here would leak the extra
-///   reference on top of the box's retained one.
-/// - **Moving store** (every other case: concrete-typed slot, or a Mixed→Mixed
-///   move): the store consumes (moves) its value operand. An owning temporary is
-///   moved in as-is, but a *borrowed* value (a parameter, local, or container read)
-///   must be `Acquire`d first. Without this, storing a borrowed `Mixed`
-///   (e.g. `Class::$h = $handler` where `$handler` is a `?SessionHandlerInterface`
-///   parameter) leaves the property dangling once the borrow's owner releases its
-///   reference, so a later read dispatches on freed memory (a fatal "on null").
+/// - **Independent-value store** (the store crosses the boxed/unboxed boundary, in
+///   either direction): a Mixed/Union slot receiving a non-Mixed value, e.g.
+///   `Class::$h = new C()`, is boxed with `__rt_mixed_from_value`, which takes its
+///   *own* retained reference to the child; and a narrowing slot receiving a Mixed
+///   value, e.g. `Class::$s += 1` on an `int` slot, is cast out of the box, so the
+///   slot holds a payload word that owns nothing of it. Either way the slot keeps a
+///   reference independent of the source, so an owning temporary must be *released*
+///   after the store (its reference is not the one the slot holds), and a borrowed
+///   source must be left untouched. Acquiring here would leak the extra reference on
+///   top of the slot's, and skipping the release leaks the source's own -- which is
+///   what made every compound assignment to a typed static property leak one Mixed
+///   cell (issue #1041).
+/// - **Moving store** (every other case: a same-representation store, or a Mixed
+///   value into a slot codegen leaves untouched): the store consumes (moves) its
+///   value operand. An owning temporary is moved in as-is, but a *borrowed* value (a
+///   parameter, local, or container read) must be `Acquire`d first. Without this,
+///   storing a borrowed `Mixed` (e.g. `Class::$h = $handler` where `$handler` is a
+///   `?SessionHandlerInterface` parameter) leaves the property dangling once the
+///   borrow's owner releases its reference, so a later read dispatches on freed
+///   memory (a fatal "on null").
 pub(super) fn lower_static_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -54,10 +60,19 @@ pub(super) fn lower_static_property_assign(
 
 /// Returns true when codegen gives the static-property slot an independently retained value.
 ///
-/// This covers both concrete values boxed into Mixed/Union slots and boxed Mixed values
-/// unboxed into object slots. Both backend paths retain the stored child independently,
-/// so borrowed sources need no `Acquire` and owning temporary sources are released after
-/// the store. Unknown metadata conservatively keeps the moving-store discipline.
+/// The rule is whether the store crosses the boxed/unboxed boundary. A concrete value going
+/// into a Mixed/Union slot is boxed, and the box retains the child itself. A boxed value
+/// going into a slot codegen narrows to -- `Str`, `Int`, `Bool`, `Float`, `Object`, or the
+/// tagged-scalar pair -- is cast out of the box, and what lands in the slot owns nothing of
+/// it (`__rt_str_persist` copies, the scalar casts read a payload word, the object arm
+/// increfs the unboxed pointer on its own). Both directions leave the source's reference
+/// unrelated to the slot's, so borrowed sources need no `Acquire` and owning temporary
+/// sources must be released after the store -- without that release the box outlives its
+/// last use and leaks, one cell per compound assignment (issue #1041).
+///
+/// Every other case is a moving store: a Mixed value into a Mixed/Union slot, or into one of
+/// the container slots codegen leaves untouched, writes the pointer itself into the slot, so
+/// the store consumes the reference. Unknown metadata conservatively keeps that discipline.
 pub(super) fn static_property_store_retains_independent_value(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -70,11 +85,23 @@ pub(super) fn static_property_store_retains_independent_value(
     let value_ty = ctx.builder.value_php_type(value.value);
     let slot_ty = slot_ty.codegen_repr();
     let value_ty = value_ty.codegen_repr();
-    let boxes_into_mixed = matches!(slot_ty, PhpType::Mixed | PhpType::Union(_))
-        && !matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
-    let unboxes_into_object = matches!(slot_ty, PhpType::Object(_))
-        && matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
-    boxes_into_mixed || unboxes_into_object
+    let value_is_boxed = matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
+    let boxes_into_mixed = matches!(slot_ty, PhpType::Mixed | PhpType::Union(_)) && !value_is_boxed;
+    // The slot types codegen actually casts a Mixed source out of. Deliberately not "any slot
+    // that is not Mixed": an array or iterable slot falls through `load_static_property_store_
+    // value_to_result`'s catch-all arm untouched, so the Mixed pointer itself is what gets
+    // stored and the store still consumes it.
+    let narrows_out_of_mixed = value_is_boxed
+        && matches!(
+            slot_ty,
+            PhpType::Str
+                | PhpType::Int
+                | PhpType::Bool
+                | PhpType::Float
+                | PhpType::Object(_)
+                | PhpType::TaggedScalar
+        );
+    boxes_into_mixed || narrows_out_of_mixed
 }
 
 /// Lowers `Class::$prop[] = value`.

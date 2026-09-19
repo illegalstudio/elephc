@@ -323,6 +323,44 @@ Ownership operations:
 Strings are not modeled as generic heap pointers because their ABI is `(ptr,
 len)`, but string ownership still participates in validator checks.
 
+### Store disciplines
+
+A store instruction either *moves* its value operand into the slot or leaves the
+slot holding something the operand does not own. Lowering has to know which,
+because the two need opposite EIR around the store:
+
+| Discipline | What the backend does | What lowering emits |
+|---|---|---|
+| **Moving store** | The slot keeps the operand's own pointer. | An owning temporary is moved in as-is; a borrowed value gets an `Acquire` first, or the slot dangles once the borrow's owner releases. |
+| **Independent-value store** | The slot gets something of its own -- a fresh box, a retained pointer, or a payload word read out of the operand. | An owning temporary gets a `Release` after the store, or its reference is never consumed and leaks; a borrowed value is left alone, or the extra retain leaks on top of the slot's. |
+
+Which one applies is a property of the *pair* of representations, not of the
+slot alone. A store is an independent-value store when it crosses the
+boxed/unboxed boundary in either direction:
+
+- **Boxing** (concrete value into a Mixed/Union slot): `__rt_mixed_from_value`
+  retains the child into a new cell.
+- **Narrowing** (Mixed value into a `Str`, `Int`, `Bool`, `Float`, `Object`, or
+  tagged-scalar slot): the cast reads a payload out of the box
+  (`__rt_mixed_cast_int` and friends), `__rt_str_persist` copies the string, and
+  the object arm increfs the unboxed pointer on its own. Nothing that lands in
+  the slot holds the box.
+
+Container element writes follow the same question, answered per helper rather
+than per slot type:
+
+| Helper | Discipline |
+|---|---|
+| `__rt_array_set_mixed`, `__rt_array_push_refcounted` | Independent: the value is incref'd into the element unconditionally. |
+| `__rt_array_set_*` from a concrete value into a Mixed-element array | Moving: codegen boxes first, and the boxing path releases the box it made. |
+| `__rt_hash_set` | Moving when the value can hand over its own reference (`value_can_own_mixed_box_source`), independent otherwise. |
+
+Getting the pair wrong is silent: the program's output is unchanged, and only
+`--gc-stats` or `--heap-debug` shows the drift. Issue #1041 was one of each --
+a typed static property narrowed a `+=` result out of its box without releasing
+it, and a property array element retained one without releasing it -- both one
+40-byte Mixed cell per execution.
+
 Borrowed property and indexed-read results may be stabilized with a provisional
 `Acquire` before an owning receiver is released. Its consumer must either
 transfer that owner or emit a matching `Release`; scalar casts and calls with a

@@ -234,15 +234,47 @@ pub(super) fn release_property_array_insert_value_after_retain(
     value: LoweredValue,
     span: Span,
 ) {
-    let Some(elem_ty) = indexed_property_array_element_type(property_ty) else {
-        return;
-    };
-    if matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Callable) {
+    if !property_array_insert_retains_value(ctx, property_ty, value) {
         return;
     }
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
+}
+
+/// Returns true when the backend insert helper takes its own reference to the element value.
+///
+/// Three disciplines meet here, and only the first needs a release:
+///
+/// - **Indexed storage** (`__rt_array_set_*`, `__rt_array_push_*`): the value is incref'd into
+///   the slot unconditionally, so an owning temporary keeps a reference nobody consumes.
+/// - **Mixed-element indexed storage from a concrete value**: codegen boxes the value first,
+///   and the boxing path releases the box it made, so releasing here would double-free.
+/// - **Assoc storage** (`__rt_hash_set`): the value is only incref'd when it cannot hand over
+///   its own reference (`value_can_own_mixed_box_source`), so an owning temporary is moved in
+///   and the store consumes it.
+///
+/// A Mixed-element *indexed* array fed an already-boxed Mixed value therefore falls in the
+/// first group, not the second: nothing boxes, the incref still fires, and without the release
+/// every `$o->items[0] += 1` / `$o->items[] = f()` leaks one Mixed cell (issue #1041).
+fn property_array_insert_retains_value(
+    ctx: &LoweringContext<'_, '_>,
+    property_ty: &PhpType,
+    value: LoweredValue,
+) -> bool {
+    let Some(elem_ty) = indexed_property_array_element_type(property_ty) else {
+        return false;
+    };
+    if !matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Callable) {
+        return true;
+    }
+    if !matches!(property_ty.codegen_repr(), PhpType::Array(_)) {
+        return false;
+    }
+    matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    )
 }
 
 /// Releases the loaded property value after rewriting it through a retaining `PropSet`.
