@@ -15,6 +15,8 @@ mod search;
 mod transform;
 #[path = "strings/encoding.rs"]
 mod encoding;
+#[path = "strings/inet.rs"]
+mod inet;
 #[path = "strings/iconv.rs"]
 mod iconv;
 #[path = "strings/formatting.rs"]

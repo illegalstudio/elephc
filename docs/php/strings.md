@@ -212,8 +212,8 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
 | `long2ip()` | `long2ip($ip): string` | Format a 32-bit integer as a dotted-quad IPv4 address |
 | `ip2long()` | `ip2long($ip): int\|false` | Parse a decimal dotted-quad IPv4 string into an integer, or `false` if invalid |
-| `inet_pton()` | `inet_pton($ip): string\|false` | Pack a dotted-quad IPv4 address into a 4-byte binary string, or `false` if invalid |
-| `inet_ntop()` | `inet_ntop($binary): string\|false` | Render a 4-byte IPv4 binary string as a dotted-quad address, or `false` if the length is not 4 |
+| `inet_pton()` | `inet_pton($ip): string\|false` | Pack an IPv4 or IPv6 address into its network-order binary string -- 4 bytes for IPv4, 16 for IPv6 -- or `false` if invalid. A `:` anywhere selects the IPv6 family, as in PHP. `::` compression and the embedded-IPv4 form (`::ffff:192.0.2.128`) are accepted everywhere. A zone identifier (`fe80::1%eth0`) is passed through to the platform's `inet_pton(3)`, which takes it on macOS and refuses it on Linux — the same split PHP itself has, for the same reason. The input is bounded at 255 bytes; anything longer is `false` without being parsed. |
+| `inet_ntop()` | `inet_ntop($binary): string\|false` | Render a packed address as text: a 4-byte string as a dotted quad, a 16-byte string as IPv6 in PHP's canonical spelling (longest zero run compressed to `::`, an IPv4-mapped address keeping its dotted-quad tail). Any other length is `false`. |
 | `md5()` | `md5($str, $binary = false): string` | MD5 hash — 32-char lowercase hex by default, or the raw 16 digest bytes when `$binary` is `true` |
 | `sha1()` | `sha1($str, $binary = false): string` | SHA1 hash — 40-char lowercase hex by default, or the raw 20 digest bytes when `$binary` is `true` |
 | `crc32()` | `crc32($str): int` | CRC-32 checksum (standard zlib/PHP polynomial), returned as a non-negative 32-bit integer |

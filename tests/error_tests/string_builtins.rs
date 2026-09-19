@@ -509,6 +509,24 @@ fn test_error_inet_pton_wrong_args() {
     expect_error("<?php inet_pton();", "inet_pton() takes exactly 1 argument");
 }
 
+/// Verifies the arity diagnostic fires from the other side too: one argument is also the
+/// MAXIMUM, so a second one is rejected rather than ignored.
+///
+/// Both builtins gained an address family, which is chosen from the argument's own text and
+/// length rather than from a second parameter. Accepting a stray second argument would be the
+/// natural way for that to go wrong.
+#[test]
+fn test_error_inet_helpers_reject_a_second_argument() {
+    expect_error(
+        "<?php inet_pton(\"1.2.3.4\", \"extra\");",
+        "inet_pton() takes exactly 1 argument",
+    );
+    expect_error(
+        "<?php inet_ntop(\"abcd\", \"extra\");",
+        "inet_ntop() takes exactly 1 argument",
+    );
+}
+
 /// Verifies the invalid-call diagnostic for error gzcompress wrong args.
 #[test]
 fn test_error_gzcompress_wrong_args() {
