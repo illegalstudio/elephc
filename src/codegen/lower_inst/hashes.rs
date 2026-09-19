@@ -365,22 +365,39 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
 pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
-    let hash_ty = ctx.value_php_type(hash)?;
-    require_hash(hash_ty.clone(), inst)?;
-    let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
-    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
     }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_hash_append_aarch64(ctx, hash, value, &value_ty, &storage_value_ty)?,
-        Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty)?,
-    }
+    append_one_value_to_hash(ctx, hash, value, inst)?;
     ctx.store_result_value(hash)?;
     receiver.store_back_value(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
     Ok(())
+}
+
+/// Appends one value at PHP's next automatic integer key: the `$hash[] = $value` primitive,
+/// without the receiver bookkeeping around it.
+///
+/// Shared with `array_push()`, which PHP treats identically on an associative receiver — it is
+/// the same operation spelled two ways, so it must not be two implementations. The caller owns
+/// resolving the receiver, releasing the mutated source, and publishing the result, because
+/// `array_push()` does those once for a whole run of values while `$hash[] =` does them per
+/// statement (issue #1087).
+pub(super) fn append_one_value_to_hash(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    value: ValueId,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash_ty = ctx.value_php_type(hash)?;
+    require_hash(hash_ty.clone(), inst)?;
+    let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
+    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_hash_append_aarch64(ctx, hash, value, &value_ty, &storage_value_ty),
+        Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty),
+    }
 }
 
 /// Lowers associative+associative array union through the shared hash helper.
