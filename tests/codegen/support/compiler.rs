@@ -427,9 +427,42 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     module
 }
 
-/// Returns whether the codegen fixture should run EIR optimization passes,
-/// matching the CLI's `ELEPHC_IR_OPT=off|on` default-on behavior.
+thread_local! {
+    /// Per-test override of the EIR optimizer, installed by [`without_ir_opt`].
+    static IR_OPT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Compiles every fixture inside `body` with the EIR optimizer forced off.
+///
+/// `ELEPHC_IR_OPT` selects the mode for a whole test PROCESS, and the harness runs tests in
+/// parallel, so setting it from one test would change how every other in-flight fixture
+/// compiles. The override is a thread-local instead -- the isolation the compiler itself uses
+/// for per-compilation state, see `src/codegen_support/compilation_context.rs` -- and fixture
+/// compilation runs on the calling thread, so it reaches this test's fixtures and no other
+/// test's. It is restored on the way out, panics included.
+pub(crate) fn without_ir_opt<T>(body: impl FnOnce() -> T) -> T {
+    /// Carries the override this block displaced, so the block cannot leak its own setting
+    /// into whatever the harness schedules on this thread next.
+    struct Restore(Option<bool>);
+    impl Drop for Restore {
+        /// Puts the displaced override back, on the panicking path as much as the normal one.
+        fn drop(&mut self) {
+            IR_OPT_OVERRIDE.with(|cell| cell.set(self.0));
+        }
+    }
+
+    let _restore = Restore(IR_OPT_OVERRIDE.with(|cell| cell.replace(Some(false))));
+    body()
+}
+
+/// Returns whether the codegen fixture should run EIR optimization passes.
+///
+/// A [`without_ir_opt`] block wins for its own thread; otherwise this matches the CLI's
+/// `ELEPHC_IR_OPT=off|on` default-on behavior.
 fn ir_opt_enabled_for_codegen_fixture() -> bool {
+    if let Some(forced) = IR_OPT_OVERRIDE.with(|cell| cell.get()) {
+        return forced;
+    }
     match std::env::var("ELEPHC_IR_OPT").as_deref() {
         Ok("off") => false,
         Ok("on") => true,

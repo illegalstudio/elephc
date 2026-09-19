@@ -18,6 +18,8 @@ mod enums;
 mod type_annotations;
 #[path = "types/narrowing.rs"]
 mod narrowing;
+#[path = "types/narrowed_object_arguments.rs"]
+mod narrowed_object_arguments;
 #[path = "types/param_coercion.rs"]
 mod param_coercion;
 #[path = "types/strict_types.rs"]
