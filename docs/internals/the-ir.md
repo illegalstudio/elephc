@@ -349,6 +349,37 @@ independent, explicit argument-alias, and may-alias storage, including scratch-b
 results that are not fresh heap blocks. That contract feeds direct-call cleanup,
 optimizer reasoning, and summaries for source wrappers.
 
+### A reference cell must be as wide as what the callee may write
+
+`InvokerRefArg` aliases a caller local so a callee can write back through it. The
+cell is the local's own frame storage, which keeps the write cheap and keeps every
+alias of the local in agreement — but it also means the callee writes at the
+slot's declared type. Whether that is sound depends on which by-reference form
+the argument is bound to, and the two forms differ:
+
+- A NAMED by-reference parameter (`function f(&$v)`) declares what it writes, and
+  the checker holds the caller's local to a compatible type. Both sides agree on
+  the representation, so the local keeps concrete storage and the marker points
+  straight at it.
+- A by-reference VARIADIC tail (`function f(&...$items)`) declares nothing. The
+  callee writes through `$items[n]`, an untyped element of an `array<mixed>`, so
+  PHP lets it store a value of any type into a local currently holding something
+  else. `$p = 1; f($p);` against `$items[0] = "s"` is ordinary PHP.
+
+Pointing the marker at concrete storage in the second case is silent corruption
+rather than a diagnostic: the string is written into a slot sized and typed for an
+`I64`, and the next read hands back the string's pointer as an integer. So the
+variadic form promotes the local to a boxed `Mixed` reference cell BEFORE taking
+its address (`promote_local_mixed_ref_cell`, the same helper `PDO::bindColumn()`
+and `bindParam()` use), and the callee's write lands in storage wide enough for
+whatever it chose.
+
+The widening is confined to that form deliberately. Applying it to a named
+by-reference parameter hands the callee a box pointer where it expects the value
+itself, which is the same corruption with the sides reversed. `src/ir_lower/expr/descriptor_args.rs`
+keeps the two entry points separate for that reason, and only the by-reference
+variadic tail in `src/ir_lower/expr/variadic_args.rs` reaches the widening one.
+
 ## Effects
 
 Each instruction and terminator carries an `Effects` summary. The builder

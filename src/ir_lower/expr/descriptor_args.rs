@@ -185,11 +185,61 @@ pub(super) fn invoker_ref_arg_storage_compatible(
 }
 
 /// Emits an invoker reference-cell marker for a local variable argument.
+///
+/// The marker points at the local's own storage, so the callee writes straight back into the
+/// caller's slot at the slot's declared type. That is right for a NAMED by-reference parameter:
+/// `f(&$v)` declares what it writes, and the checker holds the caller's local to it.
 pub(super) fn lower_invoker_ref_arg_marker(
     ctx: &mut LoweringContext<'_, '_>,
     var_name: &str,
     span: Span,
 ) -> LoweredValue {
+    lower_invoker_ref_arg_marker_at(ctx, var_name, RefArgStorage::AsDeclared, span)
+}
+
+/// Emits the marker for an argument absorbed by a BY-REFERENCE VARIADIC tail, widening the
+/// local to a boxed `Mixed` reference cell first.
+///
+/// `&...$items` is the one by-reference form PHP does not constrain. The callee writes through
+/// `$items[n]`, an untyped element of an `array<mixed>`, so it may store a value of any type
+/// into a caller local currently holding something else -- `function r(&...$items) { $items[0] =
+/// "s"; }` called with an `int` local is ordinary PHP. Pointing the marker at the local's
+/// concrete storage made that write land in a slot sized and typed for the OLD value: a string
+/// written over an `I64` slot read back as the string's pointer and printed as an integer, with
+/// no diagnostic (issue #1062).
+///
+/// Widening is confined to this form on purpose. A named by-reference parameter keeps concrete
+/// storage on both sides, and boxing the caller's local there would hand the callee a box
+/// pointer where it expects the value itself.
+///
+/// `promote_local_mixed_ref_cell` is idempotent and is the same helper PDO's `bindColumn` /
+/// `bindParam` use for exactly this situation.
+pub(super) fn lower_invoker_ref_variadic_arg_marker(
+    ctx: &mut LoweringContext<'_, '_>,
+    var_name: &str,
+    span: Span,
+) -> LoweredValue {
+    lower_invoker_ref_arg_marker_at(ctx, var_name, RefArgStorage::WidenedToMixed, span)
+}
+
+/// How wide the reference cell behind an invoker ref-arg marker has to be.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefArgStorage {
+    /// The callee writes at the parameter's declared type, so the local keeps its own storage.
+    AsDeclared,
+    /// The callee may write any type, so the local is boxed before it is aliased.
+    WidenedToMixed,
+}
+
+fn lower_invoker_ref_arg_marker_at(
+    ctx: &mut LoweringContext<'_, '_>,
+    var_name: &str,
+    storage: RefArgStorage,
+    span: Span,
+) -> LoweredValue {
+    if storage == RefArgStorage::WidenedToMixed {
+        ctx.promote_local_mixed_ref_cell(var_name, Some(span));
+    }
     let php_type = ctx.local_type(var_name);
     let slot = ctx.declare_local(var_name, php_type);
     ctx.emit_value(

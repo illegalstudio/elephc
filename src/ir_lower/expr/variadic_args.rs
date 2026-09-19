@@ -183,7 +183,9 @@ pub(super) fn lower_variadic_tail_source_value(
 ) -> LoweredValue {
     if by_ref_variadic {
         if let ExprKind::Variable(name) = &expr.kind {
-            return lower_invoker_ref_arg_marker(ctx, name, expr.span);
+            // The widening variant: a `&...` tail element is untyped, so the callee may write
+            // back a value of a different type than the caller's local holds (issue #1062).
+            return lower_invoker_ref_variadic_arg_marker(ctx, name, expr.span);
         }
     }
     let value = prelowered
