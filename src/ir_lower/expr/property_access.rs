@@ -159,6 +159,38 @@ pub(super) fn property_get_result_type(
     op: Op,
     expr: &Expr,
 ) -> PhpType {
+    property_result_type(ctx, object, property, op, expr, true)
+}
+
+/// Returns the property's slot type, IGNORING the null a receiver that may be a container miss
+/// would otherwise add.
+///
+/// The by-reference `foreach` fetch-for-write read uses this because it never produces that
+/// null: PHP evaluates such a source in a WRITE context, where a null receiver is a fatal
+/// `Error`, and `PropGetForWrite` raises exactly that instead of answering (issue #690).
+pub(super) fn property_slot_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    op: Op,
+    expr: &Expr,
+) -> PhpType {
+    property_result_type(ctx, object, property, op, expr, false)
+}
+
+/// Shared body of the two property result-type queries.
+///
+/// `receiver_miss_is_null` says whether a receiver read that can MISS its container -- an array
+/// or hash element -- makes the answer nullable. A read does produce null there; a
+/// fetch-for-write does not.
+fn property_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    op: Op,
+    expr: &Expr,
+    receiver_miss_is_null: bool,
+) -> PhpType {
     if op == Op::NullsafePropGet {
         return PhpType::Mixed;
     }
@@ -179,7 +211,8 @@ pub(super) fn property_get_result_type(
         }
         return fallback_expr_type(expr);
     };
-    let nullable = nullable || value_may_carry_container_miss(ctx, object);
+    let nullable =
+        nullable || (receiver_miss_is_null && value_may_carry_container_miss(ctx, object));
     let normalized = class_name.trim_start_matches('\\');
     if is_builtin_stdclass_name(normalized) {
         return if nullable {

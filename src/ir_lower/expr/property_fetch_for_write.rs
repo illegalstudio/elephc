@@ -23,13 +23,17 @@ pub(crate) fn lower_by_ref_foreach_property_source(
     object: &Expr,
     property: &str,
     expr: &Expr,
-) -> LoweredValue {
+) -> ByRefForeachPropertySource {
     let object_value = lower_expr(ctx, object);
     if !property_fetch_for_write_applies(ctx, &object_value, property, expr) {
-        return lower_property_get_from_value(ctx, object_value, property, Op::PropGet, expr);
+        return ByRefForeachPropertySource {
+            value: lower_property_get_from_value(ctx, object_value, property, Op::PropGet, expr),
+            receiver: None,
+        };
     }
     let data = ctx.intern_string(property);
-    let result_type = property_get_result_type(ctx, object_value.value, property, Op::PropGet, expr);
+    let result_type =
+        property_slot_result_type(ctx, object_value.value, property, Op::PropGet, expr);
     let result = ctx.emit_value(
         Op::PropGetForWrite,
         vec![object_value.value],
@@ -43,12 +47,38 @@ pub(crate) fn lower_by_ref_foreach_property_source(
     // own container.
     ctx.builder
         .set_value_ownership(result.value, Ownership::Borrowed);
-    // The stable base local keeps the receiver and its slot alive until the loop ends. Unstable
-    // chains were rejected above and used the ordinary retaining read instead.
-    if ctx.value_is_owning_temporary(object_value) {
-        crate::ir_lower::ownership::release_if_owned(ctx, object_value, Some(expr.span));
+    // A receiver that names stable backing storage -- a variable, `$this`, a declared object
+    // slot chain -- keeps itself and its property slot alive for the loop, so the temporary (if
+    // any) is released here as before. A receiver that does NOT is a temporary the loop is
+    // borrowing THROUGH: `$arr[0]->x`, `$o->get()->x`. Releasing it here frees the object whose
+    // slot owns the container the iterator walks, so it is handed to the loop instead and
+    // released on every way out (issue #690).
+    if !ctx.value_is_owning_temporary(object_value) {
+        return ByRefForeachPropertySource {
+            value: result,
+            receiver: None,
+        };
     }
-    result
+    if receiver_is_stable_backing_storage(ctx, object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object_value, Some(expr.span));
+        return ByRefForeachPropertySource {
+            value: result,
+            receiver: None,
+        };
+    }
+    ByRefForeachPropertySource {
+        value: result,
+        receiver: Some(object_value),
+    }
+}
+
+/// A by-reference `foreach` property source, plus the receiver the loop borrows through.
+pub(crate) struct ByRefForeachPropertySource {
+    /// The container the loop iterates.
+    pub(crate) value: LoweredValue,
+    /// A receiver temporary the loop must outlive. `Some` only for the borrowed
+    /// fetch-for-write read through a receiver that names no stable storage of its own.
+    pub(crate) receiver: Option<LoweredValue>,
 }
 
 /// Returns whether a by-reference property source can use the fetch-for-write read.
@@ -70,7 +100,7 @@ fn property_fetch_for_write_applies(
         return false;
     }
     let property_ty =
-        property_get_result_type(ctx, object_value.value, property, Op::PropGet, expr);
+        property_slot_result_type(ctx, object_value.value, property, Op::PropGet, expr);
     if !matches!(
         normalize_value_php_type(property_ty).codegen_repr(),
         PhpType::Array(_) | PhpType::AssocArray { .. }
@@ -82,10 +112,10 @@ fn property_fetch_for_write_applies(
     if !property_is_splittable_container_slot(ctx, &class_name, property) {
         return false;
     }
-    let ExprKind::PropertyAccess { object, .. } = &expr.kind else {
-        return false;
-    };
-    receiver_is_stable_backing_storage(ctx, object)
+    // The receiver itself no longer has to name stable storage: an unstable one is held by the
+    // loop instead (see `lower_by_ref_foreach_property_source`). What still has to hold is that
+    // the receiver is a real object value, which the checks above established.
+    true
 }
 
 /// Returns whether a class property is a fixed container slot the backend can split in place.

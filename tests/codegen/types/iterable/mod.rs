@@ -10,4 +10,5 @@
 use super::*;
 
 mod foreach;
+mod foreach_property_receivers;
 mod builtins_and_casts;

@@ -222,6 +222,17 @@ reference marker applies to a variable target, never to a whole pattern, so
 
 Use `foreach ($arr as $key => &$value)` when both the key and a mutable
 element reference are needed. The key itself cannot be bound by reference.
+
+The source of a by-reference loop can be any array the program can name, and the
+writes land in it: a local, an array element (`$a[0]`), an object property, a
+property reached through a runtime name (`$o->$n`), through an object held in an
+array element (`$arr[0]->x`), or through a call result (`$o->get()->x`). The loop
+holds whatever storage it is iterating for as long as it runs, so replacing the
+receiver inside the body does not disturb it. A receiver that turns out to be
+`null` — `$arr[5]->x` on a shorter array — raises PHP's
+`Attempt to modify property "x" on null` `Error`, because a by-reference source is
+a write target rather than a read.
+
 By-reference value binding is currently supported only for array sources;
 `foreach ($iterator as &$value)` over `Iterator`, `IteratorAggregate`, or
 `iterable`-typed values is rejected at compile time. Use an array source or

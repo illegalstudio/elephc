@@ -67,7 +67,12 @@ pub(super) fn lower_try_catch(
         Op::TryPushHandler.default_effects(),
         Some(span),
     );
+    // A throw raised inside this body may be caught here, so it does not leave the loops this
+    // `try` is nested in; recording the depth is what tells `terminate_throw` which loops it
+    // really leaves (issue #690).
+    ctx.push_try_loop_depth();
     lower_block(ctx, try_body);
+    ctx.pop_try_loop_depth();
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         branch_to(ctx, after_block);
@@ -133,7 +138,10 @@ pub(super) fn lower_try_catch_finally(
         Some(span),
     );
     let depth = push_finally_frame(ctx, finally_body, false, Some((handler_token, span)));
+    // See the twin in `lower_try_catch`: the handler is active for this body only.
+    ctx.push_try_loop_depth();
     lower_block(ctx, try_body);
+    ctx.pop_try_loop_depth();
     pop_finally_frame_if_active(ctx, depth);
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
@@ -190,10 +198,11 @@ pub(super) fn lower_catch_dispatch(
         ctx.builder.position_at_end(next_catch);
     }
 
+    // No catch matched, so the exception continues outward. This rethrow leaves every loop
+    // the abandoned `try` was nested in -- its record is already popped -- so it releases what
+    // the throw into this handler deliberately did not (issue #690).
     let current = lower_current_exception(ctx, span);
-    ctx.builder.terminate(Terminator::Throw {
-        value: current.value,
-    });
+    crate::ir_lower::stmt::control_exit::terminate_throw(ctx, current.value);
     after_reachable
 }
 

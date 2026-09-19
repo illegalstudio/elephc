@@ -637,14 +637,31 @@ reference cell by `$r = &$o->x` — there the container lives inside the cell, s
 split reads and republishes through the cell and every alias of the reference sees
 the result.
 
-The receiver has to be reachable through stable backing storage: a variable or
-`$this`, optionally followed by a chain of plain declared object properties
-(`$o->inner->x`). Proving only that the syntactic ROOT is a variable is not enough,
-because an intermediate step can be a `get` hook or a `__get` returning a fresh
-object; the read drops its receiver as soon as it takes the borrow, which would
-free the container the loop is about to iterate. Dynamic property names, hooked
-properties, `Mixed` and nullable receivers, packed fields, and receivers over a
-temporary all keep the retaining read.
+The receiver has to outlive the loop, because the borrowed container's only owner
+is the property slot inside it. A receiver that names stable backing storage does
+that by itself: a variable or `$this`, optionally followed by a chain of plain
+declared object properties (`$o->inner->x`). Any OTHER receiver is a temporary the
+loop borrows through — an array element (`$arr[0]->x`), a call result
+(`$o->get()->x`), an intermediate `get` hook or `__get` returning a fresh object —
+and dropping it when the read takes its borrow frees the container the loop is
+about to iterate. Those receivers are held by the loop instead, released on the
+exit block and, through the loop frame, on every `break`, `return` and `throw`
+that skips it (issue #690). The gate is therefore about LIFETIME, not about
+spelling; `Mixed` and nullable receivers, packed fields and hooked or undeclared
+property slots still keep the retaining read.
+
+A runtime-named property (`$o->$n`) takes the same path once its name has folded
+to a literal, which is the ordinary case: the slot the backend resolves is the one
+the static spelling reaches. A name still unresolved at lowering time keeps the
+retaining read, because the backend's slot resolution needs it.
+
+A receiver that is null at RUN TIME — an element read that missed, whose result
+still carries the element's declared type — raises PHP's
+`Attempt to modify property "x" on null` `Error` rather than being dereferenced.
+That is not a detail of the split: PHP evaluates a by-reference `foreach` source
+in a WRITE context, where a null receiver is fatal instead of the warning a plain
+read produces. It is also what lets the read describe the property's SLOT type
+instead of a nullable read type, since this path never answers null.
 
 The frontend gate in `src/ir_lower/expr/property_fetch_for_write.rs` and the lowering in
 `src/codegen/lower_inst/objects/property_fetch_for_write.rs` classify slots from the same `ClassInfo`

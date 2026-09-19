@@ -185,6 +185,7 @@ pub(super) fn lower_switch_bodies(
         continue_block: exit,
         cleanup: None,
         source_pin: None,
+        receiver_pin: None,
     });
     for index in 0..=cases.len() {
         if default.is_some() && default_index == index {

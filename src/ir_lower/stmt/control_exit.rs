@@ -199,7 +199,9 @@ pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::i
         }
         return;
     }
-    emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
+    // NOT every active loop: a `try` inside one catches without leaving it. See
+    // `loops_a_throw_would_leave` (issue #690).
+    emit_innermost_loop_cleanups(ctx, ctx.loops_a_throw_would_leave());
     ctx.builder.terminate(Terminator::Throw { value });
 }
 
@@ -295,6 +297,12 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
         // element for the whole loop; leaving through `break N`, `return`, or `throw` never
         // reaches the exit block that would drop it, so drop it here (issue #580).
         if let Some(pin) = frame.source_pin {
+            crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
+        }
+        // Same reasoning for the receiver the borrowed property source was read through: the
+        // loop holds the object so its slot keeps owning the container being written, and an
+        // exit that skips the loop's own exit block has to drop it here (issue #690).
+        if let Some(pin) = frame.receiver_pin {
             crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
         }
     }

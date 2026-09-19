@@ -44,6 +44,10 @@ pub(crate) struct LoopFrame {
     /// (issues #580 and #642). Released on every exit that skips the loop's own exit block,
     /// exactly like `cleanup`.
     pub source_pin: Option<LoopCleanup>,
+    /// Reference a by-reference `foreach` holds on the OBJECT whose property slot owns the
+    /// borrowed container, when that object is a temporary the loop reached through -- an array
+    /// element, a call result (issue #690). Released on every exit, exactly like `source_pin`.
+    pub receiver_pin: Option<LoopCleanup>,
 }
 
 /// Cleanup that must run when control leaves a loop without visiting its exit block.
@@ -106,6 +110,7 @@ pub(crate) struct LoweringSnapshot {
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
     finally_stack: Vec<FinallyFrame>,
+    try_loop_depths: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
     reflection_function_locals: HashMap<String, String>,
@@ -229,6 +234,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
     pub finally_stack: Vec<FinallyFrame>,
+    /// Loop-stack depth at each active `try` handler push; see
+    /// `LoweringContext::loops_a_throw_would_leave`.
+    pub try_loop_depths: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
     reflection_function_locals: HashMap<String, String>,
@@ -368,6 +376,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             current_class,
             loop_stack: Vec::new(),
             finally_stack: Vec::new(),
+            try_loop_depths: Vec::new(),
             static_callable_locals: HashMap::new(),
             reflection_class_locals: HashMap::new(),
             reflection_function_locals: HashMap::new(),
@@ -416,6 +425,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
             finally_stack: self.finally_stack.clone(),
+            try_loop_depths: self.try_loop_depths.clone(),
             static_callable_locals: self.static_callable_locals.clone(),
             reflection_class_locals: self.reflection_class_locals.clone(),
             reflection_function_locals: self.reflection_function_locals.clone(),
@@ -441,6 +451,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
+    /// Records that a `try` handler is now active, with the loops it encloses.
+    pub(crate) fn push_try_loop_depth(&mut self) {
+        let depth = self.loop_stack.len();
+        self.try_loop_depths.push(depth);
+    }
+
+    /// Drops the innermost active `try` handler's record.
+    pub(crate) fn pop_try_loop_depth(&mut self) {
+        self.try_loop_depths.pop();
+    }
+
+    /// Returns how many loop frames a throw raised here would actually LEAVE.
+    ///
+    /// A throw caught by a `try` INSIDE a loop does not leave that loop: control resumes in the
+    /// catch and the loop keeps running, so releasing what the loop holds would free the storage
+    /// it is still iterating and release it a second time on normal termination. Only the loops
+    /// opened INSIDE the innermost active `try` are left behind (issue #690).
+    ///
+    /// With no `try` active, a throw leaves every loop -- it is on its way out of the function.
+    pub(crate) fn loops_a_throw_would_leave(&self) -> usize {
+        let innermost_try = self.try_loop_depths.last().copied().unwrap_or(0);
+        self.loop_stack.len().saturating_sub(innermost_try)
+    }
+
     /// Restores state captured before a discarded speculative lowering.
     pub(crate) fn restore(&mut self, snapshot: LoweringSnapshot) {
         self.builder.restore_function(snapshot.function);
@@ -453,6 +487,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
         self.finally_stack = snapshot.finally_stack;
+        self.try_loop_depths = snapshot.try_loop_depths;
         self.static_callable_locals = snapshot.static_callable_locals;
         self.reflection_class_locals = snapshot.reflection_class_locals;
         self.reflection_function_locals = snapshot.reflection_function_locals;
