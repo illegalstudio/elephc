@@ -43,6 +43,55 @@ use propagate::*;
 
 pub use reachability::prune_unreachable_declarations;
 
+/// Runs one AST pass over a function, method, or closure body, keeping the body INTACT when the
+/// pass would delete its last `yield`.
+///
+/// PHP decides generator-ness syntactically, at declaration: a body that holds a `yield` token
+/// is a generator even when no `yield` can ever run, so `function g(): iterable { while (false)
+/// { yield 1; } }` returns an empty `Generator`. Every other statement these passes remove is
+/// invisible to the program's meaning. A `yield` is not — deleting the token changes what the
+/// function IS, and both readers of the property downstream (`generator_body_return_type` and
+/// `attach_generator_source_if_needed` in `src/ir_lower/function.rs`) look for exactly that
+/// token, so once it is gone nothing can recover it. The function then returned a boxed null
+/// where its caller expected a `Generator`: `valid()` answered `true` forever and `foreach`
+/// never terminated (issue #1085).
+///
+/// Applied at the function-body boundary, which is the only place the question is asked, and
+/// therefore the only place the answer has to be preserved. It is NOT enough to check for a
+/// yield after the pass has run — `prune_function_body`'s own trailing-`return` guard did
+/// exactly that and was defeated the same way.
+///
+/// Two passes need it today, and they delete a yield for DIFFERENT reasons, which is why one
+/// guard does not cover the other:
+///
+/// - the prune (`control::prune`, which the normalize phase runs again) folds a condition it
+///   can read as a literal: `while (false)`, `if (false)`, a constant `elseif` chain;
+/// - dead-code elimination (`control::dce`) rewrites an `if` chain as a whole, using facts the
+///   prune does not have. `if (false) { ... } elseif (false) { yield 1; }` survives the prune
+///   with its guard engaged and restored, and DCE then collapses the chain and takes the token
+///   with it.
+///
+/// Any future pass that can drop statements needs the same treatment.
+///
+/// The walk is paid by every body; the clone only by bodies that contain a yield at all, and
+/// only those whose yields are ALL folded away give up that pass. Nothing else in such a body
+/// is worth optimizing.
+pub(crate) fn body_preserving_yields(
+    body: Vec<Stmt>,
+    pass: impl FnOnce(Vec<Stmt>) -> Vec<Stmt>,
+) -> Vec<Stmt> {
+    if !crate::types::checker::yield_validation::body_contains_yield(&body) {
+        return pass(body);
+    }
+    let original = body.clone();
+    let result = pass(body);
+    if crate::types::checker::yield_validation::body_contains_yield(&result) {
+        result
+    } else {
+        original
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
