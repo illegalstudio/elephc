@@ -1386,9 +1386,7 @@ fn attach_generator_source_if_needed(
     body: &[Stmt],
     visible_param_count: usize,
 ) {
-    if !crate::types::checker::yield_validation::body_contains_yield(body)
-        && !is_generator_return_type(&function.return_php_type)
-    {
+    if !crate::types::checker::yield_validation::body_contains_yield(body) {
         return;
     }
     function.flags.is_generator = true;
@@ -1398,21 +1396,33 @@ fn attach_generator_source_if_needed(
     });
 }
 
-/// Returns true when checked function metadata already identifies a generator return.
-fn is_generator_return_type(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Object(name) if name.trim_start_matches('\\') == "Generator")
-}
-
 /// Returns the EIR return type to lower a function body with.
 ///
-/// For a generator (body contains `yield`, or the declared return type is
-/// `Generator`) the compiled body is a coroutine whose `return` produces the
-/// value later read by `Generator::getReturn()`, so the body return type is
-/// `Mixed`. For every other function it is the declared signature return type.
+/// For a generator the compiled body is a coroutine whose `return` produces the value later
+/// read by `Generator::getReturn()`, so the body return type is `Mixed`. For every other
+/// function it is the declared signature return type.
+///
+/// Generator-ness is the `yield` TOKEN and nothing else, because that is PHP's own rule: a body
+/// holding one is a generator, a body without one is not, whatever either declares. A declared
+/// `Generator` return type used to count as well, and it is not the same question — a function
+/// that merely FORWARDS someone else's generator declares exactly that type while holding no
+/// token:
+///
+/// ```php
+/// function inner(): Generator { yield 1; yield 2; }
+/// function factory(): Generator { return inner(); }   // an ordinary function
+/// ```
+///
+/// Under the old test `factory` was compiled as a coroutine, so `return inner()` became the
+/// value `getReturn()` hands back rather than the function's result, and iterating it never
+/// terminated (issue #1086).
+///
+/// The token is a reliable signal again because no optimizer pass may delete a body's last
+/// `yield` (`optimize::body_preserving_yields`, issue #1085). Before that it was not: the
+/// declared type was the fallback that recovered generator-ness after a fold had removed the
+/// token, which is why the two questions were conflated in the first place.
 fn generator_body_return_type(body: &[Stmt], signature_return: &PhpType) -> PhpType {
-    if crate::types::checker::yield_validation::body_contains_yield(body)
-        || is_generator_return_type(signature_return)
-    {
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
         PhpType::Mixed
     } else {
         signature_return.clone()

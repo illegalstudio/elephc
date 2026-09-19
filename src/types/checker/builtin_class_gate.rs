@@ -188,8 +188,10 @@ fn program_names(usage: &Usage, class_name: &str) -> bool {
 /// and `Generator` is absent from `dynamic_new::supported_dynamic_new_builtin_class_names`, so
 /// `new $c` cannot conjure one either.
 ///
-/// A declared `Generator` RETURN TYPE also makes a function a generator in elephc
-/// (`ir_lower::function::is_generator_return_type`); that spells the class, so it is covered.
+/// A declared `Generator` return type does NOT make a function a generator — the `yield` token
+/// is the whole rule, and a function that merely forwards someone else's generator declares that
+/// type while holding none (issue #1086). It is still covered here, because declaring the type
+/// spells the class and the name scan sees it.
 ///
 /// When absent, `_generator_class_id` is emitted as `u64::MAX`, a value no object header carries,
 /// so the runtime comparisons simply never match.
