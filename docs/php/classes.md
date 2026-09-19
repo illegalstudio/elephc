@@ -263,7 +263,9 @@ An untyped property with no explicit default (`public $x;`, instance or static) 
 
 Property default values are applied both for the normal `new ClassName()` form and for dynamic `new $variable()` instantiation (and therefore for runtime-instantiated stream wrappers and stream filters). When the class name resolves to a known class, dynamic instantiation follows the same allocation path as direct construction, so constructor arguments are evaluated and `__construct` runs normally.
 
-An `array`-typed (or untyped) property may take an associative literal default such as `['a' => 1]`. The property is then stored as an associative array, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run like any other associative array. A positional literal default (`[1, 2, 3]`) keeps integer-keyed list storage.
+An `array`-typed (or untyped) property may take an associative literal default such as `['a' => 1]`. The property is then stored as an associative array, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run like any other associative array. A positional literal default (`[1, 2, 3]`) keeps integer-keyed list storage. A `?array`, `mixed` or union-typed property takes either spelling too, stored as a boxed value.
+
+The elements may themselves be array literals, to any depth and in either spelling: `public array $grid = [[1, 2], [3, 4]];`, `public array $conf = ['db' => ['host' => 'localhost']];`, and mixtures such as `[[1], 2]` all initialize without running any code. Each nested container is allocated as part of the object's initialization and owned by the one enclosing it, so the whole tree is released exactly once with the object, and two instances never share storage — writing through `$a->grid[0][] = 9` leaves a second instance's default untouched, as in PHP.
 
 ```php
 <?php

@@ -82,9 +82,24 @@ pub(crate) enum LiteralDefaultValue {
         enum_name: String,
         case_name: String,
     },
+    /// An associative-array literal stored into a `mixed`/union slot, boxed into a Mixed cell.
+    ///
+    /// The keyed counterpart of `BoxedArray`, and missing for the same reason it was: only the
+    /// positional spelling had been taught to box, so `public ?array $x = ["k" => 1];` was
+    /// refused outright while `public ?array $x = [1, 2];` beside it compiled.
+    BoxedAssocArray {
+        value_type: PhpType,
+        entries: Vec<LiteralAssocEntry>,
+    },
 }
 
 /// Literal indexed-array element that can be materialized without evaluating code.
+///
+/// The two container forms make this recursive, which is what lets a default nest:
+/// `public array $x = [[1], [2]];` is an outer literal whose elements are themselves literals.
+/// Each container element allocates its own storage at emit time and hands that storage to the
+/// enclosing container, so the whole tree is owned by its root and released exactly once with
+/// it (issue #1052).
 #[derive(Clone)]
 pub(crate) enum LiteralArrayElement {
     Int(i64),
@@ -92,6 +107,29 @@ pub(crate) enum LiteralArrayElement {
     Float(f64),
     Str(String),
     Null,
+    /// A nested indexed-array literal, materialized into its own array.
+    Array {
+        elem_type: PhpType,
+        elements: Vec<LiteralArrayElement>,
+    },
+    /// A nested associative-array literal, materialized into its own hash.
+    AssocArray {
+        value_type: PhpType,
+        entries: Vec<LiteralAssocEntry>,
+    },
+}
+
+impl LiteralArrayElement {
+    /// Returns true for the forms that materialize into their own freshly allocated container.
+    ///
+    /// Such a value arrives owned, so the enclosing container must TRANSFER that reference
+    /// rather than add one; a scalar element has no reference to transfer.
+    fn is_owned_container(&self) -> bool {
+        matches!(
+            self,
+            LiteralArrayElement::Array { .. } | LiteralArrayElement::AssocArray { .. }
+        )
+    }
 }
 
 /// Literal associative-array key that can be materialized without evaluating code. Positional
@@ -195,6 +233,30 @@ pub(crate) fn literal_default_value(
             Ok(LiteralDefaultValue::BoxedArray {
                 elem_type,
                 elements,
+            })
+        }
+        // The keyed spelling of the arm above. Values are typed `Mixed` for the same reason the
+        // positional elements are: the slot is `mixed`, so a later write of any type into the
+        // hash must not find a narrower value type stamped underneath.
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::ArrayLiteralAssoc(items)) => {
+            let value_type = PhpType::Mixed;
+            let entries = items
+                .iter()
+                .map(|(key, value_expr)| {
+                    Ok(LiteralAssocEntry {
+                        key: literal_array_key(context, &key.kind, op_name)?,
+                        value: literal_array_element(
+                            context,
+                            &value_type,
+                            &value_expr.kind,
+                            op_name,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::BoxedAssocArray {
+                value_type,
+                entries,
             })
         }
         (PhpType::Void | PhpType::Never, ExprKind::Null) => Ok(LiteralDefaultValue::NullSentinel),
@@ -380,8 +442,13 @@ pub(super) fn emit_array_literal_default_to_result(
     emit_array_literal_allocation(ctx, elem_type, elements.len())?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     for element in elements {
-        let value_type = emit_array_element_value(ctx, element);
-        append_array_literal_element(ctx, elem_type, &value_type)?;
+        let value_type = emit_array_element_value(ctx, element)?;
+        append_array_literal_element(
+            ctx,
+            elem_type,
+            &value_type,
+            element.is_owned_container(),
+        )?;
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     Ok(())
@@ -404,7 +471,7 @@ pub(crate) fn emit_assoc_array_literal_default_to_result(
             Arch::AArch64 => {
                 materialize_assoc_literal_key_aarch64(ctx, &entry.key);
                 abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-                let actual_value_type = emit_array_element_value(ctx, &entry.value);
+                let actual_value_type = emit_array_element_value(ctx, &entry.value)?;
                 materialize_assoc_literal_value(ctx, value_type, &actual_value_type)?;
                 abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
                 abi::emit_pop_reg(ctx.emitter, "x0");
@@ -417,7 +484,7 @@ pub(crate) fn emit_assoc_array_literal_default_to_result(
             Arch::X86_64 => {
                 materialize_assoc_literal_key_x86_64(ctx, &entry.key);
                 abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
-                let actual_value_type = emit_array_element_value(ctx, &entry.value);
+                let actual_value_type = emit_array_element_value(ctx, &entry.value)?;
                 materialize_assoc_literal_value(ctx, value_type, &actual_value_type)?;
                 abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
                 abi::emit_pop_reg(ctx.emitter, "rdi");
@@ -486,6 +553,45 @@ fn literal_array_element(
             ExprKind::FloatLiteral(value) => Ok(LiteralArrayElement::Float(*value)),
             ExprKind::StringLiteral(value) => Ok(LiteralArrayElement::Str(value.clone())),
             ExprKind::Null => Ok(LiteralArrayElement::Null),
+            // A nested literal recurses rather than being refused. Only a Mixed-capable slot
+            // reaches here with a container: a `Str`/`Int`/`Float` element type cannot hold one,
+            // and falls through to the unsupported error below as before. The nested elements are
+            // typed `Mixed` for the same reason the outer ones are -- the container has to accept
+            // a later write of any type.
+            ExprKind::ArrayLiteral(items) => {
+                let inner_elem_type = PhpType::Mixed;
+                let elements = items
+                    .iter()
+                    .map(|item| {
+                        literal_array_element(context, &inner_elem_type, &item.kind, op_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::Array {
+                    elem_type: inner_elem_type,
+                    elements,
+                })
+            }
+            ExprKind::ArrayLiteralAssoc(items) => {
+                let inner_value_type = PhpType::Mixed;
+                let entries = items
+                    .iter()
+                    .map(|(key, value_expr)| {
+                        Ok(LiteralAssocEntry {
+                            key: literal_array_key(context, &key.kind, op_name)?,
+                            value: literal_array_element(
+                                context,
+                                &inner_value_type,
+                                &value_expr.kind,
+                                op_name,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::AssocArray {
+                    value_type: inner_value_type,
+                    entries,
+                })
+            }
             ExprKind::Negate(inner) => match &inner.kind {
                 ExprKind::IntLiteral(value) => value
                     .checked_neg()
@@ -525,6 +631,76 @@ fn literal_array_element(
             ExprKind::StringLiteral(value) => Ok(LiteralArrayElement::Str(value.clone())),
             _ => Err(unsupported_literal_default(context, elem_type, op_name)),
         },
+        // A container element type reached through a KEYED outer literal: `["k" => [1]]` infers
+        // the outer hash's value type from the literal, so the element type is already
+        // `array<...>` rather than `Mixed`. The nested elements keep that inferred type instead
+        // of collapsing to `Mixed`, so the inner container is stamped the way a read of it will
+        // expect.
+        PhpType::Array(inner_elem_type) => match expr {
+            ExprKind::ArrayLiteral(items) => {
+                let inner_elem_type = inner_elem_type.codegen_repr();
+                let elements = items
+                    .iter()
+                    .map(|item| {
+                        literal_array_element(context, &inner_elem_type, &item.kind, op_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::Array {
+                    elem_type: inner_elem_type,
+                    elements,
+                })
+            }
+            _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+        },
+        PhpType::AssocArray { value, .. } => {
+            let inner_value_type = value.as_ref().codegen_repr();
+            match expr {
+                ExprKind::ArrayLiteralAssoc(items) => {
+                    let entries = items
+                        .iter()
+                        .map(|(key, value_expr)| {
+                            Ok(LiteralAssocEntry {
+                                key: literal_array_key(context, &key.kind, op_name)?,
+                                value: literal_array_element(
+                                    context,
+                                    &inner_value_type,
+                                    &value_expr.kind,
+                                    op_name,
+                                )?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(LiteralArrayElement::AssocArray {
+                        value_type: inner_value_type,
+                        entries,
+                    })
+                }
+                // A positional literal stored into hash storage takes PHP's implicit 0,1,2,…
+                // keys, the same rule the top-level `AssocArray` arm applies.
+                ExprKind::ArrayLiteral(items) => {
+                    let entries = items
+                        .iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            Ok(LiteralAssocEntry {
+                                key: LiteralArrayKey::Int(index as i64),
+                                value: literal_array_element(
+                                    context,
+                                    &inner_value_type,
+                                    &item.kind,
+                                    op_name,
+                                )?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(LiteralArrayElement::AssocArray {
+                        value_type: inner_value_type,
+                        entries,
+                    })
+                }
+                _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+            }
+        }
         _ => Err(unsupported_literal_default(context, elem_type, op_name)),
     }
 }
@@ -575,30 +751,35 @@ fn emit_array_literal_allocation(
 }
 
 /// Emits one literal array element into the canonical result register(s).
+///
+/// A container element recurses into the same emitter the enclosing container used, leaving a
+/// freshly allocated OWNED container in the result register. Both callers stage the enclosing
+/// container's pointer on the stack around this call, and the nested emitters' own stack traffic
+/// is balanced, so the nesting is safe to any depth.
 fn emit_array_element_value(
     ctx: &mut FunctionContext<'_>,
     element: &LiteralArrayElement,
-) -> PhpType {
+) -> Result<PhpType> {
     match element {
         LiteralArrayElement::Int(value) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), *value);
-            PhpType::Int
+            Ok(PhpType::Int)
         }
         LiteralArrayElement::Bool(value) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(*value));
-            PhpType::Bool
+            Ok(PhpType::Bool)
         }
         LiteralArrayElement::Float(value) => {
             let label = ctx.data.add_float(*value);
             abi::emit_load_symbol_to_reg(ctx.emitter, abi::float_result_reg(ctx.emitter), &label, 0);
-            PhpType::Float
+            Ok(PhpType::Float)
         }
         LiteralArrayElement::Str(value) => {
             let (label, len) = ctx.data.add_string(value.as_bytes());
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
-            PhpType::Str
+            Ok(PhpType::Str)
         }
         LiteralArrayElement::Null => {
             abi::emit_load_int_immediate(
@@ -606,20 +787,52 @@ fn emit_array_element_value(
                 abi::int_result_reg(ctx.emitter),
                 0x7fff_ffff_ffff_fffe,
             );
-            PhpType::Void
+            Ok(PhpType::Void)
+        }
+        LiteralArrayElement::Array {
+            elem_type,
+            elements,
+        } => {
+            emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+            Ok(PhpType::Array(Box::new(elem_type.clone())))
+        }
+        LiteralArrayElement::AssocArray {
+            value_type,
+            entries,
+        } => {
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            Ok(PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(value_type.clone()),
+            })
         }
     }
 }
 
 /// Appends the current literal element value to the array pointer saved on the stack.
+///
+/// `value_is_owned` distinguishes the two ways a value can arrive. A scalar has no reference,
+/// so boxing it retains whatever the box needs and nothing is left over. A nested container
+/// arrives with the +1 `__rt_array_new`/`__rt_hash_new` gave it and no other holder, so boxing
+/// must TRANSFER that reference: the retaining box plus a release of the original leaves the
+/// cell as the single owner. Retaining without releasing would leak the whole nested tree once
+/// per element.
 fn append_array_literal_element(
     ctx: &mut FunctionContext<'_>,
     elem_type: &PhpType,
     value_type: &PhpType,
+    value_is_owned: bool,
 ) -> Result<()> {
     match elem_type.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
-            emit_box_current_value_as_mixed(ctx.emitter, &value_type.codegen_repr());
+            if value_is_owned {
+                crate::codegen::emit_box_current_owned_value_as_mixed(
+                    ctx.emitter,
+                    &value_type.codegen_repr(),
+                );
+            } else {
+                emit_box_current_value_as_mixed(ctx.emitter, &value_type.codegen_repr());
+            }
             append_refcounted_array_literal_element(ctx, &PhpType::Mixed);
         }
         PhpType::Int | PhpType::Bool => append_scalar_array_literal_element(ctx),
@@ -762,6 +975,14 @@ fn materialize_assoc_literal_value_aarch64(
             ctx.emitter.instruction("mov x4, xzr");                             // null hash values use a zero high payload word
             Ok(())
         }
+        // A nested container arrives as an owned heap pointer. `__rt_hash_set` does not retain
+        // what it stores -- it only releases what it OVERWRITES -- so handing it the pointer is
+        // itself the ownership transfer, and releasing afterwards here would free a live child.
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the nested container pointer as the hash value low word
+            ctx.emitter.instruction("mov x4, xzr");                             // container hash values do not use the high payload word
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "assoc array default element PHP type {:?}",
             other
@@ -800,6 +1021,14 @@ fn materialize_assoc_literal_value_x86_64(
             ctx.emitter.instruction("xor r8, r8");                              // null hash values use a zero high payload word
             Ok(())
         }
+        // A nested container arrives as an owned heap pointer. `__rt_hash_set` does not retain
+        // what it stores -- it only releases what it OVERWRITES -- so handing it the pointer is
+        // itself the ownership transfer, and releasing afterwards here would free a live child.
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the nested container pointer as the hash value low word
+            ctx.emitter.instruction("xor r8, r8");                              // container hash values do not use the high payload word
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "assoc array default element PHP type {:?}",
             other
@@ -834,6 +1063,14 @@ fn materialize_assoc_literal_concrete_value_aarch64(
             ctx.emitter.instruction("mov x4, x2");                              // pass the string length as the Mixed hash value high word
             Ok(())
         }
+        // Mixed-capable hash storage keeps the concrete kind in the entry's TAG word, so a
+        // container is stored as its raw owned pointer under tag 4/5 rather than wrapped in a
+        // Mixed cell -- the same shape a concrete string takes under tag 1.
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the nested container pointer as the Mixed hash value low word
+            ctx.emitter.instruction("mov x4, xzr");                             // container Mixed values do not use the high payload word
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "assoc array default Mixed element PHP type {:?}",
             other
@@ -866,6 +1103,14 @@ fn materialize_assoc_literal_concrete_value_x86_64(
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
             ctx.emitter.instruction("mov rcx, rax");                            // pass the persistent string pointer as the Mixed hash value low word
             ctx.emitter.instruction("mov r8, rdx");                             // pass the string length as the Mixed hash value high word
+            Ok(())
+        }
+        // Mixed-capable hash storage keeps the concrete kind in the entry's TAG word, so a
+        // container is stored as its raw owned pointer under tag 4/5 rather than wrapped in a
+        // Mixed cell -- the same shape a concrete string takes under tag 1.
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the nested container pointer as the Mixed hash value low word
+            ctx.emitter.instruction("xor r8, r8");                              // container Mixed values do not use the high payload word
             Ok(())
         }
         other => Err(CodegenIrError::unsupported(format!(
