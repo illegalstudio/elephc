@@ -852,3 +852,160 @@ echo count($a), count($b), count($c), count($d), count($e), "\n";
         out.stderr
     );
 }
+
+// --- Issue #1087: array_push() onto an associative receiver -------------------------------
+//
+// PHP has one array type and one append: `array_push($hash, $v)` is `$hash[] = $v`, inserting at
+// `max(int keys) + 1`, or `0` when the hash has no integer keys. AOT rejected every associative
+// receiver outright with `array_push() first argument must be array`, while the Magician and the
+// `array_unshift` contract both accepted one.
+//
+// The matrix below is the associative counterpart of
+// `test_array_push_accepts_phps_full_variadic_signature`: it walks the value counts, the key
+// forms a hash can already hold, every receiver place, and the return value. Each expected value
+// is verbatim host PHP 8.5.10 output for the same fixture.
+
+/// The full `array_push()` surface over an associative receiver.
+///
+/// Keys are read back with `foreach` rather than `array_keys()`: that builtin reads a hash key's
+/// DECLARED type rather than its runtime form, so it dies on exactly the mixed int/string key
+/// set an associative push produces (issue #1072). Using it here would assert that defect
+/// instead of this one.
+#[test]
+fn test_array_push_appends_to_an_associative_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["a" => 1, "b" => 2]; $n = array_push($a, 3);       echo implode(",", $a), "|", $n, "\n";
+$b = ["a" => 1];           $n = array_push($b, 3, 4, 5); echo implode(",", $b), "|", $n, "\n";
+$c = ["a" => 1];           $n = array_push($c);          echo implode(",", $c), "|", $n, "\n";
+$d = [5 => "x", "k" => "y"];  array_push($d, "z");       foreach ($d as $k => $v) { echo $k, "="; } echo "\n";
+$e = [-3 => "a", 7 => "b"];   array_push($e, "c");       foreach ($e as $k => $v) { echo $k, "="; } echo "\n";
+function viaRef(array &$r): int { return array_push($r, "new"); }
+$p = ["k" => "v"]; $n = viaRef($p); echo implode(",", $p), "|", $n, "\n";
+class PushBox { public array $items = ["a" => 1]; }
+$box = new PushBox(); $n = array_push($box->items, 2); echo implode(",", $box->items), "|", $n, "\n";
+class PushShelf { public static array $items = ["a" => 1]; }
+$n = array_push(PushShelf::$items, 2); echo implode(",", PushShelf::$items), "|", $n, "\n";
+$rows = ["inner" => ["a" => 1]]; $n = array_push($rows["inner"], 2); echo implode(",", $rows["inner"]), "|", $n, "\n";
+$g = ["a" => 1]; echo array_push($g, 2, 3) + 10, "\n";
+$loop = ["k" => "v"]; for ($i = 0; $i < 5; $i++) { array_push($loop, (string) $i); }
+foreach ($loop as $k => $v) { echo $k, "="; } echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "1,2,3|3\n",
+            "1,3,4,5|4\n",
+            "1|1\n",
+            "5=k=6=\n",
+            "-3=7=8=\n",
+            "v,new|2\n",
+            "1,2|2\n",
+            "1,2|2\n",
+            "1,2|2\n",
+            "13\n",
+            "k=0=1=2=3=4=\n",
+        )
+    );
+}
+
+/// The receiver is republished after EVERY insert, not once at the end.
+///
+/// A hash insert can split the table for copy-on-write, so the pointer a later insert must
+/// address is the previous insert's result. Publishing once at the end wrote the pre-split
+/// pointer back and the appends vanished — `count()` stayed at its original value while the
+/// copy was, correctly, left alone. Both directions are asserted because only the pair
+/// distinguishes a lost write from a split that never happened.
+#[test]
+fn test_array_push_on_a_shared_associative_receiver_separates_it() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1]; $b = $h; array_push($h, 2); echo count($h), ",", count($b), "\n";
+$i = ["a" => 1]; $c = $i; array_push($c, 2); echo count($i), ",", count($c), "\n";
+"#,
+    );
+    assert_eq!(out, "2,1\n1,2\n");
+}
+
+/// Appending to an associative receiver in a loop leaves no heap behind.
+///
+/// Each insert goes through `__rt_hash_set`, which owns the growth and the copy-on-write split,
+/// and the caller republishes the table pointer afterwards. A missed release on the split-away
+/// table accumulates per iteration rather than showing up once.
+#[test]
+fn test_array_push_on_an_associative_receiver_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 32; $i++) {
+    $a = ["x" => 1, "y" => 2];
+    array_push($a, 3, 4, 5);
+    $b = ["x" => "aa"];
+    $c = $b;
+    array_push($b, "bb", "cc");
+}
+echo count($a), count($b), count($c), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "531\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "associative array_push leaked: {}",
+        out.stderr
+    );
+}
+
+/// Enough values to force `__rt_hash_grow`, which FREES the old table rather than merely
+/// decrementing it.
+///
+/// A fresh one-entry literal is allocated with sixteen slots and grows once the count reaches
+/// three quarters of that, so a five-value push never reaches the path at all: the earlier
+/// fixtures exercise only the copy-on-write split. Growth is where a stale republished pointer
+/// is a use-after-free instead of a stale read, so the shared receiver is included to make the
+/// sequence split-then-grow rather than grow alone.
+#[test]
+fn test_array_push_growing_an_associative_receiver_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ["a" => 1];
+$n = array_push($a, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21);
+$b = ["a" => 1];
+$shared = $b;
+$m = array_push($b, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21);
+class GrowBox { public array $h = ["a" => 1]; }
+$o = new GrowBox();
+$p = array_push($o->h, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21);
+echo $n, ",", $m, ",", count($shared), ",", $p, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "21,21,1,21\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "growing an associative receiver leaked: {}",
+        out.stderr
+    );
+}
+
+/// A receiver that is a MISSED hash read is the in-band null-container sentinel, not a table.
+///
+/// An `AssocArray`-typed value can hold that sentinel at run time, and dereferencing it
+/// segfaulted — in the key scan when values were pushed, and in the count read when they were
+/// not, since with no values no insert happens and there is nothing to have made the receiver
+/// real. PHP answers with a `TypeError`, and so does this now, with php-src's wording.
+#[test]
+fn test_array_push_on_a_missed_associative_read_raises_a_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => ["x" => 1]];
+try { array_push($h["missing"], 2); } catch (TypeError $e) { echo "with:", $e->getMessage(), "\n"; }
+try { array_push($h["absent"]); } catch (TypeError $e) { echo "without:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "with:array_push(): Argument #1 ($array) must be of type array, null given\n",
+            "without:array_push(): Argument #1 ($array) must be of type array, null given\n",
+        )
+    );
+}

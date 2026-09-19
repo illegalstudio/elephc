@@ -26,17 +26,23 @@ builtin! {
     ),
 }
 
-/// Validates the first argument is an indexed array for an `array_push` call.
+/// Validates the first argument is an array for an `array_push` call.
 ///
 /// Arity (at least 1 arg) is pre-validated by `check_arity`. Every argument is inferred so the
-/// appended values still produce their side effects; the first must be an indexed array or the
-/// call is rejected. Returns `Int` — the new element count.
+/// appended values still produce their side effects; the first must be an array or the call is
+/// rejected. Returns `Int` — the new element count.
+///
+/// An ASSOCIATIVE receiver is accepted and appends at PHP's next automatic integer key, exactly
+/// as `$hash[] = $value` does. PHP draws no distinction here -- a PHP array is one type -- and
+/// both the Magician (`eval_array_push_assoc_replacement`) and this builtin's `array_unshift`
+/// sibling already accepted hashes, so rejecting one made `array_push($hash, ...)` a compile
+/// error for ordinary PHP (issue #1087).
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     for index in 1..cx.args.len() {
         cx.checker.infer_type(&cx.args[index], cx.env)?;
     }
-    if let PhpType::Array(_) = arr_ty {
+    if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         Ok(PhpType::Int)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))
