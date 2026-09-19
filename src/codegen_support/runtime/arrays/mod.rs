@@ -113,6 +113,7 @@ mod gc_note_child_ref;
 mod hash_count;
 mod hash_append;
 mod hash_clone_shallow;
+mod hash_chunk;
 mod hash_fnv1a;
 mod hash_free_deep;
 mod hash_get;
@@ -387,6 +388,8 @@ pub use hash_append::emit_hash_append;
 /// Emit hash append helper.
 pub use hash_clone_shallow::emit_hash_clone_shallow;
 /// Emit shallow hash clone helper.
+pub use hash_chunk::emit_hash_chunk;
+/// Emit the associative array_chunk() helper.
 pub use gc_collect_cycles::emit_gc_collect_cycles;
 /// Emit garbage collection cycle collector.
 pub use gc_mark_reachable::emit_gc_mark_reachable;

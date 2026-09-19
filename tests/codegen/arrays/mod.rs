@@ -18,6 +18,7 @@ mod indexed;
 mod internal_pointer;
 mod key_sort;
 mod assoc_helpers;
+mod assoc_chunk;
 mod nested;
 mod callbacks;
 mod foreach_key_write;
