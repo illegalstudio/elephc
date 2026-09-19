@@ -455,12 +455,6 @@ fn emit_assoc_key_append_aarch64(
         PhpType::Int | PhpType::Bool | PhpType::Callable if is_int_like_key_type(key_ty) => {
             emit_append_word_key_aarch64(ctx, "x1");
         }
-        PhpType::Str if matches!(key_ty, PhpType::Str) => {
-            ctx.emitter.instruction("stp x9, x10, [sp, #-16]!");                // preserve result array state across string-key persistence
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            ctx.emitter.instruction("ldp x9, x10, [sp], #16");                  // restore result array state after string-key persistence
-            emit_append_string_key_aarch64(ctx, "x1", "x2");
-        }
         PhpType::Mixed => {
             emit_assoc_mixed_key_append_aarch64(ctx, key_ty)?;
         }
@@ -485,19 +479,6 @@ fn emit_assoc_key_append_x86_64(
         PhpType::Int | PhpType::Bool | PhpType::Callable if is_int_like_key_type(key_ty) => {
             emit_append_word_key_x86_64(ctx, "rdi");
         }
-        PhpType::Str if matches!(key_ty, PhpType::Str) => {
-            ctx.emitter.instruction("sub rsp, 16");                             // reserve a temporary slot for result array state during key persistence
-            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 32]");           // load the result keys array pointer from the fixed stack layout
-            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the current result keys array length before persistence
-            ctx.emitter.instruction("mov QWORD PTR [rsp], r10");                // preserve the result keys array pointer across key persistence
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r11");            // preserve the current result keys array length across key persistence
-            ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed string key pointer into the persist helper input
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // restore the result keys array pointer after key persistence
-            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");            // restore the result keys array length after key persistence
-            ctx.emitter.instruction("add rsp, 16");                             // release the temporary result-array state slot
-            emit_append_string_key_x86_64(ctx, "rax", "rdx");
-        }
         PhpType::Mixed => {
             emit_assoc_mixed_key_append_x86_64(ctx, key_ty)?;
         }
@@ -521,12 +502,15 @@ fn emit_assoc_mixed_key_append_aarch64(ctx: &mut FunctionContext<'_>, key_ty: &P
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             emit_append_word_key_aarch64(ctx, "x0");
         }
-        PhpType::Str => {
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
-            emit_append_word_key_aarch64(ctx, "x0");
-        }
-        PhpType::Mixed => {
+        // A hash's key is int-or-string at RUN TIME whatever the declared key type says, so a
+        // `Str` key type gets the same sentinel dispatch as `Mixed` rather than an unconditional
+        // persist. `sort()`/`rsort()` reindex a string-keyed hash to `0..n-1`, and the receiver
+        // keeps its `AssocArray { key: Str }` type through the by-reference call (the checker
+        // pins a reference alias root rather than retyping it), so the keys arriving here are
+        // integers while the static type still says string. Persisting one read
+        // `__rt_hash_iter_next`'s `key_hi == -1` integer sentinel as a string length and took
+        // the process down (issue #1072).
+        PhpType::Str | PhpType::Mixed => {
             let key_string = ctx.next_label("akeys_assoc_key_string");
             let key_boxed = ctx.next_label("akeys_assoc_key_boxed");
             ctx.emitter.instruction("cmn x2, #1");                              // check whether this normalized hash key is an integer
@@ -560,13 +544,9 @@ fn emit_assoc_mixed_key_append_x86_64(ctx: &mut FunctionContext<'_>, key_ty: &Ph
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             emit_append_word_key_x86_64(ctx, "rax");
         }
-        PhpType::Str => {
-            ctx.emitter.instruction("mov rax, rdi");                            // pass the borrowed hash key pointer to the persistence helper
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
-            emit_append_word_key_x86_64(ctx, "rax");
-        }
-        PhpType::Mixed => {
+        // See the AArch64 twin: a hash key is int-or-string at run time, so `Str` shares the
+        // sentinel dispatch (issue #1072).
+        PhpType::Str | PhpType::Mixed => {
             let key_string = ctx.next_label("akeys_assoc_key_string");
             let key_boxed = ctx.next_label("akeys_assoc_key_boxed");
             ctx.emitter.instruction("cmp rdx, -1");                             // check whether this normalized hash key is an integer
@@ -602,19 +582,6 @@ fn emit_append_word_key_aarch64(ctx: &mut FunctionContext<'_>, value_reg: &str) 
     ctx.emitter.instruction("str x10, [x9]");                                   // persist the updated result keys length in the array header
 }
 
-/// Appends a string AArch64 key payload into the result keys array.
-fn emit_append_string_key_aarch64(ctx: &mut FunctionContext<'_>, ptr_reg: &str, len_reg: &str) {
-    ctx.emitter.instruction("ldr x9, [sp, #16]");                               // load the result keys array pointer from the fixed stack layout
-    ctx.emitter.instruction("ldr x10, [x9]");                                   // load the current result keys array length before appending
-    ctx.emitter.instruction("lsl x11, x10, #4");                                // convert the result length into a 16-byte string-slot offset
-    ctx.emitter.instruction("add x11, x9, x11");                                // advance from the array base to the selected string slot
-    ctx.emitter.instruction("add x11, x11, #24");                               // skip the fixed array header to reach the string payload region
-    ctx.emitter.instruction(&format!("str {}, [x11]", ptr_reg));                // store the owned key string pointer into the next result keys slot
-    ctx.emitter.instruction(&format!("str {}, [x11, #8]", len_reg));            // store the owned key string length into the next result keys slot
-    ctx.emitter.instruction("add x10, x10, #1");                                // increment the result keys length after the append
-    ctx.emitter.instruction("str x10, [x9]");                                   // persist the updated result keys length in the array header
-}
-
 /// Appends a pointer-sized x86_64 key payload into the result keys array.
 fn emit_append_word_key_x86_64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // load the result keys array pointer from the fixed stack layout
@@ -622,20 +589,6 @@ fn emit_append_word_key_x86_64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
     ctx.emitter.instruction(
         &format!("mov QWORD PTR [r10 + r11 * 8 + 24], {}", value_reg)
     );                                                                          // store the key payload into the next result keys slot
-    ctx.emitter.instruction("add r11, 1");                                      // increment the result keys length after the append
-    ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // persist the updated result keys length in the array header
-}
-
-/// Appends a string x86_64 key payload into the result keys array.
-fn emit_append_string_key_x86_64(ctx: &mut FunctionContext<'_>, ptr_reg: &str, len_reg: &str) {
-    ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // load the result keys array pointer from the fixed stack layout
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the current result keys array length before appending
-    ctx.emitter.instruction("mov rcx, r11");                                    // copy the result length before scaling it into a string-slot offset
-    ctx.emitter.instruction("shl rcx, 4");                                      // convert the result length into a 16-byte string-slot offset
-    ctx.emitter.instruction("add rcx, r10");                                    // advance from the array base to the selected string slot
-    ctx.emitter.instruction("add rcx, 24");                                     // skip the fixed array header to reach the string payload region
-    ctx.emitter.instruction(&format!("mov QWORD PTR [rcx], {}", ptr_reg));      // store the owned key string pointer into the next result keys slot
-    ctx.emitter.instruction(&format!("mov QWORD PTR [rcx + 8], {}", len_reg));  // store the owned key string length into the next result keys slot
     ctx.emitter.instruction("add r11, 1");                                      // increment the result keys length after the append
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // persist the updated result keys length in the array header
 }
@@ -676,7 +629,13 @@ fn require_supported_assoc_result_type(key_ty: &PhpType, result_elem_ty: &PhpTyp
     require_supported_source_key_type(key_ty)?;
     match result_elem_ty {
         PhpType::Mixed => Ok(()),
-        PhpType::Str if matches!(key_ty, PhpType::Str) => Ok(()),
+        // Deliberately NO `Str` result for a hash. A hash key is int-or-string at RUN TIME
+        // whatever the declared key type says -- `sort()`/`rsort()` renumber a string-keyed hash
+        // and the receiver keeps its type through the by-reference call -- so a `Str`-element
+        // result has nowhere to put the integer key it would then receive. Accepting the pair is
+        // what let the key materializer persist `__rt_hash_iter_next`'s `key_hi == -1` sentinel
+        // as a string length (issue #1072). Refusing it keeps that unrepresentable here, instead
+        // of relying on the check hook never handing the backend an `Array<Str>` result again.
         PhpType::Int | PhpType::Bool | PhpType::Callable if is_int_like_key_type(key_ty) => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "array_keys associative key PHP type {:?} into result PHP type {:?}",
