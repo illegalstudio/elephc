@@ -457,12 +457,32 @@ var_dump(empty($x));
 
 /// Compiles and runs the checked-in `examples/magic-methods/main.php` fixture,
 /// exercising every supported magic method end to end.
+///
+/// The expectation is the example's whole stdout, so editing the example without
+/// editing this string fails here. The last four lines are the `__toString()`
+/// contexts: `implode()` renders the object element through the same conversion
+/// the interpolation, concatenation and `(string)` cast beside it use, which is
+/// the shape the boxed-object cast fix restored. Verified byte-identical to host
+/// PHP 8.5.10.
 #[test]
 fn test_example_magic_methods_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/magic-methods/main.php"));
     assert_eq!(
         out,
-        "@nahime\n[missing]\nrole=admin;visits=3;\nnahime:active\nmissing displayName(short)\nactive\ninactive\nstatic create(nahime)\n"
+        concat!(
+            "@nahime\n",
+            "[missing]\n",
+            "role=admin;visits=3;\n",
+            "nahime:active\n",
+            "missing displayName(short)\n",
+            "active\n",
+            "inactive\n",
+            "static create(nahime)\n",
+            "implode: plain, 42, @ada, 2.5, 1\n",
+            "interp:  @ada\n",
+            "concat:  @ada\n",
+            "cast:    @ada\n",
+        )
     );
 }
 

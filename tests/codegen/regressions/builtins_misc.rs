@@ -183,6 +183,92 @@ echo implode(", ", $a);
     assert_eq!(out, "1, 2, 3");
 }
 
+/// Verifies an OBJECT element of a boxed array renders through its own `__toString`.
+///
+/// `implode()` converts each element with `__rt_mixed_cast_string`, whose tag dispatch had no
+/// object arm, so an object fell into the "unsupported" arm and joined as the EMPTY string --
+/// silently, with no warning and no crash. Every other string context was already correct
+/// (`echo`, `(string)`, concatenation, interpolation and `sprintf("%s")` all print `S7`), which
+/// is what made the gap easy to miss.
+///
+/// The selector comes from `count($argv)` on purpose: with a literal the optimizer folds the
+/// branch and narrows `pick()` back to `S`, and the fixture then exercises the STATIC object
+/// path instead of the boxed one it is meant to cover. `Child` is here because the dense table
+/// must resolve an INHERITED method, not just a concrete one.
+///
+/// A class that publishes no `__toString` is deliberately absent: PHP raises
+/// `Error: Object of class X could not be converted to string` there, while elephc still
+/// renders it as an empty field. That gap predates this arm and is unchanged by it, so pinning
+/// it here would record elephc's answer as though it were PHP's.
+#[test]
+fn test_implode_boxed_object_element_uses_tostring() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    public int $n = 0;
+    public function __toString(): string { return "S" . $this->n; }
+}
+class Child extends S {}
+
+function pick(int $k): mixed {
+    if ($k === 0) { $s = new S(); $s->n = 7; return $s; }
+    if ($k === 1) { $c = new Child(); $c->n = 9; return $c; }
+    return 42;
+}
+
+$k = count($argv) - 1;
+$a = [pick($k), pick($k + 1), pick($k + 2)];
+echo implode("|", $a);
+"#,
+    );
+    assert_eq!(out, "S7|S9|42");
+}
+
+/// Verifies the `__toString` result is owned exactly once: neither leaked nor freed twice.
+///
+/// The method's return belongs to the method, so the arm persists it and releases the original
+/// only when `__rt_str_persist` hands back a different block -- the ownership dance
+/// `__rt_sprintf_mixed_string` already performs. Getting it wrong leaks one string per element,
+/// which only a repeated fixture makes visible.
+///
+/// The selector is the LOOP COUNTER rather than `count($argv)`: reading `$argv` materializes it
+/// and leaves it alive at exit, which is two live blocks of its own and would drown the signal
+/// this fixture exists to read. `$i % 2` is equally opaque to the optimizer and allocates
+/// nothing, so a clean summary here means exactly what it says.
+///
+/// The total is load-bearing: with the object arm missing, every `S` element joins as empty and
+/// the 200 even iterations contribute 2 bytes instead of 8, for 1000 rather than 1600.
+#[test]
+fn test_implode_boxed_object_element_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class S {
+    public int $n = 0;
+    public function __toString(): string { return "S" . $this->n; }
+}
+
+function pick(int $k): mixed {
+    if ($k === 0) { $s = new S(); $s->n = 7; return $s; }
+    return 42;
+}
+
+$total = 0;
+for ($i = 0; $i < 200; $i++) {
+    $sel = $i % 2;
+    $a = [pick($sel), pick($sel), pick($sel)];
+    $total += strlen(implode(",", $a));
+}
+echo $total;
+"#,
+    );
+    assert_eq!(out.stdout, "1600", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "a __toString element must be owned exactly once: {}",
+        out.stderr
+    );
+}
+
 /// Verifies >32 local variables do not cause stur/ldur offset overflow (Issue #22 regression).
 /// Generates 50 integer variables, initializes each with its index, then sums $v0 + $v49 = 0 + 49 = 49.
 #[test]

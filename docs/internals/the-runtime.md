@@ -905,7 +905,7 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type. Publ
 | `__rt_mixed_cast_int` | Unbox a mixed cell and cast to integer | `x0` = mixed cell pointer | `x0` = integer |
 | `__rt_mixed_cast_bool` | Unbox a mixed cell and cast to boolean | `x0` = mixed cell pointer | `x0` = 0 or 1 |
 | `__rt_mixed_cast_float` | Unbox a mixed cell and cast to float | `x0` = mixed cell pointer | `d0` = float |
-| `__rt_mixed_cast_string` | Unbox a mixed cell and cast to string | `x0` = mixed cell pointer | `x1`/`x2` = string |
+| `__rt_mixed_cast_string` | The string-cast tag dispatch: ints/floats/bools format into the shared concat scratch, strings and OBJECTS are persisted into a block the caller owns (an object renders through its own `__toString`, resolved in the dense `_class_tostring_ptrs` table), arrays warn and yield `Array`, and resources yield `Resource id #N` | `x0` = mixed cell pointer | `x1`/`x2` = string |
 | `__rt_mixed_cast_array` | The `(array)` cast tag dispatch: arrays keep their COW payload, objects project to property hashes, null yields an empty array, and every other tag wraps into a one-element Mixed array | `x0` = mixed cell pointer | `x0` = array pointer |
 | `__rt_mixed_instanceof` | Unbox a mixed cell and test object payloads against class/interface metadata | `x0` = mixed cell pointer, `x1` = target id, `x2` = 0 class / 1 interface | `x0` = 0 or 1 |
 | `__rt_instanceof_lookup` | Resolve a dynamic class-string target against emitted class/interface name metadata | `x1`/`x2` = string | `x0` = found, `x1` = target id, `x2` = 0 class / 1 interface |
