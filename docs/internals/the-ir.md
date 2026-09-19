@@ -380,6 +380,38 @@ itself, which is the same corruption with the sides reversed. `src/ir_lower/expr
 keeps the two entry points separate for that reason, and only the by-reference
 variadic tail in `src/ir_lower/expr/variadic_args.rs` reaches the widening one.
 
+The cell also OWNS what it holds, the same way a plain slot does, so a write
+through it has to release the occupant it replaces. The callee's `$items[n] = ...`
+does not reach `__rt_array_set_mixed`, which does exactly that for an ordinary
+slot: the element is an invoker ref-cell marker, so the array setter recognises
+the marker tag and transfers the fresh boxed Mixed handle straight into the
+caller's cell (`emit_mixed_array_set_ref_marker_writeback_*` in
+`src/codegen/lower_inst/arrays.rs`). That hand-written transfer was a bare store,
+which orphaned the previous box and the payload it pinned on every call — one
+block per call in the reported shape, two once the replaced value was itself a
+heap string. It now reads the old handle, stores the new one, and releases the
+old, in that order: releasing first would free the box a self-assignment is about
+to store back.
+
+The concrete-source arm of the same write-back still does not release its
+occupant. It is selected by any non-`Mixed` source tag, and for a `Str`-tagged
+cell the occupant can be a `.rodata` pointer that the ownership analysis knows not
+to free and this slot-typed cleanup does not model, so releasing there would trade
+a leak for a free of read-only memory. That reason does not cover the array- and
+object-tagged cells the same arm also serves, which do own heap storage and do
+still leak it; releasing those needs the tag-aware `__rt_heap_free_safe` treatment
+rather than a blanket decref, and is left for its own change.
+
+A third gap bounds both: this write-back emitter is reached only when the assigned
+value was freshly boxed at the store, which is every CONCRETE source type. A
+`Mixed` or union-typed right-hand side (`$items[0] = $m;`, or `$items[0] =
+$items[1];`) skips it and calls `__rt_array_set_mixed` directly, and that helper
+has no marker-tag check: it decrefs the slot's occupant — the marker itself — and
+stores an ordinary box, severing the alias so the caller never sees the write. It
+is memory-safe, because `__rt_mixed_free_deep` routes the marker's tag to a
+box-only free and never follows the payload into the caller's frame, but it is a
+silent semantic divergence from PHP.
+
 ## Effects
 
 Each instruction and terminator carries an `Effects` summary. The builder
