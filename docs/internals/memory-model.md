@@ -172,6 +172,16 @@ property slot stores the payload at its slot offset and the runtime tag at `offs
 and its literal default must be written as that same `{payload, tag}` pair rather than as
 a pointer to a boxed Mixed cell.
 
+`PhpType::Union` is the one place where a type's stored shape does not follow from its
+variant. `PhpType::codegen_repr()` maps a nullable-int union to `TaggedScalar` and every
+other union to `Mixed`, so a union is a boxed cell *most* of the time but a register pair
+when its members are exactly `int` and `null`. Code that decides "is this value already a
+Mixed cell?" must ask `codegen_repr()` rather than match the variant: matching
+`PhpType::Union(_)` and assuming a pointer sends the raw payload word wherever a cell
+address was expected. That is what silently dropped integer parameter defaults across an
+empty spread, whose per-parameter default ternary merges an `int` arm with a `null` arm and
+so produces exactly this union.
+
 ### Pointer values
 
 Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<T>` value have the same runtime representation; the type tag only exists in the checker. Null pointers use address `0x0`, and dereference helpers explicitly trap on null via `__rt_ptr_check_nonnull`.

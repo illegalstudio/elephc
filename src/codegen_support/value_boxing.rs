@@ -63,9 +63,16 @@ pub(crate) fn emit_box_runtime_payload_as_mixed(
 /// Boxes the current expression result in the ABI result registers into a runtime Mixed cell.
 pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
-        PhpType::Mixed | PhpType::Union(_) => {}
+        PhpType::Mixed => {}
+        // Most unions ARE already a boxed cell, so boxing one is a no-op -- but not all of them
+        // are. `codegen_repr` stores a nullable-int union as a `TaggedScalar`: a payload register
+        // plus a tag register, not a pointer. Letting that fall through to the no-op below handed
+        // the raw payload word to whatever wanted a Mixed, which read it as a cell address
+        // (issue #1046). The arm below boxes it exactly as a declared `TaggedScalar`, which is the
+        // same storage.
+        PhpType::Union(_) if ty.codegen_repr() != PhpType::TaggedScalar => {}
         PhpType::Iterable => emit_box_iterable_as_mixed(emitter),
-        PhpType::TaggedScalar => match emitter.target.arch {
+        PhpType::TaggedScalar | PhpType::Union(_) => match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("mov x9, x0");                              // stage the tagged scalar payload while the tag moves into the helper tag register
                 emitter.instruction("mov x0, x1");                              // pass the dynamic runtime tag as the mixed boxing helper tag argument
