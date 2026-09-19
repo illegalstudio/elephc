@@ -196,6 +196,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls in this source module.
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
+    pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
     /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
@@ -303,6 +304,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         packed_classes: &'m HashMap<String, PackedClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
+        first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
@@ -357,6 +359,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             packed_classes,
             throw_access_sites,
             builtin_call_types,
+            first_class_builtin_call_types,
             loop_storage_types,
             string_incdec_locals,
             bind_kill_sites,

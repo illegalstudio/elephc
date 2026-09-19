@@ -996,6 +996,13 @@ pub(crate) fn check_call_user_func_array(
         checker.infer_type(arg, env)?;
     }
     if let ExprKind::FirstClassCallable(target) = &args[0].kind {
+        if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+            if let Some(ret_ty) =
+                check_call_user_func_builtin_callback(checker, target, elems, span, env)
+            {
+                return Ok(ret_ty);
+            }
+        }
         let sig = if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
             checker.specialize_first_class_callable_target(target, elems, span, env)?
         } else {
@@ -1023,6 +1030,13 @@ pub(crate) fn check_call_user_func_array(
     }
     if let ExprKind::Variable(var_name) = &args[0].kind {
         if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() {
+            if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+                if let Some(ret_ty) =
+                    check_call_user_func_builtin_callback(checker, &target, elems, span, env)
+                {
+                    return Ok(ret_ty);
+                }
+            }
             let sig = if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                 checker.specialize_first_class_callable_target(&target, elems, span, env)?
             } else {
@@ -1075,6 +1089,12 @@ pub(crate) fn check_call_user_func_array(
                 if let Some(ret_ty) =
                     checker.check_builtin(&builtin_name, elems, span, env)?
                 {
+                    // Same recording as the `call_user_func()` literal arm, for the same
+                    // reason: lowering resolves this callee to the same builtin and asks for
+                    // its result by this span (issue #1092).
+                    checker
+                        .first_class_builtin_call_types
+                        .insert(span, ret_ty.clone());
                     return Ok(ret_ty);
                 }
             }
@@ -1231,6 +1251,55 @@ pub(crate) fn check_call_user_func_array(
     ))
 }
 
+/// Answers a `call_user_func()` or `call_user_func_array()` callback the checker RESOLVED to a
+/// registry builtin, recording the contract's result for lowering.
+///
+/// Both spellings reach the same lowering entry point (`static_call_user_func_callback` ->
+/// `lower_static_callable_call`), which asks for the callee's result by the dispatching call's
+/// span (`static_callable_builtin_result_type`). With no entry it falls back to the DECLARED
+/// return type, which for a builtin whose result depends on its arguments is a different type:
+/// `call_user_func(array_slice(...), $assoc, 1, 2)` was refused outright for that reason, exactly
+/// as the literal-name spelling was (issue #1092).
+///
+/// `call_user_func_array()` asks only when its argument array is a LITERAL, because that is the
+/// only shape whose element expressions lowering can hand to the builtin.
+///
+/// Recording is safe for every callback the checker itself resolved -- a literal name, a
+/// first-class callable node, or a local bound to one -- because lowering resolves the same target
+/// from the same syntax. It is NOT safe for a runtime-opaque callee, where lowering can resolve a
+/// callee the checker never saw; those arms deliberately record nothing.
+///
+/// An EXTERN function shadowing a builtin name is left alone: lowering resolves the extern first
+/// and never reads this map for it, so answering from the registry would only make the checker
+/// disagree with the call that is actually emitted.
+///
+/// A contract that REJECTS the arguments yields `None` rather than an error, for the same reason
+/// the first-class hook discards it: a builtin's own hook can demand more than its signature does
+/// (`array_slice()` wants a literal `preserve_keys`), so failing here would turn programs that
+/// compile today into errors.
+fn check_call_user_func_builtin_callback(
+    checker: &mut Checker,
+    target: &CallableTarget,
+    args: &[Expr],
+    span: crate::span::Span,
+    env: &TypeEnv,
+) -> Option<PhpType> {
+    let CallableTarget::Function(name) = target else {
+        return None;
+    };
+    if checker.canonical_extern_function_name_folded(name.as_str()).is_some() {
+        return None;
+    }
+    let builtin_name = canonical_builtin_function_name(name.as_str())?;
+    let Ok(Some(ret_ty)) = checker.check_builtin(&builtin_name, args, span, env) else {
+        return None;
+    };
+    checker
+        .first_class_builtin_call_types
+        .insert(span, ret_ty.clone());
+    Some(ret_ty)
+}
+
 /// Type-checks a `call_user_func` call: resolves the callback the same way as
 /// `check_call_user_func_array` and checks it against `args[1..]`, returning the callee's inferred
 /// return type (or `Mixed` for runtime-opaque callables). Arity (at least 1) is pre-validated.
@@ -1244,6 +1313,11 @@ pub(crate) fn check_call_user_func(
         checker.infer_type(arg, env)?;
     }
     if let ExprKind::FirstClassCallable(target) = &args[0].kind {
+        if let Some(ret_ty) =
+            check_call_user_func_builtin_callback(checker, target, &args[1..], span, env)
+        {
+            return Ok(ret_ty);
+        }
         let sig =
             checker.specialize_first_class_callable_target(target, &args[1..], span, env)?;
         let ret_ty = checker.check_known_callable_call(
@@ -1257,6 +1331,11 @@ pub(crate) fn check_call_user_func(
     }
     if let ExprKind::Variable(var_name) = &args[0].kind {
         if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() {
+            if let Some(ret_ty) =
+                check_call_user_func_builtin_callback(checker, &target, &args[1..], span, env)
+            {
+                return Ok(ret_ty);
+            }
             let sig = checker.specialize_first_class_callable_target(
                 &target,
                 &args[1..],
@@ -1287,6 +1366,16 @@ pub(crate) fn check_call_user_func(
             if let Some(ret_ty) =
                 checker.check_builtin(&builtin_name, &args[1..], span, env)?
             {
+                // Lowering resolves this literal callee to the same builtin and asks for its
+                // result by span. Without the entry it falls back to the DECLARED return type,
+                // which for a builtin whose result depends on its arguments is a different type
+                // -- `call_user_func("array_slice", $assoc, 1, 2)` was refused outright for that
+                // reason (issue #1092). Safe here, and in the two arms above for the same reason,
+                // because the callee the checker resolved is the one lowering will resolve; it is
+                // the runtime-opaque callee that must record nothing.
+                checker
+                    .first_class_builtin_call_types
+                    .insert(span, ret_ty.clone());
                 return Ok(ret_ty);
             }
         }

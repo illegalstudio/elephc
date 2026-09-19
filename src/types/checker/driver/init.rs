@@ -105,6 +105,7 @@ impl Checker {
             reference_property_promotions: HashSet::new(),
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
+            first_class_builtin_call_types: HashMap::new(),
             loop_storage_types: HashMap::new(),
             string_incdec_locals: HashSet::new(),
             strict_locals: false,

@@ -954,15 +954,51 @@ impl Checker {
         span: Span,
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
-        if let CallableTarget::Function(name) = target {
-            if php_symbol_key(name.as_str()) == "preg_replace_callback" {
-                return crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
-                    self, args, span, env,
-                )
-                .map(Some);
-            }
+        let CallableTarget::Function(name) = target else {
+            return Ok(None);
+        };
+        if php_symbol_key(name.as_str()) == "preg_replace_callback" {
+            return crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
+                self, args, span, env,
+            )
+            .map(Some);
         }
-        Ok(None)
+        // An EXTERN function shadowing a builtin name is resolved as an extern call by lowering,
+        // which never reads this map; answering from the registry would only make the checker
+        // disagree with the call that is actually emitted.
+        if self
+            .canonical_extern_function_name_folded(name.as_str())
+            .is_some()
+        {
+            return Ok(None);
+        }
+        if crate::builtins::registry::lookup(name.as_str()).is_none() {
+            return Ok(None);
+        }
+        // A first-class callable to a BUILTIN resolves to a direct call at this site, with the
+        // site's own argument types in hand -- so it gets the same answer a direct call would,
+        // from the same contract, rather than the registry's declared return type.
+        //
+        // They are not the same answer whenever a builtin's result depends on what it was given.
+        // `array_slice($assoc, 1, 2)` returns an associative array and `array_slice($list, 1, 2)`
+        // an indexed one; the declared type says `array` for both. Lowering then saw an
+        // associative source arriving at a result typed `array<mixed>` and refused the call
+        // outright -- `array_slice of an associative array into result PHP type Array(Mixed)`
+        // (issue #1092).
+        //
+        // A contract that REJECTS these arguments is not propagated. The declared signature is
+        // what the generic path would have used, and a builtin's own hook can demand more than
+        // the signature does -- `array_slice()` wants a literal `preserve_keys`, for one -- so
+        // failing here would turn programs that compile today into errors. The contract is asked
+        // for a better answer, never for permission.
+        let Ok(Some(result)) = self.check_builtin(name.as_str(), args, span, env) else {
+            return Ok(None);
+        };
+        // Recorded so lowering can use it: without an entry the lowerer falls back to the
+        // declared return type and the contract's answer is thrown away again. It goes in the
+        // FIRST-CLASS map, not the general one — see `first_class_builtin_call_types`.
+        self.first_class_builtin_call_types.insert(span, result.clone());
+        Ok(Some(result))
     }
 
     /// Resolves a callable-array receiver expression to a static class receiver.

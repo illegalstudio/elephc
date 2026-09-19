@@ -263,6 +263,15 @@ pub(crate) struct Checker {
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Result types for builtin calls reached through a FIRST-CLASS CALLABLE variable.
+    ///
+    /// Kept apart from `builtin_call_types` because that map is keyed by the span of whatever
+    /// call the checker was inferring, and for `call_user_func($f, …)` that is the OUTER call.
+    /// Lowering resolves `$f` statically and would otherwise read the outer call's `Mixed` as
+    /// the inner builtin's result — the exact span collision that made a `bool`-returning
+    /// builtin's raw result get dereferenced as a pointer. Only a span whose callee the checker
+    /// itself resolved gets an entry here.
+    pub first_class_builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
     /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
@@ -828,6 +837,7 @@ pub fn check_types_with_options(
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
+        first_class_builtin_call_types: checker.first_class_builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,

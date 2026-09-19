@@ -44,7 +44,6 @@ mod lazy_branches;
 mod pipe;
 mod assignments;
 mod function_calls;
-use function_calls::resolve_registry_builtin_result_type;
 mod eval_barriers;
 mod lazy_isset;
 mod native_isset;
@@ -435,7 +434,26 @@ fn static_callable_builtin_result_type(
     operands: &[crate::ir::ValueId],
     span: Span,
 ) -> PhpType {
-    resolve_registry_builtin_result_type(ctx, name, &[], operands, span, None)
+    // The checker's result for THIS span is authoritative here just as it is for a builtin
+    // written out at its own call site: a first-class callable to a builtin resolves to a direct
+    // call, so the site has its own argument types and the contract has already answered from
+    // them. Passing `None` took the DECLARED return type instead, which for any builtin whose
+    // result depends on its arguments is a different type -- `array_slice($assoc, 1, 2)` returns
+    // an associative array where the declaration says `array`, and lowering then refused the
+    // call outright (issue #1092).
+    //
+    // Read from the FIRST-CLASS map, never from `builtin_call_types`. That one is keyed by the
+    // span of whatever call the checker was inferring, and for `call_user_func($f, ...)` that is
+    // the OUTER call: reading it here handed a `bool`-returning builtin's raw result the outer
+    // call's `Mixed` label, and the consumer dereferenced it as a pointer.
+    let checked = if span.line != 0 {
+        ctx.first_class_builtin_call_types
+            .get(&span)
+            .map(|checked| normalize_value_php_type(checked.clone()))
+    } else {
+        None
+    };
+    resolve_registry_builtin_result_type(ctx, name, &[], operands, span, checked)
         .unwrap_or_else(|| call_return_type(ctx, name, operands))
 }
 
