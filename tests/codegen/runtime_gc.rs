@@ -42,6 +42,8 @@ mod assoc_chunk;
 mod literal_builtin_elements;
 #[path = "runtime_gc/mixed_receiver_property_writes.rs"]
 mod mixed_receiver_property_writes;
+#[path = "runtime_gc/assoc_literal_spreads.rs"]
+mod assoc_literal_spreads;
 #[path = "runtime_gc/object_supertype_rebind.rs"]
 mod object_supertype_rebind;
 #[path = "runtime_gc/boxed_property_defaults.rs"]

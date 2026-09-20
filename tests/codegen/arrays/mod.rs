@@ -36,6 +36,7 @@ mod nested_mixed_write;
 mod mixed_append_autovivify;
 mod assoc_set_ops;
 mod assoc_spread;
+mod assoc_literal_spreads;
 mod widened_signatures;
 mod write_evaluation_order;
 mod float_key_diagnostics;
