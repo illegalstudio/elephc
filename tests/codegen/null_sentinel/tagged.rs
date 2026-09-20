@@ -330,4 +330,149 @@ echo json_encode($n), "|", json_encode($n), "|", $n;
     );
 
     assert_eq!(out, "42|42|42");
+/// A tagged nullable int reaching a `mixed` PARAMETER must be boxed by the call ABI.
+///
+/// It was not. `emit_box_current_value_as_mixed` matched on the DECLARED type, where
+/// `PhpType::Union(_)` means "already a boxed Mixed" — true of every nullable union except this
+/// one, which is the unboxed two-word `{payload, tag}` pair. Nothing was emitted, the callee read
+/// the raw payload as a Mixed pointer, and the caller's own `__rt_decref_mixed` ran on the
+/// integer: `var_export()` on a `?int` segfaulted whether it held `5` or `null` (#1040).
+#[test]
+fn test_tagged_nullable_int_boxes_for_a_mixed_parameter() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class N { public ?int $n = 5; }
+class M { public ?int $n = null; }
+
+function nint(int $i): ?int { return $i >= 0 ? 5 : null; }
+function take(mixed $v): string { return is_null($v) ? "null" : "set:" . $v; }
+
+echo take(nint(1)), "|", take(nint(-1)), "\n";
+echo var_export((new N())->n, true), "|", var_export((new M())->n, true), "\n";
+echo var_export(nint(1), true), "\n";
+"#,
+    );
+    assert_eq!(out, "set:5|null\n5|NULL\n5\n");
+}
+
+/// The same value reaching a `mixed` parameter of a METHOD, and through a method's return.
+#[test]
+fn test_tagged_nullable_int_boxes_for_a_mixed_method_parameter() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class Box {
+    public ?int $n = 5;
+    public function get(): ?int { return $this->n; }
+    public function take(mixed $v): string { return is_null($v) ? "null" : "set:" . $v; }
+}
+
+$b = new Box();
+echo $b->take($b->get()), "|", $b->take($b->n), "\n";
+echo var_export($b->get(), true), "\n";
+"#,
+    );
+    assert_eq!(out, "set:5|set:5\n5\n");
+}
+
+/// A static property and a `int|null` spelled without `?` take the same path.
+#[test]
+fn test_tagged_nullable_int_boxes_from_every_storage() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class S { public static ?int $n = 7; }
+class U { public int|null $n = 9; }
+
+function take(mixed $v): string { return is_null($v) ? "null" : "set:" . $v; }
+
+echo take(S::$n), "|", take((new U())->n), "\n";
+echo var_export(S::$n, true), "|", var_export((new U())->n, true), "\n";
+"#,
+    );
+    assert_eq!(out, "set:7|set:9\n7|9\n");
+}
+
+/// The other nullable scalars were never broken — they are already boxed Mixed — and must stay
+/// that way, which is what makes `int|null` the single exception worth the arm.
+#[test]
+fn test_other_nullable_scalars_still_reach_a_mixed_parameter() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function nstr(int $i): ?string { return $i >= 0 ? "x" : null; }
+function nflt(int $i): ?float { return $i >= 0 ? 1.5 : null; }
+function nbool(int $i): ?bool { return $i >= 0 ? true : null; }
+
+echo var_export(nstr(1), true), "|", var_export(nflt(1), true), "|", var_export(nbool(1), true), "\n";
+"#,
+    );
+    assert_eq!(out, "'x'|1.5|true\n");
+}
+
+/// A builtin whose result type its own check hook derives from the ARGUMENT must not be disturbed.
+///
+/// An earlier cut boxed at the EIR argument boundary instead of in the ABI. `abs($n)` is typed
+/// `int` because the checker saw `int|null`; handing the runtime a boxed Mixed made it return a
+/// boxed Mixed, which the caller then read as a raw integer — `abs(5)` answered `4330504864`.
+/// Fixing the ABI rather than the argument leaves every such hook's answer intact.
+#[test]
+fn test_tagged_nullable_int_still_reaches_builtins_unboxed() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function nint(int $i): ?int { return $i >= 0 ? 5 : null; }
+
+$n = nint(1);
+echo abs($n), "|", intdiv($n, 1), "|", max($n, 1), "|", sprintf("%d", $n), "|", strval($n), "\n";
+echo gettype($n), "|", is_int($n) ? "y" : "n", "|", $n, "\n";
+"#,
+    );
+    assert_eq!(out, "5|5|5|5|5\ninteger|y|5\n");
+}
+
+/// The other ways a value reaches a `mixed` parameter: a variadic, a closure, a first-class
+/// callable, `call_user_func`, and a `mixed` property write. All were already correct — the call
+/// ABI is shared — and this pins them so the shared fix cannot regress one of them quietly.
+#[test]
+fn test_tagged_nullable_int_reaches_every_mixed_call_shape() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function nint(int $i): ?int { return $i >= 0 ? 5 : null; }
+function variadic(mixed ...$vs): string { return implode(",", array_map(fn($x) => var_export($x, true), $vs)); }
+function plain(mixed $v): string { return var_export($v, true); }
+
+class Holder { public mixed $slot = null; }
+
+$n = nint(1);
+$c = function (mixed $v): string { return var_export($v, true); };
+$f = plain(...);
+$h = new Holder();
+$h->slot = $n;
+
+echo "variadic:", variadic($n, $n), "\n";
+echo "closure:", $c($n), "\n";
+echo "fcc:", $f($n), "\n";
+echo "cuf:", call_user_func('plain', $n), "\n";
+echo "prop:", var_export($h->slot, true), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "variadic:5,5\nclosure:5\nfcc:5\ncuf:5\nprop:5\n"
+    );
+}
+
+/// A generator taking a `?int` keeps it across the frame, including when a second parameter
+/// follows it — the two-word pair must not eat the next parameter's register.
+#[test]
+fn test_tagged_nullable_int_survives_a_generator_parameter() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function gen(?int $n) { yield $n; yield 7; }
+function gen2(?int $n, string $tail) { yield $n; yield $tail; }
+
+foreach (gen(5) as $v) { echo var_export($v, true), "|"; }
+echo "\n";
+foreach (gen2(5, "x") as $v) { echo var_export($v, true), "|"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "5|7|\n5|'x'|\n");
 }
