@@ -177,6 +177,7 @@ pub(super) fn reflection_method_owner_metadata(
     member: ReflectionListedMember,
 ) -> ReflectionOwnerMetadata {
     ReflectionOwnerMetadata {
+        rendered_to_string: None,
         reflected_name: Some(member.name.clone()),
         attr_names: member.attr_names,
         attr_args: member.attr_args,

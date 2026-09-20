@@ -99,6 +99,7 @@ pub(super) fn reflection_class_metadata_for_name(
         let is_cloneable = reflection_class_is_cloneable(class_name, info, is_enum);
         let is_iterable = reflection_class_is_iterable(info, is_enum);
         return Ok(ReflectionOwnerMetadata {
+            rendered_to_string: None,
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
             attr_args: info.attribute_args.clone(),
@@ -168,6 +169,7 @@ pub(super) fn reflection_class_metadata_for_name(
         let property_members = default_property_members(&property_names, true, interface_name);
         let constructor_member = reflection_constructor_member(&method_members);
         return Ok(ReflectionOwnerMetadata {
+            rendered_to_string: None,
             reflected_name: Some(interface_name.to_string()),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
@@ -243,6 +245,7 @@ pub(super) fn reflection_class_metadata_for_name(
         let property_members = default_property_members(&property_names, false, trait_name);
         let constructor_member = reflection_constructor_member(&method_members);
         return Ok(ReflectionOwnerMetadata {
+            rendered_to_string: None,
             reflected_name: Some(trait_name.to_string()),
             attr_names: Vec::new(),
             attr_args: Vec::new(),

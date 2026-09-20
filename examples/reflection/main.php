@@ -38,3 +38,22 @@ foreach ($fn->getParameters() as $param) {
 
     echo "\n";
 }
+
+// `__toString()` renders PHP's own dump, which is the fastest way to see
+// everything a reflector holds. The only line PHP prints that elephc does not
+// is `@@ <file> <line> - <line>`: a compiled binary has no honest answer for
+// it, since the source it was built from need not exist where it runs.
+echo "\n", $fn;
+
+class Inbox
+{
+    final protected static function route(string|int $id, int &$hits = 0, ...$rest): ?Mailer
+    {
+        return null;
+    }
+}
+
+echo "\n", new ReflectionMethod('Inbox', 'route');
+
+// One parameter renders on its own too.
+echo "\n", (new ReflectionMethod('Inbox', 'route'))->getParameters()[1], "\n";

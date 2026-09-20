@@ -25,7 +25,13 @@ pub(super) fn reflection_parameter_default_value(
         return Ok(Some(value));
     }
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
+        // `ConstRef` is a GLOBAL constant. It folds the same way the scoped forms do, and it
+        // has to: the constant NAME alone left `isDefaultValueConstant()` true while
+        // `isDefaultValueAvailable()` stayed false and `getDefaultValue()` threw — a state PHP
+        // never produces (#1080).
+        ExprKind::ClassConstant { .. }
+            | ExprKind::ScopedConstantAccess { .. }
+            | ExprKind::ConstRef(_) => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
         }
@@ -43,6 +49,7 @@ pub(super) fn reflection_object_parameter_default_value(
     let ExprKind::NewObject { class_name, args } = &default.kind else {
         return Ok(None);
     };
+    let written_args = args.len();
     let Some(args) = reflection_object_parameter_default_args(
         ctx,
         current_class,
@@ -56,6 +63,7 @@ pub(super) fn reflection_object_parameter_default_value(
     Ok(Some(ReflectionParameterDefaultValue::Object {
         class_name: class_name.as_str().to_string(),
         args,
+        written_args,
     }))
 }
 
@@ -129,7 +137,9 @@ pub(super) fn reflection_parameter_default_non_object_value(
         return Ok(Some(value));
     }
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
+        ExprKind::ClassConstant { .. }
+            | ExprKind::ScopedConstantAccess { .. }
+            | ExprKind::ConstRef(_) => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
         }
@@ -261,6 +271,14 @@ pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Opti
             reflection_static_receiver_label(receiver),
             name
         )),
+        // A GLOBAL constant is a name too, and PHP reports it the same way: a parameter declared
+        // `int $n = LIMIT` answers `LIMIT` from `getDefaultValueConstantName()` and prints
+        // `= LIMIT` in a dump, exactly as a class constant does. Only the scoped form was
+        // recognized here, so the global one had neither a name nor a folded value and dropped out
+        // of both (#1080).
+        ExprKind::ConstRef(name) => {
+            Some(name.as_str().trim_start_matches('\\').to_string())
+        }
         _ => None,
     }
 }

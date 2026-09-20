@@ -28,6 +28,7 @@ pub(super) fn reflection_class_constant_metadata(
         resolve_reflection_enum_case(ctx, &reflected_class, &constant_name)
     {
         return Ok(ReflectionOwnerMetadata {
+            rendered_to_string: None,
             reflected_name: Some(constant_name.clone()),
             attr_names: case.attribute_names.clone(),
             attr_args: case.attribute_args.clone(),
@@ -107,6 +108,7 @@ pub(super) fn reflection_enum_case_metadata(
     Ok(
         resolve_reflection_enum_case(ctx, &reflected_enum, &case_name)
             .map(|(enum_name, case)| ReflectionOwnerMetadata {
+                rendered_to_string: None,
                 reflected_name: Some(case_name.clone()),
                 attr_names: case.attribute_names.clone(),
                 attr_args: case.attribute_args.clone(),
@@ -175,6 +177,7 @@ pub(super) fn reflection_class_constant_owner_metadata(
     let member_flags =
         reflection_member_flags(false, &metadata.visibility, is_final, false, false, false);
     ReflectionOwnerMetadata {
+        rendered_to_string: None,
         reflected_name: Some(reflected_name),
         attr_names: metadata.attr_names,
         attr_args: metadata.attr_args,

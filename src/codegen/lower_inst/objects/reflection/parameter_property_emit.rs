@@ -9,6 +9,39 @@
 
 use super::*;
 
+/// Renders the `__toString()` dump for a `getDeclaringFunction()` reflector.
+///
+/// That reflector is built from metadata with NO parameters on purpose: emitting them would emit a
+/// `ReflectionParameter` for each, and each of those emits its own declaring function, which does
+/// not terminate. So the dump cannot be rendered from the metadata — it would claim
+/// `Parameters [0]` for a method that has some. The member is rebuilt from its names here and
+/// rendered to a STRING, which carries no such cycle.
+fn reflection_declaring_function_dump(
+    ctx: &FunctionContext<'_>,
+    declaring_class_name: Option<&str>,
+    name: &str,
+) -> Option<String> {
+    let Some(class_name) = declaring_class_name else {
+        let function = ctx.function_by_name(name)?;
+        let signature = function.signature.as_ref()?;
+        let parameters = reflection_parameter_members_with_declaring_function(
+            ctx, signature, "", None, None, None, &[], None,
+        )
+        .ok()?;
+        return Some(reflection_function_to_string(
+            name,
+            reflection_builtin_function_signature(name).is_some(),
+            &parameters,
+            reflection_return_type_metadata(signature).as_ref(),
+        ));
+    };
+    let info = ctx.module.class_infos.get(class_name)?;
+    let member = reflection_class_method_member(ctx, class_name, info, name)
+        .ok()
+        .flatten()?;
+    Some(reflection_listed_method_to_string(&member))
+}
+
 /// Writes one ReflectionParameter object's private metadata properties.
 pub(super) fn emit_reflection_parameter_properties(
     ctx: &mut FunctionContext<'_>,
@@ -32,6 +65,13 @@ pub(super) fn emit_reflection_parameter_properties(
         public_name_offset + 8,
     );
     emit_reflection_string_property(ctx, &parameter.name, name_offset, name_offset + 8);
+    let parameter_string = reflection_parameter_to_string(parameter);
+    emit_reflection_owner_string_property_by_name(
+        ctx,
+        "ReflectionParameter",
+        "__string",
+        &parameter_string,
+    )?;
     emit_reflection_attrs_property(
         ctx,
         "ReflectionParameter",
@@ -173,6 +213,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
             metadata.returns_reference = *returns_reference;
+            metadata.rendered_to_string = reflection_declaring_function_dump(ctx, None, name);
             emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
@@ -203,6 +244,11 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
             metadata.returns_reference = *returns_reference;
+            metadata.rendered_to_string = reflection_declaring_function_dump(
+                ctx,
+                declaring_class_name.as_deref(),
+                name,
+            );
             emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
