@@ -1250,6 +1250,42 @@ $property = new ReflectionProperty('Controller', 'id');
 echo $property->getAttributes()[0]->getName(); // Column
 ```
 
+Every `getAttributes()` above takes PHP's optional filter, `getAttributes(?string $name = null, int $flags = 0)`. Passing a class name keeps only the attributes of exactly that class, and a name nothing matches gives an empty array:
+
+```php
+<?php
+#[Attribute] class Route { public function __construct(public string $path = "/") {} }
+#[Attribute] class Deprecated {}
+
+#[Route("/home")]
+#[Deprecated]
+class Controller {}
+
+$class = new ReflectionClass(Controller::class);
+echo count($class->getAttributes()), "\n";                 // 2
+echo count($class->getAttributes(Route::class)), "\n";     // 1
+echo count($class->getAttributes("Nope")), "\n";           // 0
+echo $class->getAttributes(Route::class)[0]->newInstance()->path, "\n"; // /home
+```
+
+The filter compares class names the way PHP does — folding ASCII case, without resolving a leading separator — so `getAttributes("markerone")` finds `#[MarkerOne]` and `getAttributes("\MarkerOne")` finds nothing.
+
+`$flags` is accepted so the signature matches PHP, but only the default `0` — filter by exact class name — is implemented. `ReflectionAttribute::IS_INSTANCEOF` widens the filter to subclasses and implemented interfaces, and deciding that needs a subclass test on a class name the compiled program only has as a runtime string. No AOT builtin answers one: `is_subclass_of()` reports `false` for a string first argument, and `class_parents()`, `class_implements()` and `class_exists()` reject a non-literal name. Rather than quietly returning a subset of PHP's answer, elephc refuses the call:
+
+```
+error: ReflectionClass::getAttributes(): the $flags argument is not supported yet — ReflectionAttribute::IS_INSTANCEOF needs a subclass test on a class name known only at runtime, and AOT mode has no name-keyed class hierarchy query
+```
+
+Refusing everything but `0` costs nothing in fidelity: PHP itself accepts only `0` and `ReflectionAttribute::IS_INSTANCEOF`, and raises `ValueError: Argument #2 ($flags) must be a valid attribute filter flag` for any other value. So the one valid call elephc turns away is the `IS_INSTANCEOF` one.
+
+The compile-time refusal covers every spelling where the argument list is visible: positional, named (`flags: 2`), through a spread (`getAttributes(...$args)`, where the flag cannot be read at all, so the call is refused — pass the arguments positionally), and a call on a `mixed` receiver that could dispatch to a Reflection owner at runtime. Three spellings are allowed through, because PHP answers them without any subclass test: a `null` name, no name at all (`getAttributes(flags: 2)` — an absent `$name` is null, so nothing is filtered), and a `$flags` that folds to `0`, including a literal `false`.
+
+Some spellings hand the method its arguments with no visible list — a first-class callable (`$r->getAttributes(...)`), `call_user_func_array([$r, 'getAttributes'], $args)`, and a dynamic method name (`$r->$m(...)`), which PHP-level dispatch resolves only at runtime. There the method itself throws:
+
+```
+PHP Fatal error: Uncaught ReflectionException: ReflectionAttribute::IS_INSTANCEOF is not supported yet: it needs a subclass test on a class name known only at runtime, and AOT mode has no name-keyed class hierarchy query
+```
+
 `ReflectionAttribute` is a final synthetic built-in class with `getName(): string`, `getArguments(): array`, and `newInstance(): mixed` methods. It is populated internally by `class_get_attributes()` and the supported Reflection lookups and cannot be constructed or populated directly from user code; its metadata slots are private. `getArguments()` returns the same `array<int|string, mixed>` shape as `class_attribute_args()`. `newInstance()` constructs the attribute class on demand when the attribute class exists in the program and the captured positional or named arguments are supported literals:
 
 ```php
@@ -1320,7 +1356,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionClass::newInstance()` | `new ReflectionClass($class_name)` | Construct an instance of the reflected class with forwarded constructor arguments |
 | `ReflectionClass::newInstanceArgs()` | `new ReflectionClass($class_name)` | Construct an instance of the reflected class from an argument array |
 | `ReflectionClass::newInstanceWithoutConstructor()` | `new ReflectionClass($class_name)` | Allocate an instance of the reflected class without running `__construct()` |
-| `ReflectionClass::getAttributes()` | `new ReflectionClass($class_name)` | Return `ReflectionAttribute` objects for class attributes |
+| `ReflectionClass::getAttributes()` | `new ReflectionClass($class_name)` | Return `ReflectionAttribute` objects for class attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionObject::*` inherited class metadata methods | `new ReflectionObject($object)` | Return the same reflected class metadata as `ReflectionClass`, with the reflected class taken from the object's runtime class id |
 | `ReflectionEnum::isBacked()` / `getBackingType()` | `new ReflectionEnum($enum_name)` | Return whether the reflected enum is backed and expose `int`/`string` backing metadata as `ReflectionNamedType` |
 | `ReflectionEnum::hasCase()` / `getCase()` / `getCases()` | Eval-backed `new ReflectionEnum($enum_name)` | Return enum-case presence and `ReflectionEnumUnitCase` / `ReflectionEnumBackedCase` objects for eval-declared enum cases |
@@ -1329,7 +1365,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionFunction::isInternal()` / `isUserDefined()` | `new ReflectionFunction($function_name)` | Return origin predicates for supported reflected functions |
 | `ReflectionFunction::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionFunction($function_name)` | Return retained function predicates; AOT reflection reports `false` for closures and return-by-reference, uses `#[Deprecated]` metadata, and reports generator functions from lowered generator flags |
 | `ReflectionFunction::hasTentativeReturnType()` / `getTentativeReturnType()` / `isDisabled()` | `new ReflectionFunction($function_name)` | Return PHP-compatible defaults for supported functions: no tentative return type and not disabled |
-| `ReflectionFunction::getAttributes()` | `new ReflectionFunction($function_name)` | Return `ReflectionAttribute` objects for function attributes |
+| `ReflectionFunction::getAttributes()` | `new ReflectionFunction($function_name)` | Return `ReflectionAttribute` objects for function attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionFunction::getParameters()` | `new ReflectionFunction($function_name)` | Return `ReflectionParameter` objects for the reflected function parameters |
 | `ReflectionFunction::getNumberOfParameters()` | `new ReflectionFunction($function_name)` | Return the total number of reflected function parameters |
 | `ReflectionFunction::getNumberOfRequiredParameters()` | `new ReflectionFunction($function_name)` | Return the number of required reflected function parameters |
@@ -1344,7 +1380,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionMethod::hasTentativeReturnType()` / `getTentativeReturnType()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return PHP-compatible defaults for supported user methods: no tentative return type |
 | `ReflectionMethod::hasPrototype()` / `getPrototype()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained parent/interface prototype metadata for supported reflected method overrides and interface implementations |
 | `ReflectionMethod::getDeclaringClass()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return a `ReflectionClass` object for the class-like symbol that declares the reflected method |
-| `ReflectionMethod::getAttributes()` | `new ReflectionMethod($class_name, $method_name)` | Return `ReflectionAttribute` objects for method attributes |
+| `ReflectionMethod::getAttributes()` | `new ReflectionMethod($class_name, $method_name)` | Return `ReflectionAttribute` objects for method attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionMethod::isStatic()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is static |
 | `ReflectionMethod::isPublic()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is public |
 | `ReflectionMethod::isProtected()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is protected |
@@ -1373,7 +1409,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionParameter::getClass()` | Same as `ReflectionParameter::hasType()` | Return a `ReflectionClass` object for nullable or non-nullable named object parameter types, or `null` for builtin, union, intersection, or untyped parameters |
 | `ReflectionParameter::allowsNull()` | Same as `ReflectionParameter::hasType()` | Return PHP nullability for retained parameter type/default metadata |
 | `ReflectionParameter::isArray()` / `isCallable()` | Same as `ReflectionParameter::hasType()` | Return PHP's legacy named-type predicates for nullable or non-nullable `array` / `callable` parameter declarations; union declarations report `false` |
-| `ReflectionParameter::getAttributes()` | Same construction forms as `ReflectionParameter::hasType()` | Return `ReflectionAttribute` objects for function and method parameter attributes |
+| `ReflectionParameter::getAttributes()` | Same construction forms as `ReflectionParameter::hasType()` | Return `ReflectionAttribute` objects for function and method parameter attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionParameter::getDeclaringClass()` | Same construction forms as `ReflectionParameter::hasType()` | Return a `ReflectionClass` object for method parameters, or `null` for function parameters |
 | `ReflectionParameter::getDeclaringFunction()` | Same construction forms as `ReflectionParameter::hasType()` | Return a `ReflectionMethod` object for method parameters or a `ReflectionFunction` object for function parameters |
 | `ReflectionParameter::isDefaultValueAvailable()` | Same construction forms as `ReflectionParameter::isOptional()` | Return whether a reflected parameter has a materialized default value |
@@ -1385,7 +1421,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionIntersectionType::getTypes()` / `allowsNull()` / `__toString()` | `ReflectionParameter::getType()` | Return intersection members as `ReflectionNamedType` objects, report `false` for nullability, and stringify retained intersection metadata |
 | `ReflectionProperty::getName()` | `new ReflectionProperty($class_name, $property_name)` | Return the reflected property name |
 | `ReflectionProperty::getDeclaringClass()` | `new ReflectionProperty($class_name, $property_name)` or `ReflectionClass::getProperty()` / `getProperties()` | Return a `ReflectionClass` object for the class-like symbol that declares the reflected property |
-| `ReflectionProperty::getAttributes()` | `new ReflectionProperty($class_name, $property_name)` | Return `ReflectionAttribute` objects for property attributes |
+| `ReflectionProperty::getAttributes()` | `new ReflectionProperty($class_name, $property_name)` | Return `ReflectionAttribute` objects for property attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionProperty::isStatic()` | `new ReflectionProperty($class_name, $property_name)` | Return whether the reflected property is static |
 | `ReflectionProperty::isPublic()` | `new ReflectionProperty($class_name, $property_name)` | Return whether the reflected property is public |
 | `ReflectionProperty::isProtected()` | `new ReflectionProperty($class_name, $property_name)` | Return whether the reflected property is protected |
@@ -1416,7 +1452,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionProperty::setValue()` | Instance reflectors with an explicit object/value argument, or inline/tracked known static property reflectors | Write supported instance/static property storage |
 | `ReflectionProperty::setAccessible()` | `new ReflectionProperty($class_name, $property_name)` or `ReflectionClass::getProperty()` / `getProperties()` | Accepted as a PHP-compatible no-op for eval-backed and generated/AOT property reflection |
 | `ReflectionClassConstant::getName()` | `new ReflectionClassConstant($class_name, $constant_name)` or `ReflectionClass::getReflectionConstant()` / `getReflectionConstants()` | Return the reflected class constant or enum-case name |
-| `ReflectionClassConstant::getAttributes()` | Same as `ReflectionClassConstant::getName()` | Return `ReflectionAttribute` objects for class-constant or enum-case attributes |
+| `ReflectionClassConstant::getAttributes()` | Same as `ReflectionClassConstant::getName()` | Return `ReflectionAttribute` objects for class-constant or enum-case attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionClassConstant::getDeclaringClass()` | Same as `ReflectionClassConstant::getName()` | Return a `ReflectionClass` object for the class-like symbol that declares the reflected constant or enum case |
 | `ReflectionClassConstant::getValue()` | Same as `ReflectionClassConstant::getName()` | Return the reflected class-constant value, or the enum-case object for reflected enum cases |
 | `ReflectionClassConstant::isEnumCase()` | Same as `ReflectionClassConstant::getName()` | Return whether the reflected constant entry is an enum case |
@@ -1431,7 +1467,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionEnumUnitCase::getName()` / `ReflectionEnumBackedCase::getName()` | `new ReflectionEnumUnitCase($enum_name, $case_name)` or `new ReflectionEnumBackedCase($enum_name, $case_name)` | Return the reflected enum-case name |
 | `ReflectionEnumUnitCase::getValue()` / `ReflectionEnumBackedCase::getValue()` | Same as enum-case `getName()` | Return the reflected enum-case object |
 | `ReflectionEnumBackedCase::getBackingValue()` | `new ReflectionEnumBackedCase($enum_name, $case_name)` | Return the scalar backing value for the reflected backed enum case |
-| `ReflectionEnumUnitCase::getAttributes()` / `ReflectionEnumBackedCase::getAttributes()` | Same as enum-case `getName()` | Return `ReflectionAttribute` objects for enum-case attributes |
+| `ReflectionEnumUnitCase::getAttributes()` / `ReflectionEnumBackedCase::getAttributes()` | Same as enum-case `getName()` | Return `ReflectionAttribute` objects for enum-case attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionEnumUnitCase::getDeclaringClass()` / `ReflectionEnumBackedCase::getDeclaringClass()` | Same as enum-case `getName()` | Return a `ReflectionClass` object for the enum that declares the reflected case |
 | `ReflectionEnumUnitCase::getEnum()` / `ReflectionEnumBackedCase::getEnum()` | Same as enum-case `getName()` | Return a `ReflectionEnum` object for the enum that declares the reflected case |
 | `ReflectionEnumUnitCase::isDeprecated()` / `ReflectionEnumBackedCase::isDeprecated()` | Same as enum-case `getName()` | Return PHP's current non-deprecated default for retained enum-case metadata |

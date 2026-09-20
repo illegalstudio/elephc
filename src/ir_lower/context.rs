@@ -3206,6 +3206,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owned_unboxed_local_load(value.value) {
             return true;
         }
+        if self.value_is_owning_mixed_unbox(value.value) {
+            return true;
+        }
         if self.value_is_owning_mixed_string_cast(value.value) {
             return true;
         }
@@ -3539,6 +3542,24 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
             && matches!(result_type, PhpType::Callable)
+    }
+
+    /// Returns whether a `MixedUnbox` already handed back a reference of its own.
+    ///
+    /// `lower_mixed_unbox` ends in `emit_unbox_mixed_to_owned_refcounted_result`, so the payload
+    /// it produces is OWNED, not a borrow of the box. Reading it as a borrow made the store that
+    /// consumes it acquire a second reference, which the single slot release in the epilogue
+    /// never balanced — the unboxed object, and the whole subtree it owns, stayed alive for the
+    /// rest of the process.
+    ///
+    /// `coerce_typed_assign_value` is the only emitter, and it has two callers — a typed local
+    /// (`lower_typed_assign`) and a typed property write (`lower_property_assign`) — so this says
+    /// one thing about both: a typed target initialized from a Mixed source already owns the value
+    /// it was handed. The property path has a separate leak of its own that predates this and is
+    /// unchanged by it (#1115): measured at three blocks per assignment with the predicate both on
+    /// and off.
+    fn value_is_owning_mixed_unbox(&self, value: ValueId) -> bool {
+        self.builder.value_defining_op(value) == Some(Op::MixedUnbox)
     }
 
     /// Returns whether a generic cast owns a detached string copy of a Mixed operand.
