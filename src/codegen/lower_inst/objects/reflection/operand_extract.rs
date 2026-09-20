@@ -12,6 +12,7 @@ use super::*;
 /// Returns empty Reflection metadata for unsupported dynamic constructor operands.
 pub(super) fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
     ReflectionOwnerMetadata {
+        rendered_to_string: None,
         reflected_name: None,
         attr_names: Vec::new(),
         attr_args: Vec::new(),

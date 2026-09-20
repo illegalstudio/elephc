@@ -62,3 +62,5 @@ mod class_relation_names;
 mod mixed_receiver_property_writes;
 #[path = "oop/reflection_attribute_filter.rs"]
 mod reflection_attribute_filter;
+#[path = "oop/reflection_to_string.rs"]
+mod reflection_to_string;
