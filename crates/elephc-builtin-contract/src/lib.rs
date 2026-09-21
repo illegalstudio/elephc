@@ -13,6 +13,7 @@
 //!   validated for uniqueness by catalog consumers.
 
 mod aot_profile;
+pub mod union_order;
 mod callback_parameters;
 mod class_spec;
 mod constant_spec;
@@ -47,6 +48,7 @@ pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
 pub use core_functions::CORE_FUNCTION_NAMES;
+pub use union_order::union_member_rank;
 pub use module::PhpModule;
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};

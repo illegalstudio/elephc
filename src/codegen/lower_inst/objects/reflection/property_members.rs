@@ -352,7 +352,7 @@ pub(super) fn reflection_type_metadata_to_string(type_metadata: &ReflectionParam
             if union.allows_null && names.iter().all(|name| name != "null") {
                 names.push(String::from("null"));
             }
-            names.sort_by_key(|name| reflection_union_member_rank(name));
+            names.sort_by_key(|name| elephc_builtin_contract::union_member_rank(name));
             names.join("|")
         }
         ReflectionParameterTypeMetadata::Intersection(intersection) => intersection
@@ -361,42 +361,6 @@ pub(super) fn reflection_type_metadata_to_string(type_metadata: &ReflectionParam
             .map(|type_metadata| type_metadata.name.clone())
             .collect::<Vec<_>>()
             .join("&"),
-    }
-}
-
-/// Returns PHP's print order for one union member.
-///
-/// PHP does not echo a union in the order it was declared: it renders the type mask, which has a
-/// fixed order. Measured on 8.5.10, where the left column is the declaration:
-///
-/// | declared | printed |
-/// | --- | --- |
-/// | `float\|int\|string` | `string\|int\|float` |
-/// | `bool\|array\|string` | `array\|string\|bool` |
-/// | `null\|int\|string` | `string\|int\|null` |
-/// | `int\|C\|I` | `C\|I\|int` |
-/// | `array\|object\|string` | `object\|array\|string` |
-/// | `false\|int` | `int\|false` |
-///
-/// Class names come first and keep THEIR declared order among themselves, which a stable sort on
-/// this rank preserves because they all share rank 0.
-pub(super) fn reflection_union_member_rank(name: &str) -> u8 {
-    match name {
-        "static" => 1,
-        "callable" => 2,
-        "object" => 3,
-        "array" => 4,
-        "iterable" => 5,
-        "string" => 6,
-        "int" => 7,
-        "float" => 8,
-        "bool" => 9,
-        "false" => 10,
-        "true" => 11,
-        "null" => 12,
-        // A class, interface or enum name, or a type this table does not know: PHP prints those
-        // ahead of the built-ins, in the order they were written.
-        _ => 0,
     }
 }
 
