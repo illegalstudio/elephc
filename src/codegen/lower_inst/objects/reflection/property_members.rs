@@ -380,7 +380,7 @@ pub(super) fn reflection_type_metadata_to_string(type_metadata: &ReflectionParam
 ///
 /// Class names come first and keep THEIR declared order among themselves, which a stable sort on
 /// this rank preserves because they all share rank 0.
-fn reflection_union_member_rank(name: &str) -> u8 {
+pub(super) fn reflection_union_member_rank(name: &str) -> u8 {
     match name {
         "static" => 1,
         "callable" => 2,

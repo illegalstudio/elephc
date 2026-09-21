@@ -337,11 +337,12 @@ pub(super) fn reflection_declared_type_metadata(
         }
         TypeExpr::Union(members) => {
             let allows_null = members.iter().any(|member| matches!(member, TypeExpr::Void));
-            let types = members
+            let mut types = members
                 .iter()
                 .filter(|member| !matches!(member, TypeExpr::Void))
                 .map(reflection_named_type_metadata_from_type_expr)
                 .collect::<Option<Vec<_>>>()?;
+            sort_union_members_like_php(&mut types);
             if types.len() == 1 {
                 let mut metadata = types.into_iter().next()?;
                 metadata.allows_null = allows_null;
@@ -417,6 +418,15 @@ pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionN
             Some(reflection_builtin_named_type("array", false))
         }
         PhpType::Callable => Some(reflection_builtin_named_type("callable", false)),
+        // `false` is a type of its own in a union (`false|int`), not a `bool`. Answering `None`
+        // here made the whole union unrepresentable, so `(string) $type` rendered as the empty
+        // string rather than `int|false` (issue #1118).
+        PhpType::False => Some(reflection_builtin_named_type("false", false)),
+        // A bare `object` hint resolves to `PhpType::Object` with no name, and copying that name
+        // printed nothing at all — `array|object|string` came out as `array||string`.
+        PhpType::Object(name) if name.is_empty() => {
+            Some(reflection_builtin_named_type("object", false))
+        }
         PhpType::Object(name) => Some(ReflectionNamedTypeMetadata {
             name: name.clone(),
             allows_null: false,
@@ -458,6 +468,10 @@ pub(super) fn reflection_union_or_nullable_type_metadata(
         metadata.allows_null = allows_null;
         return Some(ReflectionParameterTypeMetadata::Named(metadata));
     }
+    // PHP prints union members in its own rank order, not the declared one. The list built
+    // above already collapses packed and keyed storage into one PHP type, so it only needs
+    // ordering -- rebuilding it here would undo that de-duplication.
+    sort_union_members_like_php(&mut types);
     (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Union(
         ReflectionUnionTypeMetadata { types, allows_null },
     ))
@@ -504,4 +518,24 @@ pub(super) fn reflection_named_type_metadata_from_type_expr(
         }
         _ => None,
     }
+}
+
+/// Orders a union's members the way PHP prints them, not the way they were declared.
+///
+/// PHP renders a union from its internal type mask, which has a fixed order, so `int|string`
+/// prints as `string|int`. `ReflectionMethod::__toString()` already used this order (issue
+/// #1080); the type OBJECT returned by `getType()` kept the declared one, so the same program
+/// disagreed with itself:
+///
+/// ```text
+/// echo (string) $p;             // Parameter #0 [ <required> string|int $v ]
+/// echo (string) $p->getType();  // int|string
+/// ```
+///
+/// The sort is stable, which is what keeps class names in their declared order among themselves:
+/// they all share rank 0.
+fn sort_union_members_like_php(types: &mut [ReflectionNamedTypeMetadata]) {
+    types.sort_by_key(|member| {
+        super::property_members::reflection_union_member_rank(&member.name)
+    });
 }
