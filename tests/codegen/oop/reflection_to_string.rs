@@ -461,3 +461,35 @@ echo $s->getDefaultValue();
     );
     assert_eq!(out, "nyy7");
 }
+
+/// Verifies the compiler's own hidden variadic never reaches the dump.
+///
+/// Every callable carries a synthesized `mixed ...$__elephc_func_args` so `func_get_args()` can
+/// read surplus positional arguments. It is an ABI slot, not a PHP parameter. Printing it made
+/// the compiled dump read `Parameters [3]` with a
+/// `Parameter #2 [ <optional> array ...$__elephc_func_args#gen ]` PHP never emits, and made the
+/// compiled and eval dumps disagree about the same method.
+#[test]
+fn test_the_hidden_func_args_variadic_is_not_printed() {
+    let out = compile_and_run(
+        r#"<?php
+class Demo {
+    public function plain(int $a, string $b = "x"): bool { return true; }
+}
+function freePlain(int $a): bool { return true; }
+echo (string) new ReflectionMethod('Demo', 'plain');
+echo (string) new ReflectionFunction('freePlain');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "Method [ <user> public method plain ] {\n  \
+         - Parameters [2] {\n    \
+         Parameter #0 [ <required> int $a ]\n    \
+         Parameter #1 [ <optional> string $b = 'x' ]\n  }\n  - Return [ bool ]\n}\n\
+         Function [ <user> function freePlain ] {\n  \
+         - Parameters [1] {\n    \
+         Parameter #0 [ <required> int $a ]\n  }\n  - Return [ bool ]\n}\n"
+    );
+}
