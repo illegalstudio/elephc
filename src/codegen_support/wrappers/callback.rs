@@ -192,7 +192,7 @@ fn spill_visible_args(emitter: &mut Emitter, visible_arg_types: &[PhpType]) {
                     ptr_reg,
                     len_reg,
                     idx * 16
-                )); // spill the incoming string callback argument before loading captures
+                ));                                                             // spill the incoming string callback argument before loading captures
             }
             (Arch::AArch64, _) => {
                 let reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
@@ -247,19 +247,19 @@ fn spill_captures(
                 emitter.instruction(&format!(
                     "movsd xmm0, QWORD PTR [{} + {}]",
                     env_reg, env_offset
-                )); // load a captured float from the callback environment
+                ));                                                             // load a captured float from the callback environment
                 abi::store_at_offset(emitter, "xmm0", frame_arg_slot_offset(arg_idx));
             }
             (Arch::X86_64, PhpType::Str) => {
                 emitter.instruction(&format!(
                     "mov r10, QWORD PTR [{} + {}]",
                     env_reg, env_offset
-                )); // load the captured string pointer from the callback environment
+                ));                                                             // load the captured string pointer from the callback environment
                 emitter.instruction(&format!(
                     "mov r11, QWORD PTR [{} + {}]",
                     env_reg,
                     env_offset + 8
-                )); // load the captured string length from the callback environment
+                ));                                                             // load the captured string length from the callback environment
                 abi::store_at_offset(emitter, "r10", frame_arg_slot_offset(arg_idx));
                 abi::store_at_offset(emitter, "r11", frame_arg_slot_offset(arg_idx) - 8);
             }
@@ -268,7 +268,7 @@ fn spill_captures(
                 emitter.instruction(&format!(
                     "mov r10, QWORD PTR [{} + {}]",
                     env_reg, env_offset
-                )); // load a captured scalar/pointer from the callback environment
+                ));                                                             // load a captured scalar/pointer from the callback environment
                 abi::store_at_offset(emitter, "r10", frame_arg_slot_offset(arg_idx));
             }
         }

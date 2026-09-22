@@ -219,7 +219,7 @@ pub(crate) fn emit_read_x86_64<F>(
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    )); // owned-string heap-kind word
+    ));                                                                         // owned-string heap-kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer header
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // save the output buffer pointer
 

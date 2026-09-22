@@ -150,7 +150,7 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                          // materialize the owned-string heap-kind word
+    ));                                                                         // materialize the owned-string heap-kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp raw ciphertext as owned string
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain raw output pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize ciphertext output length
@@ -160,7 +160,7 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                          // materialize the owned-string heap-kind word
+    ));                                                                         // materialize the owned-string heap-kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp tag allocation as owned string
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // retain tag output pointer
 
@@ -373,7 +373,7 @@ fn emit_openssl_decrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                          // materialize the owned-string heap-kind word
+    ));                                                                         // materialize the owned-string heap-kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp plaintext as owned string
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain plaintext pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize plaintext output length

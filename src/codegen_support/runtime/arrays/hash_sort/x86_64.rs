@@ -60,17 +60,17 @@ fn emit_key_sort_entry(emitter: &mut Emitter) {
     emitter.instruction("and r11, 8");                                          // isolate SORT_FLAG_CASE
     emitter.instruction("shr r11, 3");                                          // 1 when case folding was requested
     emitter.instruction(&format!("mov esi, {}", super::KEY_COMPARATOR_REGULAR)); // default to SORT_REGULAR
-    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_NUMERIC));
+    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_NUMERIC)); // stage the numeric comparator selector
     emitter.instruction("cmp r10, 1");                                          // SORT_NUMERIC
     emitter.instruction("cmove rsi, rax");                                      // adopt the numeric selector
-    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_STRING));
+    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_STRING)); // stage the string comparator selector
     emitter.instruction("add rax, r11");                                        // case folding picks the adjacent selector
     emitter.instruction("cmp r10, 2");                                          // SORT_STRING
     emitter.instruction("cmove rsi, rax");                                      // adopt the binary-string selector
-    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_LOCALE));
+    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_LOCALE)); // stage the locale comparator selector
     emitter.instruction("cmp r10, 5");                                          // SORT_LOCALE_STRING
     emitter.instruction("cmove rsi, rax");                                      // adopt the locale selector
-    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_NATURAL));
+    emitter.instruction(&format!("mov eax, {}", super::KEY_COMPARATOR_NATURAL)); // stage the natural-order comparator selector
     emitter.instruction("add rax, r11");                                        // case folding picks the adjacent selector
     emitter.instruction("cmp r10, 6");                                          // SORT_NATURAL
     emitter.instruction("cmove rsi, rax");                                      // adopt the natural-order selector

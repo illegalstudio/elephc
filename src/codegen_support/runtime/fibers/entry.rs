@@ -72,7 +72,7 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "ldr x10, [x19, #{}]",
         FIBER_CALLABLE_WRAPPER_OFFSET
-    )); // x10 = generated Fiber entry wrapper pointer
+    ));                                                                         // x10 = generated Fiber entry wrapper pointer
     emitter.instruction("cbnz x10, __rt_fiber_entry_call_wrapper");             // proceed when the constructor stored a wrapper
     abi::emit_symbol_address(emitter, "x0", "_fiber_msg_unsupported_callable"); // x0 = pointer to the static unsupported-callable message
     emitter.instruction("mov x1, #48");                                         // x1 = error message length in bytes
@@ -87,7 +87,7 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "str xzr, [x19, #{}]",
         FIBER_TRANSFER_VALUE_OFFSET + 8
-    )); // transfer_value.hi = 0 (raw integer/string default tag)
+    ));                                                                         // transfer_value.hi = 0 (raw integer/string default tag)
     emitter.instruction(&format!("mov x20, #{}", FIBER_STATE_TERMINATED));      // FIBER_STATE_TERMINATED constant
     emitter.instruction(&format!("str x20, [x19, #{}]", FIBER_STATE_OFFSET));   // state = Terminated
 
@@ -113,7 +113,7 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "str xzr, [x19, #{}]",
         FIBER_TRANSFER_VALUE_OFFSET + 8
-    )); // wipe transfer_value.hi as well
+    ));                                                                         // wipe transfer_value.hi as well
     emitter.instruction(&format!("mov x20, #{}", FIBER_STATE_TERMINATED));      // FIBER_STATE_TERMINATED constant — the fiber is done after an escape
     emitter.instruction(&format!("str x20, [x19, #{}]", FIBER_STATE_OFFSET));   // state = Terminated
 
@@ -165,11 +165,11 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], {}",
         FIBER_STATE_OFFSET, FIBER_STATE_RUNNING
-    )); // state = Running
+    ));                                                                         // state = Running
     emitter.instruction(&format!(
         "mov r13, QWORD PTR [r12 + {}]",
         FIBER_CALLABLE_WRAPPER_OFFSET
-    )); // r13 = generated Fiber entry wrapper pointer
+    ));                                                                         // r13 = generated Fiber entry wrapper pointer
     emitter.instruction("test r13, r13");                                       // did construction provide a supported wrapper?
     emitter.instruction("jne __rt_fiber_entry_call_wrapper");                   // proceed when the constructor stored a wrapper
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_unsupported_callable"); // rdi = pointer to the unsupported-callable message
@@ -186,15 +186,15 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], rax",
         FIBER_TRANSFER_VALUE_OFFSET
-    )); // transfer_value.lo = closure return value
+    ));                                                                         // transfer_value.lo = closure return value
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], 0",
         FIBER_TRANSFER_VALUE_OFFSET + 8
-    )); // transfer_value.hi = 0
+    ));                                                                         // transfer_value.hi = 0
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], {}",
         FIBER_STATE_OFFSET, FIBER_STATE_TERMINATED
-    )); // state = Terminated
+    ));                                                                         // state = Terminated
 
     // -- pop the boundary handler before yielding control back to the caller --
     emitter.instruction("mov r10, QWORD PTR [rsp]");                            // r10 = handler.next (previous chain head)
@@ -202,7 +202,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov rdi, QWORD PTR [r12 + {}]",
         FIBER_CALLER_OFFSET
-    )); // rdi = caller fiber* (or NULL = main)
+    ));                                                                         // rdi = caller fiber* (or NULL = main)
     emitter.instruction("call __rt_fiber_switch");                              // hand control back; this call never returns inside this fiber
     emitter.instruction("ud2");                                                 // defensive trap if the unreachable epilogue is ever entered
 
@@ -213,19 +213,19 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], r10",
         FIBER_PENDING_THROW_OFFSET
-    )); // park the escaped Throwable for the caller
+    ));                                                                         // park the escaped Throwable for the caller
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], 0",
         FIBER_TRANSFER_VALUE_OFFSET
-    )); // wipe transfer_value.lo
+    ));                                                                         // wipe transfer_value.lo
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], 0",
         FIBER_TRANSFER_VALUE_OFFSET + 8
-    )); // wipe transfer_value.hi
+    ));                                                                         // wipe transfer_value.hi
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], {}",
         FIBER_STATE_OFFSET, FIBER_STATE_TERMINATED
-    )); // state = Terminated after an escape
+    ));                                                                         // state = Terminated after an escape
     emitter.instruction("mov r10, QWORD PTR [rsp]");                            // r10 = handler.next
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // restore the previous handler chain head
     emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                       // r10 = saved diagnostic suppression depth
@@ -233,7 +233,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov rdi, QWORD PTR [r12 + {}]",
         FIBER_CALLER_OFFSET
-    )); // rdi = caller fiber* (or NULL = main)
+    ));                                                                         // rdi = caller fiber* (or NULL = main)
     emitter.instruction("call __rt_fiber_switch");                              // hand control back; caller-side helper re-raises
     emitter.instruction("ud2");                                                 // defensive trap if a terminated fiber resumes past the switch
 }

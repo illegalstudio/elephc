@@ -335,11 +335,11 @@ pub(crate) fn emit_throwable_creation_line_unknown(emitter: &mut Emitter, payloa
         Arch::AArch64 => emitter.instruction(&format!(
             "str xzr, [{}, #{}]",
             payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )), // no user `new` behind this Throwable: the creation line is unknown
+        )),                                                                     // no user `new` behind this Throwable: the creation line is unknown
         Arch::X86_64 => emitter.instruction(&format!(
             "mov QWORD PTR [{} + {}], 0",
             payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )), // no user `new` behind this Throwable: the creation line is unknown
+        )),                                                                     // no user `new` behind this Throwable: the creation line is unknown
     }
 }
 

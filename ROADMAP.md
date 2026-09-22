@@ -1106,6 +1106,14 @@ statics, and static class properties all reset between requests). Run it with
 Optimization work is driven by benchmarks, generated assembly size, and
 real-world validation rather than by speculative pass work.
 
+### Delivered in v0.27.1
+
+- [x] Completed the supported Core builtin inventory across native compilation and `eval()`, with shared runtime state, ownership, diagnostics, and generated documentation.
+- [x] Expanded PHP language compatibility for object casts, class-aware `defined('Class::CONST')`, `for` clause grammar, postfix property and array increments, grouped declarations, and nested property defaults.
+- [x] Hardened array, callable, property, and call-boundary ownership, including copy-on-write mutation, named keyed spreads, by-reference arguments, and loop-carried nullable values.
+- [x] Extended the runtime and bridge surface with IPv6 conversion, recursive `mkdir()`, `file_put_contents()` flags, corrected curl output handling, and safer compiler and web artifact paths.
+- [x] Improved release diagnostics and portability for bridge rebuilds, missing native archives, deep recursion, x86_64 argument layout, and assembly-only output.
+
 - [ ] Local-to-SSA promotion (`mem2reg`) for eligible non-aliased scalar PHP locals — replace repeated `load_local` / `store_local` traffic with SSA values and block parameters at CFG joins and loop back edges, while conservatively retaining address-taken, by-reference, global/static, refcounted, and otherwise volatile slots in memory. Re-run register allocation on the promoted graph so loop-carried values such as counters and accumulators can remain in registers across the whole loop.
 - [ ] EIR integer range and induction-variable analysis — propagate intervals through constants, comparisons, loop bounds, masks, shifts, and checked `add` / `sub` / `mul`; prove when PHP integer overflow is impossible and rewrite only those operations to unchecked scalar forms. Keep overflow-to-float behavior on every unproven path and cover all supported targets with optimizer-on/off equivalence tests.
 - [ ] Loop optimization on canonical EIR CFGs — build on natural-loop analysis, LICM, `mem2reg`, and control-flow normalization to recognize basic induction variables, hoist invariant bounds/materializations, simplify loop tests and updates, and keep hot back edges free of redundant intermediary blocks and jumps.

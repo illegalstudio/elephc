@@ -58,19 +58,19 @@ fn emit_key_sort_entry(emitter: &mut Emitter) {
     emitter.instruction("and x9, x1, x9");                                      // the comparison family PHP selects on
     emitter.instruction("ands x10, x1, #8");                                    // isolate SORT_FLAG_CASE
     emitter.instruction("cset x10, ne");                                        // 1 when case folding was requested
-    emitter.instruction(&format!("mov x11, #{}", super::KEY_COMPARATOR_REGULAR));
+    emitter.instruction(&format!("mov x11, #{}", super::KEY_COMPARATOR_REGULAR)); // default unknown flags to regular comparison
     emitter.instruction("cmp x9, #1");                                          // SORT_NUMERIC
-    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_NUMERIC));
+    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_NUMERIC)); // stage the numeric comparator selector
     emitter.instruction("csel x11, x12, x11, eq");                              // adopt the numeric selector
     emitter.instruction("cmp x9, #2");                                          // SORT_STRING
-    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_STRING));
+    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_STRING)); // stage the string comparator selector
     emitter.instruction("add x12, x12, x10");                                   // case folding picks the adjacent selector
     emitter.instruction("csel x11, x12, x11, eq");                              // adopt the binary-string selector
     emitter.instruction("cmp x9, #5");                                          // SORT_LOCALE_STRING
-    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_LOCALE));
+    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_LOCALE)); // stage the locale comparator selector
     emitter.instruction("csel x11, x12, x11, eq");                              // adopt the locale selector
     emitter.instruction("cmp x9, #6");                                          // SORT_NATURAL
-    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_NATURAL));
+    emitter.instruction(&format!("mov x12, #{}", super::KEY_COMPARATOR_NATURAL)); // stage the natural-order comparator selector
     emitter.instruction("add x12, x12, x10");                                   // case folding picks the adjacent selector
     emitter.instruction("csel x11, x12, x11, eq");                              // adopt the natural-order selector
     emitter.instruction(&format!(

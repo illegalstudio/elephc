@@ -109,10 +109,10 @@ pub fn emit_hash_slice(emitter: &mut Emitter) {
 
     // -- decide whether this position belongs to the window --
     emitter.instruction("ldr x9, [sp, #48]");                                   // x9 = window start position
-    emitter.instruction("cmp x22, x9");                                          // is this entry still before the window?
+    emitter.instruction("cmp x22, x9");                                         // is this entry still before the window?
     emitter.instruction("b.lt __rt_hash_slice_advance");                        // skip entries ahead of the offset
     emitter.instruction("ldr x9, [sp, #56]");                                   // x9 = window end position
-    emitter.instruction("cmp x22, x9");                                          // has the walk passed the end of the window?
+    emitter.instruction("cmp x22, x9");                                         // has the walk passed the end of the window?
     emitter.instruction("b.ge __rt_hash_slice_done");                           // every later entry is outside it too, so stop walking
 
     // -- copy the key: verbatim when preserving, renumbered when the source key is an integer --

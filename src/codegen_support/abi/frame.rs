@@ -141,7 +141,7 @@ pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize)
                     dest,
                     frame_pointer_reg(emitter),
                     offset
-                )); // materialize the local-slot address relative to rbp
+                ));                                                             // materialize the local-slot address relative to rbp
             }
         }
     }
@@ -373,13 +373,13 @@ pub fn emit_store_zero_to_local_slot(emitter: &mut Emitter, offset: usize) {
                 emitter.instruction(&format!(
                     "mov QWORD PTR [{}], 0",
                     frame_pointer_reg(emitter)
-                )); // zero-initialize the frame-base slot directly through rbp
+                ));                                                             // zero-initialize the frame-base slot directly through rbp
             } else {
                 emitter.instruction(&format!(
                     "mov QWORD PTR [{} - {}], 0",
                     frame_pointer_reg(emitter),
                     offset
-                )); // zero-initialize the requested local slot relative to rbp
+                ));                                                             // zero-initialize the requested local slot relative to rbp
             }
         }
     }
