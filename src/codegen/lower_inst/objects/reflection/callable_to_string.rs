@@ -24,6 +24,8 @@ use super::{
     ReflectionDefaultArrayKey, ReflectionListedMember, ReflectionMemberFlags,
     ReflectionParameterDefaultValue, ReflectionParameterMember, ReflectionParameterTypeMetadata,
 };
+use crate::names::is_generated_local_name;
+
 use super::class_traits::reflection_class_like_is_internal;
 use super::property_members::{reflection_property_visibility_label, reflection_type_metadata_to_string};
 
@@ -95,6 +97,15 @@ fn reflection_callable_body(
     parameters: &[ReflectionParameterMember],
     return_type: Option<&ReflectionParameterTypeMetadata>,
 ) -> String {
+    // Every callable carries a synthesized `mixed ...$__elephc_func_args` so `func_get_args()`
+    // can read surplus positional arguments. It is an ABI slot, not a PHP parameter: PHP never
+    // prints it, `getParameters()` already omits it, and printing it here made the compiled dump
+    // disagree with the eval one for the same method. `is_generated_local_name` is the predicate
+    // the rest of the compiler uses to keep these out of `get_defined_vars()` and eval scopes.
+    let parameters: Vec<&ReflectionParameterMember> = parameters
+        .iter()
+        .filter(|parameter| !is_generated_local_name(&parameter.name))
+        .collect();
     if parameters.is_empty() && return_type.is_none() {
         return format!("{header} {{\n}}\n");
     }
