@@ -595,3 +595,63 @@ echo count($r->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF)), 
         err
     );
 }
+
+/// Verifies a STATIC associative spread is read rather than refused.
+///
+/// The guard treated every spread as opaque, so `getAttributes(...['name' => M::class])` was a
+/// compile error for a list the shared call planner expands into named arguments before anything
+/// else looks at it — `src/types/call_args/mod.rs` says in its own header that all call surfaces
+/// must go through that planner. Measured against host PHP 8.5.10: both spellings answer `1` on a
+/// class carrying two attributes, and the plain call answers `2`.
+#[test]
+fn test_get_attributes_reads_a_static_associative_spread() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute]
+class Marker { public function __construct(public int $n = 0) {} }
+
+#[Attribute]
+class Other {}
+
+#[Marker(1)]
+#[Other]
+class Subject {}
+
+$r = new ReflectionClass(Subject::class);
+echo count($r->getAttributes());
+echo count($r->getAttributes(Marker::class));
+echo count($r->getAttributes(name: Marker::class));
+echo count($r->getAttributes(...['name' => Marker::class]));
+echo count($r->getAttributes(...['name' => Marker::class, 'flags' => 0]));
+"#,
+    );
+
+    assert_eq!(out, "21111");
+}
+
+/// Verifies a spread whose contents are a RUNTIME array is still refused.
+///
+/// Expanding the static form must not soften this one: nothing in a runtime array can tell
+/// `$flags` from absent, so accepting it would trade a loud compile error for the silent subset
+/// the guard exists to prevent.
+#[test]
+fn test_get_attributes_still_rejects_a_runtime_spread() {
+    let err = compile_expect_type_error(
+        r#"<?php
+#[Attribute] class Marker {}
+
+#[Marker]
+class Subject {}
+
+$r = new ReflectionClass(Subject::class);
+$args = [];
+$args['name'] = Marker::class;
+echo count($r->getAttributes(...$args)), "\n";
+"#,
+    );
+    assert!(
+        err.contains("cannot be read through a spread"),
+        "unexpected diagnostic: {}",
+        err
+    );
+}

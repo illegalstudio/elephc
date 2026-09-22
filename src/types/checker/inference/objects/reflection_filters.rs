@@ -9,11 +9,17 @@
 //! - Only the `$flags` argument is refused; the `$name` filter is implemented.
 //! - The argument list is read in every spelling PHP allows, because each one that slipped past
 //!   turned a compile error into a silently wrong answer.
+//! - Static associative spreads are expanded through the SHARED expander the call planner uses,
+//!   rather than being treated as opaque. Refusing them here made
+//!   `getAttributes(...['name' => M::class, 'flags' => 0])` a compile error for a list the rest
+//!   of the compiler normalizes into named arguments. A spread that is not a static associative
+//!   literal survives the expansion and still reads as `Hidden`.
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
+use crate::types::call_args::expand_static_assoc_spread_args;
 use crate::types::checker::Checker;
 
 /// The synthesized Reflection classes that carry a `getAttributes()` method over `__attrs`.
@@ -44,8 +50,9 @@ enum FilterFlags<'a> {
 /// Returns the `$name` and `$flags` arguments of a `getAttributes()` call.
 ///
 /// Named arguments are matched by parameter name, since `getAttributes(flags: 2, name: $n)` puts
-/// `$flags` at index 0. A spread anywhere makes the whole list unreadable, which is reported
-/// rather than mistaken for a short call.
+/// `$flags` at index 0. The caller expands static associative spreads first, so only a spread
+/// whose contents are a runtime array still reaches the `Hidden` arm — that one genuinely cannot
+/// be told from a short call.
 fn get_attributes_filter_arguments(args: &[Expr]) -> (Option<&Expr>, FilterFlags<'_>) {
     let mut name = None;
     let mut flags = FilterFlags::Absent;
@@ -121,7 +128,11 @@ impl Checker {
         let Some(owner) = self.reflection_attribute_owner(class_name, method_key) else {
             return Ok(());
         };
-        let (name, flags) = get_attributes_filter_arguments(args);
+        // The shared expander turns `...['name' => M::class, 'flags' => 0]` into named arguments,
+        // exactly as the call planner does before anything else reads the list. A spread whose
+        // contents are a runtime array is left alone and still reads as `Hidden`.
+        let expanded = expand_static_assoc_spread_args(args);
+        let (name, flags) = get_attributes_filter_arguments(&expanded);
         let flags = match flags {
             FilterFlags::Absent => return Ok(()),
             // A named `flags:` can stand alone, and then `$name` takes its `null` default.
