@@ -219,13 +219,18 @@ fn reflection_dump_default_value(default: &ReflectionParameterDefaultValue) -> S
 
 /// Renders a float default the way PHP's dump does.
 ///
-/// Two things Rust's own `to_string` does not do. PHP keeps the decimal point on an integral
-/// value — `1.0` stays `1.0` — and it switches to an exponent form outside a narrow decimal
-/// range, where Rust expands every digit. Measured on 8.5.10: `1e100` prints `1.0E+100`, `1e-5`
-/// prints `1.0E-5` and `1e15` prints `1.0E+15`, while `1.5` and `0.1` stay decimal.
+/// Three things Rust's own `to_string` does not do. PHP spells the non-finite values `INF`,
+/// `-INF` and `NAN` where Rust writes `inf`, `-inf` and `NaN`; it keeps the decimal point on an
+/// integral value — `1.0` stays `1.0` — and it switches to an exponent form outside a narrow
+/// decimal range, where Rust expands every digit. Measured on 8.5.10: `1e100` prints `1.0E+100`,
+/// `1e-5` prints `1.0E-5` and `1e15` prints `1.0E+15`, while `1.5` and `0.1` stay decimal, and
+/// `function f(float $x = INF, float $y = -INF, float $z = NAN) {}` dumps those three names.
 fn reflection_dump_float(value: f64) -> String {
-    if !value.is_finite() {
-        return value.to_string();
+    if value.is_nan() {
+        return "NAN".to_string();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() { "-INF" } else { "INF" }.to_string();
     }
     let magnitude = value.abs();
     let exponential = magnitude != 0.0 && !(1e-4..1e15).contains(&magnitude);
