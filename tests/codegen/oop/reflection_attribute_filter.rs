@@ -408,6 +408,11 @@ echo count($f(Base::class, ReflectionAttribute::IS_INSTANCEOF)), "\n";
 }
 
 /// `call_user_func_array` hands over a runtime array, which is the same blind spot.
+///
+/// The argument list is written INLINE rather than through a variable. A variable one makes the
+/// call take the descriptor-invoker path, which currently refuses an array-of-Reflection-objects
+/// result at compile time (#1233) — an upstream limitation this fixture must not be blocked by,
+/// and must not enshrine as expected either.
 #[test]
 fn test_get_attributes_call_user_func_array_throws_on_the_flag() {
     let out = compile_and_run_expect_failure(
@@ -420,8 +425,7 @@ fn test_get_attributes_call_user_func_array_throws_on_the_flag() {
 class Target {}
 
 $r = new ReflectionClass(Target::class);
-$args = [Base::class, ReflectionAttribute::IS_INSTANCEOF];
-echo count(call_user_func_array([$r, 'getAttributes'], $args)), "\n";
+echo count(call_user_func_array([$r, 'getAttributes'], [Base::class, ReflectionAttribute::IS_INSTANCEOF])), "\n";
 "#,
     );
     assert!(
