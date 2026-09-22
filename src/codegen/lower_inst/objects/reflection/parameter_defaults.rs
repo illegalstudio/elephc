@@ -29,9 +29,20 @@ pub(super) fn reflection_parameter_default_value(
         // has to: the constant NAME alone left `isDefaultValueConstant()` true while
         // `isDefaultValueAvailable()` stayed false and `getDefaultValue()` threw — a state PHP
         // never produces (#1080).
-        ExprKind::ClassConstant { .. }
-            | ExprKind::ScopedConstantAccess { .. }
-            | ExprKind::ConstRef(_) => {
+        //
+        // Unlike the scoped forms it does NOT propagate a fold failure. `reflection_constant_value`
+        // is fallible, and `ReflectionConstantValue` carries no array, so `const ITEMS = [1, 2];
+        // function f($items = ITEMS) {}` failed the whole compile once global constants reached
+        // it. Every other unsupported default here answers `Ok(None)` and keeps the program
+        // building; this one now does too. That is still short of PHP, which reports the array —
+        // folding it needs an array variant and is filed — but a program that compiled before
+        // this branch compiles after it.
+        ExprKind::ConstRef(_) => Ok(
+            reflection_constant_value(ctx, current_class, current_info, default, 0)
+                .ok()
+                .and_then(reflection_parameter_default_from_constant_value),
+        ),
+        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
         }

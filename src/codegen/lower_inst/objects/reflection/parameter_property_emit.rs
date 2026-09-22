@@ -22,15 +22,24 @@ fn reflection_declaring_function_dump(
     name: &str,
 ) -> Option<String> {
     let Some(class_name) = declaring_class_name else {
-        let function = ctx.function_by_name(name)?;
-        let signature = function.signature.as_ref()?;
+        // A supported callable BUILTIN is not a generated function, so `function_by_name` misses
+        // it and the dump used to fall back to the deliberately parameterless metadata --
+        // `(new ReflectionParameter('strlen', 'string'))->getDeclaringFunction()->__toString()`
+        // claimed `Parameters [0]` for a function with one. The same table that decides the
+        // `<internal>` label below carries its signature.
+        let builtin_signature =
+            reflection_builtin_function_signature(name).map(|(_, signature)| signature);
+        let signature = match &builtin_signature {
+            Some(signature) => signature,
+            None => ctx.function_by_name(name)?.signature.as_ref()?,
+        };
         let parameters = reflection_parameter_members_with_declaring_function(
             ctx, signature, "", None, None, None, &[], None,
         )
         .ok()?;
         return Some(reflection_function_to_string(
             name,
-            reflection_builtin_function_signature(name).is_some(),
+            builtin_signature.is_some(),
             &parameters,
             reflection_return_type_metadata(signature).as_ref(),
         ));

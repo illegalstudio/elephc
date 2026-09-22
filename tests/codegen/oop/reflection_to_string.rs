@@ -383,3 +383,81 @@ echo substr($s, 0, strpos($s, ']') + 1), "|", $r->isInternal() ? "y" : "n", "\n"
     );
     assert_eq!(out, "Function [ <internal> function strlen ]|y\n");
 }
+
+/// Verifies a supported callable BUILTIN's declaring dump keeps its parameters.
+///
+/// `function_by_name` only knows generated functions and closures, so `strlen` missed and the
+/// dump fell back to the deliberately parameterless metadata the reflector carries to stay out of
+/// the `ReflectionParameter` -> `getDeclaringFunction()` -> `ReflectionParameter` cycle. It then
+/// claimed `Parameters [0]` for a function PHP reports one parameter for.
+///
+/// The two leading reads are not decoration. Stringifying this object in a program that does
+/// nothing else SEGFAULTS, on this branch and at the merge-base alike (#1229) — a pre-existing
+/// crash this fixture must not trip over while covering the parameters, so it is written in the
+/// shape that runs.
+#[test]
+fn test_a_builtin_declaring_function_dump_keeps_its_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter('strlen', 'string');
+echo $p->getName(), "|";
+$f = $p->getDeclaringFunction();
+echo $f->getName(), "|";
+echo (string) $f;
+"#,
+    );
+    assert_eq!(
+        out,
+        "string|strlen|Function [ <internal> function strlen ] {\n  \
+         - Parameters [1] {\n    \
+         Parameter #0 [ <required> string $string ]\n  }\n  - Return [ int ]\n}\n"
+    );
+}
+
+/// Verifies the non-finite float defaults use PHP's spelling rather than Rust's.
+///
+/// `f64::to_string` gives `inf`, `-inf` and `NaN`; PHP 8.5.10 prints `INF`, `-INF` and `NAN`.
+#[test]
+fn test_non_finite_float_defaults_use_php_spelling() {
+    let out = compile_and_run(
+        r#"<?php
+function nonFinite(float $x = INF, float $y = -INF, float $z = NAN) { return 0; }
+echo (string) new ReflectionFunction('nonFinite');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Function [ <user> function nonFinite ] {\n  \
+         - Parameters [3] {\n    \
+         Parameter #0 [ <optional> float $x = INF ]\n    \
+         Parameter #1 [ <optional> float $y = -INF ]\n    \
+         Parameter #2 [ <optional> float $z = NAN ]\n  }\n}\n"
+    );
+}
+
+/// Verifies a global constant this evaluator cannot fold does not fail the COMPILE.
+///
+/// `ReflectionConstantValue` has no array variant, so routing global constants through the
+/// fallible evaluator made `const ITEMS = [1, 2]; function f($items = ITEMS) {}` a compile error
+/// for the whole program. The metadata is still missing — PHP reports the array — but the program
+/// builds, and the predicates then behave exactly as they do for a parameter with no default,
+/// which is what PHP does in that state too.
+#[test]
+fn test_an_unfoldable_global_constant_default_still_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+const ITEMS = [1, 2];
+const LIMIT = 7;
+function withArray($x = ITEMS) { return 0; }
+function withScalar($x = LIMIT) { return 0; }
+
+$a = new ReflectionParameter('withArray', 0);
+$s = new ReflectionParameter('withScalar', 0);
+echo $a->isDefaultValueAvailable() ? "y" : "n";
+echo $s->isDefaultValueAvailable() ? "y" : "n";
+echo $s->isDefaultValueConstant() ? "y" : "n";
+echo $s->getDefaultValue();
+"#,
+    );
+    assert_eq!(out, "nyy7");
+}
