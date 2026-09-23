@@ -25,7 +25,9 @@ pub(super) fn reflection_parameter_default_value(
         return Ok(Some(value));
     }
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
+        ExprKind::ConstRef { .. }
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
         }
@@ -129,7 +131,9 @@ pub(super) fn reflection_parameter_default_non_object_value(
         return Ok(Some(value));
     }
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
+        ExprKind::ConstRef { .. }
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
         }
@@ -250,12 +254,28 @@ pub(super) fn reflection_parameter_default_from_constant_value(
         ReflectionConstantValue::Str(value) => Some(ReflectionParameterDefaultValue::Str(value)),
         ReflectionConstantValue::Null => Some(ReflectionParameterDefaultValue::Null),
         ReflectionConstantValue::EnumCase { .. } => None,
+        ReflectionConstantValue::Array(elements) => elements
+            .into_iter()
+            .map(reflection_parameter_default_from_constant_value)
+            .collect::<Option<Vec<_>>>()
+            .map(ReflectionParameterDefaultValue::Array),
+        ReflectionConstantValue::AssocArray(entries) => entries
+            .into_iter()
+            .map(|entry| {
+                Some(ReflectionDefaultAssocEntry {
+                    key: entry.key,
+                    value: reflection_parameter_default_from_constant_value(entry.value)?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(ReflectionParameterDefaultValue::AssocArray),
     }
 }
 
-/// Returns PHP's constant-name metadata for parameter defaults that name a class constant.
+/// Returns PHP's constant-name metadata for parameter defaults that name a constant.
 pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Option<String> {
     match &default.kind {
+        ExprKind::ConstRef(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
         ExprKind::ScopedConstantAccess { receiver, name } => Some(format!(
             "{}::{}",
             reflection_static_receiver_label(receiver),
