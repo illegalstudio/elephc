@@ -255,6 +255,41 @@ pub(super) fn reflection_constant_value(
             name,
             depth + 1,
         ),
+        ExprKind::ConstRef(name) => reflection_global_constant_value(ctx, name, depth),
+        ExprKind::ArrayLiteral(elements) => {
+            let mut values = Vec::with_capacity(elements.len());
+            for element in elements {
+                values.push(reflection_constant_value(
+                    ctx,
+                    current_class,
+                    current_info,
+                    element,
+                    depth + 1,
+                )?);
+            }
+            Ok(ReflectionConstantValue::Array(values))
+        }
+        ExprKind::ArrayLiteralAssoc(entries) => {
+            let mut values = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                let key = reflection_constant_array_key_expr(
+                    ctx,
+                    current_class,
+                    current_info,
+                    key,
+                    depth + 1,
+                )?;
+                let value = reflection_constant_value(
+                    ctx,
+                    current_class,
+                    current_info,
+                    value,
+                    depth + 1,
+                )?;
+                values.push(ReflectionConstantAssocEntry { key, value });
+            }
+            Ok(ReflectionConstantValue::AssocArray(values))
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "ReflectionClass constant metadata expression {:?}",
             other
@@ -419,6 +454,59 @@ pub(super) fn reflection_scoped_constant_value(
     )))
 }
 
+/// Resolves and evaluates one global constant reference for static Reflection metadata.
+pub(super) fn reflection_global_constant_value(
+    ctx: &FunctionContext<'_>,
+    name: &crate::names::Name,
+    depth: usize,
+) -> Result<ReflectionConstantValue> {
+    let expr_kind = ctx
+        .module
+        .global_constants
+        .get(name.as_str())
+        .or_else(|| ctx.module.global_constants.get(name.as_str().trim_start_matches('\\')))
+        .map(|(expr_kind, _)| expr_kind.clone())
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "ReflectionClass constant metadata for global constant {}",
+                name.as_str().trim_start_matches('\\')
+            ))
+        })?;
+    let expr = crate::parser::ast::Expr::new(expr_kind, crate::span::Span::dummy());
+    reflection_constant_value(ctx, "", None, &expr, depth + 1)
+}
+
+/// Normalizes one evaluated constant expression into a PHP array key form.
+pub(super) fn reflection_constant_array_key_expr(
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
+    key: &Expr,
+    depth: usize,
+) -> Result<ReflectionDefaultArrayKey> {
+    if let Some(key) = reflection_default_array_key(key) {
+        return Ok(key);
+    }
+    let value = reflection_constant_value(ctx, current_class, current_info, key, depth)?;
+    reflection_constant_array_key(&value).ok_or_else(|| {
+        CodegenIrError::unsupported(
+            "ReflectionClass constant metadata array key that is not a scalar",
+        )
+    })
+}
+
+/// Returns the PHP array key form of one evaluated constant value.
+pub(super) fn reflection_constant_array_key(value: &ReflectionConstantValue) -> Option<ReflectionDefaultArrayKey> {
+    match value {
+        ReflectionConstantValue::Int(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
+        ReflectionConstantValue::Bool(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
+        ReflectionConstantValue::Float(value) => Some(ReflectionDefaultArrayKey::Int(*value as i64)),
+        ReflectionConstantValue::Str(value) => reflection_default_string_array_key(value),
+        ReflectionConstantValue::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
+        _ => None,
+    }
+}
+
 /// Returns an interface constant expression, including inherited parent interfaces.
 pub(super) fn reflection_interface_constant_expr(
     ctx: &FunctionContext<'_>,
@@ -470,6 +558,8 @@ pub(super) fn reflection_constant_value_kind(value: &ReflectionConstantValue) ->
         ReflectionConstantValue::Str(_) => "string",
         ReflectionConstantValue::Null => "null",
         ReflectionConstantValue::EnumCase { .. } => "enum-case",
+        ReflectionConstantValue::Array(_) => "array",
+        ReflectionConstantValue::AssocArray(_) => "assoc-array",
     }
 }
 

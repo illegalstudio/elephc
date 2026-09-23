@@ -3348,6 +3348,58 @@ echo $inherited->getDefaultValue();
     );
 }
 
+/// Verifies that parameters defaulted to array-valued constants, global or class,
+/// reflect the default the way PHP does (regression for #1230).
+#[test]
+fn test_reflection_parameter_array_valued_constant_defaults() {
+    let out = compile_and_run_capture(
+        r#"<?php
+const ARR = [1, 2, 3];
+const ASSOC = ["a" => 1, "1" => 2];
+const SCALAR = 7;
+const NESTED = [1, ["deep"], "s", null, ["m" => true]];
+
+class ConstHolder {
+    public const LIST = [10, 20];
+    public const MAP = ["k" => 5];
+    public const SCALAR = 9;
+}
+
+function withGlobalArray($x = ARR) { return 0; }
+function withGlobalAssoc($x = ASSOC) { return 0; }
+function withGlobalScalar($x = SCALAR) { return 0; }
+function withNested($x = NESTED) { return 0; }
+function withClassList($x = ConstHolder::LIST) { return 0; }
+function withClassMap($x = ConstHolder::MAP) { return 0; }
+function withClassScalar($x = ConstHolder::SCALAR) { return 0; }
+
+$p = new ReflectionParameter("withGlobalArray", 0);
+echo "ga: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withGlobalAssoc", 0);
+echo "go: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withGlobalScalar", 0);
+echo "gs: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withNested", 0);
+echo "ne: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withClassList", 0);
+echo "cl: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withClassMap", 0);
+echo "cm: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withClassScalar", 0);
+echo "cs: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ga: y ARR [1,2,3]\ngo: y ASSOC {\"a\":1,\"1\":2}\ngs: y SCALAR 7\nne: y NESTED [1,[\"deep\"],\"s\",null,{\"m\":true}]\ncl: y ConstHolder::LIST [10,20]\ncm: y ConstHolder::MAP {\"k\":5}\ncs: y ConstHolder::SCALAR 9\n"
+    );
+}
+
 /// Verifies direct `new ReflectionParameter()` construction for statically known
 /// class and interface method targets.
 #[test]
