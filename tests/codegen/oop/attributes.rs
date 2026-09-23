@@ -3400,6 +3400,43 @@ echo "cs: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueC
     );
 }
 
+/// Verifies that `ReflectionClass::getConstant()`, `getConstants()`, and
+/// `ReflectionClassConstant::getValue()` reflect array-valued constants,
+/// renumbering mixed-spread integer keys the way PHP does (regression for #1230).
+#[test]
+fn test_reflection_constant_apis_return_array_values() {
+    let out = compile_and_run_capture(
+        r#"<?php
+const OTHER = ["b" => 7, 1 => 8];
+class ReflectArrayConstHolder {
+    public const LIST = [1, 2, 3];
+    public const MAP = ["a" => 1, "1" => 2];
+    public const NESTED = [1, ["deep"], "s", null, ["m" => true]];
+    public const MIXED = ["first" => 1, ...OTHER, 9];
+    public const SCALAR = 7;
+}
+$ref = new ReflectionClass(ReflectArrayConstHolder::class);
+echo json_encode($ref->getConstant("LIST")), "\n";
+echo json_encode($ref->getConstant("MAP")), "\n";
+echo json_encode($ref->getConstant("NESTED")), "\n";
+echo json_encode($ref->getConstant("MIXED")), "\n";
+$all = $ref->getConstants();
+echo count($all), ":", json_encode($all["MIXED"]), "\n";
+$c = $ref->getReflectionConstant("MIXED");
+echo $c ? json_encode($c->getValue()) : "false", "\n";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "[1,2,3]\n{\"a\":1,\"1\":2}\n[1,[\"deep\"],\"s\",null,{\"m\":true}]\n{\"first\":1,\"b\":7,\"0\":8,\"1\":9}\n5:{\"first\":1,\"b\":7,\"0\":8,\"1\":9}\n{\"first\":1,\"b\":7,\"0\":8,\"1\":9}\n"
+    );
+}
+
 /// Verifies direct `new ReflectionParameter()` construction for statically known
 /// class and interface method targets.
 #[test]

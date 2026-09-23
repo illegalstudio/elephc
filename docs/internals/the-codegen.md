@@ -287,6 +287,35 @@ x86_64. `substr_count()` copies the tag to `x7` or `r11` only after conversion
 calls have finished, then restores the subject, needle, and offset ABI
 registers before window validation.
 
+### Reflection constant values
+
+Static Reflection metadata folds constant expressions at compile time in
+`reflection_constant_value` (`src/codegen/lower_inst/objects/reflection/names_constants.rs`),
+which is distinct from the pure `resolve_const_default` resolver in
+`src/codegen/const_default_values.rs`: the reflection folder returns the flat
+`ReflectionConstantValue` metadata enum, while the pure resolver returns the
+target-neutral `ConstDefaultValue` consumed by eval-bridge default registration
+and descriptor invokers. The two are not interchangeable.
+
+Supported forms: scalar literals, `self::`/`parent::`/`ClassName::` scoped
+access with ancestry, global `const` references, `::class`, negation, the
+binary arithmetic and comparison operators, `null`, unit/backed enum cases,
+indexed and associative array literals, and mixed array literals. A mixed
+literal (`ArrayLiteralMixed`) folds each entry in PHP evaluation order: bare
+elements take the next free integer slot, explicit keys are kept, and a
+spread's integer keys are renumbered into a contiguous block starting after the
+destination's highest integer key (`0` when it has none) while its string keys
+are kept in place — matching PHP's compile-time constant evaluation. Array keys
+normalize with PHP's rules (integer strings, `false`, truncated floats, `null`
+to `""`). Unfolding a form outside this list is a compile error naming the
+expression, not a silent fallback.
+
+The folded values emit through `emit_reflection_constant_value_as_mixed`
+(`default_emit.rs`), which materializes a fresh boxed `Mixed` array (recursive,
+mixed payload slots) for array forms. Consumers: `ReflectionParameter`
+defaults, `ReflectionClass::getConstant()` / `getConstants()`,
+`ReflectionClassConstant::getValue()`, and enum backing values.
+
 ## Backend Contract
 
 - PHP-visible behavior belongs in `src/ir_lower/` and `src/codegen/`.
