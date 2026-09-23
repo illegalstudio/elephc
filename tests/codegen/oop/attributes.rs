@@ -1699,6 +1699,66 @@ echo $backed->hasConstant("Ready") ? "Q" : "q";
     assert_eq!(out, "MPSx:ChTwDPAz:IJKLC:RUK:ELNvGFr:BNYQ");
 }
 
+/// Verifies that reflection constant metadata folds array constants with PHP's key rules:
+/// duplicate keys collapse (first position, last value), spread integer keys renumber from
+/// the highest key (negative or not), NAN/INF keys cast to 0, and lists normalize to the
+/// packed shape (regression for #1230).
+#[test]
+fn test_reflection_constant_folder_php_key_rules() {
+    let out = compile_and_run_capture(
+        r#"<?php
+const A = [1, 2];
+const B = [3];
+const DUP = [1 => "a", 1 => "b"];
+const S = [0, ...DUP];
+const NSTR = ["2" => "a", "b"];
+const NEG = [-5 => "a", "b"];
+const NEGSPREAD = [-5 => 1, ...["a" => 2, 0 => 3]];
+const EXPL = [0 => "a", "b"];
+const NANINF = [INF => 1, NAN => 2];
+const SPREADONLY = [1, ...[5, 6]];
+function gA($x = A) {}
+function gB($x = B) {}
+function gS($x = S) {}
+function gNSTR($x = NSTR) {}
+function gNEG($x = NEG) {}
+function gNEGSPREAD($x = NEGSPREAD) {}
+function gEXPL($x = EXPL) {}
+function gNANINF($x = NANINF) {}
+function gSPREADONLY($x = SPREADONLY) {}
+// One literal constructor call per name: the AOT checker requires string literals for
+// reflection owner constructors (dynamic-name lookup is a separate, later gap).
+$p = new ReflectionParameter("gA", 0);
+echo "A:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gB", 0);
+echo "B:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gS", 0);
+echo "S:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gNSTR", 0);
+echo "NSTR:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gNEG", 0);
+echo "NEG:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gNEGSPREAD", 0);
+echo "NEGSPREAD:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gEXPL", 0);
+echo "EXPL:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gNANINF", 0);
+echo "NANINF:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gSPREADONLY", 0);
+echo "SPREADONLY:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "A:[1,2] list=1\nB:[3] list=1\nS:[0,\"b\"] list=1\nNSTR:{\"2\":\"a\",\"3\":\"b\"} list=0\nNEG:{\"-5\":\"a\",\"-4\":\"b\"} list=0\nNEGSPREAD:{\"-5\":1,\"a\":2,\"-4\":3} list=0\nEXPL:[\"a\",\"b\"] list=1\nNANINF:[2] list=1\nSPREADONLY:[1,5,6] list=1\n"
+    );
+}
+
 /// Verifies that `ReflectionClass::getConstant()` and `getConstants()` expose
 /// class, parent, interface, trait, private, and enum-case constants.
 #[test]
@@ -3435,6 +3495,27 @@ echo $c ? json_encode($c->getValue()) : "false", "\n";
         out.stdout,
         "[1,2,3]\n{\"a\":1,\"1\":2}\n[1,[\"deep\"],\"s\",null,{\"m\":true}]\n{\"first\":1,\"b\":7,\"0\":8,\"1\":9}\n5:{\"first\":1,\"b\":7,\"0\":8,\"1\":9}\n{\"first\":1,\"b\":7,\"0\":8,\"1\":9}\n"
     );
+}
+
+/// Pins the known limitation that a parameter defaulted to an enum case reflects as having
+/// no default (PHP reports the default; the enum-case default form is a later gap). A case
+/// nested in an array constant is a separate, later gap and is not exercised here: the
+/// base already fatals registering such a constant with the eval bridge.
+#[test]
+fn test_reflection_parameter_enum_case_defaults_report_unavailable() {
+    let out = compile_and_run_capture(
+        r#"<?php
+enum PinEnum { case Hearts; }
+function withEnumCase($x = PinEnum::Hearts) {}
+echo (new ReflectionParameter("withEnumCase", 0))->isDefaultValueAvailable() ? "y" : "n", "\n";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "n\n");
 }
 
 /// Verifies direct `new ReflectionParameter()` construction for statically known

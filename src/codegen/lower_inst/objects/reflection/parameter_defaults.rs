@@ -217,12 +217,21 @@ pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefau
     match &key.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
-        ExprKind::FloatLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value as i64)),
+        ExprKind::FloatLiteral(value) => {
+            // PHP 8.5 casts NAN and the infinities to the key 0; Rust `as` saturates
+            // infinities to ±i64::MAX, so only finite floats take the truncating cast.
+            let key = if value.is_finite() { *value as i64 } else { 0 };
+            Some(ReflectionDefaultArrayKey::Int(key))
+        }
         ExprKind::StringLiteral(value) => reflection_default_string_array_key(value),
         ExprKind::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value.checked_neg().map(ReflectionDefaultArrayKey::Int),
-            ExprKind::FloatLiteral(value) => Some(ReflectionDefaultArrayKey::Int((-*value) as i64)),
+            ExprKind::FloatLiteral(value) => {
+                let negated = -*value;
+                let key = if negated.is_finite() { negated as i64 } else { 0 };
+                Some(ReflectionDefaultArrayKey::Int(key))
+            }
             _ => None,
         },
         _ => None,
