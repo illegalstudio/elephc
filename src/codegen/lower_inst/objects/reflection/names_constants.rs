@@ -290,6 +290,104 @@ pub(super) fn reflection_constant_value(
             }
             Ok(ReflectionConstantValue::AssocArray(values))
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            let mut values = Vec::with_capacity(entries.len());
+            let mut max_int: i64 = -1;
+            for entry in entries {
+                match entry {
+                    crate::parser::ast::ArrayEntry::Value(expr) => {
+                        let value = reflection_constant_value(
+                            ctx,
+                            current_class,
+                            current_info,
+                            expr,
+                            depth + 1,
+                        )?;
+                        let key = if max_int < 0 { 0 } else { max_int + 1 };
+                        max_int = key;
+                        values.push(ReflectionConstantAssocEntry {
+                            key: ReflectionDefaultArrayKey::Int(key),
+                            value,
+                        });
+                    }
+                    crate::parser::ast::ArrayEntry::Keyed(key_expr, value_expr) => {
+                        let key = reflection_constant_array_key_expr(
+                            ctx,
+                            current_class,
+                            current_info,
+                            key_expr,
+                            depth + 1,
+                        )?;
+                        let value = reflection_constant_value(
+                            ctx,
+                            current_class,
+                            current_info,
+                            value_expr,
+                            depth + 1,
+                        )?;
+                        if let ReflectionDefaultArrayKey::Int(value) = &key {
+                            max_int = std::cmp::max(max_int, *value);
+                        }
+                        values.push(ReflectionConstantAssocEntry { key, value });
+                    }
+                    crate::parser::ast::ArrayEntry::Spread(entry_expr) => {
+                        // The parser stores the whole `...source` expression, so the source
+                        // node itself is one level down.
+                        let source = if let ExprKind::Spread(inner) = &entry_expr.kind {
+                            &**inner
+                        } else {
+                            entry_expr
+                        };
+                        let source_value = reflection_constant_value(
+                            ctx,
+                            current_class,
+                            current_info,
+                            source,
+                            depth + 1,
+                        )?;
+                        let source_entries = match source_value {
+                            ReflectionConstantValue::Array(items) => items
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, value)| {
+                                    (ReflectionDefaultArrayKey::Int(index as i64), value)
+                                })
+                                .collect::<Vec<_>>(),
+                            ReflectionConstantValue::AssocArray(entries) => entries
+                                .into_iter()
+                                .map(|entry| (entry.key, entry.value))
+                                .collect(),
+                            other => {
+                                return Err(CodegenIrError::unsupported(format!(
+                                    "ReflectionClass constant metadata spread of a non-array constant ({})",
+                                    reflection_constant_value_kind(&other)
+                                )))
+                            }
+                        };
+                        // PHP renumbers spread integer keys into a contiguous block starting
+                        // after the destination's highest integer key (0 when it has none);
+                        // string keys are kept in place.
+                        let start = if max_int < 0 { 0 } else { max_int + 1 };
+                        let mut slot: i64 = 0;
+                        for (key, value) in source_entries {
+                            let key = match key {
+                                ReflectionDefaultArrayKey::Int(_) => {
+                                    let key = start + slot;
+                                    slot += 1;
+                                    max_int = key;
+                                    ReflectionDefaultArrayKey::Int(key)
+                                }
+                                ReflectionDefaultArrayKey::Str(name) => {
+                                    ReflectionDefaultArrayKey::Str(name)
+                                }
+                            };
+                            values.push(ReflectionConstantAssocEntry { key, value });
+                        }
+                    }
+                }
+            }
+            Ok(ReflectionConstantValue::AssocArray(values))
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "ReflectionClass constant metadata expression {:?}",
             other
