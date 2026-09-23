@@ -5,25 +5,9 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
-## [0.27.1] - 2026-09-22
-- Added the complete supported Core builtin inventory to both native compilation and `eval()`, including backtraces, error and exception handlers, function argument inspection, symbol and resource inventories, garbage-collector controls, and PHP 8.5 `clone()`, with shared runtime state and ownership across the two backends.
-- Added PHP-compatible `(object)` casts: arrays become `stdClass` property bags, scalars use the `scalar` property, `null` becomes an empty object, and object operands preserve identity.
-- Added class-aware `defined('Class::CONST')`, including inherited constants, enum cases, visibility, `self::`, `parent::`, and runtime `static::` dispatch, plus the `sizeof()` alias for `count()`.
-- Added PHP's full supported `for` initializer and update expression grammar, postfix `++` and `--` on properties and array elements in expression position, and comma-separated property and class-constant declarations.
-- Added enum cases and arbitrarily nested array literals as supported property defaults, including nullable, union, mixed, static, and boxed property storage.
-- Expanded array compatibility with variadic `array_push()`, associative and indexed-string `array_slice()`, self-referential `array_splice()` replacements, and PHP sort flags for `ksort()` and `krsort()`.
-- Added IPv6 support to `inet_pton()` and `inet_ntop()`.
-- Expanded `mkdir()` with permissions and recursive creation, and `file_put_contents()` with flags including correctly ordered `LOCK_EX` handling.
-- Security hardened compiler artifact writes, archive scratch storage, isolated web request body reads, multipart upload-progress parsing, and dependency auditing.
-- Fixed compiler output, linker, and recursion handling: `--emit-asm` no longer depends on runtime assembly, missing or stale bridge archives produce accurate recovery diagnostics, and deeply nested input reaches the configured diagnostic instead of overflowing an embedder stack.
-- Fixed invalid `putenv()` assignments, invalid class lookup arguments, and nullable substring lengths to follow PHP's `ValueError`, `TypeError`, and omitted-argument behavior.
-- Fixed inherited private constructor resolution and diagnostics, reflection visibility and declaration spelling, and constructor metadata across AOT and `eval()`.
-- Fixed parameter-local retyping, inferred scalar union returns, loop-carried nullable storage, guarded reassignment, nullable closure calls, and dynamically reached untyped function return inference.
-- Fixed named keyed spreads through dynamic calls and preserved source-order evaluation, runtime arity checks, by-reference argument storage, and callable descriptor ownership across native and evaluated calls.
-- Fixed array lowering and ownership across boxed, associative, property, static-property, by-reference, and copy-on-write receivers, including `array_fill()`, explicit-key spreads, nested literals, reindexing sorts, `array_keys()`, mutation store-back, `foreach` by reference, and compound assignments.
-- Fixed bounded `implode()` output, numeric-string to integer saturation, JSON encoding of tagged nullable integers, and local values incorrectly treated as caller temporaries at call boundaries.
-- Fixed `curl_exec()` output routing and eval-side curl argument validation.
-- Fixed stale bridge rebuild detection for path dependencies, x86_64 `$argv` layout, boxed `array_push()` return counts, and an `ob_get_status()` ownership leak.
+## [0.27.1] - 2026-09-23
+- Added broader PHP compatibility across Core builtins and `eval()`, object casts, class constants, control-flow and declaration syntax, property defaults, arrays, IPv6, and filesystem APIs; also hardened compiler artifacts, archives, and web request handling.
+- Fixed compiler and runtime correctness across compilation and linking, inheritance and reflection, type inference, dynamic and by-reference calls, array mutation and ownership, numeric and string edge cases, curl, and supported-target behavior.
 
 ## [0.27.0] - 2026-09-11
 - Added PHP's `pcntl` extension to native compilation and `eval()`: `pcntl_fork()`, child waits and status decoding, `pcntl_exec()`, priorities, Linux CPU affinity and namespaces, Darwin QoS, `posix_setpgid()` and `posix_setsid()`, plus PHP-compatible signal registration, dispatch, masks, alarms, async signals, siginfo and synchronous waits on macOS AArch64, Linux AArch64 and Linux x86_64. Elephc's `pcntl_daemon()` is available outside `--strict-php`; PCNTL is refused on iOS targets and in hosted `cdylib`/`staticlib` exports.
