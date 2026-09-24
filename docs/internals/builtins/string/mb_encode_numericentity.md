@@ -2,7 +2,7 @@
 title: "mb_encode_numericentity() - internals"
 description: "Compiler internals for mb_encode_numericentity(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 808
+  order: 838
 ---
 
 ## `mb_encode_numericentity()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_encode_numericentity.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_encode_numericentity.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

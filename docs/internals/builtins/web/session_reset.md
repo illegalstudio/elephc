@@ -2,7 +2,7 @@
 title: "session_reset() - internals"
 description: "Compiler internals for session_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 930
+  order: 991
 ---
 
 ## `session_reset()` - internals

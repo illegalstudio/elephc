@@ -2,7 +2,7 @@
 title: "mb_rtrim()"
 description: "Removes Unicode whitespace or the specified characters from the end."
 sidebar:
-  order: 836
+  order: 866
 ---
 
 ## mb_rtrim()
@@ -23,9 +23,9 @@ Removes Unicode whitespace or the specified characters from the end.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_rtrim.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_rtrim.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_rtrim.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_rtrim.rs)).
 
-_No examples yet - check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

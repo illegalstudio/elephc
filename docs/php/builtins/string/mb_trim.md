@@ -2,7 +2,7 @@
 title: "mb_trim()"
 description: "Removes Unicode whitespace or the specified characters from both ends."
 sidebar:
-  order: 858
+  order: 888
 ---
 
 ## mb_trim()
@@ -23,9 +23,9 @@ Removes Unicode whitespace or the specified characters from both ends.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_trim.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_trim.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_trim.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_trim.rs)).
 
-_No examples yet - check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -2,7 +2,7 @@
 title: "mb_http_output() - internals"
 description: "Compiler internals for mb_http_output(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 824
+  order: 854
 ---
 
 ## `mb_http_output()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_http_output.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_http_output.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

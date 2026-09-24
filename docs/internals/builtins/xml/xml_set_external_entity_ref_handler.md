@@ -2,7 +2,7 @@
 title: "xml_set_external_entity_ref_handler() - internals"
 description: "Compiler internals for xml_set_external_entity_ref_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 956
+  order: 1017
 ---
 
 ## `xml_set_external_entity_ref_handler()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/xml/xml_set_external_entity_ref_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/xml/xml_set_external_entity_ref_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

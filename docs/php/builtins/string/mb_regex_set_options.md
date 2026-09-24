@@ -2,7 +2,7 @@
 title: "mb_regex_set_options()"
 description: "Reads multibyte regex options, or changes them and returns the previous canonical option string."
 sidebar:
-  order: 835
+  order: 865
 ---
 
 ## mb_regex_set_options()
@@ -21,9 +21,9 @@ Reads multibyte regex options, or changes them and returns the previous canonica
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_regex_set_options.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_regex_set_options.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_regex_set_options.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_regex_set_options.rs)).
 
-_No examples yet - check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

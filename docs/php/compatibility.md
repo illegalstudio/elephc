@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **917 / 2169** (42%), classes **142 / 329** (43%), constants **1105 / 3180** (35%).
+Overall coverage: functions **978 / 2169** (45%), classes **142 / 329** (43%), constants **1114 / 3180** (35%).
 
 ## Coverage by PHP module
 
@@ -18,11 +18,11 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 
 | PHP module | Functions | Classes | Constants |
 |---|---|---|---|
-| [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | — |
-| `bz2` | 0 / 10 · 0% | — | — |
-| [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | — | 21 / 21 · 100% |
+| [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | - |
+| `bz2` | 0 / 10 · 0% | - | - |
+| [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | - | 21 / 21 · 100% |
 | `core` | 62 / 62 · 100% | 21 / 40 · 52% | 37 / 89 · 42% |
-| `ctype` | 4 / 11 · 36% | — | — |
+| `ctype` | 4 / 11 · 36% | - | - |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
 | `dba` | 0 / 15 · 0% | 0 / 1 · 0% | - |
@@ -68,8 +68,8 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `soap` | 0 / 2 · 0% | 0 / 8 · 0% | 0 / 81 · 0% |
 | `sockets` | 0 / 37 · 0% | 0 / 2 · 0% | 0 / 243 · 0% |
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
-| [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | — |
-| `sqlite3` | — | 0 / 4 · 0% | 0 / 12 · 0% |
+| [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
+| `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
 | `standard` | 382 / 545 · 70% | 2 / 6 · 33% | 163 / 400 · 41% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |

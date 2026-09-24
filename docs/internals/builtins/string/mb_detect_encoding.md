@@ -2,7 +2,7 @@
 title: "mb_detect_encoding() - internals"
 description: "Compiler internals for mb_detect_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 805
+  order: 835
 ---
 
 ## `mb_detect_encoding()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_detect_encoding.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_detect_encoding.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

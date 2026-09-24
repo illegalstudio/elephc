@@ -260,22 +260,7 @@ fn default_json(default: DefaultSpec) -> Value {
 
 /// Returns the documentation spelling for a neutral PHP type.
 fn type_name(ty: TypeSpec) -> String {
-    match ty {
-        TypeSpec::Int => "int".to_string(),
-        TypeSpec::Float => "float".to_string(),
-        TypeSpec::Str => "string".to_string(),
-        TypeSpec::Bool => "bool".to_string(),
-        TypeSpec::Object => "object".to_string(),
-        TypeSpec::Mixed => "mixed".to_string(),
-        TypeSpec::Void => "void".to_string(),
-        // elephc extensions to the neutral spelling. Without these the generated pages would
-        // document `mixed` for a raw address — the same wrong answer the declaration itself
-        // used to give, moved one step downstream into the docs.
-        TypeSpec::Ptr => "pointer".to_string(),
-        TypeSpec::Callable => "callable".to_string(),
-        TypeSpec::Array => "array".to_string(),
-        TypeSpec::Nullable(inner) => format!("?{}", type_name(*inner)),
-    }
+    ty.to_string()
 }
 
 /// Returns the lowercase documentation spelling for a contract area.

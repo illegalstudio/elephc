@@ -2,7 +2,7 @@
 title: "mb_encode_mimeheader()"
 description: "Encodes a MIME header with language defaults, Base64 or Q transfer, and folded lines."
 sidebar:
-  order: 807
+  order: 837
 ---
 
 ## mb_encode_mimeheader()
@@ -25,9 +25,9 @@ Encodes a MIME header with language defaults, Base64 or Q transfer, and folded l
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_encode_mimeheader.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_encode_mimeheader.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_encode_mimeheader.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_encode_mimeheader.rs)).
 
-_No examples yet - check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -2,7 +2,7 @@
 title: "mb_check_encoding()"
 description: "Checks encoded strings or array keys and values recursively for invalid byte sequences."
 sidebar:
-  order: 798
+  order: 828
 ---
 
 ## mb_check_encoding()
@@ -22,9 +22,9 @@ Checks encoded strings or array keys and values recursively for invalid byte seq
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_check_encoding.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_check_encoding.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_check_encoding.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_check_encoding.rs)).
 
-_No examples yet - check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

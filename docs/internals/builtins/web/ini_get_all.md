@@ -2,7 +2,7 @@
 title: "ini_get_all() - internals"
 description: "Compiler internals for ini_get_all(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 913
+  order: 974
 ---
 
 ## `ini_get_all()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:5071](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L5071) (`ini_get_all`)
+- **Lowering**: [`src/web_prelude/build.rs`:5082](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L5082) (`ini_get_all`)
 - **Function symbol**: `ini_get_all()`
 
 

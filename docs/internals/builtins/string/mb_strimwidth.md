@@ -2,7 +2,7 @@
 title: "mb_strimwidth() - internals"
 description: "Compiler internals for mb_strimwidth(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 842
+  order: 872
 ---
 
 ## `mb_strimwidth()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_strimwidth.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_strimwidth.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

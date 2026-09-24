@@ -2,7 +2,7 @@
 title: "mb_list_encodings() - internals"
 description: "Compiler internals for mb_list_encodings(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 828
+  order: 858
 ---
 
 ## `mb_list_encodings()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_list_encodings.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_list_encodings.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

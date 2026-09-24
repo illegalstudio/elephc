@@ -2,7 +2,7 @@
 title: "mb_ereg_replace_callback()"
 description: "Replaces multibyte regex matches with the string result of a callback receiving all captures."
 sidebar:
-  order: 812
+  order: 842
 ---
 
 ## mb_ereg_replace_callback()
@@ -24,9 +24,9 @@ Replaces multibyte regex matches with the string result of a callback receiving 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_replace_callback.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_replace_callback.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_replace_callback.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_replace_callback.rs)).
 
-_No examples yet - check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

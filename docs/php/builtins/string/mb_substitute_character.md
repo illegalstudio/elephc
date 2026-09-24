@@ -2,7 +2,7 @@
 title: "mb_substitute_character()"
 description: "Reads or changes the replacement codepoint or mode used for invalid or unrepresentable characters."
 sidebar:
-  order: 855
+  order: 885
 ---
 
 ## mb_substitute_character()
@@ -21,9 +21,9 @@ Reads or changes the replacement codepoint or mode used for invalid or unreprese
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_substitute_character.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_substitute_character.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_substitute_character.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_substitute_character.rs)).
 
-_No examples yet - check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

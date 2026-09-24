@@ -2,7 +2,7 @@
 title: "ini_set()"
 description: "Overrides a configuration directive for the rest of the request."
 sidebar:
-  order: 914
+  order: 975
 ---
 
 ## ini_set()
