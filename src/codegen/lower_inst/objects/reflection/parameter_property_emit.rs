@@ -22,33 +22,68 @@ fn reflection_declaring_function_dump(
     name: &str,
 ) -> Option<String> {
     let Some(class_name) = declaring_class_name else {
-        // A supported callable BUILTIN is not a generated function, so `function_by_name` misses
-        // it and the dump used to fall back to the deliberately parameterless metadata --
-        // `(new ReflectionParameter('strlen', 'string'))->getDeclaringFunction()->__toString()`
-        // claimed `Parameters [0]` for a function with one. The same table that decides the
-        // `<internal>` label below carries its signature.
-        let builtin_signature =
-            reflection_builtin_function_signature(name).map(|(_, signature)| signature);
-        let signature = match &builtin_signature {
-            Some(signature) => signature,
-            None => ctx.function_by_name(name)?.signature.as_ref()?,
-        };
+        // A source declaration shadows extension builtins, including in strict-php mode. Consult
+        // the builtin signature table only when no generated function with this name exists.
+        if let Some(function) = ctx.function_by_name(name) {
+            let signature = function.signature.as_ref()?;
+            let parameters = reflection_parameter_members_with_declaring_function(
+                ctx, signature, "", None, None, None, &[], None,
+            )
+            .ok()?;
+            return Some(reflection_function_to_string(
+                name,
+                false,
+                signature.by_ref_return,
+                &parameters,
+                reflection_return_type_metadata(signature).as_ref(),
+            ));
+        }
+
+        let (_, signature) = reflection_builtin_function_signature(name)?;
         let parameters = reflection_parameter_members_with_declaring_function(
-            ctx, signature, "", None, None, None, &[], None,
+            ctx, &signature, "", None, None, None, &[], None,
         )
         .ok()?;
         return Some(reflection_function_to_string(
             name,
-            builtin_signature.is_some(),
+            true,
+            signature.by_ref_return,
             &parameters,
-            reflection_return_type_metadata(signature).as_ref(),
+            reflection_return_type_metadata(&signature).as_ref(),
         ));
     };
-    let info = ctx.module.class_infos.get(class_name)?;
-    let member = reflection_class_method_member(ctx, class_name, info, name)
-        .ok()
-        .flatten()?;
-    Some(reflection_listed_method_to_string(&member))
+
+    if let Some(info) = ctx.module.class_infos.get(class_name) {
+        if let Some(member) = reflection_class_method_member(ctx, class_name, info, name)
+            .ok()
+            .flatten()
+        {
+            return Some(reflection_listed_method_to_string(&member));
+        }
+    }
+    if let Some(interface_name) = resolve_reflection_interface(ctx, class_name) {
+        if let Some(info) = ctx.module.interface_infos.get(interface_name) {
+            if let Some(member) =
+                reflection_interface_method_member(ctx, info, interface_name, name)
+                    .ok()
+                    .flatten()
+            {
+                return Some(reflection_listed_method_to_string(&member));
+            }
+        }
+    }
+    if let Some(trait_name) = resolve_reflection_trait(ctx, class_name) {
+        if let Some(methods) = ctx.module.declared_trait_methods.get(trait_name) {
+            if let Some(member) =
+                reflection_trait_method_member(ctx, methods, trait_name, name)
+                    .ok()
+                    .flatten()
+            {
+                return Some(reflection_listed_method_to_string(&member));
+            }
+        }
+    }
+    None
 }
 
 /// Writes one ReflectionParameter object's private metadata properties.

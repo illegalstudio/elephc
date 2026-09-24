@@ -123,9 +123,12 @@ pub(super) fn reflection_class_method_member(
         .get(&method_key)
         .cloned()
         .unwrap_or_default();
-    let Some(flags) = reflection_method_member_flags(info, &method_key) else {
+    let Some(mut flags) = reflection_method_member_flags(info, &method_key) else {
         return Ok(None);
     };
+    flags.is_inherited = declaring_class_name
+        .as_deref()
+        .is_some_and(|declaring| php_symbol_key(declaring) != php_symbol_key(class_name));
     let required_parameter_count = reflection_required_parameter_count(sig);
     let late_static_return = if flags.is_static {
         info.late_static_static_method_returns.get(&method_key)
@@ -235,7 +238,8 @@ pub(super) fn reflection_interface_method_member(
         .cloned()
         .unwrap_or_else(|| interface_name.to_string());
     let required_parameter_count = reflection_required_parameter_count(sig);
-    let flags = reflection_member_flags(is_static, &Visibility::Public, false, true, false, false);
+    let mut flags = reflection_member_flags(is_static, &Visibility::Public, false, true, false, false);
+    flags.is_inherited = php_symbol_key(&declaring_class_name) != php_symbol_key(interface_name);
     let late_static_return = if is_static {
         info.late_static_static_method_returns.get(&method_key)
     } else {

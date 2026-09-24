@@ -334,7 +334,7 @@ enum ReflectionParameterSelector {
     Position(i64),
 }
 
-/// Boolean metadata exposed by ReflectionMethod and ReflectionProperty predicates.
+/// Method and property flags plus inherited-origin metadata used by Reflection dumps.
 #[derive(Clone, Copy, Default)]
 struct ReflectionMemberFlags {
     is_static: bool,
@@ -346,6 +346,8 @@ struct ReflectionMemberFlags {
     is_readonly: bool,
     is_promoted: bool,
     is_virtual: bool,
+    /// The reflected class inherits this method from another class-like.
+    is_inherited: bool,
 }
 
 /// Runtime class candidate used when object reflection must dispatch by object class id.

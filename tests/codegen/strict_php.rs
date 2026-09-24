@@ -99,6 +99,39 @@ echo ptr_get(41);
     assert_eq!(out, "42");
 }
 
+/// Reflection of a user declaration wins over an Elephc-only builtin signature with the same name.
+#[test]
+fn test_strict_php_reflection_uses_shadowing_user_signature() {
+    let out = compile_strict_cli_and_run(
+        r#"<?php
+function ptr_get(int $left, int $right): int { return $left + $right; }
+$dump = (new ReflectionParameter("ptr_get", 0))->getDeclaringFunction()->__toString();
+echo strpos($dump, "Parameters [2]") !== false ? "2" : "0";
+echo strpos($dump, 'int $left') !== false ? "L" : "l";
+echo strpos($dump, 'int $right') !== false ? "R" : "r";
+echo strpos($dump, "<user>") !== false ? "U" : "u";
+echo (new ReflectionParameter("ptr_get", 0))->getDeclaringFunction()->isInternal() ? "I" : "U";
+"#,
+    );
+    assert_eq!(out, "2LRUU");
+}
+
+/// Reflection keeps a strict-php user declaration's signature when it shadows an extension name.
+#[test]
+fn test_strict_php_reflection_dump_uses_shadowing_user_signature() {
+    let out = compile_strict_cli_and_run(
+        r#"<?php
+function ptr_get(int $left, int $right): int { return $left + $right; }
+$dump = (new ReflectionParameter("ptr_get", 0))->getDeclaringFunction()->__toString();
+echo strpos($dump, "Parameters [2]") !== false ? "2" : "0";
+echo strpos($dump, 'int $left') !== false ? "L" : "l";
+echo strpos($dump, 'int $right') !== false ? "R" : "r";
+echo strpos($dump, "<user>") !== false ? "U" : "u";
+"#,
+    );
+    assert_eq!(out, "2LRU");
+}
+
 /// Verifies every call form dispatches a strict-hidden extension builtin name to the user
 /// function that shadows it, so callable strings cannot pick a different target than a
 /// direct call.

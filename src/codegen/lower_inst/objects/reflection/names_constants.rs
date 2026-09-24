@@ -70,6 +70,7 @@ pub(super) fn reflection_member_flags(
         is_readonly,
         is_promoted,
         is_virtual: false,
+        is_inherited: false,
     }
 }
 
