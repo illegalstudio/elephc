@@ -3295,6 +3295,7 @@ mod tests {
             declared_params: vec![true],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         };
         let invoker = RuntimeCallableInvoker {
             label: "owned_invoker",
@@ -3450,6 +3451,7 @@ mod tests {
             declared_params: vec![true, false, true],
             variadic: Some("rest".to_string()),
             deprecation: None,
+            is_generator: false,
         }
     }
 
@@ -3480,6 +3482,7 @@ mod tests {
             declared_params: vec![true, false],
             variadic: Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string()),
             deprecation: None,
+            is_generator: false,
         }
     }
 

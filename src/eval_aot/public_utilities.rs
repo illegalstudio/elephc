@@ -140,6 +140,7 @@ mod tests {
             declared_params: vec![true],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         };
         if hidden_collector {
             signature.params.push((
