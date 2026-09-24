@@ -185,7 +185,7 @@ pub(crate) fn lower_user_function(
     // `Generator` object itself. The public signature stays `Generator` for
     // callers; only the EIR body return type becomes Mixed so `return $x`
     // lowers to a plain boxed Mixed return instead of a Generator coercion.
-    let body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
+    let body_return_type = generator_body_return_type(body, &eir_signature.return_type, signature.is_generator);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&body_return_type),
