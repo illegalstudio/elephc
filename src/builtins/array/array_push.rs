@@ -37,7 +37,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     for index in 1..cx.args.len() {
         cx.checker.infer_type(&cx.args[index], cx.env)?;
     }
-    if matches!(arr_ty, PhpType::Array(_)) || arr_ty.is_php_array() {
+    if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() {
         Ok(PhpType::Int)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))
