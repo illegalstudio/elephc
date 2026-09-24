@@ -86,3 +86,32 @@ echo $t;
     );
     assert_clean(out, "0");
 }
+
+/// Method materializers also balance tagged Mixed temporaries, including calls with ref params.
+///
+/// These paths build the argument array through the method-specific invoker helpers rather than
+/// the direct-call cleanup planner. Exercise instance, static, and mixed by-ref signatures for
+/// enough iterations that a per-call cell leak is observable.
+#[test]
+fn test_tagged_scalar_method_argument_boxing_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Sink {
+    public function take($value) { return is_int($value) ? 1 : 0; }
+    public static function stake($value) { return is_int($value) ? 1 : 0; }
+    public function withRef(&$out, $value) { $out = 1; return is_int($value) ? 1 : 0; }
+}
+$sink = new Sink();
+$empty = [];
+$total = 0;
+for ($i = 0; $i < 300; $i++) {
+    $total += $sink->take(count($empty) > 0 ? $empty[0] : 7);
+    $total += Sink::stake(count($empty) > 0 ? $empty[0] : 7);
+    $out = 0;
+    $total += $sink->withRef($out, count($empty) > 0 ? $empty[0] : 7);
+}
+echo $total;
+"#,
+    );
+    assert_clean(out, "900");
+}
