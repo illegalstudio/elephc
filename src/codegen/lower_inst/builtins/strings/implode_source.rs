@@ -7,14 +7,14 @@
 //!
 //! Key details:
 //! - The answer is always an OWNED indexed array, so the join site's release is unconditional:
-//!   a hash is converted to its values, and an indexed array is retained.
+//!   hashes become dense value copies and packed arrays widen to boxed Mixed slots.
 //! - Every non-array payload raises PHP's own `TypeError` instead of being read through the
 //!   indexed-array layout. Reference PHP words null differently from the other types, and
 //!   names a boolean by its value.
 
 use super::*;
 
-use crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_array_values;
+use crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_boxed_array_values;
 use crate::codegen::lower_inst::builtins::scalar_metadata::emit_branch_on_gettype_mixed_tag;
 
 /// Reference PHP's wording when the payload is null: the separator's type is named too,
@@ -86,42 +86,21 @@ pub(super) fn emit_boxed_implode_array_type_guard(
     Ok(())
 }
 
-/// Leaves the indexed array `implode()` should join in the first integer argument register,
-/// given a boxed Mixed operand already loaded there.
+/// Leaves an owned dense Mixed array for the join runtime in the first integer argument register.
 ///
-/// The operand's declared type was `mixed` or a union, so nothing static says whether it holds
-/// an indexed array or a hash, and the two need different handling:
+/// The shared boxed-array normalizer converts hash values to dense storage and widens packed
+/// arrays according to their runtime element tag. The outer Mixed cell describes only that the
+/// operand is an array; its payload may still contain raw ints, objects, or strings, so retaining
+/// it as `Array<Mixed>` without checking the packed header would make the renderer read the wrong
+/// slot layout.
 ///
-///   * an indexed array is joined directly, RETAINED so the caller can release unconditionally;
-///   * a hash is converted to its values first, exactly as a statically typed one is, because
-///     the renderers walk a dense payload and a hash has none (PHP joins values, ignoring keys).
-///
-/// The result is owned either way — the hash conversion allocates, the indexed branch increfs —
-/// so the join site releases it with one unconditional decref rather than a runtime flag.
-///
-/// A payload that is no array at all cannot reach here: `emit_boxed_implode_array_type_guard`
-/// already threw for it, at a point where a throw is safe.
+/// The type guard runs before the glue is staged, making the normalizer's invalid-tag path
+/// unreachable for a well-formed value while keeping any actual TypeError catchable.
 pub(super) fn emit_boxed_implode_array_source(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let assoc = ctx.next_label("implode_src_assoc");
-    let done = ctx.next_label("implode_src_done");
-
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_branch_on_gettype_mixed_tag(ctx, 5, &assoc);
-
-    emit_move_payload_to_first_argument(ctx);
-    // The payload is BORROWED from the Mixed cell. Retaining it here is what lets the join site
-    // release its operand unconditionally, the same way it releases the hash conversion.
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
-    abi::emit_jump(ctx.emitter, &done);
-
-    ctx.emitter.label(&assoc);
-    emit_move_payload_to_first_argument(ctx);
-    // `Mixed` values: a hash stores boxed cells, and stamping the copy as such is what routes
-    // it through `__rt_implode`'s per-element cast rather than the raw-slot arms.
-    emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)?;
-
-    ctx.emitter.label(&done);
-    Ok(())
+    emit_loaded_boxed_array_values(
+        ctx,
+        "implode(): Argument #2 ($array) must be of type array",
+    )
 }
 
 /// The register `__rt_mixed_unbox` leaves the unboxed payload (`value_lo`) in.
@@ -130,12 +109,6 @@ fn unboxed_payload_reg(ctx: &FunctionContext<'_>) -> &'static str {
         Arch::AArch64 => "x1",
         Arch::X86_64 => "rdi",
     }
-}
-
-/// Moves the unboxed payload into the first integer argument register.
-fn emit_move_payload_to_first_argument(ctx: &mut FunctionContext<'_>) {
-    let payload = unboxed_payload_reg(ctx);
-    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
 }
 
 /// Raises `implode()`'s `TypeError` naming `type_name`, exactly as php-src words it.
