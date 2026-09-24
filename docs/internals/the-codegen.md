@@ -308,7 +308,7 @@ destination's highest integer key (`0` when it has none) while its string keys
 are kept in place — matching PHP's compile-time constant evaluation. Array keys
 normalize with PHP's rules (integer strings, `false`, truncated floats, `null`
 to `""`). Unfolding a form outside this list is a compile error naming the
-expression, not a silent fallback.
+unsupported form, not a silent fallback.
 
 The folded values emit through `emit_reflection_constant_value_as_mixed`
 (`default_emit.rs`), which materializes a fresh boxed `Mixed` array (recursive,

@@ -25,7 +25,7 @@ pub(super) fn reflection_parameter_default_value(
         return Ok(Some(value));
     }
     match &default.kind {
-        ExprKind::ConstRef { .. }
+        ExprKind::ConstRef(_)
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
@@ -131,7 +131,7 @@ pub(super) fn reflection_parameter_default_non_object_value(
         return Ok(Some(value));
     }
     match &default.kind {
-        ExprKind::ConstRef { .. }
+        ExprKind::ConstRef(_)
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
