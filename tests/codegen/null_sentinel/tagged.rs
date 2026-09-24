@@ -7,11 +7,12 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Every fixture is compiled with `compile_and_run_tagged` (forces `NullRepr::Tagged`);
-//!   expected outputs are PHP 8.4 cross-checked. The legacy sentinel default is covered by
-//!   the rest of the suite and must keep passing unchanged.
+//! - Fixtures use `NullRepr::Tagged`; most go through `compile_and_run_tagged`, while exception
+//!   ownership checks also enable heap debugging. Expected outputs are PHP cross-checked.
+//!   The legacy sentinel default is covered by the rest of the suite and must keep passing.
 
 use super::*;
+use std::fs;
 
 /// The integer PHP_INT_MAX-1 (== the legacy null sentinel bit pattern) must echo as itself
 /// under the tagged representation.
@@ -475,4 +476,63 @@ echo "\n";
 "#,
     );
     assert_eq!(out, "5|7|\n5|'x'|\n");
+}
+
+/// Compiles a tagged-null fixture with heap debug enabled for exception-unwind ownership checks.
+fn compile_and_run_tagged_with_heap_debug(source: &str) -> crate::support::ProgramOutput {
+    let dir = make_cli_test_dir("elephc_tagged_heap_debug");
+    let (user_asm, runtime_asm, requirements) = compile_source_to_asm_with_defines_repr(
+        source,
+        &dir,
+        &std::collections::HashSet::new(),
+        8_388_608,
+        false,
+        true,
+        elephc::codegen::NullRepr::Tagged,
+    );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(dir);
+    output
+}
+
+/// A caught throw releases a tagged nullable-int box passed to a mixed parameter.
+///
+/// The box is a caller-owned temporary and its call-operand owner is published before the callee
+/// can throw. Same-frame catch cleanup must retire that owner even though normal post-call cleanup
+/// is skipped (regression probe for #1122's reported leak).
+#[test]
+fn test_tagged_mixed_argument_box_is_released_when_the_callee_throws() {
+    let out = compile_and_run_tagged_with_heap_debug(
+        r#"<?php
+function throwsAfterReadingMixed(mixed $value): void {
+    echo $value;
+    throw new RuntimeException("stop");
+}
+function catchRepeated(?int $value): int {
+    $caught = 0;
+    for ($i = 0; $i < 32; $i++) {
+        try { throwsAfterReadingMixed($value); }
+        catch (RuntimeException $error) { $caught++; }
+    }
+    return $caught;
+}
+echo "|", catchRepeated(7);
+"#,
+    );
+
+    assert!(out.success, "program failed: stdout={:?} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("|{}32", "7".repeat(32)));
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }
