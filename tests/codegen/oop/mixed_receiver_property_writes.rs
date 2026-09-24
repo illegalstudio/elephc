@@ -46,21 +46,38 @@ var_dump($t->n);
 /// The property's own declaration does not decide this: a typed `string`, an untyped property and
 /// a `float` all took the same discarded path.
 #[test]
-fn test_mixed_receiver_writes_every_declared_property_kind() {
+fn test_mixed_receiver_writes_typed_string_and_float_properties() {
     let out = compile_and_run(
         r#"<?php
-class T { public string $s = "a"; public $u = 1; public float $f = 1.5; }
+class T { public string $s = "a"; public float $f = 1.5; }
 function ws(mixed $o): void { $o->s = "z"; }
-function wu(mixed $o): void { $o->u = 9; }
 function wf(mixed $o): void { $o->f = 2.5; }
 $t = new T();
 ws($t);
-wu($t);
 wf($t);
-var_dump($t->s, $t->u, $t->f);
+var_dump($t->s, $t->f);
 "#,
     );
-    assert_eq!(out, "string(1) \"z\"\nint(9)\nfloat(2.5)\n");
+    assert_eq!(out, "string(1) \"z\"\nfloat(2.5)\n");
+}
+
+/// Refined untyped slots fail closed when their runtime storage representation is ambiguous.
+#[test]
+fn test_mixed_receiver_write_refuses_an_untyped_refined_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class T { public $u = 1; }
+function write(mixed $o): void { $o->u = 9; }
+        write(new T());
+"#,
+    );
+    let diagnostic = format!("{}{}", out.stdout, out.stderr);
+    assert!(!out.success, "untyped refined property write unexpectedly succeeded");
+    assert!(
+        diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property T::$u"),
+        "output: {}",
+        diagnostic
+    );
 }
 
 /// Two classes declaring the same property name is what makes this a runtime dispatch rather than
@@ -215,4 +232,33 @@ var_dump($a, $t->n);
 "#,
     );
     assert_eq!(out, "int(8)\nint(9)\n");
+}
+
+/// A runtime class-id match still enforces property visibility from the current lexical scope.
+#[test]
+fn test_mixed_receiver_write_does_not_bypass_private_property_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    private int $secret = 1;
+    public function writeInside(mixed $o): void { $o->secret = 7; }
+    public function readSecret(): int { return $this->secret; }
+}
+function writeOutside(mixed $o): void { $o->secret = 9; }
+$t = new T();
+try { writeOutside($t); } catch (Error $e) { echo "blocked|"; }
+$t->writeInside($t);
+echo $t->readSecret();
+"#,
+    );
+    assert_eq!(out, "blocked|7");
+}
+
+#[test]
+fn test_example_mixed_property_write_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../../../examples/mixed-property-write/main.php"));
+    assert_eq!(
+        out,
+        "attempts: 3\nprivate write blocked\ntoken: kept\n"
+    );
 }
