@@ -343,7 +343,10 @@ pub(super) fn assoc_array_literal_type_from_entries(
         let next = match entry {
             ArrayEntry::Spread(inner) => {
                 match infer_expr_type_syntactic(inner).codegen_repr() {
-                    PhpType::Array(elem) => elem.codegen_repr(),
+                    // Indexed sources pass through ArrayToHash before HashSpread; that
+                    // conversion stores their values as boxed Mixed cells, so the destination
+                    // hash must use the same value layout even when the source is homogeneous.
+                    PhpType::Array(_) => PhpType::Mixed,
                     PhpType::AssocArray { value, .. } => value.codegen_repr(),
                     _ => PhpType::Mixed,
                 }
@@ -453,15 +456,9 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     if ctx.value_is_owning_temporary(spread_source) {
         crate::ir_lower::ownership::release_if_owned(ctx, spread_source, Some(span));
     }
-    // The promoted hash is a DIFFERENT value from the one the caller handed us, so releasing it
-    // above says nothing about the original array. An owning temporary source -- a call result, a
-    // nested literal -- has no other owner once the promotion has consumed the reference the
-    // acquire added, so it is released here, exactly as the indexed sibling releases its own
-    // source. Without this, `[...f(), "k" => 1]` leaked one array per evaluation while the
-    // borrowed-local form stayed clean.
-    if spread_source.value != source.value && ctx.value_is_owning_temporary(source) {
-        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
-    }
+    // Indexed sources are consumed by ArrayToHash itself, so only the promoted hash is released
+    // here. Releasing the original source again double-decrements owning temporaries after a
+    // spread followed by another insertion.
 }
 
 /// Lowers an indexed-array spread by appending each source element to the destination.
