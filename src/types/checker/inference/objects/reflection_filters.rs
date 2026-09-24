@@ -19,8 +19,9 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
-use crate::types::call_args::expand_static_assoc_spread_args;
+use crate::types::call_args::plan_call_args;
 use crate::types::checker::Checker;
+use crate::types::FunctionSig;
 
 /// The synthesized Reflection classes that carry a `getAttributes()` method over `__attrs`.
 const REFLECTION_ATTRIBUTE_OWNERS: [&str; 10] = [
@@ -37,48 +38,43 @@ const REFLECTION_ATTRIBUTE_OWNERS: [&str; 10] = [
 ];
 
 /// What the call site says about `getAttributes()`'s `$flags`, as far as the AST can show it.
-enum FilterFlags<'a> {
+enum FilterFlags {
     /// The call passes no `$flags` at all, so PHP's default `0` applies.
     Absent,
     /// The expression passed for `$flags`.
-    Given(&'a Expr),
+    Given(Expr),
     /// A spread hides the argument list: `getAttributes(...$args)` is one AST argument whose
     /// contents are a runtime array, so nothing here can tell `$flags` from absent.
     Hidden,
+    /// The shared planner rejected the call; ordinary call validation owns its diagnostic.
+    Invalid,
 }
 
 /// Returns the `$name` and `$flags` arguments of a `getAttributes()` call.
 ///
-/// Named arguments are matched by parameter name, since `getAttributes(flags: 2, name: $n)` puts
-/// `$flags` at index 0. The caller expands static associative spreads first, so only a spread
-/// whose contents are a runtime array still reaches the `Hidden` arm — that one genuinely cannot
-/// be told from a short call.
-fn get_attributes_filter_arguments(args: &[Expr]) -> (Option<&Expr>, FilterFlags<'_>) {
-    let mut name = None;
-    let mut flags = FilterFlags::Absent;
-    let mut positional = 0usize;
-    for arg in args {
-        match &arg.kind {
-            ExprKind::Spread(_) => return (None, FilterFlags::Hidden),
-            ExprKind::NamedArg {
-                name: param,
-                value,
-            } => match param.as_str() {
-                "name" => name = Some(value.as_ref()),
-                "flags" => flags = FilterFlags::Given(value.as_ref()),
-                _ => {}
-            },
-            _ => {
-                match positional {
-                    0 => name = Some(arg),
-                    1 => flags = FilterFlags::Given(arg),
-                    _ => {}
-                }
-                positional += 1;
-            }
-        }
+/// The shared call plan puts named values into signature order and expands static associative
+/// spreads. A dynamic spread remains `Hidden` because it can supply either filter at run time.
+fn get_attributes_filter_arguments(
+    sig: &FunctionSig,
+    args: &[Expr],
+    span: Span,
+) -> (Option<Expr>, FilterFlags) {
+    let Ok(plan) = plan_call_args(sig, args, span, false, false) else {
+        // The ordinary call checker owns PHP's diagnostics. This guard only inspects a valid plan.
+        return (None, FilterFlags::Invalid);
+    };
+    if plan.has_spread_args() {
+        return (None, FilterFlags::Hidden);
     }
-    (name, flags)
+    let normalized = plan.normalized_args();
+    (
+        normalized.first().cloned(),
+        normalized
+            .get(1)
+            .cloned()
+            .map(FilterFlags::Given)
+            .unwrap_or(FilterFlags::Absent),
+    )
 }
 
 impl Checker {
@@ -128,11 +124,17 @@ impl Checker {
         let Some(owner) = self.reflection_attribute_owner(class_name, method_key) else {
             return Ok(());
         };
-        // The shared expander turns `...['name' => M::class, 'flags' => 0]` into named arguments,
-        // exactly as the call planner does before anything else reads the list. A spread whose
-        // contents are a runtime array is left alone and still reads as `Hidden`.
-        let expanded = expand_static_assoc_spread_args(args);
-        let (name, flags) = get_attributes_filter_arguments(&expanded);
+        let Some(sig) = self
+            .classes
+            .get(owner)
+            .and_then(|class_info| class_info.methods.get(method_key))
+        else {
+            return Ok(());
+        };
+        // Consume the shared plan so named arguments and static associative spreads use exactly
+        // the same parameter mapping as ordinary calls. A dynamic spread remains Hidden because
+        // it can supply either filter at run time.
+        let (name, flags) = get_attributes_filter_arguments(sig, args, span);
         let flags = match flags {
             FilterFlags::Absent => return Ok(()),
             // A named `flags:` can stand alone, and then `$name` takes its `null` default.
@@ -144,17 +146,21 @@ impl Checker {
             }
             // A spread hides the name as well, so nothing here can conclude it is null.
             FilterFlags::Hidden => None,
+            FilterFlags::Invalid => return Ok(()),
         };
         // PHP returns every attribute when `$name` is null, whatever `$flags` says, so a null
         // name needs no subclass test and the flag is inert.
-        if name.is_some_and(|name| matches!(name.kind, ExprKind::Null)) {
+        if name
+            .as_ref()
+            .is_some_and(|name| matches!(name.kind, ExprKind::Null))
+        {
             return Ok(());
         }
         let folds_to_zero = |expr: &Expr| {
             matches!(expr.kind, ExprKind::BoolLiteral(false))
                 || self.eval_static_int_expr(expr) == Some(0)
         };
-        if flags.is_some_and(folds_to_zero) {
+        if flags.as_ref().is_some_and(folds_to_zero) {
             return Ok(());
         }
         let receiver = match class_name {
