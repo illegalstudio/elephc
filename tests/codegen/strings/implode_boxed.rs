@@ -97,10 +97,11 @@ echo implode(",", (array) bools()), ";";
 echo implode(",", (array) strs()), ";";
 echo implode(",", (array) none()), ";";
 echo implode(",", (array) one()), ";";
-echo implode(",", (array) signed());
+echo ImPlOdE(",", (array) signed()), ";";
+echo JoIn((array) bools());
 "#,
     );
-    assert_eq!(out, "1,2;1.5,2.5;1,;a,b;;42;-7,0,7");
+    assert_eq!(out, "1,2;1.5,2.5;1,;a,b;;42;-7,0,7;1");
 }
 
 /// Verifies a `foreach` value bound from a nested container renders (issue #1081).
