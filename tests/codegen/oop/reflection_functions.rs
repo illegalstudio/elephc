@@ -375,6 +375,7 @@ echo $declaring->returnsReference() ? "y" : "n";
     );
 
     assert_eq!(out, "ynyny");
+}
 
 /// Verifies a Reflection object codegen builds INSIDE another one can be stringified.
 ///
@@ -570,3 +571,4 @@ echo get_class($f), "|", gettype((string) $f);
     );
 
     assert_eq!(out, "ReflectionFunction|string");
+}
