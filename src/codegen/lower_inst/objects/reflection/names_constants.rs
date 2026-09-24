@@ -403,13 +403,19 @@ fn reflection_constant_array_entries_fold(
                 };
                 // PHP renumbers spread integer keys into a contiguous block starting
                 // after the destination's highest integer key (0 when it has none);
-                // string keys are kept in place.
-                let start = next_reflection_constant_int_key(max_int)?;
+                // string keys are kept in place. The start is computed lazily so a spread
+                // whose keys need no slot (all strings, or empty) cannot trigger a spurious
+                // overflow when the destination's highest key is i64::MAX.
+                let mut start: Option<i64> = None;
                 let mut slot: i64 = 0;
                 for (key, value) in source_entries {
                     let key = match key {
                         ReflectionDefaultArrayKey::Int(_) => {
+                            if start.is_none() {
+                                start = Some(next_reflection_constant_int_key(max_int)?);
+                            }
                             let key = start
+                                .unwrap()
                                 .checked_add(slot)
                                 .ok_or_else(|| {
                                     CodegenIrError::unsupported(
@@ -650,8 +656,10 @@ pub(super) fn reflection_scoped_constant_value(
 
 /// Resolves and evaluates one global constant reference for static Reflection metadata.
 ///
-/// `span` is the reference's own span so a failure inside the constant's expression still
-/// points at the reference site; the stored table carries no span of its own.
+/// The stored table carries no span of its own, so the synthesized expression takes
+/// `span` — the reference site. Nested expressions inside the stored kind keep their
+/// definition-site spans; only failures attributed to the top-level expression point at
+/// the reference.
 pub(super) fn reflection_global_constant_value(
     ctx: &FunctionContext<'_>,
     name: &crate::names::Name,
