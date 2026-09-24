@@ -339,7 +339,10 @@ fn reflection_constant_array_entries_fold(
                     expr,
                     depth + 1,
                 )?;
-                let key = next_reflection_constant_int_key(max_int)?;
+                let key = next_reflection_constant_int_key(
+                    max_int,
+                    crate::codegen::compile_php_version(),
+                )?;
                 max_int = Some(key);
                 values.push(ReflectionConstantAssocEntry {
                     key: ReflectionDefaultArrayKey::Int(key),
@@ -412,7 +415,10 @@ fn reflection_constant_array_entries_fold(
                     let key = match key {
                         ReflectionDefaultArrayKey::Int(_) => {
                             if start.is_none() {
-                                start = Some(next_reflection_constant_int_key(max_int)?);
+                                start = Some(next_reflection_constant_int_key(
+                                    max_int,
+                                    crate::codegen::compile_php_version(),
+                                )?);
                             }
                             let key = start
                                 .unwrap()
@@ -457,9 +463,15 @@ fn reflection_constant_array_entries_fold(
 
 /// Returns the next free integer slot — `max + 1` for some highest key, `0` when the
 /// destination holds no integer key yet — or a compile error on overflow.
-fn next_reflection_constant_int_key(max_int: Option<i64>) -> Result<i64> {
+fn next_reflection_constant_int_key(
+    max_int: Option<i64>,
+    php_version: crate::php_version::PhpVersion,
+) -> Result<i64> {
     match max_int {
         None => Ok(0),
+        Some(max_int) if max_int < 0 && php_version < crate::php_version::PhpVersion::Php83 => {
+            Ok(0)
+        }
         Some(max_int) => max_int
             .checked_add(1)
             .ok_or_else(|| {
@@ -826,4 +838,3 @@ pub(super) fn reflection_enum_case_backing_value(case: &EnumCaseInfo) -> Option<
         EnumCaseValue::Str(value) => Some(ReflectionConstantValue::Str(value.clone())),
     }
 }
-
