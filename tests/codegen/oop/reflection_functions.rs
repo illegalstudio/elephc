@@ -493,6 +493,69 @@ echo get_class($f), "|", gettype((string) $f);
     assert_eq!(out, "ReflectionFunction|string");
 }
 
+/// Verifies a getter name formed from literal fragments still lowers its companion object.
+///
+/// The complete getter does not appear in string data: the method name is assembled by runtime
+/// concatenation, so reachability must combine literal fragments before giving up (#1252).
+#[test]
+fn test_declaring_function_through_concatenated_dynamic_method_name_stringifies() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$getter = "get" . "DeclaringFunction";
+$f = $p->$getter();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string");
+}
+
+/// Verifies the legacy parameter class getter lowers its materialized result without naming it.
+#[test]
+fn test_reflection_parameter_class_getter_object_lowers_without_explicit_type_name() {
+    let out = compile_and_run(
+        r#"<?php
+class GetterClassDependency {}
+function getterClassSurface(GetterClassDependency $value): void {}
+$parameter = new ReflectionParameter("getterClassSurface", "value");
+$class = $parameter->getClass();
+echo get_class($class), ":", gettype((string) $class);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionClass:string");
+}
+
+/// Verifies type objects returned by Reflection getters need no explicit type-name references.
+///
+/// These slots contain freshly materialized `ReflectionType` objects, but the PHP program never
+/// names their concrete synthetic classes or narrows by `instanceof` (#1252).
+#[test]
+fn test_reflection_type_getter_objects_lower_without_explicit_type_names() {
+    let out = compile_and_run(
+        r#"<?php
+interface GetterTypeA {}
+interface GetterTypeB {}
+class GetterTypeBoth implements GetterTypeA, GetterTypeB {}
+function getterTypeSurface(int|string $value, GetterTypeA&GetterTypeB $both): int|string { return $value; }
+class GetterTypeProperty { public int|string $value; }
+$parameterUnion = (new ReflectionParameter("getterTypeSurface", "value"))->getType();
+$parameterIntersection = (new ReflectionParameter("getterTypeSurface", "both"))->getType();
+$returnType = (new ReflectionFunction("getterTypeSurface"))->getReturnType();
+$settableType = (new ReflectionProperty(GetterTypeProperty::class, "value"))->getSettableType();
+foreach ([$parameterUnion, $parameterIntersection, $returnType, $settableType] as $type) {
+    echo get_class($type), ":", gettype((string) $type), "|";
+}
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "ReflectionUnionType:string|ReflectionIntersectionType:string|ReflectionUnionType:string|ReflectionUnionType:string|"
+    );
+}
+
 /// Verifies the declaring function reached through a method name held in a variable can be
 /// stringified — the third route that is not a literal `MethodCall` (#1229).
 #[test]
