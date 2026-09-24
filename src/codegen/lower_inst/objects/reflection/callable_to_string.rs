@@ -25,6 +25,7 @@ use super::{
     ReflectionParameterDefaultValue, ReflectionParameterMember, ReflectionParameterTypeMetadata,
 };
 use crate::names::is_generated_local_name;
+use elephc_builtin_contract::PhpModule;
 
 use super::class_traits::reflection_class_like_is_internal;
 use super::property_members::{reflection_property_visibility_label, reflection_type_metadata_to_string};
@@ -32,6 +33,7 @@ use super::property_members::{reflection_property_visibility_label, reflection_t
 /// Renders `ReflectionMethod::__toString()` for one reflected method.
 pub(super) fn reflection_method_to_string(
     name: &str,
+    declaring_class_name: Option<&str>,
     flags: ReflectionMemberFlags,
     prototype_class_name: Option<&str>,
     inherited_class_name: Option<&str>,
@@ -53,7 +55,10 @@ pub(super) fn reflection_method_to_string(
     parts.push(reflection_property_visibility_label(flags));
     parts.push("method");
 
-    let mut origin_parts = vec![reflection_origin_label(is_internal).to_string()];
+    let module = declaring_class_name
+        .and_then(elephc_builtin_contract::lookup_class)
+        .map(|class| class.module);
+    let mut origin_parts = vec![reflection_origin_label(is_internal, module)];
     if let Some(class_name) = inherited_class_name {
         origin_parts.push(format!("inherits {class_name}"));
     }
@@ -88,25 +93,24 @@ pub(super) fn reflection_function_to_string(
     } else {
         normalized_name.to_string()
     };
+    let module = elephc_builtin_contract::lookup(name).map(|contract| contract.module);
     let header = format!(
         "Function [ <{}> function {} ]",
-        reflection_origin_label(is_internal),
+        reflection_origin_label(is_internal, module),
         display_name
     );
     reflection_callable_body(&header, parameters, return_type)
 }
 
-/// Returns the origin word PHP opens a dump header with.
-///
-/// PHP names the extension for an internal callable — `<internal:Core>` for `strlen`,
-/// `<internal:standard>` for `count`, `<internal:json>` for `json_encode`, measured on 8.5.10 —
-/// and the metadata reaching this renderer does not say which one. `<user>` would be worse than
-/// an incomplete `<internal>`: the same object's `isInternal()` answers true.
-fn reflection_origin_label(is_internal: bool) -> &'static str {
-    if is_internal {
-        "internal"
-    } else {
-        "user"
+/// Returns PHP's callable origin label, including the owning module when it is known.
+fn reflection_origin_label(is_internal: bool, module: Option<PhpModule>) -> String {
+    if !is_internal {
+        return "user".to_string();
+    }
+    match module {
+        Some(PhpModule::Core) => "internal:Core".to_string(),
+        Some(module) => format!("internal:{}", module.php_name()),
+        None => "internal".to_string(),
     }
 }
 
@@ -314,6 +318,7 @@ pub(super) fn reflection_listed_method_to_string(member: &ReflectionListedMember
     };
     reflection_method_to_string(
         &member.name,
+        member.declaring_class_name.as_deref(),
         member.flags,
         member
             .prototype_member
