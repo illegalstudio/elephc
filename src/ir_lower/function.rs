@@ -1133,6 +1133,7 @@ pub(crate) fn lower_clone_override_function(
         declared_params: vec![false; params.len()],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     if module
         .functions
@@ -1315,6 +1316,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+        is_generator: false,
         };
         function.source_signature = Some(source_signature(&function_name, &signature));
         function.signature = Some(eir_runtime_metadata_signature(&signature));
@@ -2216,7 +2218,8 @@ fn closure_signature_from_ast(
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
-    if crate::types::checker::yield_validation::body_contains_yield(body) {
+    signature.is_generator = crate::types::checker::yield_validation::body_contains_yield(body);
+    if signature.is_generator {
         signature.return_type = PhpType::Object("Generator".to_string());
         return signature;
     }
