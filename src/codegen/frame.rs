@@ -568,6 +568,10 @@ pub(super) fn emit_exception_cleanup_callback(
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
     ctx.emitter.blank();
     ctx.emitter.comment("exceptional PHP frame cleanup callback");
+    if is_destructor(ctx.function) {
+        destructor_cleanup::emit_callback(ctx, entry_label);
+        return;
+    }
     ctx.emitter.label_global(&callback);
     ctx.unwinding_cleanup = true;
     match ctx.emitter.target.arch {
@@ -645,6 +649,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_static_property_cleanup(ctx);
     if module_uses_resource_inventory_cleanup(ctx.module) {
         abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
+    }
+    if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_release_catalog");
     }
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
@@ -756,9 +763,7 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
         if ctx.module.extern_globals.contains_key(&name) {
             continue;
         }
-        let ty = if name == "argv" {
-            argv_array_type()
-        } else if ctx.module.web && crate::superglobals::is_superglobal(&name) {
+        let ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
             crate::superglobals::superglobal_type().codegen_repr()
         } else {
             PhpType::Mixed
