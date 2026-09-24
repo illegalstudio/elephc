@@ -331,6 +331,8 @@ echo json_encode($n), "|", json_encode($n), "|", $n;
     );
 
     assert_eq!(out, "42|42|42");
+}
+
 /// A tagged nullable int reaching a `mixed` PARAMETER must be boxed by the call ABI.
 ///
 /// It was not. `emit_box_current_value_as_mixed` matched on the DECLARED type, where
