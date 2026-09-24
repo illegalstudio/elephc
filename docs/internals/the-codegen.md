@@ -102,6 +102,24 @@ builtin names are absent from backend dispatch. Only compiler-resident language
 constructs such as `eval`, `isset`, `unset`, `empty`, `exit`, and `die` retain the
 separate `LanguageConstructCall` path.
 
+## Reflection Reachability
+
+Synthetic builtin Reflection classes are lowered from EIR reachability rather than emitted as a
+fixed full surface in every native program. The EIR lowerer collects Reflection classes found in
+value types, object construction, static calls, and method-dispatch candidates, then adds their
+parents and implementation owners before lowering concrete methods and property-initializer
+thunks. Dynamic eval keeps the full Reflection surface because its class and method names can be
+resolved only at runtime.
+
+Some Reflection getters materialize a new Reflection object into a `mixed` property slot instead
+of emitting an EIR object-construction operation. For those slots, the lowerer also includes the
+materialized class when the holder is reachable and the getter name is present in the module's
+string data. It repeats this companion scan to a fixed point because a returned Reflection object
+can itself hold another materialized Reflection object. This keeps getter-returned objects' method
+and `__toString` tables available without pulling the entire Reflection hierarchy into programs
+that never call those getters. Getter names assembled only at runtime are outside this static
+reachability signal.
+
 ## Eval Lowering Boundary
 
 Literal `eval()` calls reach EIR as `EvalLiteralCall`. The shared planner in
