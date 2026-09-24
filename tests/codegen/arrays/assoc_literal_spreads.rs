@@ -67,6 +67,18 @@ foreach ($after as $k => $v) { echo $k, "=", $v, ";"; }
     assert_eq!(out, "34|c=8;0=1;1=2;");
 }
 
+/// An unkeyed element after a spread in an already-associative literal uses PHP's runtime next key.
+#[test]
+fn test_unkeyed_element_after_associative_spread_uses_runtime_next_key() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["c" => 8, ...[3, 4], 5];
+echo count($a), "|", implode(",", array_keys($a)), "|", $a[0], $a[1], $a[2], $a["c"];
+"#,
+    );
+    assert_eq!(out, "4|c,0,1,2|3458");
+}
+
 /// A literal spread source rather than a variable: the source is an owning temporary, so the
 /// consuming promotion below must NOT be handed an extra reference.
 #[test]
