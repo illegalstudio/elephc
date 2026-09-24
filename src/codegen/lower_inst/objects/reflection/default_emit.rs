@@ -66,6 +66,10 @@ pub(super) fn emit_reflection_constant_array_to_result(
 }
 
 /// Allocates and populates an associative array whose values hold boxed constant values.
+///
+/// The per-entry push is consumed by `emit_reflection_assoc_array_default_insert` (it pops
+/// the stacked array pointer into the hash-set register), so the loop is stack-balanced
+/// without a final pop, unlike the indexed emitter whose append helper re-pushes.
 pub(super) fn emit_reflection_constant_assoc_array_to_result(
     ctx: &mut FunctionContext<'_>,
     entries: &[ReflectionConstantAssocEntry],
