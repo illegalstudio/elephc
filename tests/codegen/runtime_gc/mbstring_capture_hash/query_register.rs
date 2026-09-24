@@ -133,15 +133,8 @@ fn registration_shim(plan: &str, count: usize) -> String {
         return format!(r#"
     sub sp, sp, #64
     stp x29, x30, [sp, #48]
-    mov x1, x0
-    mov x0, #5
-    mov x2, #0
-    bl __rt_mixed_from_value
-    str x0, [sp]
     bl __rt_reference_new
     str x0, [sp, #8]
-    ldr x0, [sp]
-    bl __rt_decref_any
     mov x0, #0
     ldr x1, [sp, #8]
     {steps}
@@ -177,14 +170,9 @@ fn registration_shim(plan: &str, count: usize) -> String {
     push rbp
     mov rbp, rsp
     sub rsp, 64
-    mov rax, 5
-    xor esi, esi
-    call __rt_mixed_from_value
-    mov QWORD PTR [rsp + 8], rax
+    mov rax, rdi
     call __rt_reference_new
     mov QWORD PTR [rsp + 16], rax
-    mov rax, QWORD PTR [rsp + 8]
-    call __rt_decref_any
     xor edi, edi
     mov rsi, QWORD PTR [rsp + 16]
     lea rdx, [rip + _query_register_{plan}]

@@ -2029,7 +2029,6 @@ fn emit_aarch64_ref_arg_cells(
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             slot.raw_refcounted_owned = true;
             emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
-            abi::emit_call_label(emitter, "__rt_incref");
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -2071,7 +2070,6 @@ fn emit_x86_64_ref_arg_cells(
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             slot.raw_refcounted_owned = true;
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
-            abi::emit_call_label(emitter, "__rt_incref");
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);

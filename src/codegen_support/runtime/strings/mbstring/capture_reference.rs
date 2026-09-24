@@ -12,11 +12,48 @@
 //! - Shared indexed payloads still require an identity-preserving representation adapter.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 
 /// Emits graph filling and per-entry live-reference selection for associative capture output.
 pub(super) fn emit(emitter: &mut Emitter) {
+    emit_reference_child_slot(emitter);
     emit_store(emitter);
     emit_fill(emitter);
+}
+
+/// Resolves native ref-cells and eval's persistent Mixed wrappers to one writable child slot.
+pub(super) fn emit_reference_child_slot(emitter: &mut Emitter) {
+    let arm = emitter.target.arch == Arch::AArch64;
+    let name = "__rt_mbstring_reference_child_slot";
+    emitter.label_global(name);
+    if arm {
+        emitter.instruction(&format!("cbz x0, {name}_invalid"));             // reject a missing reference before reading its allocation header
+        emitter.instruction("ldurb w9, [x0, #-8]");                          // inspect the managed heap kind of the outer owner
+        emitter.instruction(&format!("cmp w9, #{REFERENCE_CELL_HEAP_KIND}")); // native aliases use a two-word ref-cell
+        emitter.instruction(&format!("b.eq {name}_valid"));                    // the first word is already the writable child slot
+        emitter.instruction("ldr x9, [x0]");                                  // eval references use a boxed Mixed wrapper
+        emitter.instruction("cmp x9, #7");                                    // require the nested Mixed tag
+        emitter.instruction(&format!("b.ne {name}_invalid"));                 // reject ordinary PHP values
+        emitter.instruction("ldr x9, [x0, #16]");                             // inspect eval's persistent-reference marker
+        emitter.instruction("cmp x9, #1");                                    // reject detached nested boxes
+        emitter.instruction(&format!("b.ne {name}_invalid"));
+        emitter.instruction("add x0, x0, #8");                                // return the wrapper's writable child slot
+    } else {
+        emitter.instruction("test rax, rax");                                 // reject a missing reference
+        emitter.instruction(&format!("jz {name}_invalid"));
+        emitter.instruction(&format!("cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}")); // recognize native ref-cells
+        emitter.instruction(&format!("je {name}_valid"));
+        emitter.instruction("cmp QWORD PTR [rax], 7");                        // require an eval nested Mixed wrapper
+        emitter.instruction(&format!("jne {name}_invalid"));
+        emitter.instruction("cmp QWORD PTR [rax + 16], 1");                   // require a persistent eval reference
+        emitter.instruction(&format!("jne {name}_invalid"));
+        emitter.instruction("add rax, 8");                                    // return the wrapper's writable child slot
+    }
+    emitter.label(&format!("{name}_valid"));
+    emitter.instruction("ret");
+    emitter.label(&format!("{name}_invalid"));
+    emitter.instruction(if arm { "mov x0, #0" } else { "xor eax, eax" });      // expose an invalid reference without touching caller storage
+    emitter.instruction("ret");
 }
 
 /// Emits the C4 store callback accepting context, borrowed writer reference, key, and value descriptors.
@@ -25,17 +62,15 @@ pub(super) fn emit_store(emitter: &mut Emitter) {
     emitter.label_global("__rt_mbstring_capture_reference_store");
     if arm {
         emitter.instruction("cbz x1, __rt_mbstring_capture_reference_invalid"); // reject an absent writer before inspecting its marker
-        emitter.instruction("ldr x9, [x1]");                                    // inspect the persistent reference tag
-        emitter.instruction("cmp x9, #7");                                      // require a nested reference cell
-        emitter.instruction("b.ne __rt_mbstring_capture_reference_invalid");    // ordinary values are not writable reference identities
-        emitter.instruction("ldr x9, [x1, #16]");                               // inspect the persistent reference discriminator
-        emitter.instruction("cmp x9, #1");                                      // distinguish reference cells from ordinary nested boxes
-        emitter.instruction("b.ne __rt_mbstring_capture_reference_invalid");    // reject a detached value rather than mutating it
+        emitter.instruction("mov x10, x0");                                     // preserve the opaque host context across reference validation
+        emitter.instruction("mov x0, x1");                                      // resolve either managed reference representation
+        emitter.instruction("bl __rt_mbstring_reference_child_slot");           // return the writable child slot
+        emitter.instruction("cbz x0, __rt_mbstring_capture_reference_invalid"); // reject malformed references
         emitter.instruction("sub sp, sp, #48");                                 // preserve the caller inputs across current-value resolution
         emitter.instruction("stp x29, x30, [sp, #32]");                         // retain caller linkage for the protected store
-        emitter.instruction("str x0, [sp]");                                    // retain the opaque host context
+        emitter.instruction("str x10, [sp]");                                   // retain the opaque host context
         emitter.instruction("stp x2, x3, [sp, #8]");                            // retain borrowed key and capture descriptors
-        emitter.instruction("mov x0, x1");                                      // dereference the writer afresh for this entry
+        emitter.instruction("ldr x0, [x0]");                                    // dereference the writer afresh for this entry
         emitter.instruction("bl __rt_mbstring_capture_destination");            // select a current hash or promote a unique indexed payload
         emitter.instruction("cbz x0, __rt_mbstring_capture_reference_failed");  // leave unsupported shared indexed storage untouched
         emitter.instruction("mov x1, x0");                                      // pass the selected stable hash to the construction store
@@ -52,17 +87,17 @@ pub(super) fn emit_store(emitter: &mut Emitter) {
     } else {
         emitter.instruction("test rsi, rsi");                                   // reject an absent writer before inspecting its marker
         emitter.instruction("jz __rt_mbstring_capture_reference_invalid");      // preserve a missing output reference without dereferencing it
-        emitter.instruction("cmp QWORD PTR [rsi], 7");                          // require a nested reference cell
-        emitter.instruction("jne __rt_mbstring_capture_reference_invalid");     // ordinary values are not writable reference identities
-        emitter.instruction("cmp QWORD PTR [rsi + 16], 1");                     // require the persistent reference discriminator
-        emitter.instruction("jne __rt_mbstring_capture_reference_invalid");     // reject a detached nested value
+        emitter.instruction("mov rax, rsi");                                    // resolve either managed reference representation
+        emitter.instruction("call __rt_mbstring_reference_child_slot");         // return the writable child slot
+        emitter.instruction("test rax, rax");                                   // reject malformed references
+        emitter.instruction("jz __rt_mbstring_capture_reference_invalid");
         emitter.instruction("push rbp");                                        // preserve linkage and align nested calls
         emitter.instruction("mov rbp, rsp");                                    // establish a stable callback frame
         emitter.instruction("sub rsp, 32");                                     // preserve inputs across current-value resolution
         emitter.instruction("mov QWORD PTR [rsp], rdi");                        // retain the opaque host context
         emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                    // retain the borrowed key descriptor
         emitter.instruction("mov QWORD PTR [rsp + 16], rcx");                   // retain the borrowed capture descriptor
-        emitter.instruction("mov rax, rsi");                                    // dereference the writer afresh for this entry
+        emitter.instruction("mov rax, QWORD PTR [rax]");                        // dereference the writer afresh for this entry
         emitter.instruction("call __rt_mbstring_capture_destination");          // select a current hash or promote a unique indexed payload
         emitter.instruction("test rax, rax");                                   // distinguish a selected hash from unsupported storage
         emitter.instruction("jz __rt_mbstring_capture_reference_failed");       // preserve unsupported shared indexed payloads

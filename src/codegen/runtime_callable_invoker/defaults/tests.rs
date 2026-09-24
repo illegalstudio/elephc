@@ -56,7 +56,7 @@ fn emit_default_asm(target_name: &str, default: &InvokerDefaultValue) -> String 
         super::super::INVOKER_BOUNDARY_FRAME_SIZE,
         1,
     );
-    let mut ctx = InvokerEmitContext::new("object_default", owners, false, Vec::new());
+    let mut ctx = InvokerEmitContext::new("object_default", owners, false, false, Vec::new(), target);
     emit_const_default_to_result(default, None, &mut emitter, &mut ctx, &mut data);
     emitter.output()
 }

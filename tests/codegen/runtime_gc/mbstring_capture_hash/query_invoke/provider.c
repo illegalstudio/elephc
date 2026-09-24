@@ -108,7 +108,7 @@ int64_t query_fixture(const void *source, void **child) __asm__("_query_invoke_f
 int64_t query_fixture(const void *source, void **child) {
     struct policy policy = { UINT64_C(0x7175657279), 64, {0, 0, 0} };
     struct native_query state = { {0, NULL}, &policy, CONFIGURED ? configuration : NULL, FILTERED ? filter : NULL };
-    const void *args[3] = { source, (unsigned char *)child - 8, source };
+    const void *args[3] = { source, child, source };
     observed = 0;
     int64_t result = CONFIGURED
         ? native_invoke(82, args, ARG_COUNT, STRICT_TYPES, NULL, &state)

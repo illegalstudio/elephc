@@ -21,14 +21,16 @@ fn test_mbstring_query_remove_native_destructor_boundary() {
         ("[new NativeQueryOldValue(1, $rewrite, $fail), new NativeQueryOldValue(2, $rewrite, $fail)]", 2),
     ] {
         for boxed in [false, true] {
-            let source = source(payload);
+            let source = if boxed {
+                source(payload).replace("query_test_remove(array $matches)", "query_test_remove(mixed $matches)")
+            } else { source(payload) };
             let directory = make_cli_test_dir("mbstring_query_native_remove");
             let (assembly, runtime, libraries) = compile_source_to_asm_with_options(
                 &source, &directory, 8_388_608, true, true);
             let store = function_symbol(&assembly, "capture_test_store");
             let (load, publish, common) = hash_slot_assembly("_query_test_selected");
             let patched = install_store_shim(&assembly);
-            let preparation = if boxed { prepare_mixed_shim() } else { "" };
+            let preparation = unbox_hash_argument_shim();
             let patched = replace_function(&patched, "query_test_remove", &format!(
                 "{preparation}{publish}\n{}", remove_shim()));
             let patched = replace_function(&patched, "query_test_observe", &observe_shim(&load));

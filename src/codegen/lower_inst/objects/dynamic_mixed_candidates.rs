@@ -677,6 +677,7 @@ fn emit_dynamic_new_mixed_constructor_container_call_at_offset(
         &constructor.sig,
         &captures,
         false,
+        true,
         Some(&constructor.impl_class),
     );
     let php_name = format!("{}::__construct", candidate.class_name);

@@ -590,7 +590,7 @@ mod tests {
             let mut data = DataSection::new();
             let mut export = string_export();
             add_internal_collector(&mut export);
-            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
             let asm = emitter.output();
             let public_label = if matches!(target.platform, Platform::MacOS) {
                 "_roundtrip:"

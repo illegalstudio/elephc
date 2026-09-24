@@ -564,7 +564,7 @@ pub(super) fn eval_static_property_reference_bind_result(
         )?;
         let value = eval_reference_target_value(&target, context, values)?;
         context.bind_static_property_alias(&declaring_class, property.name(), target);
-        return store_static_property_value(&declaring_class, property.name(), value, context, values);
+        return store_borrowed_static_property(&declaring_class, property.name(), value, context, values);
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         if let Some(parent) = context.class_native_parent_name(&class_name) {
@@ -770,7 +770,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 values,
             )?;
         }
-        return store_static_property_value(&declaring_class, property.name(), value, context, values);
+        return store_borrowed_static_property(&declaring_class, property.name(), value, context, values);
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         if let Some(parent) = context.class_native_parent_name(&class_name) {

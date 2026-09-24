@@ -5,7 +5,7 @@
 //! - Shared mbstring runtime-function lowering for capture and query parsing operations.
 //!
 //! Key details:
-//! - An output pointer denotes the persistent reference wrapper, never its previous PHP value.
+//! - An output pointer denotes the managed reference cell, never its previous PHP value.
 //! - Unproven raw, property, parameter, or capture storage fails before machine code executes.
 //! - Every accepted local or alias is backed by a tracked Mixed reference owner.
 
@@ -25,12 +25,10 @@ pub(super) fn stage_reference(ctx: &mut FunctionContext<'_>, value: ValueId, poi
     ctx.materialize_local_storage_address(slot, register)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("sub x0, x0, #8");                          // recover the tracked wrapper from its writable child slot
-            ctx.emitter.instruction(&format!("str x0, [sp, #{pointer}]"));      // retain output identity without copying the previous PHP value
+            ctx.emitter.instruction(&format!("str x0, [sp, #{pointer}]"));      // pass the live reference cell without copying its PHP value
         },
         Arch::X86_64 => {
-            ctx.emitter.instruction("sub rax, 8");                              // address the tracked wrapper rather than its current child value
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {pointer}], rax")); // pass the live persistent reference to the V4 host
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {pointer}], rax")); // pass the live reference cell to the V4 host
         },
     }
     Ok(())
@@ -51,7 +49,7 @@ pub(super) fn stage_state(ctx: &mut FunctionContext<'_>, offset: usize) {
     }
 }
 
-/// Rejects every alias source that could point to an untracked raw cell instead of a managed wrapper.
+/// Rejects every alias source that could point to untracked raw storage instead of a managed cell.
 fn managed_local(ctx: &FunctionContext<'_>, slot: LocalSlotId, visiting: &mut HashSet<LocalSlotId>) -> bool {
     if !visiting.insert(slot) { return false; }
     let Some(local) = ctx.function.locals.get(slot.as_raw() as usize) else { return false; };

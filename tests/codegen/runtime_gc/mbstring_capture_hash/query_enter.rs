@@ -99,8 +99,11 @@ echo "done\n";
 /// Replaces only native test entries while preserving compiled PHP callers, objects, and cleanup.
 fn run(source: &str, boxed: bool, callbacks: bool, expected: &str) {
     let directory = make_cli_test_dir("mbstring_query_native_enter");
+    let source = if boxed {
+        source.replace("query_test_enter(array $matches)", "query_test_enter(mixed $matches)")
+    } else { source.to_owned() };
     let (assembly, runtime, libraries) = compile_source_to_asm_with_options(
-        source, &directory, 8_388_608, true, true);
+        &source, &directory, 8_388_608, true, true);
     let (load, publish, common) = hash_slot_assembly("_query_test_selected");
     let mut patched = assembly;
     if callbacks {
@@ -110,7 +113,7 @@ fn run(source: &str, boxed: bool, callbacks: bool, expected: &str) {
         let jump = if target().arch == Arch::AArch64 { "b" } else { "jmp" };
         patched = replace_function(&patched, "query_test_rewrite", &format!("{load}\n{jump} {store}\n"));
     }
-    let prepare = if boxed { prepare_mixed_shim() } else { "" };
+    let prepare = unbox_hash_argument_shim();
     patched = replace_function(&patched, "query_test_enter", &format!("{prepare}{publish}\n{}", enter_shim()));
     patched.push_str(&format!("\n{common}\n"));
     let output = assemble_and_run_capture(&patched, &runtime_obj_for_asm(&runtime), &directory,

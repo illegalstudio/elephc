@@ -25,9 +25,6 @@ pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
         if output.is_some() { return Err(CodegenIrError::unsupported("dynamic spread mbstring output references are not yet supported")); }
         return lower_packed(ctx, inst, operation);
     }
-    if !operation.supports_arity(inst.operands.len()) {
-        return Err(CodegenIrError::invalid_module("invalid mbstring argument count"));
-    }
     let contract = elephc_builtin_contract::lookup_id(operation.builtin_id()).expect("mbstring contract");
     let pointers_size = (inst.operands.len() * 8 + 15) & !15;
     let state_offset = pointers_size + inst.operands.len() * 48;

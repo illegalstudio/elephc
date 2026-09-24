@@ -85,19 +85,18 @@ echo "done\n";
 /// Runs conversion, set, unset, and nested construction during ordinary and throwing PHP destructors.
 #[test]
 fn test_mbstring_capture_hash_native_reentrant_destructor_boundary() {
-    assert_reentry_boundary(false);
-    assert_reentry_boundary(true);
+    assert_reentry_boundary();
 }
 
-/// Checks raw and preboxed capture slots across conversion, mutation, pending throws, and heap cleanup.
-fn assert_reentry_boundary(initially_boxed: bool) {
+/// Checks managed capture slots across conversion, mutation, pending throws, and heap cleanup.
+fn assert_reentry_boundary() {
     let source = r#"<?php
-function capture_test_store(array $matches): int { return count($matches); }
+function capture_test_store(mixed &$matches): int { return count($matches); }
 function capture_test_rewrite(int &$mode): int { return $mode; }
 function capture_test_take_snapshot(int &$mode): NativeCaptureReentrantValue {
     return new NativeCaptureReentrantValue($mode, false);
 }
-function show_capture(array $matches): void { echo $matches["key"], "\n"; }
+function show_capture(mixed $matches): void { echo $matches["key"], "\n"; }
 class NativeCaptureReentrantValue {
     public function __construct(public int $mode, public bool $fail) {}
     public function __destruct() {
@@ -135,10 +134,7 @@ echo "done\n";
     let store = function_symbol(&assembly, "capture_test_store");
     let (load_selected, publish_selected, common) = hash_slot_assembly("_capture_test_selected");
     let (load_snapshot, publish_snapshot, snapshot_common) = hash_slot_assembly("_capture_test_snapshot_hash");
-    let patched = install_store_shim(&assembly);
-    let prefix = format!("{store}:\n");
-    let prepare = if initially_boxed { prepare_mixed_shim() } else { "" };
-    let patched = patched.replacen(&prefix, &format!("{prefix}{prepare}{publish_selected}\n"), 1);
+    let patched = install_store_shim_with_publish(&assembly, &publish_selected);
     let rewrite = format!("{}{}", reentry_shim(&load_selected, &store),
         snapshot::copy_shim(&load_selected, &publish_snapshot));
     let patched = replace_function(&patched, "capture_test_rewrite", &rewrite);
@@ -163,12 +159,12 @@ echo "done\n";
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
-/// Boxes the test input before capture starts, using the same native argument and return conventions.
-fn prepare_mixed_shim() -> &'static str {
+/// Extracts a hash from a boxed PHP array while accepting native callback hashes.
+fn unbox_hash_argument_shim() -> &'static str {
     if target().arch == Arch::AArch64 {
-        "    stp x29, x30, [sp, #-16]!\n    bl __rt_hash_to_mixed\n    ldp x29, x30, [sp], #16\n"
+        "    sub sp, sp, #32\n    stp x29, x30, [sp, #16]\n    str x0, [sp]\n    bl __rt_heap_kind\n    mov x9, x0\n    ldr x0, [sp]\n    cmp x9, #8\n    b.ne 1f\n    ldr x0, [x0]\n    b 2f\n1:\n    cmp x9, #5\n    b.ne 3f\n2:\n    bl __rt_mixed_unbox\n    mov x0, x1\n3:\n    ldp x29, x30, [sp, #16]\n    add sp, sp, #32\n"
     } else {
-        "    sub rsp, 8\n    call __rt_hash_to_mixed\n    add rsp, 8\n    mov rdi, rax\n"
+        "    push rdi\n    mov rax, rdi\n    call __rt_heap_kind\n    pop rdi\n    cmp eax, 8\n    jne 1f\n    mov rdi, QWORD PTR [rdi]\n    jmp 2f\n1:\n    cmp eax, 5\n    jne 3f\n2:\n    sub rsp, 8\n    mov rax, rdi\n    call __rt_mixed_unbox\n    add rsp, 8\n3:\n"
     }
 }
 
@@ -201,7 +197,9 @@ fn reentry_shim(load_selected: &str, store: &str) -> String {
     stp x29, x30, [sp, #16]
     str x0, [sp]
     {load_selected}
+    bl __rt_incref
     bl __rt_hash_to_mixed
+    bl __rt_decref_hash
     ldr x0, [sp]
     ldp x29, x30, [sp, #16]
     add sp, sp, #32
@@ -263,7 +261,11 @@ fn reentry_shim(load_selected: &str, store: &str) -> String {
     sub rsp, 24
     mov QWORD PTR [rsp], rdi
     {load_selected}
+    mov rax, rdi
+    call __rt_incref
+    mov rdi, rax
     call __rt_hash_to_mixed
+    call __rt_decref_hash
     mov rdi, QWORD PTR [rsp]
     add rsp, 24
     cmp rdi, 3
@@ -349,6 +351,11 @@ pub(in crate::codegen::runtime_gc) fn replace_function(assembly: &str, name: &st
 
 /// Replaces only the marked test function, leaving actual PHP classes and ownership lowering intact.
 fn install_store_shim(assembly: &str) -> String {
+    install_store_shim_with_publish(assembly, "")
+}
+
+/// Publishes the raw hash only after converting a boxed PHP array argument.
+fn install_store_shim_with_publish(assembly: &str, publish: &str) -> String {
     // The frame contains two borrowed descriptors and inline "key"/"captured" bytes.
     // Both variants borrow the PHP hash, then propagate status two after frame teardown.
     let done = format!(
@@ -421,5 +428,5 @@ fn install_store_shim(assembly: &str) -> String {
     ret
 "#)
     };
-    replace_function(assembly, "capture_test_store", &body)
+    replace_function(assembly, "capture_test_store", &format!("{}{publish}\n{body}", unbox_hash_argument_shim()))
 }

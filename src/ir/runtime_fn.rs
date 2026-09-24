@@ -802,6 +802,11 @@ impl RuntimeFnId {
     /// cursor (and, for a seek, the seek mode) as extra operands. Declaring the real
     /// runtime arity here keeps EIR validation meaningful instead of switching it off.
     const fn lowering_owned_arity_bounds(self) -> Option<(usize, Option<usize>)> {
+        // The shared mbstring engine reports PHP arity errors at runtime, including calls
+        // through first-class callables whose argument count is only known when invoked.
+        if self.uses_mbstring_runtime() {
+            return Some((0, None));
+        }
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
@@ -1949,6 +1954,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArraySum
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
+                | RuntimeFnId::Count
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim

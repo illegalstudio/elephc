@@ -84,7 +84,7 @@ const X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET: usize = 64;
 ///
 /// A BY-REFERENCE slot is different. `eval_ref_arg_slots` gives constructor slots
 /// `raw_refcounted_owned = true`, so writeback releases the raw slot on the changed and the
-/// unchanged path alike; that release is only balanced when the staging cast acquired an owner.
+/// unchanged path alike. The bridge acquires one owner after argument preparation succeeds.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ConstructorArgOwner {
     /// The argument array keeps the payload alive for the whole native activation.
@@ -1328,7 +1328,6 @@ fn emit_aarch64_constructor_ref_arg_cells(
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
-            abi::emit_call_label(emitter, "__rt_incref");
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -1369,7 +1368,6 @@ fn emit_x86_64_constructor_ref_arg_cells(
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
-            abi::emit_call_label(emitter, "__rt_incref");
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);

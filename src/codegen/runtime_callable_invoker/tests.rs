@@ -24,7 +24,8 @@ fn mixed_invoker_returns_follow_runtime_ownership_on_all_targets() {
     ] {
         let target = Target::parse(name).unwrap();
         let mut emitter = Emitter::new(target);
-        let mut ctx = InvokerEmitContext::new("mixed_owner_invoker", target);
+        let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 0);
+        let mut ctx = InvokerEmitContext::new("mixed_owner_invoker", owners, false, Vec::new(), target);
         emit_boxed_invoker_return(&mut emitter, &PhpType::Mixed, false, &mut ctx);
         let arch = emitter.target.arch;
         let output = emitter.output();
@@ -87,7 +88,8 @@ fn by_ref_invoker_returns_ignore_the_internal_ownership_status() {
     ] {
         let target = Target::parse(name).unwrap();
         let mut emitter = Emitter::new(target);
-        let mut ctx = InvokerEmitContext::new("by_ref_invoker", target);
+        let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 0);
+        let mut ctx = InvokerEmitContext::new("by_ref_invoker", owners, false, Vec::new(), target);
         emit_boxed_invoker_return(&mut emitter, &PhpType::Mixed, true, &mut ctx);
         let output = emitter.output();
         assert!(!output.contains("return_owned"), "{name}: {output}");
@@ -109,7 +111,8 @@ fn by_value_string_returns_persist_only_the_borrowed_path() {
     ] {
         let target = Target::parse(name).unwrap();
         let mut emitter = Emitter::new(target);
-        let mut ctx = InvokerEmitContext::new("string_owner_invoker", target);
+        let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 0);
+        let mut ctx = InvokerEmitContext::new("string_owner_invoker", owners, true, Vec::new(), target);
         restore_concat_offset_after_nested_call(&mut emitter, &PhpType::Str, false, &mut ctx);
         let arch = emitter.target.arch;
         let output = emitter.output();
@@ -177,7 +180,10 @@ fn native_argument_owners_assemble_on_all_supported_targets() {
             let mut data = DataSection::new();
             for catch in [false, true] {
                 let label = if catch { "__native_argument_eval_invoker" } else { "__native_argument_invoker" };
-                let invoker = RuntimeCallableInvoker { label, sig: &sig, captures: &[], mbstring_operation: None };
+                let invoker = RuntimeCallableInvoker {
+                    label, sig: &sig, captures: &[], mbstring_operation: None,
+                    owns_string_return: false, php_return_status: false, defaults: &[None],
+                };
                 emit_runtime_callable_invoker_impl(&mut emitter, &mut data, &invoker, catch);
             }
             let source = directory.join(format!("{name}-{pic}.s"));

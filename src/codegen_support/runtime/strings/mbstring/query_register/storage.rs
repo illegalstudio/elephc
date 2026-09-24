@@ -26,27 +26,24 @@ fn root(emitter: &mut Emitter) {
     if arm {
         emitter.instruction("str xzr, [x2]");                                   // publish no cursor until a valid managed hash is selected
         emitter.instruction("cbz x1, __rt_mbstring_query_root_invalid");        // require a borrowed persistent writer reference
-        emitter.instruction("ldr x9, [x1]");                                    // inspect the writer's boxed representation
-        emitter.instruction("cmp x9, #7");                                      // require a nested reference cell
-        emitter.instruction("b.ne __rt_mbstring_query_root_invalid");           // reject ordinary values as writer handles
-        emitter.instruction("ldr x9, [x1, #16]");                               // inspect the persistent reference discriminator
-        emitter.instruction("cmp x9, #1");                                      // distinguish PHP references from ordinary Mixed boxes
-        emitter.instruction("b.ne __rt_mbstring_query_root_invalid");           // leave detached boxes untouched
+        emitter.instruction("mov x0, x1");                                      // resolve either persistent reference representation
+        emitter.instruction("bl __rt_mbstring_reference_child_slot");           // return the writable child slot
+        emitter.instruction("cbz x0, __rt_mbstring_query_root_invalid");        // leave ordinary boxed values untouched
+        emitter.instruction("ldr x0, [x0]");                                    // borrow the current boxed PHP value
         emitter.instruction("sub sp, sp, #32");                                 // preserve the cursor output and linkage across native helpers
         emitter.instruction("stp x29, x30, [sp, #16]");                         // retain caller linkage during resolution and pinning
         emitter.instruction("str x2, [sp]");                                    // retain the shared executor's cursor output
-        emitter.instruction("mov x0, x1");                                      // resolve the writer's current value without copying it
     } else {
         emitter.instruction("mov QWORD PTR [rdx], 0");                          // publish no cursor before managed hash selection
         emitter.instruction("test rsi, rsi");                                   // require a borrowed writer handle
         emitter.instruction("jz __rt_mbstring_query_root_invalid");             // reject a missing persistent reference
-        emitter.instruction("cmp QWORD PTR [rsi], 7");                          // require a nested reference cell
-        emitter.instruction("jne __rt_mbstring_query_root_invalid");            // ordinary values cannot identify writable storage
-        emitter.instruction("cmp QWORD PTR [rsi + 16], 1");                     // require the persistent reference discriminator
-        emitter.instruction("jne __rt_mbstring_query_root_invalid");            // reject detached Mixed boxes without mutation
+        emitter.instruction("mov rax, rsi");                                    // resolve either persistent reference representation
+        emitter.instruction("call __rt_mbstring_reference_child_slot");         // return the writable child slot
+        emitter.instruction("test rax, rax");                                   // reject ordinary boxed values without mutation
+        emitter.instruction("jz __rt_mbstring_query_root_invalid");
+        emitter.instruction("mov rax, QWORD PTR [rax]");                        // borrow the current boxed PHP value
         emitter.instruction("sub rsp, 24");                                     // align native calls and preserve the cursor output
         emitter.instruction("mov QWORD PTR [rsp], rdx");                        // retain the executor's cursor output across helper calls
-        emitter.instruction("mov rax, rsi");                                    // adapt the live writer to the private Mixed dereference ABI
     }
     abi::emit_call_label(emitter, "__rt_mixed_deref");
     emitter.instruction(if arm { "cmp x0, #0" } else { "test rax, rax" });      // a null terminal value produces no query writes

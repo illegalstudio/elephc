@@ -341,7 +341,6 @@ mod tests {
         let mut eval_registry = 0;
         let mut eval_internal = 0;
         let mut eval_pending = 0;
-        let mut reference_pending = 0;
         let mut aot_registry = 0;
         let mut aot_external = 0;
 
@@ -355,9 +354,6 @@ mod tests {
                 }
                 BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending) => {
                     eval_pending += 1;
-                }
-                BackendSupport::Unsupported(UnsupportedReason::ReferenceAdaptersPending) => {
-                    reference_pending += 1;
                 }
                 other => panic!("unexpected eval support for {}: {other:?}", contract.name),
             }

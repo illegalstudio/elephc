@@ -173,6 +173,10 @@ pub(super) fn lower_dynamic_call_user_func_array(
             signature.as_ref(),
             arg_array_expr.span,
         ),
+        None if matches!(arg_array_expr.kind, ExprKind::ArrayLiteralAssoc(_)) => {
+            let ExprKind::ArrayLiteralAssoc(pairs) = &arg_array_expr.kind else { unreachable!() };
+            lower_descriptor_invoker_assoc_arg_array(ctx, pairs, arg_array_expr)
+        }
         None => lower_expr(ctx, arg_array_expr),
     };
     Some(emit_callable_descriptor_invoke(ctx, callback, arg_array, expr.span))
@@ -337,6 +341,39 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, item.span);
     }
     take_published_container(ctx, owner, array_ty, span)
+}
+
+/// Publishes an associative callback argument array before evaluating values that can throw.
+fn lower_descriptor_invoker_assoc_arg_array(
+    ctx: &mut LoweringContext<'_, '_>,
+    pairs: &[(Expr, Expr)],
+    expr: &Expr,
+) -> LoweredValue {
+    let hash_ty = assoc_array_literal_type_for_ir(ctx, pairs, expr);
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(pairs.len() as u32)),
+        hash_ty.clone(),
+        Op::HashNew.default_effects(),
+        Some(expr.span),
+    );
+    let owner = publish_constructed_container(ctx, hash, expr.span);
+    for (key, value) in pairs {
+        let entry_span = value.span;
+        let key = lower_expr(ctx, key);
+        let value = lower_expr(ctx, value);
+        let hash = load_published_container(ctx, owner, hash_ty.clone(), entry_span);
+        ctx.emit_void(
+            Op::HashSet,
+            vec![hash.value, key.value, value.value],
+            None,
+            Op::HashSet.default_effects(),
+            Some(entry_span),
+        );
+        ctx.refresh_argument_array_guard(hash, entry_span);
+    }
+    take_published_container(ctx, owner, hash_ty, expr.span)
 }
 
 /// Returns true when `call_user_func()` must keep runtime descriptor semantics.

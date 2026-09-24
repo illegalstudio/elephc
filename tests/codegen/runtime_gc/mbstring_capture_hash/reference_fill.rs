@@ -162,16 +162,9 @@ fn fill_shim(length: usize, retarget: bool) -> String {
         return format!(r#"
     sub sp, sp, #48
     stp x29, x30, [sp, #32]
-    mov x1, x0
-    mov x0, #5
-    mov x2, #0
-    bl __rt_mixed_from_value
-    str x0, [sp]
     bl __rt_reference_new
     str x0, [sp, #8]
     {publish_writer}
-    ldr x0, [sp]
-    bl __rt_decref_any
     mov x0, #0
     ldr x1, [sp, #8]
     {graph}
@@ -195,15 +188,10 @@ fn fill_shim(length: usize, retarget: bool) -> String {
     push rbp
     mov rbp, rsp
     sub rsp, 32
-    mov rax, 5
-    xor esi, esi
-    call __rt_mixed_from_value
-    mov QWORD PTR [rsp], rax
+    mov rax, rdi
     call __rt_reference_new
     mov QWORD PTR [rsp + 8], rax
     {publish_writer}
-    mov rax, QWORD PTR [rsp]
-    call __rt_decref_any
     xor edi, edi
     mov rsi, QWORD PTR [rsp + 8]
     lea rdx, [rip + _capture_test_graph]
@@ -226,9 +214,9 @@ fn save_result_shim() -> String {
     let publish_result = hash_slot_assembly("_capture_test_result").1;
     let clear_writer = hash_slot_assembly("_capture_test_writer").1;
     if target().arch == Arch::AArch64 {
-        format!("ldr x0, [sp, #8]\nbl __rt_mixed_unbox\nmov x0, x1\nbl __rt_incref\n{publish_result}\nmov x0, #0\n{clear_writer}")
+        format!("ldr x0, [sp, #8]\nldr x0, [x0, #8]\nbl __rt_incref\n{publish_result}\nmov x0, #0\n{clear_writer}")
     } else {
-        format!("mov rax, QWORD PTR [rsp + 8]\ncall __rt_mixed_unbox\nmov rax, rdi\ncall __rt_incref\nmov rdi, rax\n{publish_result}\nxor edi, edi\n{clear_writer}")
+        format!("mov rax, QWORD PTR [rsp + 8]\nmov rax, QWORD PTR [rax + 8]\ncall __rt_incref\nmov rdi, rax\n{publish_result}\nxor edi, edi\n{clear_writer}")
     }
 }
 
@@ -237,22 +225,20 @@ pub(super) fn retarget_shim() -> String {
     let load_writer = hash_slot_assembly("_capture_test_writer").0;
     if target().arch == Arch::AArch64 {
         return format!(r#"
-    sub sp, sp, #32
-    stp x29, x30, [sp, #16]
-    mov x1, x0
-    mov x0, #5
-    mov x2, #0
-    bl __rt_mixed_from_value
+    sub sp, sp, #48
+    stp x29, x30, [sp, #32]
+    bl __rt_mixed_clone
     str x0, [sp]
     {load_writer}
-    ldr x1, [sp]
-    bl __rt_reference_replace
-    bl __rt_decref_any
-    ldr x0, [sp]
+    bl __rt_mbstring_reference_child_slot
+    ldr x9, [x0]
+    ldr x10, [sp]
+    str x10, [x0]
+    mov x0, x9
     bl __rt_decref_any
     mov x0, #0
-    ldp x29, x30, [sp, #16]
-    add sp, sp, #32
+    ldp x29, x30, [sp, #32]
+    add sp, sp, #48
     ret
 "#);
     }
@@ -260,16 +246,16 @@ pub(super) fn retarget_shim() -> String {
     push rbp
     mov rbp, rsp
     sub rsp, 16
-    mov rax, 5
-    xor esi, esi
-    call __rt_mixed_from_value
+    mov rax, rdi
+    call __rt_mixed_clone
     mov QWORD PTR [rsp], rax
     {load_writer}
     mov rax, rdi
-    mov rdi, QWORD PTR [rsp]
-    call __rt_reference_replace
-    call __rt_decref_any
-    mov rax, QWORD PTR [rsp]
+    call __rt_mbstring_reference_child_slot
+    mov r10, QWORD PTR [rax]
+    mov r11, QWORD PTR [rsp]
+    mov QWORD PTR [rax], r11
+    mov rax, r10
     call __rt_decref_any
     xor eax, eax
     leave

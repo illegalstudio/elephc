@@ -133,7 +133,7 @@ fn assert_indexed_fill(source: &str, expected: &str) {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// Adapts a native Mixed child-slot address to the retained reference expected by capture filling.
+/// Passes the managed reference cell to capture filling.
 fn indexed_shim(length: usize) -> String {
     let done = format!("{}capture_indexed_done", target().platform.local_label_prefix());
     if target().arch == Arch::AArch64 {
@@ -144,7 +144,7 @@ fn indexed_shim(length: usize) -> String {
         };
         return format!(r#"
     stp x29, x30, [sp, #-16]!
-    sub x1, x0, #8
+    mov x1, x0
     mov x0, #0
     {graph}
     mov x3, #{length}
@@ -160,7 +160,7 @@ fn indexed_shim(length: usize) -> String {
     format!(r#"
     push rbp
     mov rbp, rsp
-    lea rsi, [rdi - 8]
+    mov rsi, rdi
     xor edi, edi
     lea rdx, [rip + _capture_test_graph]
     mov ecx, {length}

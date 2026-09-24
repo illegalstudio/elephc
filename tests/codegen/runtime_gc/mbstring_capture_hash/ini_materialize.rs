@@ -24,7 +24,7 @@ function ini_test_result(int $mode): mixed {
 }
 function ini_test_identity(mixed $value, int $index): bool { return is_string($value) && $index >= 0; }
 function ini_test_retired(): bool { return mb_internal_encoding() == "UTF-8"; }
-function ini_check_tree(mixed $value, int &$index): bool {
+function ini_check_tree(mixed $value, mixed &$index): bool {
     if (is_string($value)) {
         $copy = (string)$value;
         $valid = ini_test_identity($copy, $index);

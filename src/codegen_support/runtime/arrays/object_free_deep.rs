@@ -72,7 +72,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     // global) gave the object a new owner. php keeps such an object alive and never runs its
     // destructor again; freeing it here left that owner holding dead storage, and the next
     // release of the same block ran `__destruct` a second time. Drop the in-progress guard,
-    // remember completion in kind bit 17 exactly like the collector does, and leave.
+    // remember completion in kind bit 14 exactly like the collector does, and leave.
     // Only a destructor run by THIS call can resurrect, and its guard bit 31 is the witness:
     // the collector's sweep frees cycle members that still count their peers as owners after
     // it ran their destructors itself, and those must be freed, not kept.
@@ -83,7 +83,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("cbz w10, __rt_object_free_deep_not_resurrected");      // no surviving owner: release the storage as before
     emitter.instruction("str w10, [x0, #-12]");                                 // clear the guard so those owners release normally later
     emitter.instruction("ldr x10, [x0, #-8]");                                  // load the uniform heap kind word
-    emitter.instruction("orr x10, x10, #0x20000");                              // mark the destructor as completed for the final release
+    emitter.instruction("orr x10, x10, #0x4000");                               // mark the destructor as completed for the final release
     emitter.instruction("str x10, [x0, #-8]");                                  // persist the completion mark in the header
     emitter.instruction("b __rt_object_free_deep_resurrected");                 // keep the object and unwind only this cleanup frame
     emitter.label("__rt_object_free_deep_not_resurrected");
@@ -382,7 +382,7 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("and r10d, 0x7fffffff");                                // isolate the real owners the destructor body left behind
     emitter.instruction("jz __rt_object_free_deep_not_resurrected_x");          // no surviving owner: release the storage as before
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // clear the guard so those owners release normally later
-    emitter.instruction("or QWORD PTR [rax - 8], 0x20000");                     // mark the destructor as completed for the final release
+    emitter.instruction("or QWORD PTR [rax - 8], 0x4000");                      // mark the destructor as completed for the final release
     emitter.instruction("jmp __rt_object_free_deep_resurrected_x");             // keep the object and unwind only this cleanup frame
     emitter.label("__rt_object_free_deep_not_resurrected_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the object identity through the C ABI

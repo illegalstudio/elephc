@@ -121,6 +121,7 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) captures: &'a [(String, PhpType, bool)],
     pub(super) mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
     pub(super) owns_string_return: bool,
+    pub(super) php_return_status: bool,
     /// Parameter defaults ALREADY resolved against the module, indexed like `sig.params`.
     /// A declared default that could not be folded into a materializable value stays `None`, and
     /// the invoker keeps its fatal diagnostic for that slot rather than inventing a value.
@@ -142,6 +143,7 @@ struct InvokerEmitContext {
     mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
     argument_owners: InvokerArgumentOwners,
     owns_string_return: bool,
+    php_return_status: bool,
     /// Resolved parameter defaults for this body, indexed like `FunctionSig::params`.
     defaults: InvokerDefaults,
 }
@@ -152,6 +154,7 @@ impl InvokerEmitContext {
         invoker_label: &str,
         argument_owners: InvokerArgumentOwners,
         owns_string_return: bool,
+        php_return_status: bool,
         defaults: InvokerDefaults,
         target: Target,
     ) -> Self {
@@ -160,6 +163,7 @@ impl InvokerEmitContext {
             label_counter: 0,
             argument_owners,
             owns_string_return,
+            php_return_status,
             defaults,
             mbstring_operation: None,
         }
@@ -226,6 +230,7 @@ fn emit_runtime_callable_invoker_impl(
         invoker.label,
         argument_owners,
         invoker.owns_string_return,
+        invoker.php_return_status,
         invoker.defaults.to_vec(),
         emitter.target,
     );
@@ -779,7 +784,7 @@ fn emit_loaded_indexed_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter, ctx.owns_string_return);
+    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter, ctx);
     sig.return_type.clone()
 }
 
@@ -904,7 +909,7 @@ fn emit_loaded_assoc_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter, ctx.owns_string_return);
+    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter, ctx);
     sig.return_type.clone()
 }
 
@@ -2693,7 +2698,7 @@ fn call_target_with_pushed_args(
     arg_types: &[PhpType],
     sig: &FunctionSig,
     emitter: &mut Emitter,
-    owns_string_return: bool,
+    ctx: &mut InvokerEmitContext,
 ) {
     // Every descriptor entry receives one trailing native argument after its complete PHP ABI
     // shape. Ordinary PHP functions ignore the extra register or stack word. The synthetic
@@ -2714,7 +2719,10 @@ fn call_target_with_pushed_args(
     abi::emit_call_reg(emitter, call_reg);
     emit_restore_invoker_php_frame_head(emitter);
     let return_ty = if sig.by_ref_return { PhpType::Pointer(None) } else { sig.return_type.clone() };
-    restore_concat_offset_after_nested_call(emitter, &return_ty, owns_string_return);
+    let owned_label = ctx.next_label("invoker_string_owned");
+    restore_concat_offset_after_nested_call(
+        emitter, &return_ty, ctx.owns_string_return, ctx.php_return_status, &owned_label,
+    );
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
 }
 
@@ -2743,9 +2751,18 @@ fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
 }
 
 /// Restores the concat offset after a nested callable target returns.
-fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &PhpType, owns_string_return: bool) {
-    if return_ty.codegen_repr() == PhpType::Str && !owns_string_return {
-        abi::emit_call_label(emitter, "__rt_str_persist");
+fn restore_concat_offset_after_nested_call(
+    emitter: &mut Emitter, return_ty: &PhpType, owns_string_return: bool,
+    php_return_status: bool, owned_label: &str,
+) {
+    if return_ty.codegen_repr() == PhpType::Str {
+        if php_return_status {
+            crate::codegen::return_ownership::emit_branch_if_owned(emitter, owned_label);
+            abi::emit_call_label(emitter, "__rt_str_persist");
+            emitter.label(owned_label);
+        } else if !owns_string_return {
+            abi::emit_call_label(emitter, "__rt_str_persist");
+        }
     }
     let scratch = abi::temp_int_reg(emitter.target);
     match emitter.target.arch {
@@ -3273,20 +3290,20 @@ mod tests {
         let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
         let defaults: InvokerDefaults = vec![None; sig.params.len()];
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, &defaults, "borrowed_result");
+        state.cache_runtime_callable_invoker(&sig, &[], false, false, &defaults, "borrowed_result");
         assert!(state
-            .runtime_callable_invoker(&sig, &[], true, &defaults)
+            .runtime_callable_invoker(&sig, &[], true, false, &defaults)
             .is_none());
-        state.cache_runtime_callable_invoker(&sig, &[], true, &defaults, "owned_result");
+        state.cache_runtime_callable_invoker(&sig, &[], true, false, &defaults, "owned_result");
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], false, &defaults)
+                .runtime_callable_invoker(&sig, &[], false, false, &defaults)
                 .as_deref(),
             Some("borrowed_result")
         );
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], true, &defaults)
+                .runtime_callable_invoker(&sig, &[], true, false, &defaults)
                 .as_deref(),
             Some("owned_result")
         );
@@ -3304,13 +3321,13 @@ mod tests {
         left[0] = Some(InvokerDefaultValue::String("left".to_string()));
         right[0] = Some(InvokerDefaultValue::String("right".to_string()));
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, &left, "left_body");
+        state.cache_runtime_callable_invoker(&sig, &[], false, false, &left, "left_body");
         assert!(state
-            .runtime_callable_invoker(&sig, &[], false, &right)
+            .runtime_callable_invoker(&sig, &[], false, false, &right)
             .is_none());
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], false, &left)
+                .runtime_callable_invoker(&sig, &[], false, false, &left)
                 .as_deref(),
             Some("left_body")
         );
@@ -3322,11 +3339,17 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             for owned in [false, true] {
                 let mut emitter = Emitter::new(Target::parse(name).unwrap());
-                restore_concat_offset_after_nested_call(&mut emitter, &PhpType::Str, owned);
+                restore_concat_offset_after_nested_call(&mut emitter, &PhpType::Str, owned, false, "owned_result");
                 let asm = emitter.output();
                 assert_eq!(asm.contains("__rt_str_persist"), !owned, "{name}: {owned}");
                 assert!(asm.contains("_concat_off"), "{name}: {owned}");
             }
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            restore_concat_offset_after_nested_call(&mut emitter, &PhpType::Str, false, true, "owned_result");
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_str_persist"), "{name}");
+            assert!(asm.contains("owned_result:"), "{name}");
+            assert!(asm.contains(if name.ends_with("x86_64") { "test r11, r11" } else { "cbnz x15" }), "{name}");
         }
     }
 
@@ -3400,6 +3423,7 @@ mod tests {
             captures: &[],
             mbstring_operation: None,
             owns_string_return: false,
+            php_return_status: false,
             defaults: &[None],
         };
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -3450,7 +3474,7 @@ mod tests {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
-            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false, Vec::new(), target);
+            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false, false, Vec::new(), target);
             let (ref_cell_reg, source_tag_reg, branch) = match target.arch {
                 Arch::AArch64 => ("x19", "x20", "b.eq mixed_ref_cell_invoker_ref_mixed_0"),
                 Arch::X86_64 => ("r12", "r13", "je mixed_ref_cell_invoker_ref_mixed_0"),
@@ -3494,7 +3518,7 @@ mod tests {
             let mut concrete = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
             let mut concrete_ctx =
-                InvokerEmitContext::new("concrete_ref", owners, false, Vec::new(), target);
+                InvokerEmitContext::new("concrete_ref", owners, false, false, Vec::new(), target);
             push_invoker_ref_storage_address(
                 storage_reg,
                 source_tag_reg,
@@ -3509,7 +3533,7 @@ mod tests {
 
             let mut mixed = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
-            let mut mixed_ctx = InvokerEmitContext::new("mixed_ref", owners, false, Vec::new(), target);
+            let mut mixed_ctx = InvokerEmitContext::new("mixed_ref", owners, false, false, Vec::new(), target);
             push_invoker_ref_storage_address(
                 storage_reg,
                 source_tag_reg,
@@ -3596,6 +3620,7 @@ mod tests {
             captures: &[],
             mbstring_operation: None,
             owns_string_return: false,
+            php_return_status: false,
             defaults: &defaults,
         };
         emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);

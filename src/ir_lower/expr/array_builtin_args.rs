@@ -135,7 +135,7 @@ pub(super) fn lower_builtin_call_args(
     {
         if let Some(sig) = sig {
             if let Some(operands) = lower_positional_spread_args_with_signature(
-                ctx, sig, args, Some(name),
+                ctx, sig, args, Some(name), false,
             ) {
                 for (name, ty) in pcntl_outputs {
                     ctx.set_local_logical_type(&name, ty);
@@ -146,7 +146,7 @@ pub(super) fn lower_builtin_call_args(
     }
     let lowered = match argument_lowering {
         crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues => {
-            lower_builtin_args_preserving_values(ctx, sig, args)
+            lower_builtin_args_preserving_values(ctx, &canonical, sig, args)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults => {
             lower_args_with_signature(ctx, sig, args)
@@ -413,6 +413,7 @@ pub(super) fn lower_positional_builtin_args_with_signature(
 /// suppress scalar binding without changing the authoritative PHP signature or argument order.
 fn lower_builtin_args_preserving_values(
     ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
@@ -425,8 +426,18 @@ fn lower_builtin_args_preserving_values(
             *ty = PhpType::Mixed;
         }
     }
+    let capture_output_index = crate::builtins::registry::lookup(name)
+        .and_then(|def| def.spec.runtime_builtin_id())
+        .filter(|id| matches!(id,
+            elephc_builtin_contract::RuntimeBuiltinId::MbEreg
+                | elephc_builtin_contract::RuntimeBuiltinId::MbEregi
+                | elephc_builtin_contract::RuntimeBuiltinId::MbParseStr))
+        .and_then(|id| elephc_builtin_contract::lookup_id(id.builtin_id()))
+        .and_then(|contract| contract.params.iter().position(|param| param.by_ref));
     ctx.begin_argument_guard_scope();
-    let operands = lower_args_with_signature_options(ctx, Some(&storage), args, true, true);
+    let operands = lower_args_with_signature_options_for_capture(
+        ctx, Some(&storage), args, true, true, capture_output_index,
+    );
     ctx.end_argument_guard_scope();
     operands
 }

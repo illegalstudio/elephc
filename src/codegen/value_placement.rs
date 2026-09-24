@@ -114,7 +114,7 @@ mod tests {
     //! - These tests verify the stack-slot contract before instruction lowering uses it.
 
     use crate::ir::{
-        Builder, Function, Immediate, IrHeapKind, IrType, LocalSlotId, Op, Ownership,
+        Builder, DataId, Function, Immediate, IrHeapKind, IrType, LocalSlotId, Op, Ownership,
     };
     use crate::types::PhpType;
 

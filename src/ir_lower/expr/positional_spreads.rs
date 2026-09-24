@@ -16,6 +16,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
     sig: &FunctionSig,
     args: &[Expr],
     builtin_name: Option<&str>,
+    capture_values: bool,
 ) -> Option<Vec<crate::ir::ValueId>> {
     // Keep generic source planning intact. Only by-value indexed tails can be
     // materialized into one array without losing references or named keys.
@@ -41,8 +42,8 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
-        let value = lower_arg_with_signature(ctx, sig, index, arg);
-        if sig.ref_params.get(index).copied().unwrap_or(false) {
+        let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
+        if capture_values || sig.ref_params.get(index).copied().unwrap_or(false) {
             operands.push(value);
         } else {
             let lowered = lowered_value_from_id(ctx, value);
@@ -100,7 +101,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
                 args[spread_idx].span,
             )
         };
-        operands.push(lower_arg_with_signature(ctx, sig, param_idx, &expr));
+        operands.push(lower_arg_with_signature_options(ctx, sig, param_idx, &expr, capture_values));
     }
 
     if sig.variadic.is_some() {

@@ -288,6 +288,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
         }, span);
     }
     for (parameter_index, value) in args.iter().enumerate() {
+        ctx.unguard_call_argument(*value, span);
         if let Some((_, slot)) = roots.iter().find(|(index, _)| *index == parameter_index) {
             retire_owned_call_operand(ctx, *slot, span);
             continue;

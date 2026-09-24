@@ -152,7 +152,7 @@ fn native_argument_ownership_raw_string_slot_ledger() {
         };
         let args = raw_string_ref_args([retained.0, retained.1], current);
 
-        cleanup_native_function_ref_args_for_test(&args, &mut values).unwrap();
+        cleanup_native_function_ref_args(&args, &mut values).unwrap();
 
         assert_eq!(release_count(&values, original), 1);
         assert_eq!(values.cell_owners.get(&(original.as_ptr() as usize)), Some(&1));
@@ -181,7 +181,7 @@ fn native_argument_ownership_raw_heap_slot_ledger() {
         };
         let args = raw_heap_ref_args(original_word, current);
 
-        cleanup_native_function_ref_args_for_test(&args, &mut values).unwrap();
+        cleanup_native_function_ref_args(&args, &mut values).unwrap();
 
         assert_eq!(release_count(&values, original), 1);
         assert_eq!(values.cell_owners.get(&(original.as_ptr() as usize)), Some(&1));
@@ -202,7 +202,7 @@ fn raw_string_ref_args(original: [u64; 2], current: [u64; 2]) -> BoundNativeFunc
             slot: Box::new(current),
             target: None,
         }],
-        owners: Vec::new(),
+        named_keys: Vec::new(),
     }
 }
 
@@ -215,7 +215,7 @@ fn raw_heap_ref_args(original: u64, current: u64) -> BoundNativeFunctionArgs {
             slot: Box::new(current),
             target: None,
         }],
-        owners: Vec::new(),
+        named_keys: Vec::new(),
     }
 }
 

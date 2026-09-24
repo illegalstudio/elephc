@@ -122,7 +122,6 @@ fn reference_shim(remove: bool) -> String {
         return format!(r#"
     sub sp, sp, #32
     stp x29, x30, [sp, #16]
-    sub x0, x0, #8
     {publish}
     mov x1, x0
     mov x0, #0
@@ -152,7 +151,6 @@ fn reference_shim(remove: bool) -> String {
     push rbp
     mov rbp, rsp
     sub rsp, 16
-    sub rdi, 8
     {publish}
     mov rsi, rdi
     xor edi, edi

@@ -213,7 +213,7 @@ mod tests {
     fn persist_copy_loop_is_cache_line_aligned_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
-            emit_str_persist(&mut emitter);
+            emit_str_persist(&mut emitter, false);
             assert!(
                 emitter.output().contains(".p2align 6\n__rt_str_persist_copy:"),
                 "{name}"

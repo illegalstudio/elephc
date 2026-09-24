@@ -22,6 +22,7 @@ fn native_mbstring_capture_reference_begin_preserves_publication_and_owners() {
     if target.arch == Arch::X86_64 { emitter.raw(".intel_syntax noprefix"); }
     emitter.raw(".text");
     super::emit(&mut emitter);
+    super::super::capture_reference::emit_reference_child_slot(&mut emitter);
     arrays::emit_hash_new(&mut emitter);
     arrays::emit_mixed_from_value(&mut emitter);
     adapters(&mut emitter);
@@ -58,7 +59,7 @@ fn adapters(emitter: &mut Emitter) {
         emitter.instruction("mov rax, rsi");                                    // pass the private unary input
         emitter.instruction("jmp r11");                                         // delegate without another frame
     }
-    for symbol in ["__rt_str_persist", "__rt_resource_id_of"] {
+    for symbol in ["__rt_str_persist", "__rt_resource_id_of", "__rt_resource_inventory_register"] {
         emitter.label_global(symbol);
         emitter.instruction(&format!("{} fixture_unsupported", if arm { "b" } else { "jmp" }));// reject unexpected string or resource boxing in this fixture
     }

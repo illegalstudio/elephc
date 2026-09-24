@@ -44,7 +44,77 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    eval_call_arg_values_observed(args, context, caller_scope, values, |_, _| {})
+    let mut evaluated_args = Vec::with_capacity(args.len());
+    let mut saw_named = false;
+
+    let evaluated = (|| {
+        for arg in args {
+            if arg.is_spread() {
+                if saw_named {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                let spread = eval_expr(arg.value(), context, caller_scope, values)?;
+                let unpacked = (|| {
+                    if !values.is_array_like(spread)? {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                    let first_unpacked = evaluated_args.len();
+                    append_unpacked_call_arg_values(
+                        spread, &mut evaluated_args, &mut saw_named, context, values,
+                    )?;
+                    for argument in &mut evaluated_args[first_unpacked..] {
+                        if argument.value.is_borrowed() {
+                            argument.value = values.retain(argument.value)?;
+                        }
+                    }
+                    Ok(())
+                })();
+                let released = release_expr_result(spread, context, values);
+                unpacked.and(released)?;
+                continue;
+            }
+
+            if let Some(name) = arg.name() {
+                saw_named = true;
+                let (value, ref_target) =
+                    eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+                let value = if value.is_borrowed() {
+                    values.retain(value)?
+                } else {
+                    value
+                };
+                evaluated_args.push(EvaluatedCallArg {
+                    name: Some(name.to_string()),
+                    value,
+                    ref_target,
+                });
+                continue;
+            }
+
+            if saw_named {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+            let value = if value.is_borrowed() {
+                values.retain(value)?
+            } else {
+                value
+            };
+            evaluated_args.push(EvaluatedCallArg {
+                name: None,
+                value,
+                ref_target,
+            });
+        }
+        Ok(())
+    })();
+    if let Err(status) = evaluated {
+        for argument in evaluated_args {
+            let _ = release_expr_result(argument.value, context, values);
+        }
+        return Err(status);
+    }
+    Ok(evaluated_args)
 }
 
 /// Reports each directly evaluated argument before binding so callers can manage known temporary owners.

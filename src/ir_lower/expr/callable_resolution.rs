@@ -138,6 +138,11 @@ pub(super) fn lower_static_callable_call(
                 &function_name,
                 source_prefers_extension_builtin(&function_name),
             );
+            if let Some(call) = lower_packed_builtin_call(
+                ctx, &function_name, sig.as_ref(), callback_args, expr,
+            ) {
+                return Some(call);
+            }
             // Source-order argument evaluation publishes each owned argument before the next one
             // is evaluated, so a later argument that throws cannot strand an earlier one. The
             // ledger must be balanced on this path too: `emit_builtin_call_value` releases the

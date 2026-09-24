@@ -60,6 +60,25 @@ pub(super) fn lower_arg_with_signature(
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 
+/// Captures a by-value runtime-parser argument while preserving by-reference places.
+pub(super) fn lower_arg_with_signature_options(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+    capture_values: bool,
+) -> crate::ir::ValueId {
+    if !capture_values {
+        return lower_arg_with_signature(ctx, sig, index, arg);
+    }
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        promote_captured_reference_argument(ctx, arg);
+        return lower_arg_with_signature(ctx, sig, index, arg);
+    }
+    let lowered = lower_expr(ctx, arg);
+    capture_call_argument_value(ctx, lowered, index, arg.span).value
+}
+
 /// Promotes a runtime-parser output local at its source-order argument evaluation point.
 /// The managed reference retains storage identity without capturing the previous PHP value.
 pub(super) fn promote_captured_reference_argument(ctx: &mut LoweringContext<'_, '_>, arg: &Expr) {
@@ -714,6 +733,20 @@ pub(super) fn lower_args_with_signature_options(
     trim_trailing_defaults: bool,
     capture_values: bool,
 ) -> Vec<crate::ir::ValueId> {
+    lower_args_with_signature_options_for_capture(
+        ctx, sig, args, trim_trailing_defaults, capture_values, None,
+    )
+}
+
+/// Promotes one runtime-parser output when its argument is evaluated in source order.
+pub(super) fn lower_args_with_signature_options_for_capture(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    trim_trailing_defaults: bool,
+    capture_values: bool,
+    capture_output_index: Option<usize>,
+) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
@@ -721,11 +754,11 @@ pub(super) fn lower_args_with_signature_options(
     let args = literal_bound.as_deref().unwrap_or(args);
     if crate::types::call_args::has_named_args(args) {
         let operands = lower_named_args_with_signature_options(
-            ctx, sig, args, trim_trailing_defaults, capture_values,
+            ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
         );
         return coerce_operands_to_params(ctx, sig, operands);
     }
-    if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args, None) {
+    if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args, None, capture_values) {
         return operands;
     }
     let static_spread_args = if has_static_call_spread_args(args) {
@@ -738,6 +771,16 @@ pub(super) fn lower_args_with_signature_options(
         return coerce_operands_to_params(ctx, sig, operands);
     }
     if args.iter().any(is_spread_arg) {
+        if capture_values {
+            return args.iter().enumerate().map(|(index, arg)| {
+                if is_spread_arg(arg) {
+                    let lowered = lower_expr(ctx, arg);
+                    capture_call_argument_value(ctx, lowered, index, arg.span).value
+                } else {
+                    lower_arg_with_signature_options(ctx, sig, index, arg, true)
+                }
+            }).collect();
+        }
         return lower_args(ctx, args);
     }
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
@@ -751,8 +794,11 @@ pub(super) fn lower_args_with_signature_options(
             .iter()
             .enumerate()
             .map(|(index, arg)| {
-                let value = lower_arg_with_signature(ctx, sig, index, arg);
-                if index + 1 < args.len() {
+                if capture_output_index == Some(index) {
+                    promote_captured_reference_argument(ctx, arg);
+                }
+                let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
+                if !capture_values && index + 1 < args.len() {
                     root_prior_argument_preserving_reference_place(
                         ctx, sig, index, arg, value,
                     )
@@ -767,8 +813,11 @@ pub(super) fn lower_args_with_signature_options(
         .iter()
         .enumerate()
         .map(|(index, arg)| {
-            let value = lower_arg_with_signature(ctx, sig, index, arg);
-            if index + 1 < args.len() {
+            if capture_output_index == Some(index) {
+                promote_captured_reference_argument(ctx, arg);
+            }
+            let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
+            if !capture_values && index + 1 < args.len() {
                 root_prior_argument_preserving_reference_place(
                     ctx, sig, index, arg, value,
                 )

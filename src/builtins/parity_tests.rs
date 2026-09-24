@@ -558,6 +558,11 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Ptr => "ptr",
         TypeSpec::Callable => "callable",
         TypeSpec::Array => "array",
+        TypeSpec::False => "false",
+        TypeSpec::Null => "null",
+        TypeSpec::Union(members) => {
+            return members.iter().any(|member| php_type_matches(*member, declared));
+        }
         // `declared` already had its `?` stripped above, so compare the inner type.
         TypeSpec::Nullable(inner) => return php_type_matches(*inner, declared),
         TypeSpec::Mixed => {

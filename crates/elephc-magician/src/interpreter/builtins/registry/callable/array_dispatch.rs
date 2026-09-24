@@ -150,6 +150,9 @@ pub(in crate::interpreter) fn eval_callable_with_values(
     if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
         return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
     }
+    if eval_builtin_uses_owned_arguments(name) {
+        return eval_builtin_callback_with_arguments(name, positional_args(evaluated_args), false, context, values);
+    }
     if let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? {
         return Ok(result);
     }
@@ -182,6 +185,9 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
         return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+    }
+    if eval_builtin_uses_owned_arguments(name) {
+        return eval_builtin_callback_with_arguments(name, evaluated_args, true, context, values);
     }
     if let Some(result) =
         eval_date_procedural_alias_with_evaluated_args(name, evaluated_args.clone(), context, values)?

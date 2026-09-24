@@ -130,7 +130,7 @@ fn eval_reference_array_element_value(
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
     if let EvalExpr::LoadVar(local) = value {
         if let Some(reference) = eval_persistent_variable_reference(local, context, scope, values)? {
-            return Ok((values.retain(reference)?, None));
+            return Ok((values.retain(reference)?, Some(EvalReferenceTarget::Cell { cell: reference })));
         }
     }
     let (value, target) = eval_call_arg_value(value, context, scope, values)?;

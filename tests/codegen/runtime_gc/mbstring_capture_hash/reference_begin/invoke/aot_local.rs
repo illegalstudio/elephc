@@ -100,9 +100,9 @@ echo "done\n";
     let (assembly, runtime, libraries) = compile_source_to_asm_with_options(source, &directory, 8_388_608, true, true);
     let publish = hash_slot_assembly("_capture_test_writer").1;
     let hold = if target().arch == Arch::AArch64 {
-        format!("stp x29, x30, [sp, #-16]!\nsub x0, x0, #8\nbl __rt_incref\n{publish}\nmov x0, #0\nldp x29, x30, [sp], #16\nret\n")
+        format!("stp x29, x30, [sp, #-16]!\nbl __rt_incref\n{publish}\nmov x0, #0\nldp x29, x30, [sp], #16\nret\n")
     } else {
-        format!("sub rsp, 8\nlea rax, [rdi - 8]\ncall __rt_incref\nmov rdi, rax\n{publish}\nxor eax, eax\nadd rsp, 8\nret\n")
+        format!("sub rsp, 8\nmov rax, rdi\ncall __rt_incref\nmov rdi, rax\n{publish}\nxor eax, eax\nadd rsp, 8\nret\n")
     };
     let mut patched = replace_function(&assembly, "capture_test_hold", &hold);
     patched = replace_function(&patched, "capture_test_read", &observe_shim());
@@ -111,8 +111,8 @@ echo "done\n";
     let output = assemble_and_run_capture(&patched, &runtime_obj_for_asm(&runtime), &directory,
         &libraries, &default_link_paths(), &[]);
     assert!(output.success, "{}\n{}", output.stdout, output.stderr);
-    let ordinary = "hold:0\nafter frame:6\ndrop:destroy value\n0\n";
-    let throwing = "hold:0\ncaught:scope\nafter frame:6\ndrop:destroy value\n0\n";
+    let ordinary = "hold:0\nafter frame:8\ndrop:destroy value\n0\n";
+    let throwing = "hold:0\ncaught:scope\nafter frame:8\ndrop:destroy value\n0\n";
     assert_eq!(output.stdout, format!("{}done\n", format!("{ordinary}{ordinary}{throwing}").repeat(8)));
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     let _ = std::fs::remove_dir_all(directory);
@@ -124,14 +124,10 @@ fn local_shim() -> String {
         return r#"
     sub sp, sp, #64
     stp x29, x30, [sp, #48]
-    sub x0, x0, #8
     str x0, [sp, #32]
     bl __rt_heap_kind
-    cmp x0, #5
+    cmp x0, #8
     b.ne .L_capture_local_invalid
-    ldr x0, [sp, #32]
-    bl __rt_reference_is
-    cbz x0, .L_capture_local_invalid
     mov x0, #0
     ldr x1, [sp, #32]
     mov x2, #0
@@ -161,15 +157,11 @@ fn local_shim() -> String {
     push rbp
     mov rbp, rsp
     sub rsp, 48
-    lea rax, [rdi - 8]
+    mov rax, rdi
     mov QWORD PTR [rsp + 32], rax
     call __rt_heap_kind
-    cmp eax, 5
+    cmp eax, 8
     jne .L_capture_local_invalid
-    mov rax, QWORD PTR [rsp + 32]
-    call __rt_reference_is
-    test eax, eax
-    jz .L_capture_local_invalid
     xor edi, edi
     mov rsi, QWORD PTR [rsp + 32]
     xor edx, edx

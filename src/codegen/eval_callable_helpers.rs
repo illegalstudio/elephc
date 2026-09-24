@@ -790,6 +790,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         captures,
         mbstring_operation: None,
         owns_string_return,
+        php_return_status: true,
         defaults: &defaults,
     };
     let enclosing = emitter.current_text_section();

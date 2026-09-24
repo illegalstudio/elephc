@@ -102,6 +102,17 @@ fn capture_callback_argument(
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps, owners: &mut Vec<RuntimeCellHandle>,
 ) -> Result<(), EvalStatus> {
     if preserve_references && builtin_arguments::by_reference(Some(contract), argument.name.as_deref(), position) {
+        if let Some(EvalReferenceTarget::Cell { cell }) = argument.ref_target.as_ref() {
+            if !values.is_reference(argument.value)? {
+                let old = argument.value;
+                let reference = values.retain(*cell)?;
+                owners.push(reference);
+                argument.value = reference;
+                let index = owners.iter().position(|owner| *owner == old).expect("owned callback input");
+                owners.remove(index);
+                eval_release_value(context, values, old)?;
+            }
+        }
         if argument.ref_target.is_some() && !values.is_reference(argument.value)? {
             return Err(EvalStatus::UnsupportedConstruct);
         }

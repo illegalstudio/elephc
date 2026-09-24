@@ -17,7 +17,7 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
-    emit_runtime_callable_invoker_with_string_owner(ctx, sig, captures, false)
+    emit_runtime_callable_invoker_with_string_owner(ctx, sig, captures, false, false)
 }
 
 /// Emits a builtin invoker with mbstring's runtime argument boundary when required.
@@ -48,7 +48,8 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         sig,
         captures: &[],
         mbstring_operation: Some(operation),
-        owns_string_return: false,
+        owns_string_return: sig.return_type.codegen_repr() == PhpType::Str,
+        php_return_status: false,
         defaults: &defaults,
     };
     let enclosing = ctx.emitter.current_text_section();
@@ -67,8 +68,9 @@ pub(super) fn emit_runtime_callable_invoker_with_string_owner(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
     owns_string_return: bool,
+    php_return_status: bool,
 ) -> String {
-    emit_runtime_callable_invoker_in_class(ctx, sig, captures, owns_string_return, None)
+    emit_runtime_callable_invoker_in_class(ctx, sig, captures, owns_string_return, php_return_status, None)
 }
 
 /// Emits a descriptor invoker whose defaults resolve in the DECLARING class's constant scope.
@@ -80,6 +82,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
     owns_string_return: bool,
+    php_return_status: bool,
     current_class: Option<&str>,
 ) -> String {
     ctx.shared.callable_argument_normalizer |=
@@ -91,7 +94,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     );
     if let Some(label) =
         ctx.shared
-            .runtime_callable_invoker(sig, captures, owns_string_return, &defaults)
+            .runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults)
     {
         return label;
     }
@@ -103,6 +106,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         captures,
         mbstring_operation: None,
         owns_string_return,
+        php_return_status,
         defaults: &defaults,
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
@@ -113,7 +117,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, owns_string_return, &defaults, &label);
+        .cache_runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults, &label);
     label
 }
 
