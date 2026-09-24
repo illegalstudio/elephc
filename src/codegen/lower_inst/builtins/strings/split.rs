@@ -10,8 +10,7 @@
 use super::*;
 
 use crate::codegen::lower_inst::builtins::arrays::values::{
-    emit_loaded_assoc_array_values, emit_loaded_boxed_array_values,
-    emit_loaded_dynamic_mixed_array_values,
+    emit_loaded_assoc_array_values, emit_loaded_dynamic_mixed_array_values,
 };
 
 /// Stack cleanup slots for split builtin string coercions that allocate owned temporaries.
@@ -610,6 +609,10 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
         // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
         PhpType::Bool => Ok("__rt_implode_bool"),
         PhpType::Int => Ok("__rt_implode_int"),
+        // The generic renderer dispatches Float from the array header and calls __rt_ftoa,
+        // preserving the live output cursor across conversion. A separate float helper would
+        // duplicate that cursor-publication protocol.
+        PhpType::Float => Ok("__rt_implode"),
         // An empty array literal carries an uninhabited element type (`Never`, or
         // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
         // dereference an element, so the generic string helper is the safe choice and

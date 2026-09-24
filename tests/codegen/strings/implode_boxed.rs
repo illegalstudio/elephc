@@ -64,10 +64,12 @@ echo implode(',', $o->x), ";";
 echo implode(',', $t), ";";
 echo implode(',', $o->x ?? []), ";";
 echo g([1, 2, 3]), ";";
-echo h([4.5, 5.5]);
+echo h([4.5, 5.5]), ";";
+echo ImPlOdE(',', [6, 7]), ";";
+echo JoIn([8, 9]);
 "#,
     );
-    assert_eq!(out, "1,2;1,2;1,2;1|2|3;4.5-5.5");
+    assert_eq!(out, "1,2;1,2;1,2;1|2|3;4.5-5.5;6,7;89");
 }
 
 /// Verifies the layouts survive an `(array)` cast of a `mixed` RETURN value.
