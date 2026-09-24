@@ -78,7 +78,7 @@ return true;"##,
 
     assert_eq!(
         values.output,
-        "7/3:first#0rvRNTnac:int!B:A1:EvalParamTag:first:d|union#1rvbYTnac:union!:intB:stringB:A0:d|both#2rvbYTnac:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|items#3OvbYTNAc:array?B:A0:D=null|callback#4OvbYTNaC:callable?B:A0:D=null|second#5OvbYTNac:App\\Name?C:A0:D=null|rest#6OVRNtNac:null:A0:d|"
+        "7/3:first#0rvRNTnac:int!B:A1:EvalParamTag:first:d|union#1rvbYTnac:union!:stringB:intB:A0:d|both#2rvbYTnac:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|items#3OvbYTNAc:array?B:A0:D=null|callback#4OvbYTNaC:callable?B:A0:D=null|second#5OvbYTNac:App\\Name?C:A0:D=null|rest#6OVRNtNac:null:A0:d|"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -114,7 +114,7 @@ return true;"##,
 
     assert_eq!(
         values.output,
-        "dep:?EvalReflectTypeStringDep|union:int|string|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:int|string|null|concat:int|string|null|echo:int|string|null"
+        "dep:?EvalReflectTypeStringDep|union:string|int|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:string|int|null|concat:string|int|null|echo:string|int|null"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -287,7 +287,7 @@ return true;"##,
 
     assert_eq!(
         values.output,
-        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep:set:EvalReflectPropertyTypeDep:plainSet:N:unionSet:2"
+        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:stringB:intB|direct:T:EvalReflectPropertyTypeDep:set:EvalReflectPropertyTypeDep:plainSet:N:unionSet:2"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -325,7 +325,7 @@ return true;"##,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "string:2:intB:stringB:2:7");
+    assert_eq!(values.output, "string:2:stringB:intB:2:7");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
