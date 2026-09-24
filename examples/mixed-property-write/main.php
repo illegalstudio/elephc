@@ -1,26 +1,12 @@
 <?php
-class Settings {
-    public int $attempts = 0;
-    private string $token = "kept";
-
-    public function token(): string { return $this->token; }
+class Profile {
+    public string $name = "unknown";
 }
 
-function incrementAttempts(mixed $target): void {
-    $target->attempts = 3;
+function renameProfile(mixed $profile, string $name): void {
+    $profile->name = $name;
 }
 
-function overwriteToken(mixed $target): void {
-    $target->token = "changed";
-}
-
-$settings = new Settings();
-incrementAttempts($settings);
-echo "attempts: ", $settings->attempts, "\n";
-
-try {
-    overwriteToken($settings);
-} catch (Error $error) {
-    echo "private write blocked\n";
-}
-echo "token: ", $settings->token(), "\n";
+$profile = new Profile();
+renameProfile($profile, "Ada");
+echo $profile->name, "\n";
