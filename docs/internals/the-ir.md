@@ -748,6 +748,24 @@ All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
 
+#### Associative literal spreads
+
+An associative literal that interleaves explicit keys, spreads, and bare values is kept as an
+ordered `ArrayLiteralMixed` entry list until EIR lowering. Lowering allocates the destination
+hash once and visits entries in source order: keyed entries use `HashSet`, spread entries use
+`HashSpread`, and a bare value uses the runtime hash-append path. A bare value after a spread must
+get its integer key at run time because the spread's length is not known while parsing; assigning
+the parser's static cursor could overwrite a key contributed by the spread.
+
+Spreading a hash copies its values in insertion order, preserving string keys and renumbering
+integer keys according to PHP unpacking. Spreading an indexed array first emits `ArrayToHash`,
+which consumes the array reference it receives and boxes each slot as `Mixed`; `HashSpread` then
+copies that promoted hash into the destination. Lowering acquires a reference first when the
+source is borrowed from a local, global, reference cell, or static property, but transfers an
+owned temporary directly. Only the promoted hash is released after `HashSpread`, since
+`ArrayToHash` already consumed the indexed source. This keeps COW owners intact and avoids both
+double releases and leaked temporary arrays.
+
 `ArrayCloneShallow` also carries the one aliasing case a by-reference builtin cannot
 resolve at runtime: a `$replacement` that IS the receiver. `array_splice($a, 1, 1, $a)`
 lowers both arguments to loads of the same slot, so the backend would pass one pointer
