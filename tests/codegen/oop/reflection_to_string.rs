@@ -16,9 +16,8 @@
 //!   gets right: the prototype marker, the empty body, and the union order (#1117).
 //! - A union prints in PHP's type-mask order, not the declared one: `int|string` comes back as
 //!   `string|int`. See `reflection_union_member_rank`.
-//! - An internal callable prints `<internal>` where PHP names the extension (`<internal:Core>`).
-//!   The extension is not carried in the metadata; `<user>` would contradict the same object's
-//!   `isInternal()`, which answers true.
+//! - Internal callable origins include the owning module, including PHP's capitalized
+//!   `<internal:Core>` spelling for Zend functions.
 
 use super::*;
 
@@ -369,19 +368,26 @@ echo $q->getDeclaringFunction()->__toString();
     );
 }
 
-/// An internal callable's dump must not claim `<user>` while the same object's `isInternal()`
-/// answers true. PHP names the extension (`<internal:Core>` for `strlen`); the metadata reaching
-/// the renderer does not carry it, so the tag stops at `<internal>`.
+/// Internal function and method dumps name their PHP module just as Reflection does.
 #[test]
-fn test_internal_function_dump_says_internal() {
+fn test_internal_callable_dumps_include_their_php_module() {
     let out = compile_and_run(
         r#"<?php
-$r = new ReflectionFunction('strlen');
-$s = (string) $r;
-echo substr($s, 0, strpos($s, ']') + 1), "|", $r->isInternal() ? "y" : "n", "\n";
+$core = new ReflectionFunction('strlen');
+$json = new ReflectionFunction('json_encode');
+$date = new ReflectionMethod('DateTime', 'format');
+$core_dump = (string) $core;
+$json_dump = (string) $json;
+$date_dump = (string) $date;
+echo substr($core_dump, 0, strpos($core_dump, ']') + 1), "|";
+echo substr($json_dump, 0, strpos($json_dump, ']') + 1), "|";
+echo substr($date_dump, 0, strpos($date_dump, ']') + 1), "\n";
 "#,
     );
-    assert_eq!(out, "Function [ <internal> function strlen ]|y\n");
+    assert_eq!(
+        out,
+        "Function [ <internal:Core> function strlen ]|Function [ <internal:json> function json_encode ]|Method [ <internal:date, prototype DateTimeInterface> public method format ]\n"
+    );
 }
 
 /// Verifies a supported callable BUILTIN's declaring dump keeps its parameters.
@@ -408,7 +414,7 @@ echo (string) $f;
     );
     assert_eq!(
         out,
-        "string|strlen|Function [ <internal> function strlen ] {\n  \
+        "string|strlen|Function [ <internal:Core> function strlen ] {\n  \
          - Parameters [1] {\n    \
          Parameter #0 [ <required> string $string ]\n  }\n  - Return [ int ]\n}\n"
     );

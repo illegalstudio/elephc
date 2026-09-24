@@ -245,6 +245,7 @@ pub(super) fn emit_reflection_owner_object(
         } else if class_name == "ReflectionMethod" {
             reflection_method_to_string(
                 reflected_name,
+                metadata.parent_class_name.as_deref(),
                 metadata.member_flags,
                 metadata
                     .prototype_member
