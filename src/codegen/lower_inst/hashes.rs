@@ -836,6 +836,10 @@ fn emit_hash_append_key_scan_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction(&format!("b.ne {}", next_label));                   // skip string-keyed entries
     ctx.emitter.instruction("ldr x15, [x14, #8]");                              // load the integer key low word
     ctx.emitter.instruction("add x15, x15, #1");                                // candidate append key is existing integer key plus one
+    if crate::codegen_support::compile_php_version().version_id() < 80300 {
+        ctx.emitter.instruction("cmp x15, #0");                                  //check for a negative candidate under the pre-8.3 profile
+        ctx.emitter.instruction("csel x15, x15, xzr, ge");                       //restart a negative candidate at key zero
+    }
     ctx.emitter.instruction(&format!("cbz x12, {}", update_label));             // first integer key always seeds the append key
     ctx.emitter.instruction("cmp x15, x11");                                    // compare the candidate with the best key so far
     ctx.emitter.instruction(&format!("b.le {}", next_label));                   // keep the existing best key when it is larger
@@ -872,6 +876,11 @@ fn emit_hash_append_key_scan_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction(&format!("jne {}", next_label));                    // skip string-keyed entries
     ctx.emitter.instruction("mov rcx, QWORD PTR [rax + 8]");                    // load the integer key low word
     ctx.emitter.instruction("add rcx, 1");                                      // candidate append key is existing integer key plus one
+    if crate::codegen_support::compile_php_version().version_id() < 80300 {
+        ctx.emitter.instruction("xor rdx, rdx");                                 //prepare zero as the pre-8.3 restart key
+        ctx.emitter.instruction("test rcx, rcx");                                //check whether the candidate append key is negative
+        ctx.emitter.instruction("cmovl rcx, rdx");                               //restart a negative candidate at key zero
+    }
     ctx.emitter.instruction("test r8, r8");                                     // has any integer key already seeded the append key?
     ctx.emitter.instruction(&format!("jz {}", update_label));                   // first integer key always seeds the append key
     ctx.emitter.instruction("cmp rcx, r11");                                    // compare the candidate with the best key so far

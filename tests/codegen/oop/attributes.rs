@@ -3497,6 +3497,33 @@ echo $c ? json_encode($c->getValue()) : "false", "\n";
     );
 }
 
+/// Reflection and runtime array appends use the implicit integer-key rule for the selected PHP profile.
+#[test]
+fn test_reflection_constant_array_implicit_keys_follow_php_profile() {
+    let source = r#"<?php
+class NegativeKeyConstHolder {
+    public const VALUE = [-5 => "a", "b"];
+}
+$class = new ReflectionClass(NegativeKeyConstHolder::class);
+$constant = $class->getConstant("VALUE");
+$constants = $class->getConstants();
+$array = [-5 => "a", "b"];
+$array[] = "c";
+echo PHP_VERSION, " ", json_encode($constant), " ", json_encode($constants["VALUE"]), " ", json_encode($array), "\n";
+"#;
+    let php82 = compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php82);
+    assert_eq!(
+        php82,
+        "8.2.0 {\"-5\":\"a\",\"0\":\"b\"} {\"-5\":\"a\",\"0\":\"b\"} {\"-5\":\"a\",\"0\":\"b\",\"1\":\"c\"}\n"
+    );
+
+    let php83 = compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php83);
+    assert_eq!(
+        php83,
+        "8.3.0 {\"-5\":\"a\",\"-4\":\"b\"} {\"-5\":\"a\",\"-4\":\"b\"} {\"-5\":\"a\",\"-4\":\"b\",\"-3\":\"c\"}\n"
+    );
+}
+
 /// Pins the known limitation that a parameter defaulted to an enum case reflects as having
 /// no default (PHP reports the default; the enum-case default form is a later gap). A case
 /// nested in an array constant is a separate, later gap and is not exercised here: the

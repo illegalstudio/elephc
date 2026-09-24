@@ -305,7 +305,10 @@ literal (`ArrayLiteralMixed`) folds each entry in PHP evaluation order: bare
 elements take the next free integer slot, explicit keys are kept, and a
 spread's integer keys are renumbered into a contiguous block starting after the
 destination's highest integer key (`0` when it has none) while its string keys
-are kept in place — matching PHP's compile-time constant evaluation. Array keys
+are kept in place. The implicit key after a negative integer key starts at `0`
+for PHP 8.0–8.2 and advances from that key for PHP 8.3+, following the selected
+compile profile. The parser preserves such bare entries until lowering so the
+profile-dependent rule remains available. Array keys
 normalize with PHP's rules (integer strings, `false`, truncated floats, `null`
 to `""`). Unfolding a form outside this list is a compile error naming the
 unsupported form, not a silent fallback.

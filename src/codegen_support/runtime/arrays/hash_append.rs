@@ -79,6 +79,10 @@ pub fn emit_hash_append(emitter: &mut Emitter) {
     // -- materialize the append key and delegate insertion --
     emitter.label("__rt_hash_append_key_ready");
     emitter.instruction("cbz x9, __rt_hash_append_no_int_keys");                // hashes with no integer keys append at key zero
+    if crate::codegen_support::compile_php_version().version_id() < 80300 {
+        emitter.instruction("cmp x8, #0");                                       //check whether the largest integer key is negative
+        emitter.instruction("b.lt __rt_hash_append_no_int_keys");                //PHP before 8.3 restarts append keys at zero
+    }
     emitter.instruction("add x1, x8, #1");                                      // append after the largest observed integer key
     emitter.instruction("b __rt_hash_append_call_set");                         // use the computed key for insertion
 
@@ -150,6 +154,10 @@ fn emit_hash_append_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_append_key_ready");
     emitter.instruction("test r9, r9");                                         // did the scan observe any integer keys?
     emitter.instruction("je __rt_hash_append_no_int_keys");                     // hashes with no integer keys append at key zero
+    if crate::codegen_support::compile_php_version().version_id() < 80300 {
+        emitter.instruction("test rax, rax");                                    //check whether the largest integer key is negative
+        emitter.instruction("js __rt_hash_append_no_int_keys");                  //PHP before 8.3 restarts append keys at zero
+    }
     emitter.instruction("add rax, 1");                                          // append after the largest observed integer key
     emitter.instruction("jmp __rt_hash_append_call_set");                       // use the computed key for insertion
 
