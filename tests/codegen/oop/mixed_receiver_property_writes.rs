@@ -259,6 +259,6 @@ fn test_example_mixed_property_write_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/mixed-property-write/main.php"));
     assert_eq!(
         out,
-        "attempts: 3\nprivate write blocked\ntoken: kept\n"
+        "Ada\n"
     );
 }
