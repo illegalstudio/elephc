@@ -39,10 +39,25 @@ for ($i = 0; $i < 20; $i++) {
     $m = ["k" => $i + 1, "j" => "x"];
     $count = $count + $m["k"];
 }
+
 echo $count, "\n";
 "#,
     );
     assert_clean(out, "210\n");
+}
+
+/// A zero-value push through a reference alias does not release its boxed associative owner.
+#[test]
+fn test_zero_value_assoc_array_push_keeps_flow_refined_mixed_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$hash = ["key" => 1];
+$alias =& $hash;
+for ($i = 0; $i < 32; $i++) { array_push($alias); }
+echo count($hash), ":", $hash["key"], "\n";
+"#,
+    );
+    assert_clean(out, "1:1\n");
 }
 
 /// Same shape with a boxed `ichecked_mul` value, covering the sibling checked
