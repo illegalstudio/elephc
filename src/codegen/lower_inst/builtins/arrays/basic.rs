@@ -104,8 +104,13 @@ fn lower_array_push_into_hash(
         &sentinel_label,
     );
     let receiver = ReceiverPlace::resolve(ctx, array)?;
-    if let Some(slot) = receiver.slot() {
-        ctx.release_mutated_source_local_owner(slot, array)?;
+    // A zero-value call only reads the count below; it never publishes a replacement pointer.
+    // Releasing a boxed local here would leave its slot unchanged, so epilogue cleanup would
+    // decref the same owner again. The first append is what makes the old owner mutable/consumed.
+    if inst.operands.len() > 1 {
+        if let Some(slot) = receiver.slot() {
+            ctx.release_mutated_source_local_owner(slot, array)?;
+        }
     }
     let storage_value_ty = match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::AssocArray { value, .. } => value.codegen_repr(),
