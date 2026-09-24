@@ -108,15 +108,18 @@ pub(super) fn reflection_builtin_function_signature(function_name: &str) -> Opti
 
 /// Returns whether a reflected function or method represents compiler builtin metadata.
 pub(super) fn reflection_function_or_method_is_internal(
+    ctx: &FunctionContext<'_>,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
 ) -> bool {
     if class_name == "ReflectionFunction" {
-        return metadata
-            .reflected_name
-            .as_deref()
-            .and_then(reflection_builtin_function_signature)
-            .is_some();
+        let Some(name) = metadata.reflected_name.as_deref() else {
+            return false;
+        };
+        if ctx.function_by_name(name).is_some() {
+            return false;
+        }
+        return reflection_builtin_function_signature(name).is_some();
     }
     metadata
         .parent_class_name
@@ -176,8 +179,9 @@ pub(super) fn reflection_method_metadata(
 pub(super) fn reflection_method_owner_metadata(
     member: ReflectionListedMember,
 ) -> ReflectionOwnerMetadata {
+    let rendered_to_string = reflection_listed_method_to_string(&member);
     ReflectionOwnerMetadata {
-        rendered_to_string: None,
+        rendered_to_string: Some(rendered_to_string),
         reflected_name: Some(member.name.clone()),
         attr_names: member.attr_names,
         attr_args: member.attr_args,

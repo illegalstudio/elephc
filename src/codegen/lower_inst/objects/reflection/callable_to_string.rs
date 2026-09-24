@@ -34,7 +34,9 @@ pub(super) fn reflection_method_to_string(
     name: &str,
     flags: ReflectionMemberFlags,
     prototype_class_name: Option<&str>,
+    inherited_class_name: Option<&str>,
     is_internal: bool,
+    returns_reference: bool,
     parameters: &[ReflectionParameterMember],
     return_type: Option<&ReflectionParameterTypeMetadata>,
 ) -> String {
@@ -50,25 +52,46 @@ pub(super) fn reflection_method_to_string(
     }
     parts.push(reflection_property_visibility_label(flags));
     parts.push("method");
-    let origin = match (reflection_origin_label(is_internal), prototype_class_name) {
-        (label, Some(class_name)) => format!("<{label}, prototype {class_name}>"),
-        (label, None) => format!("<{label}>"),
+
+    let mut origin_parts = vec![reflection_origin_label(is_internal).to_string()];
+    if let Some(class_name) = inherited_class_name {
+        origin_parts.push(format!("inherits {class_name}"));
+    }
+    if let Some(class_name) = prototype_class_name {
+        origin_parts.push(format!("prototype {class_name}"));
+    }
+    // PHP marks constructors specially in ReflectionMethod dumps; destructors have no dtor tag.
+    if name.eq_ignore_ascii_case("__construct") {
+        origin_parts.push("ctor".to_string());
+    }
+    let origin = format!("<{}>", origin_parts.join(", "));
+    let display_name = if returns_reference {
+        format!("&{name}")
+    } else {
+        name.to_string()
     };
-    let header = format!("Method [ {} {} {} ]", origin, parts.join(" "), name);
+    let header = format!("Method [ {} {} {} ]", origin, parts.join(" "), display_name);
     reflection_callable_body(&header, parameters, return_type)
 }
 
-/// Renders `ReflectionFunction::__toString()` for one reflected function.
+/// Renders ReflectionFunction::__toString() for one reflected function.
 pub(super) fn reflection_function_to_string(
     name: &str,
     is_internal: bool,
+    returns_reference: bool,
     parameters: &[ReflectionParameterMember],
     return_type: Option<&ReflectionParameterTypeMetadata>,
 ) -> String {
+    let normalized_name = name.trim_start_matches(char::from(92));
+    let display_name = if returns_reference {
+        format!("&{normalized_name}")
+    } else {
+        normalized_name.to_string()
+    };
     let header = format!(
         "Function [ <{}> function {} ]",
         reflection_origin_label(is_internal),
-        name.trim_start_matches('\\')
+        display_name
     );
     reflection_callable_body(&header, parameters, return_type)
 }
@@ -110,9 +133,12 @@ fn reflection_callable_body(
         return format!("{header} {{\n}}\n");
     }
     let mut rendered = format!("{header} {{\n  - Parameters [{}] {{\n", parameters.len());
-    for parameter in parameters {
+    for (visible_position, parameter) in parameters.into_iter().enumerate() {
         rendered.push_str("    ");
-        rendered.push_str(&reflection_parameter_to_string(parameter));
+        rendered.push_str(&reflection_parameter_to_string_at_position(
+            parameter,
+            visible_position as i64,
+        ));
         rendered.push('\n');
     }
     rendered.push_str("  }\n");
@@ -130,9 +156,17 @@ fn reflection_callable_body(
 /// The `__toString` slot used to hold the parameter's bare NAME, so `(string) $parameter` answered
 /// `a` where PHP answers `Parameter #0 [ <required> int $a ]`.
 pub(super) fn reflection_parameter_to_string(parameter: &ReflectionParameterMember) -> String {
+    reflection_parameter_to_string_at_position(parameter, parameter.position)
+}
+
+/// Renders a parameter at its visible position after hidden compiler-only formals are removed.
+fn reflection_parameter_to_string_at_position(
+    parameter: &ReflectionParameterMember,
+    position: i64,
+) -> String {
     let mut rendered = format!(
         "Parameter #{} [ <{}> ",
-        parameter.position,
+        position,
         if parameter.is_optional {
             "optional"
         } else {
@@ -151,7 +185,6 @@ pub(super) fn reflection_parameter_to_string(parameter: &ReflectionParameterMemb
     }
     rendered.push('$');
     rendered.push_str(&parameter.name);
-    // A variadic collects what is left, so it has no default to show even though it is optional.
     if !parameter.is_variadic {
         if let Some(default) = reflection_parameter_default_to_string(parameter) {
             rendered.push_str(" = ");
@@ -274,6 +307,11 @@ fn reflection_dump_float(value: f64) -> String {
 
 /// Renders the `ReflectionMethod::__toString()` answer for one listed member.
 pub(super) fn reflection_listed_method_to_string(member: &ReflectionListedMember) -> String {
+    let inherited_class_name = if member.flags.is_inherited {
+        member.declaring_class_name.as_deref()
+    } else {
+        None
+    };
     reflection_method_to_string(
         &member.name,
         member.flags,
@@ -281,10 +319,12 @@ pub(super) fn reflection_listed_method_to_string(member: &ReflectionListedMember
             .prototype_member
             .as_deref()
             .and_then(|prototype| prototype.declaring_class_name.as_deref()),
+        inherited_class_name,
         member
             .declaring_class_name
             .as_deref()
             .is_some_and(reflection_class_like_is_internal),
+        member.returns_reference,
         &member.parameters,
         member.type_metadata.as_ref(),
     )

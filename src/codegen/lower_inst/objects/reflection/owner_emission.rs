@@ -238,7 +238,7 @@ pub(super) fn emit_reflection_owner_object(
     if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
         // The `__string` slot backs `__toString()`. Both owners declared it and nothing ever
         // filled it, so `(string) $method` answered the empty string (#1080).
-        let is_internal = reflection_function_or_method_is_internal(class_name, &metadata);
+        let is_internal = reflection_function_or_method_is_internal(ctx, class_name, &metadata);
         let reflected_name = metadata.reflected_name.as_deref().unwrap_or("");
         let rendered = if let Some(rendered) = metadata.rendered_to_string.clone() {
             rendered
@@ -250,7 +250,9 @@ pub(super) fn emit_reflection_owner_object(
                     .prototype_member
                     .as_deref()
                     .and_then(|prototype| prototype.declaring_class_name.as_deref()),
+                None,
                 is_internal,
+                metadata.returns_reference,
                 &metadata.parameter_members,
                 metadata.type_metadata.as_ref(),
             )
@@ -258,6 +260,7 @@ pub(super) fn emit_reflection_owner_object(
             reflection_function_to_string(
                 reflected_name,
                 is_internal,
+                metadata.returns_reference,
                 &metadata.parameter_members,
                 metadata.type_metadata.as_ref(),
             )

@@ -493,3 +493,88 @@ echo (string) new ReflectionFunction('freePlain');
          Parameter #0 [ <required> int $a ]\n  }\n  - Return [ bool ]\n}\n"
     );
 }
+
+
+/// Builtin signatures are retained in declaring-function dumps, and interface/trait methods use
+/// their original callable metadata rather than the parameterless fallback.
+#[test]
+fn test_declaring_function_dump_covers_builtins_interfaces_and_traits() {
+    let out = compile_and_run(
+        r#"<?php
+$builtinParameter = new ReflectionParameter("strlen", "string");
+$builtinDump = $builtinParameter->getDeclaringFunction()->__toString();
+echo (strpos($builtinDump, "Parameters [1]") !== false ? "B" : "b");
+echo (strpos($builtinDump, 'string $string') !== false ? "P" : "p");
+
+interface DumpInterface { public function run(int $value): void; }
+trait DumpTrait { public function run(string $value): void {} }
+$interfaceParameter = new ReflectionParameter([DumpInterface::class, "run"], 0);
+$traitParameter = new ReflectionParameter([DumpTrait::class, "run"], 0);
+$interfaceDump = $interfaceParameter->getDeclaringFunction()->__toString();
+$traitDump = $traitParameter->getDeclaringFunction()->__toString();
+echo (strpos($interfaceDump, 'int $value') !== false ? "I" : "i");
+echo (strpos($traitDump, 'string $value') !== false ? "T" : "t");
+"#,
+    );
+    assert_eq!(out, "BPIT");
+}
+
+/// Reference-return markers in function and method headers follow their declarations.
+#[test]
+fn test_reflection_callable_dumps_mark_reference_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferenceDumpBox { public $value = 1; }
+function &referenceDumpFunction(ReferenceDumpBox $box) { return $box->value; }
+class ReferenceDumpOwner {
+    public $value = 2;
+    public function &read() { return $this->value; }
+}
+$functionDump = (new ReflectionFunction("referenceDumpFunction"))->__toString();
+$methodDump = (new ReflectionMethod(ReferenceDumpOwner::class, "read"))->__toString();
+echo strpos($functionDump, "function &referenceDumpFunction") !== false ? "F" : "f";
+echo strpos($methodDump, "method &read") !== false ? "M" : "m";
+"#,
+    );
+    assert_eq!(out, "FM");
+}
+
+/// Method origin tags include inherited owners and constructors while matching PHP's destructor dump.
+#[test]
+fn test_reflection_method_dump_renders_inherited_and_constructor_tags() {
+    let out = compile_and_run(
+        r#"<?php
+class DumpMethodParent {
+    public function inherited() {}
+    public function __construct() {}
+    public function __destruct() {}
+}
+class DumpMethodChild extends DumpMethodParent {
+    public function own() {}
+}
+$inherited = (new ReflectionMethod(DumpMethodChild::class, "inherited"))->__toString();
+$constructor = (new ReflectionMethod(DumpMethodChild::class, "__construct"))->__toString();
+$destructor = (new ReflectionMethod(DumpMethodChild::class, "__destruct"))->__toString();
+echo strpos($inherited, "<user, inherits DumpMethodParent>") !== false ? "I" : "i";
+echo strpos($constructor, "<user, inherits DumpMethodParent, ctor>") !== false ? "C" : "c";
+echo strpos($destructor, "<user, inherits DumpMethodParent>") !== false ? "D" : "d";
+echo strpos($destructor, "dtor") === false ? "N" : "n";
+"#,
+    );
+    assert_eq!(out, "ICDN");
+}
+
+/// Hidden compiler parameters are omitted and visible positions are compacted in callable dumps.
+#[test]
+fn test_reflection_callable_dump_compacts_positions_after_hidden_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function dump_positions(int $value = 0, ...$rest) { return func_num_args(); }
+$dump = (new ReflectionFunction("dump_positions"))->__toString();
+echo strpos($dump, 'Parameter #0 [ <optional> int $value = 0 ]') !== false ? "0" : "x";
+echo strpos($dump, 'Parameter #1 [ <optional> ...$rest ]') !== false ? "1" : "x";
+echo strpos($dump, "Parameter #2") === false ? "N" : "n";
+"#,
+    );
+    assert_eq!(out, "01N");
+}
