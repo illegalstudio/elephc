@@ -484,12 +484,10 @@ pub(crate) fn prune_function_body(body: Vec<Stmt>, by_ref_return: bool) -> Vec<S
 /// its caller expects a `Generator`, `valid()` answers `true` forever and `foreach` never
 /// terminates (issue #1085).
 ///
-/// Keeping the dead branch is what preserves the property, and it is the only place the two
-/// downstream readers of it can be kept in agreement. `generator_body_return_type` and
-/// `attach_generator_source_if_needed` in `src/ir_lower/function.rs` both ask whether this is a
-/// generator; one of them can also fall back to a declared `Generator` return type, and that
-/// fallback is NOT the same question — a function that merely forwards someone else's generator
-/// declares the same type without holding a `yield` token.
+/// Keeping the dead branch is what preserves the property. Both `generator_body_return_type`
+/// and `attach_generator_source_if_needed` in `src/ir_lower/function.rs` now classify a function
+/// by its `yield` token only; a declared `Generator` return type is not equivalent, because a
+/// function that merely forwards another generator declares that type without holding a `yield`.
 ///
 /// The clone is paid only by bodies that contain a yield at all, and only those whose yields are
 /// ALL statically dead give up their pruning.

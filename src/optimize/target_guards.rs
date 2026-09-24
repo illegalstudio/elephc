@@ -16,13 +16,13 @@ pub(super) fn fold_callable_body<'a>(
     references: impl Iterator<Item = &'a str>,
 ) -> Vec<Stmt> {
     if active_fold_target().is_none() {
-        return fold_block(body);
+        return crate::optimize::body_preserving_yields(body, fold_block);
     }
     with_fresh_reference_volatile(|| {
         for name in references {
             mark_reference_volatile(name);
         }
-        fold_block(body)
+        crate::optimize::body_preserving_yields(body, fold_block)
     })
 }
 
