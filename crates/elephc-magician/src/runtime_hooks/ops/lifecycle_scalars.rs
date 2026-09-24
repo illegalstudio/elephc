@@ -113,6 +113,30 @@ macro_rules! impl_lifecycle_scalar_ops {
         crate::runtime_hooks::object_owners::retain_object_children(self, object, children)
     }
 
+    /// Uses the runtime's GC-traced persistent reference cells.
+    fn supports_persistent_references(&self) -> bool { true }
+
+    /// Checks the runtime wrapper marker before an assignment writes through it.
+    fn is_reference(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_is_reference(value.as_ptr()) } != 0)
+    }
+
+    /// Allocates an independently owned reference wrapper around a copied PHP value.
+    fn reference_new(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_reference_new(value.as_ptr()) })
+    }
+
+    /// Publishes a copied replacement and transfers the previous owner for cleanup.
+    fn reference_replace(&mut self, reference: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        let previous = unsafe { __elephc_eval_value_reference_replace(reference.as_ptr(), value.as_ptr()) };
+        if previous.is_null() { self.null() } else { Self::handle(previous) }
+    }
+
+    /// Detaches a reference before returning an ordinary PHP value copy.
+    fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_copy(value.as_ptr()) })
+    }
+
     /// Emits one PHP warning through the generated runtime diagnostic helper.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
         // Magician submits complete diagnostics, unlike native fragment producers.

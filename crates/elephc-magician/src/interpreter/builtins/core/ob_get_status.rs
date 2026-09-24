@@ -30,7 +30,14 @@ pub(in crate::interpreter) fn eval_builtin_ob_get_status(
         [full_status] => {
             let full_status = eval_owned_expr(full_status, context, scope, values)?;
             let result = eval_ob_get_status_result(&[full_status], context, values);
-            super::call_user_func::release_callback_result(full_status, result, context, values)
+            match (result, eval_release_value(context, values, full_status)) {
+                (Ok(value), Ok(())) => Ok(value),
+                (Err(status), _) => Err(status),
+                (Ok(value), Err(status)) => {
+                    let _ = eval_release_value(context, values, value);
+                    Err(status)
+                }
+            }
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }

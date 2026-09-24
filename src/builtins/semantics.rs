@@ -155,6 +155,8 @@ pub enum BuiltinRuntimeFunctions {
 pub enum BuiltinArgumentLowering {
     /// Use shared signature planning and ordinary source-order evaluation.
     Standard,
+    /// Preserve concrete values and nullable types for runtime PHP parameter conversion.
+    PreserveValues,
     /// Materialize every regular default through shared planning, including positional calls.
     MaterializeDefaults,
     /// Drop the unsupported statically-default count mode after shared planning.

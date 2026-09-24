@@ -20,6 +20,47 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     emit_runtime_callable_invoker_with_string_owner(ctx, sig, captures, false)
 }
 
+/// Emits a builtin invoker with mbstring's runtime argument boundary when required.
+pub(super) fn emit_runtime_builtin_invoker_inline(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    sig: &FunctionSig,
+) -> String {
+    let operation = crate::builtins::registry::lookup(name).and_then(|definition| {
+        if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(target) =
+            definition.spec.semantics.runtime_functions
+        {
+            target.mbstring_operation()
+        } else {
+            None
+        }
+    });
+    let Some(operation) = operation else {
+        return emit_runtime_callable_invoker_inline(ctx, sig, &[]);
+    };
+    let label = ctx.next_global_label("callable_invoker");
+    let done_label = ctx.next_label("callable_invoker_done");
+    let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
+        ctx.module, None, sig,
+    );
+    let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        label: &label,
+        sig,
+        captures: &[],
+        mbstring_operation: Some(operation),
+        owns_string_return: false,
+        defaults: &defaults,
+    };
+    let enclosing = ctx.emitter.current_text_section();
+    abi::emit_jump(ctx.emitter, &done_label);
+    super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
+        ctx.emitter, ctx.data, &invoker,
+    );
+    ctx.emitter.reopen_text_section(enclosing);
+    ctx.emitter.label(&done_label);
+    label
+}
+
 /// Emits an invoker whose result-copy policy follows the concrete callee's string ownership.
 pub(super) fn emit_runtime_callable_invoker_with_string_owner(
     ctx: &mut FunctionContext<'_>,
@@ -60,6 +101,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         label: &label,
         sig,
         captures,
+        mbstring_operation: None,
         owns_string_return,
         defaults: &defaults,
     };

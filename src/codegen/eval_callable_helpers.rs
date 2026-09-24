@@ -788,6 +788,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         label: &label,
         sig,
         captures,
+        mbstring_operation: None,
         owns_string_return,
         defaults: &defaults,
     };

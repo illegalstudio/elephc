@@ -40,6 +40,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_mbstring_array_next_error");                 // reject non-array roots without reading their payload
     emitter.instruction("ldr x1, [x2]");                                        // resume the insertion-order hash cursor
     emitter.instruction("bl __rt_hash_iter_next");                              // borrow the next key and per-entry typed value
+    emitter.instruction("bl __rt_hash_entry_deref");                            // expose the current value of any managed reference entry
     emitter.instruction("cmn x0, #1");                                          // recognize the hash iterator end marker
     emitter.instruction("b.eq __rt_mbstring_array_next_end");                   // publish no entry when the hash walk ends
     emitter.instruction("ldr x9, [sp, #8]");                                    // recover the caller-owned cursor pointer
@@ -158,6 +159,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_mbstring_array_next_error");                  // reject non-array roots without reading their payload
     emitter.instruction("mov rsi, QWORD PTR [rdx]");                            // resume the insertion-order hash cursor
     emitter.instruction("call __rt_hash_iter_next");                            // borrow the next key and per-entry typed value
+    emitter.instruction("call __rt_hash_entry_deref");                          // expose the current value of any managed reference entry
     emitter.instruction("cmp rax, -1");                                         // recognize the hash iterator end marker
     emitter.instruction("je __rt_mbstring_array_next_end");                     // publish no entry when the hash walk ends
     emitter.instruction("mov r10, QWORD PTR [rsp + 8]");                        // recover the caller-owned cursor pointer

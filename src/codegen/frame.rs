@@ -23,7 +23,7 @@ use crate::codegen::{
     emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::data_section::DataWord;
-use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
+use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{
     CoreBuiltinOp, Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
     RuntimeCallTarget, ValueDef, ValueId,
@@ -565,6 +565,7 @@ pub(super) fn emit_exception_cleanup_callback(
     if !ctx.exception_cleanup_activation {
         return;
     }
+    let callback = format!("{entry_label}__cdylib_exception_cleanup");
     ctx.emitter.blank();
     ctx.emitter.comment("exceptional PHP frame cleanup callback");
     ctx.emitter.label_global(&callback);
@@ -1525,7 +1526,13 @@ pub(in crate::codegen) fn return_transfers_local_string_owner(
     function: &Function,
     value: ValueId,
 ) -> bool {
-    let Some(slot) = return_cleanup_skip_slot(function, value) else {
+    let Some(result_ty) = function.value(value).map(|value| value.php_type.codegen_repr()) else {
+        return false;
+    };
+    let return_ty = function.return_php_type.codegen_repr();
+    let Some(slot) = return_cleanup_skip_slot_inner(
+        function, value, &result_ty, &return_ty, &mut HashSet::new(),
+    ) else {
         return false;
     };
     if local_slot_is_parameter(function, slot)

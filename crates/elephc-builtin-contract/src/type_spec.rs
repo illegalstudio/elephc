@@ -19,6 +19,7 @@ impl fmt::Display for TypeSpec {
             Self::Float => "float",
             Self::Str => "string",
             Self::Bool => "bool",
+            Self::Object => "object",
             Self::False => "false",
             Self::Null => "null",
             Self::Mixed => "mixed",

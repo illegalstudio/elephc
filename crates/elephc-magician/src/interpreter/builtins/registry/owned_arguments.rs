@@ -30,7 +30,7 @@ pub(in crate::interpreter) fn eval_owned_builtin_call(
     with_owned_builtin_arguments(name, callback_by_value, Some(scope), context, values,
         |contract, lexical_scope, context, values, owners, evaluated| {
             let lexical_scope = lexical_scope.ok_or(EvalStatus::RuntimeFatal)?;
-            eval_owned_call_arg_values(args, context, lexical_scope, values, owners, evaluated,
+            eval_owned_builtin_call_arg_values(args, context, lexical_scope, values, owners, evaluated,
                 (!callback_by_value).then_some(contract))
         })
 }

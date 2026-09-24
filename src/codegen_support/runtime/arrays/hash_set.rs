@@ -21,6 +21,7 @@
 use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use super::hash_layout;
 
 /// hash_set: insert or update a normalized int/string key-value pair in the hash table.
 /// Grows the table automatically if load factor exceeds 75%, persists newly
@@ -226,10 +227,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_recompute_entry");
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after helper call
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after helper call
-    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
-    emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
-    emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
+    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
     emitter.instruction("b __rt_hash_set_write_value");                         // ordinary released payloads must not fall into reference-cell write-through
 
     // -- write through a boxed descriptor-invoker marker stored in a Mixed hash entry --
@@ -248,10 +246,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_invoker_reference_mixed_ready");
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload the hash table after optional boxing
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload the current probe index
-    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes
-    emitter.instruction("mul x12, x9, x11");                                    // reconstruct the selected entry offset
-    emitter.instruction("add x12, x5, x12");                                    // advance from table base to the selected entry
-    emitter.instruction("add x12, x12, #40");                                   // skip the hash header
+    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
     emitter.instruction("ldr x14, [x12, #24]");                                 // reload the boxed invoker marker
     emitter.instruction("ldr x14, [x14, #8]");                                  // load the caller's Mixed storage address
     emitter.instruction("ldr x0, [x14]");                                       // save the previous boxed Mixed owner for release
@@ -297,10 +292,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_reference_release");
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after the boxing helper
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after the boxing helper
-    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
-    emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
-    emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
+    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
     emitter.instruction("ldr x0, [x12, #24]");                                  // load the managed reference cell this entry owns
     emitter.instruction("str x0, [sp, #56]");                                   // save the cell across the payload release
     emitter.instruction("bl __rt_reference_cell_value_release");                // release the value the reference set currently holds
@@ -545,10 +537,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_recompute_entry_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the release helper clobbered caller-saved registers
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index for entry-address reconstruction
-    emitter.instruction("mov r12, r11");                                        // copy the probe index before scaling it into a byte offset
-    emitter.instruction("shl r12, 6");                                          // convert the probe index into a 64-byte hash-entry offset
-    emitter.instruction("add r12, r10");                                        // advance from the hash-table base pointer to the selected entry block
-    emitter.instruction("add r12, 40");                                         // skip the fixed hash header to land on the selected entry
+    hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
     emitter.instruction("jmp __rt_hash_set_write_value_x");                     // ordinary released payloads must not fall into reference-cell write-through
 
     emitter.label("__rt_hash_set_invoker_reference_write_x");
@@ -565,10 +554,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_invoker_reference_mixed_ready_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash table after optional boxing
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index
-    emitter.instruction("mov r12, r11");                                        // copy the probe index for address reconstruction
-    emitter.instruction("shl r12, 6");                                          // convert the probe index to a 64-byte entry offset
-    emitter.instruction("add r12, r10");                                        // advance from table base to the selected entry
-    emitter.instruction("add r12, 40");                                         // skip the hash header
+    hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
     emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // reload the boxed invoker marker
     emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the caller's Mixed storage address
     emitter.instruction("mov rax, QWORD PTR [r14]");                            // save the previous boxed Mixed owner for release
@@ -613,10 +599,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_reference_release_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the boxing helper
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index for entry-address reconstruction
-    emitter.instruction("mov r12, r11");                                        // copy the probe index before scaling it into a byte offset
-    emitter.instruction("shl r12, 6");                                          // convert the probe index into a 64-byte hash-entry offset
-    emitter.instruction("add r12, r10");                                        // advance from the hash-table base pointer to the selected entry block
-    emitter.instruction("add r12, 40");                                         // skip the fixed hash header to land on the selected entry
+    hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
     emitter.instruction("mov rax, QWORD PTR [r12 + 24]");                       // load the managed reference cell this entry owns
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the cell across the payload release
     emitter.instruction("call __rt_reference_cell_value_release");              // release the value the reference set currently holds

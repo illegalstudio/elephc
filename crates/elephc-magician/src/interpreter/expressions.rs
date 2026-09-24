@@ -209,7 +209,7 @@ fn eval_expr_with_result_ownership(
             subject,
             arms,
             default,
-        } => eval_match_expr(subject, arms, default.as_deref(), context, scope, values),
+        } => eval_match_expr(subject, arms, default.as_deref(), context, scope, values, own_result),
         EvalExpr::Clone(object) => with_eval_operands(
             &[object.as_ref()],
             context,

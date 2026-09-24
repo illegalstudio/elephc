@@ -160,10 +160,7 @@ fn emit_hash_iter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, 1");                                          // decode slot index = cursor - 1 for resumed insertion-order walks
 
     emitter.label("__rt_hash_iter_entry");
-    emitter.instruction("mov r11, r10");                                        // copy the slot index before scaling it into a byte offset
-    emitter.instruction("shl r11, 6");                                          // convert the slot index into a 64-byte hash-entry offset
-    emitter.instruction("add r11, rdi");                                        // advance from the hash-table base pointer to the selected entry block
-    emitter.instruction("add r11, 40");                                         // skip the fixed 40-byte hash header to land on the selected entry
+    hash_layout::emit_entry_address(emitter, "r11", "rdi", "r10");             // address the selected entry in the separate allocation
     emitter.instruction("cmp QWORD PTR [r11], 2");                              // did the loop body delete the saved successor?
     emitter.instruction("jne __rt_hash_iter_live_entry");                       // live entries can be returned normally
     emitter.instruction("mov r10, QWORD PTR [r11 + 56]");                       // tombstones retain their former next link for active cursors

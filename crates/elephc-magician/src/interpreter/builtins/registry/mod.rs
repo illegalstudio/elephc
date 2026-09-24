@@ -291,15 +291,18 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
         return Ok(None);
     };
     if let Some(runtime_builtin) = spec.runtime_builtin {
+        if runtime_builtin.is_mbstring() {
+            return call_shared_mbstring_direct(runtime_builtin, args, context, scope, values);
+        }
         if !runtime_builtin.supports_arity(args.len()) && spec.values.is_none() {
             return Err(EvalStatus::RuntimeFatal);
         }
         let operands = args.iter().collect::<Vec<_>>();
-        return with_eval_operands(&operands, context, scope, values, |args, context, _, values| {
+        return with_eval_operands(&operands, context, scope, values, |args, context, scope, values| {
             let borrowed = args.iter().map(|value| value.borrowed()).collect::<Vec<_>>();
             // Runtime capability misses and deliberate arity adapters reuse the same
             // evaluated cells. Falling back to expression hooks would repeat side effects.
-            let result = eval_declared_builtin_values_call(name, &borrowed, context, values)?
+            let result = eval_declared_builtin_values_call_from_scope(name, &borrowed, Some(scope), context, values)?
                 .ok_or(EvalStatus::UnsupportedConstruct)?;
             if result.is_borrowed() { values.retain(result) } else { Ok(result) }
         }).map(Some);

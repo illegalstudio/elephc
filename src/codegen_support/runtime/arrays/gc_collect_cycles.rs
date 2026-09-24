@@ -302,7 +302,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the current heap header scan pointer
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the initial heap end
     emitter.instruction("cmp x9, x10");                                         // reached the end of the bump region?
-    emitter.instruction("b.ge __rt_gc_collect_cycles_destruct_init");           // move on once every root candidate has been checked
+    emitter.instruction("b.ge __rt_gc_collect_cycles_free_init");               // move on once every root candidate has been checked
     emitter.instruction("ldr w11, [x9]");                                       // load this block payload size from the heap header
     emitter.instruction("ldr w12, [x9, #4]");                                   // load this block refcount from the heap header
     emitter.instruction("cbz w12, __rt_gc_collect_cycles_root_next");           // free blocks are not GC roots

@@ -25,7 +25,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::{Function, LocalKind, Module, Ownership};
 use crate::codegen_support::source_method_adapters::MethodKind;
 use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
@@ -38,6 +38,7 @@ use super::eval_ref_arg_helpers::{
 };
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 use super::eval_argument_helpers::emit_borrowed_string_arg;
+use super::eval_value_helpers::{emit_borrowed_eval_string_argument, native_method_returns_owned_value};
 
 /// Method metadata needed by eval method-call bridge dispatch.
 #[derive(Clone)]
@@ -71,7 +72,17 @@ struct EvalStaticMethodSlot {
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
+    return_is_owned: bool,
+    return_uses_marker: bool,
     entry_symbol: String,
+}
+
+/// Origin of a method result crossing the eval bridge.
+#[derive(Clone, Copy)]
+enum EvalMethodResultSource {
+    CompiledInstance,
+    CompiledStatic,
+    RuntimeHelper,
 }
 
 const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
@@ -272,7 +283,8 @@ fn collect_class_method_slots(
             .get(method)
             .map(String::as_str)
             .unwrap_or(class_name);
-        let runtime_helper = eval_runtime_backed_instance_method_helper(class_name, method);
+        let runtime_intrinsic = eval_runtime_backed_instance_method_intrinsic(class_name, method);
+        let runtime_helper = runtime_intrinsic.and_then(IntrinsicCall::runtime_helper);
         let entry = match runtime_helper {
             Some(_) => EvalMethodEntry::Raw(sig.clone(), method_symbol(impl_class, method)),
             None => eval_method_entry(module, impl_class, method, sig, MethodKind::Instance),
@@ -423,6 +435,8 @@ fn collect_class_static_method_slots(
             params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
             return_ty: sig.return_type.codegen_repr(),
+            return_is_owned: native_method_returns_owned_value(module, impl_class, method, true),
+            return_uses_marker: compiled_method_return_uses_marker(sig),
             entry_symbol: entry_symbol.clone(),
         });
     }
@@ -2007,8 +2021,8 @@ fn emit_aarch64_ref_arg_cells(
     fail_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) -> Vec<EvalRefArgSlot> {
-    let ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
-    for slot in &ref_slots {
+    let mut ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
+    for slot in &mut ref_slots {
         emit_aarch64_load_eval_arg(module, emitter, slot.param_index, arg_array_frame_offset, fail_label);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
@@ -2049,8 +2063,8 @@ fn emit_x86_64_ref_arg_cells(
     callable_support: &EvalCallableDescriptorSupport,
     context_frame_offset: usize,
 ) -> Vec<EvalRefArgSlot> {
-    let ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
-    for slot in &ref_slots {
+    let mut ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
+    for slot in &mut ref_slots {
         emit_x86_64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);

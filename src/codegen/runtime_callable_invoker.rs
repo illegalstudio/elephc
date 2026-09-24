@@ -32,6 +32,7 @@
 
 mod argument_owners;
 mod defaults;
+mod mbstring;
 mod owned_value_args;
 mod public_args;
 mod reference_args;
@@ -118,6 +119,7 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) label: &'a str,
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
+    pub(super) mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
     pub(super) owns_string_return: bool,
     /// Parameter defaults ALREADY resolved against the module, indexed like `sig.params`.
     /// A declared default that could not be folded into a materializable value stays `None`, and
@@ -137,6 +139,7 @@ pub(super) fn needs_callable_argument_normalizer(sig: &FunctionSig) -> bool {
 struct InvokerEmitContext {
     label_prefix: String,
     label_counter: usize,
+    mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
     argument_owners: InvokerArgumentOwners,
     owns_string_return: bool,
     /// Resolved parameter defaults for this body, indexed like `FunctionSig::params`.
@@ -150,6 +153,7 @@ impl InvokerEmitContext {
         argument_owners: InvokerArgumentOwners,
         owns_string_return: bool,
         defaults: InvokerDefaults,
+        target: Target,
     ) -> Self {
         Self {
             label_prefix: local_label_prefix(invoker_label, target),
@@ -157,6 +161,7 @@ impl InvokerEmitContext {
             argument_owners,
             owns_string_return,
             defaults,
+            mbstring_operation: None,
         }
     }
 
@@ -222,7 +227,9 @@ fn emit_runtime_callable_invoker_impl(
         argument_owners,
         invoker.owns_string_return,
         invoker.defaults.to_vec(),
+        emitter.target,
     );
+    ctx.mbstring_operation = invoker.mbstring_operation;
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -928,17 +935,6 @@ fn variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
             .unwrap_or(false)
 }
 
-/// Transfers the fresh variadic container on top of the staging stack into the invoker's
-/// argument-owner ledger while preserving the borrowed pointer passed to the callee.
-fn capture_pushed_variadic_owner(
-    emitter: &mut Emitter,
-    ctx: &mut InvokerEmitContext,
-    variadic_ty: &PhpType,
-) {
-    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 0);
-    argument_owners::capture(emitter, ctx, variadic_ty);
-}
-
 /// Returns the declared target PHP type for a parameter.
 fn declared_target_ty<'a>(sig: Option<&'a FunctionSig>, param_idx: usize) -> Option<&'a PhpType> {
     sig.and_then(|sig| {
@@ -1510,13 +1506,6 @@ fn push_loaded_array_element_arg(
         owned_value_args::coerce(emitter, ctx, data, source_elem_ty, target_ty);
     if !boxed_to_mixed {
         abi::emit_incref_if_refcounted(emitter, &pushed_ty);
-    }
-    if boxed_to_mixed
-        || (pushed_ty.is_refcounted() && !matches!(pushed_ty, PhpType::Object(_)))
-        || pushed_ty == PhpType::Callable
-        || (pushed_ty == PhpType::Str && source_elem_ty.codegen_repr() == PhpType::Mixed)
-    {
-        argument_owners::capture(emitter, ctx, &pushed_ty);
     }
     abi::emit_push_result_value(emitter, &pushed_ty);
     pushed_ty
@@ -3409,6 +3398,7 @@ mod tests {
             label: "owned_invoker",
             sig: &sig,
             captures: &[],
+            mbstring_operation: None,
             owns_string_return: false,
             defaults: &[None],
         };
@@ -3460,7 +3450,7 @@ mod tests {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
-            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false, Vec::new());
+            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false, Vec::new(), target);
             let (ref_cell_reg, source_tag_reg, branch) = match target.arch {
                 Arch::AArch64 => ("x19", "x20", "b.eq mixed_ref_cell_invoker_ref_mixed_0"),
                 Arch::X86_64 => ("r12", "r13", "je mixed_ref_cell_invoker_ref_mixed_0"),
@@ -3504,7 +3494,7 @@ mod tests {
             let mut concrete = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
             let mut concrete_ctx =
-                InvokerEmitContext::new("concrete_ref", owners, false, Vec::new());
+                InvokerEmitContext::new("concrete_ref", owners, false, Vec::new(), target);
             push_invoker_ref_storage_address(
                 storage_reg,
                 source_tag_reg,
@@ -3519,7 +3509,7 @@ mod tests {
 
             let mut mixed = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
-            let mut mixed_ctx = InvokerEmitContext::new("mixed_ref", owners, false, Vec::new());
+            let mut mixed_ctx = InvokerEmitContext::new("mixed_ref", owners, false, Vec::new(), target);
             push_invoker_ref_storage_address(
                 storage_reg,
                 source_tag_reg,
@@ -3604,6 +3594,7 @@ mod tests {
             label,
             sig,
             captures: &[],
+            mbstring_operation: None,
             owns_string_return: false,
             defaults: &defaults,
         };

@@ -18,6 +18,9 @@ pub(in crate::interpreter) fn eval_builtin_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if eval_builtin_uses_owned_arguments(name) {
+        return eval_owned_builtin_call(name, args, false, context, scope, values);
+    }
     with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
         eval_bound_builtin_call(name, arguments, context, values)
     })

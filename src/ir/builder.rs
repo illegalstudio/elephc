@@ -215,6 +215,32 @@ impl<'f> Builder<'f> {
         }
     }
 
+    /// Aligns cleanup-only loads with the final storage type of their local slot.
+    pub fn repair_owned_local_cleanup_load_types(&mut self) {
+        let repairs = self.func.values.iter().enumerate().filter_map(|(raw, value)| {
+            if value.ownership != Ownership::Owned { return None; }
+            let ValueDef::Instruction { inst, .. } = value.def else { return None; };
+            let instruction = self.func.instructions.get(inst.as_raw() as usize)?;
+            if !matches!(instruction.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
+                return None;
+            }
+            let Some(Immediate::LocalSlot(slot)) = instruction.immediate else { return None; };
+            let local = self.func.locals.get(slot.as_raw() as usize)?;
+            if value.ir_type == local.ir_type && value.php_type == local.php_type { return None; }
+            let value_id = ValueId::from_raw(raw as u32);
+            value_is_used_only_by_release(&self.func, value_id)
+                .then(|| (value_id, inst, local.ir_type, local.php_type.clone()))
+        }).collect::<Vec<_>>();
+        for (value_id, inst_id, ir_type, php_type) in repairs {
+            let value = &mut self.func.values[value_id.as_raw() as usize];
+            value.ir_type = ir_type;
+            value.php_type = php_type.clone();
+            let instruction = &mut self.func.instructions[inst_id.as_raw() as usize];
+            instruction.result_type = ir_type;
+            instruction.result_php_type = php_type;
+        }
+    }
+
     /// Neutralizes deferred releases for local loads that stayed borrowed.
     ///
     /// Lowering cannot know whether a later source-order store will widen a local's
@@ -730,6 +756,17 @@ pub(crate) fn local_load_coercion_owns_result(storage_type: &PhpType, result_typ
         (PhpType::Mixed, PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Void)
             | (_, PhpType::TaggedScalar)
     )
+}
+
+/// Identifies local payloads whose release can be deferred to frame cleanup.
+fn local_load_release_is_deferred_candidate(result_type: &PhpType) -> bool {
+    matches!(result_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Iterable)
+}
+
+/// Mixed unboxing retains an independent owner that must be released at its use site.
+fn local_load_requires_owned_mixed_unbox(storage_type: &PhpType, result_type: &PhpType) -> bool {
+    matches!(storage_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(result_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) | PhpType::Iterable)
 }
 
 /// Returns true when a guard token is used only by its unguard or as the next guard anchor.

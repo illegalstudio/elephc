@@ -70,6 +70,7 @@ pub(crate) mod numeric_string;
 pub mod opcache;
 /// `opcache_get_configuration()` standard-library prelude injection.
 pub mod opcache_prelude;
+pub mod shared_ini_prelude;
 /// PHP `(object)` cast standard-library prelude injection.
 pub mod object_cast_prelude;
 /// Optimizer passes.

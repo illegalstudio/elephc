@@ -258,7 +258,7 @@ pub(super) fn write_back_owned_variable_ref_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let retained = values.retain(value)?;
-    let replaced = match set_owned_scope_cell(context, scope, name.to_string(), retained) {
+    let replaced = match set_owned_scope_cell(context, scope, name.to_string(), retained, values) {
         Ok(replaced) => replaced,
         Err(status) => {
             let _ = eval_release_value(context, values, retained);

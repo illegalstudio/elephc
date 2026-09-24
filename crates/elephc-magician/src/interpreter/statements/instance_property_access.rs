@@ -225,10 +225,10 @@ pub(crate) fn eval_property_set_result(
                 return eval_throw_property_access_error(
                     &declaring_class,
                     property_name,
-                    value,
+                    write_visibility,
                     context,
                     values,
-                )?;
+                );
             }
             if !is_static {
                 validate_native_readonly_property_write(
@@ -595,6 +595,31 @@ fn validate_native_readonly_property_write(
 }
 
 /// Binds one eval object property to a by-reference source parameter.
+/// Checks an AOT array property before forwarding a write to its native setter.
+pub(super) fn validate_eval_native_array_property_assignment(
+    declaring_class: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(property_type) = context.native_property_type(declaring_class, property_name) else {
+        return Ok(());
+    };
+    let requires_array = !property_type.allows_null()
+        && !property_type.is_intersection()
+        && !property_type.variants().is_empty()
+        && property_type.variants().iter().all(|variant| matches!(variant, EvalParameterTypeVariant::Array));
+    if !requires_array || matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Ok(());
+    }
+    eval_throw_type_error(
+        &format!("Cannot assign value to property {}::{} of type array", declaring_class, property_name),
+        context,
+        values,
+    )
+}
+
 pub(super) fn eval_property_reference_bind_result(
     object: RuntimeCellHandle,
     property_name: &str,

@@ -198,6 +198,7 @@ pub(in crate::interpreter) fn execute_stmt(
                 scope,
                 name.clone(),
                 value,
+                values,
             )? {
                 eval_release_value(context, values, replaced)?;
             }

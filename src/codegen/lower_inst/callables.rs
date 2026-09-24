@@ -28,7 +28,8 @@ use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
     emit_call_arg_temp_cleanups, emit_direct_resolved_method_call,
     emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
-    emit_runtime_builtin_wrapper_inline, emit_runtime_callable_invoker_inline,
+    emit_runtime_builtin_wrapper_inline, emit_runtime_builtin_invoker_inline,
+    emit_runtime_callable_invoker_inline,
     emit_runtime_callable_invoker_with_string_owner,
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
@@ -420,7 +421,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_type_error(
 pub(in crate::codegen) fn emit_runtime_unary_callback_descriptor_value(
     ctx: &mut FunctionContext<'_>, callable: ValueId, op_name: &str, message: &'static str,
 ) -> Result<()> {
-    emit_runtime_mixed_callable_descriptor_value_impl(ctx, callable, op_name, true, Some(message), Some(1))
+    emit_runtime_mixed_callable_descriptor_value_impl(ctx, callable, op_name, true, Some(message), Some(message))
 }
 
 /// Implements boxed callable descriptor selection with a configurable string-name miss path.
@@ -1111,11 +1112,6 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         candidate_names,
         crate::strict_php::is_enabled(),
     )?;
-    if callback_arity.is_some() {
-        cases.extend(runtime_builtin_descriptor_cases_at_arity(ctx, None, None, crate::strict_php::is_enabled(), callback_arity)?);
-        cases.sort_by(|left, right| left.label.cmp(&right.label));
-        cases.dedup_by(|left, right| left.label == right.label);
-    }
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "{} for runtime string with no descriptor targets",
@@ -2693,8 +2689,7 @@ fn emit_descriptor_reg_invoker_mixed_result_with_normalized_arg(
     abi::emit_push_reg(ctx.emitter, descriptor_reg); // preserve the callable descriptor while normalizing call_user_func_array() args
     emit_normalized_invoker_arg_container(ctx, arg_container, release_runtime_descriptor)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed normalized argument container for invocation and cleanup
-    let guard_bytes = super::callable_guards::begin(ctx.emitter, release_runtime_descriptor);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, descriptor_reg, guard_bytes + 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, descriptor_reg, 16);
     move_reg_to_arg(ctx, descriptor_reg, 0);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, 0);

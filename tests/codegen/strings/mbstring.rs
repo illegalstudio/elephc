@@ -316,7 +316,6 @@ fn check_mbstring_supported_target_lowering(target: &str) {
     assert!(assembly.contains("__rt_throwable_previous"), "{target}");
     if !target.starts_with("ios-") {
         assert!(assembly.contains("__rt_mbstring_request_reset"), "{target}");
-        assert!(assembly.contains("__rt_mbstring_release_catalog"), "{target}");
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

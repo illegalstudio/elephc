@@ -470,25 +470,3 @@ fn lower_named_args_with_spread_plan_impl(
     }
     Some(operands)
 }
-
-/// Captures a planned source value while preserving the original lvalue for reference parameters.
-fn lower_planned_source_arg(
-    ctx: &mut LoweringContext<'_, '_>,
-    sig: &FunctionSig,
-    plan: &crate::types::call_args::CallArgPlan,
-    source_index: usize,
-    arg: &Expr,
-    capture_values: bool,
-) -> ValueId {
-    let parameter = plan.source_values.iter().find(|source| source.source_index() == source_index)
-        .and_then(|source| source.param_idx());
-    let by_ref = parameter.is_some_and(|index| sig.ref_params.get(index).copied().unwrap_or(false));
-    if capture_values && by_ref {
-        promote_captured_reference_argument(ctx, arg);
-    }
-    let value = lower_call_source_arg(ctx, arg);
-    if capture_values && !by_ref {
-        let lowered = lowered_value_from_id(ctx, value);
-        capture_call_argument_value(ctx, lowered, parameter.unwrap_or(sig.params.len() + source_index), arg.span).value
-    } else { value }
-}

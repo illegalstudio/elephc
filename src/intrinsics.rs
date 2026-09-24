@@ -482,6 +482,18 @@ impl IntrinsicCall {
         INTRINSICS[self.spec_index].runtime_helper
     }
 
+    /// Returns PHP parameter indexes whose boxed Mixed owners the helper consumes.
+    pub fn consumed_mixed_params(self) -> &'static [usize] {
+        match self.kind {
+            IntrinsicCallKind::SplDllPush
+            | IntrinsicCallKind::SplDllUnshift
+            | IntrinsicCallKind::SplQueueEnqueue => &[0],
+            IntrinsicCallKind::SplDllAdd => &[1],
+            IntrinsicCallKind::SplDllOffsetSet | IntrinsicCallKind::SplFixedOffsetSet => &[0, 1],
+            _ => &[],
+        }
+    }
+
     /// Lists visible boxed argument positions whose owners the SPL helper consumes.
     /// Offset readers release their index cells, while writers also consume stored values.
     pub fn consumed_mixed_parameters(self) -> &'static [usize] {

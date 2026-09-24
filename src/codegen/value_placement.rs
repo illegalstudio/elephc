@@ -11,7 +11,8 @@
 
 use std::collections::HashMap;
 
-use crate::ir::{Function, IrType, ValueId};
+use crate::ir::{Function, Immediate, IrType, Op, Ownership, ValueDef, ValueId};
+use crate::types::PhpType;
 
 /// Stack-slot table for the Phase 04 spill-everything backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +32,33 @@ impl ValuePlacement {
     pub fn runtime_return_ownership_slot(&self, value: ValueId) -> Option<usize> {
         self.runtime_return_ownership_slot_of.get(&value).copied()
     }
+}
+
+/// Returns true when a value receives a path-specific runtime ownership marker.
+fn publishes_runtime_ownership_status(func: &Function, value: ValueId) -> bool {
+    let Some(value) = func.value(value) else {
+        return false;
+    };
+    let ValueDef::Instruction { inst, .. } = value.def else {
+        return false;
+    };
+    let Some(instruction) = func.instruction(inst) else {
+        return false;
+    };
+    if matches!(instruction.op, Op::Call | Op::FunctionVariantCall) {
+        return true;
+    }
+    if instruction.op != Op::Cast
+        || instruction.immediate != Some(Immediate::CastTarget(IrType::Str))
+    {
+        return false;
+    }
+    let Some(source) = instruction.operands.first().copied() else {
+        return false;
+    };
+    func.value(source).is_some_and(|source| {
+        matches!(source.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    })
 }
 
 /// Allocates a frame slot for every non-void SSA value in a function.

@@ -1449,7 +1449,46 @@ impl<'a> FunctionContext<'a> {
         }
         Ok(!self.function.instructions.iter().any(|inst| {
             inst.op == Op::Release && inst.operands.first().copied() == Some(value)
-        })
+        }))
+    }
+
+    /// Reports whether a string result can transfer its heap owner to a retaining consumer.
+    pub(super) fn string_value_can_transfer_ownership_to_consumer(
+        &self,
+        value: ValueId,
+    ) -> Result<bool> {
+        if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst)
+            || self.function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+            })
+        {
+            return Ok(false);
+        }
+        if self.value_is_heap_owned_string_for_mixed_box(value)? {
+            return Ok(true);
+        }
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let inst = self.function.instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if inst.op != Op::RuntimeCall {
+            return Ok(false);
+        }
+        use crate::builtins::semantics::BuiltinResultOwnership;
+        let fresh = match inst.immediate {
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) =>
+                target.result_ownership() == BuiltinResultOwnership::Fresh,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. })) =>
+                target.result_ownership() == BuiltinResultOwnership::Fresh,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) =>
+                target.result_ownership() == BuiltinResultOwnership::Fresh,
+            _ => false,
+        };
+        Ok(fresh)
     }
 
     /// Returns true when a string producer leaves a heap-owned payload that Mixed boxing may consume.

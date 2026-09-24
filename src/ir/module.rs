@@ -81,6 +81,9 @@ pub struct CloneOverrideApplicator {
 pub struct Module {
     pub target: Target,
     pub source_path: Option<String>,
+    /// Optional mbstring startup arguments: effective core encodings followed by raw INI pairs.
+    /// These belong to user assembly, never the reusable runtime object.
+    pub mbstring_startup: Option<Vec<Vec<u8>>>,
     /// Canonical PHP source paths compiled into this binary, in include order.
     pub included_files: Vec<String>,
     /// `--probe` build key, embedded as `_elephc_probe_key` so the probe endpoint
@@ -146,6 +149,7 @@ impl Module {
         Self {
             target,
             source_path: None,
+            mbstring_startup: None,
             included_files: Vec::new(),
             probe_key: None,
             functions: Vec::new(),

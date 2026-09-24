@@ -70,6 +70,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
+    out.push_str(&comm_directive("_mbstring_deferred_capture_head", 8, target));
+    out.push_str(&comm_directive("_mbstring_deferred_capture_tail", 8, target));
+    out.push_str(&comm_directive("_mbstring_deferred_capture_draining", 8, target));
+    out.push_str(&comm_directive("_mbstring_ini_native_active", 8, target));
     out.push_str(&format!(
         ".globl _serialize_return_array_msg\n_serialize_return_array_msg:\n    .ascii \"{}\"\n",
         super::SERIALIZE_RETURN_ARRAY_MSG,
@@ -520,6 +525,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_gc_pin_head", 8, target));
     out.push_str(&comm_directive("_gc_pending_throw", 8, target));
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
+    out.push_str(&comm_directive("_hash_write_guard_top", 8, target));
     out.push_str(&comm_directive("_gc_runs", 8, target));
     out.push_str(&comm_directive("_gc_collected", 8, target));
     out.push_str(&comm_directive("_gc_application_started", 8, target));

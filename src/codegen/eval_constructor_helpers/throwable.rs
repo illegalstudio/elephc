@@ -83,7 +83,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the message argument
     emitter.instruction("cmp x9, #0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("b.eq {}", success_label));                    // keep the empty Throwable defaults when no message was supplied
-    emit_aarch64_load_eval_arg(module, emitter, 0);
+    emit_aarch64_load_eval_arg(module, emitter, 0, fail_label);
     abi::emit_call_label(emitter, "__rt_mixed_cast_string");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
     emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
@@ -91,7 +91,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the code argument
     emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep code zero when only the message was supplied
-    emit_aarch64_load_eval_arg(module, emitter, 1);
+    emit_aarch64_load_eval_arg(module, emitter, 1, fail_label);
     emit_aarch64_cast_eval_arg(
         module,
         emitter,
@@ -100,6 +100,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
         fail_label,
         data,
         callable_support,
+        ConstructorArgOwner::Borrowed,
     );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for code initialization
     emitter.instruction("str x0, [x9, #24]");                                   // store the integer exception code
@@ -125,7 +126,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the message argument
     emitter.instruction("cmp r11, 0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("je {}", success_label));                      // keep the empty Throwable defaults when no message was supplied
-    emit_x86_64_load_eval_arg(module, emitter, 0);
+    emit_x86_64_load_eval_arg(module, emitter, 0, fail_label);
     abi::emit_call_label(emitter, "__rt_mixed_cast_string");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
     emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the message pointer in the compact Throwable payload
@@ -133,7 +134,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the code argument
     emitter.instruction("cmp r11, 1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep code zero when only the message was supplied
-    emit_x86_64_load_eval_arg(module, emitter, 1);
+    emit_x86_64_load_eval_arg(module, emitter, 1, fail_label);
     emit_x86_64_cast_eval_arg(
         module,
         emitter,
@@ -142,6 +143,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
         fail_label,
         data,
         callable_support,
+        ConstructorArgOwner::Borrowed,
     );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for code initialization
     emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // store the integer exception code
@@ -163,7 +165,7 @@ fn emit_aarch64_builtin_throwable_previous_arg(
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload argc before testing the previous argument
     emitter.instruction("cmp x9, #2");                                          // did eval supply the normalized previous argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep null when the legacy bridge omitted previous
-    emit_aarch64_load_eval_arg(module, emitter, 2);
+    emit_aarch64_load_eval_arg(module, emitter, 2, fail_label);
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed previous argument for inspection
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the nullable previous payload
     emitter.instruction("cmp x0, #8");                                          // runtime tag 8 means the previous argument is null
@@ -188,7 +190,7 @@ fn emit_x86_64_builtin_throwable_previous_arg(
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload argc before testing the previous argument
     emitter.instruction("cmp r11, 2");                                          // did eval supply the normalized previous argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep null when the legacy bridge omitted previous
-    emit_x86_64_load_eval_arg(module, emitter, 2);
+    emit_x86_64_load_eval_arg(module, emitter, 2, fail_label);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed previous argument for inspection
     emitter.instruction("call __rt_mixed_unbox");                               // expose the nullable previous payload
     emitter.instruction("cmp rax, 8");                                          // runtime tag 8 means the previous argument is null

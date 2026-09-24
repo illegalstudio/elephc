@@ -54,7 +54,27 @@ pub(in crate::interpreter) fn set_scope_cell(
     ownership: ScopeCellOwnership,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    update_scope_cell(context, scope, name.into(), |scope, name| {
+    let name = name.into();
+    if let Some(reference) = visible_scope_cell(context, scope, &name) {
+        if values.is_reference(reference)? {
+            if reference == cell { return Ok(Vec::new()); }
+            let previous = values.reference_replace(reference, cell)?;
+            if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
+                let global = context.global_scope_ptr().ok_or(EvalStatus::RuntimeFatal)?;
+                if global == scope as *mut ElephcEvalScope {
+                    scope.mark_reference_changed(&global_name);
+                } else {
+                    unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?.mark_reference_changed(&global_name);
+                }
+            } else {
+                scope.mark_reference_changed(&name);
+            }
+            let mut released = vec![previous];
+            if ownership == ScopeCellOwnership::Owned { released.push(cell); }
+            return Ok(released);
+        }
+    }
+    update_scope_cell(context, scope, name, |scope, name| {
         scope.set_respecting_references(name, cell, ownership)
     })
 }
@@ -65,7 +85,16 @@ pub(in crate::interpreter) fn set_owned_scope_cell(
     scope: &mut ElephcEvalScope,
     name: String,
     cell: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    if let Some(reference) = visible_scope_cell(context, scope, &name) {
+        if values.is_reference(reference)? {
+            let same_owner = reference == cell;
+            let mut replaced = set_scope_cell(context, scope, name, cell, ScopeCellOwnership::Owned, values)?;
+            if same_owner { replaced.push(cell); }
+            return Ok(replaced);
+        }
+    }
     update_scope_cell(context, scope, name, |scope, name| {
         scope.set_owned_respecting_references(name, cell)
     })

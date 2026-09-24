@@ -86,6 +86,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
+    if !is_extern && !is_user_function {
+        if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr) {
+            return call;
+        }
+    }
     // A by-reference-returning callee hands back a lease that has to survive this caller's own
     // cleanup, so its staging is published before the arguments are evaluated. Only the direct
     // user-call branch below transfers a cell; an extern, builtin or eval-dispatched call with
@@ -390,35 +395,11 @@ pub(super) fn emit_builtin_call_value(
             effects_lookup::language_construct_effects(name),
         )
     };
-    let call = ctx.emit_value(
-        op,
-        operands.clone(),
-        immediate,
-        php_type,
-        effects,
-        Some(span),
-    );
-    if let Some(slot) = eval_source_owner {
-        retire_owned_call_operand(ctx, slot, span);
-    } else {
-        // Eval returns a boxed PHP value, never ownership of the code buffer
-        // passed to the parser. Even `return $source` reads its scope cell.
-        let return_alias = if is_eval { ReturnArgAlias::None } else { ReturnArgAlias::Unknown };
-        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), &return_alias, span);
-    }
     let eval_needs_barrier = match eval_literal {
         Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
         None => true,
     };
     if is_eval {
-        ctx.mark_eval_executed();
-        if eval_needs_barrier {
-            ctx.apply_eval_barrier();
-        } else if let Some(write_names) = eval_literal
-            .and_then(|fragment| eval_literal_scope_barrier_writes(ctx, fragment))
-        {
-            ctx.apply_eval_scope_barrier(&write_names);
-        }
         ctx.begin_argument_guard_scope();
         for (parameter, value) in operands.iter().copied().enumerate() {
             let source = LoweredValue {
@@ -443,13 +424,27 @@ pub(super) fn emit_builtin_call_value(
     );
     // Scope widening can make the already-lowered source load an owned string cast.
     // Eval guards that owner through exceptional exits, then releases it normally here.
-    release_owned_call_arg_temporaries(
-        ctx,
-        &operands,
-        Some(call.value),
-        if is_eval { &ReturnArgAlias::None } else { &ReturnArgAlias::Unknown },
-        span,
-    );
+    if let Some(slot) = eval_source_owner {
+        retire_owned_call_operand(ctx, slot, span);
+    } else {
+        release_owned_call_arg_temporaries(
+            ctx,
+            &operands,
+            Some(call.value),
+            if is_eval { &ReturnArgAlias::None } else { &ReturnArgAlias::Unknown },
+            span,
+        );
+    }
+    if is_eval {
+        ctx.mark_eval_executed();
+        if eval_needs_barrier {
+            ctx.apply_eval_barrier();
+        } else if let Some(write_names) = eval_literal
+            .and_then(|fragment| eval_literal_scope_barrier_writes(ctx, fragment))
+        {
+            ctx.apply_eval_scope_barrier(&write_names);
+        }
+    }
     call
 }
 

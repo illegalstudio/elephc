@@ -14,7 +14,6 @@ mod function_binding;
 mod function_staging;
 mod method_binding;
 mod native_execution;
-mod native_staging;
 pub(in crate::interpreter) mod builtin_arguments;
 
 use super::*;
@@ -24,7 +23,6 @@ pub(in crate::interpreter) use function_binding::*;
 use function_staging::stage_native_function_invoker_args;
 pub(in crate::interpreter) use method_binding::*;
 pub(in crate::interpreter) use native_execution::*;
-use native_staging::stage_native_function_invoker_args;
 
 /// Evaluates an eval-declared user function with PHP-style argument binding.
 pub(in crate::interpreter) fn eval_dynamic_function(
@@ -64,72 +62,12 @@ pub(in crate::interpreter) fn eval_call_arg_values_observed(
 
 /// Captures owned builtin inputs, using shared reference modes when a contract is supplied.
 /// Without a contract, call_user_func captures independent values even for reference parameters.
-pub(in crate::interpreter) fn eval_owned_call_arg_values(
+pub(in crate::interpreter) fn eval_owned_builtin_call_arg_values(
     args: &[EvalCallArg], context: &mut ElephcEvalContext, caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps, owners: &mut Vec<RuntimeCellHandle>, evaluated: &mut Vec<EvaluatedCallArg>,
     contract: Option<&elephc_builtin_contract::BuiltinContract>,
 ) -> Result<(), EvalStatus> {
     evaluate_call_arguments(args, context, caller_scope, values, &mut |_, _| {}, Some(owners), evaluated, contract)
-}
-
-/// Acquires normal-call argument owners without discarding caller reference targets.
-pub(in crate::interpreter) fn eval_leased_call_arg_values(
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    caller_scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-    leases: &mut Vec<EvalValueLease>,
-    evaluated_args: &mut Vec<EvaluatedCallArg>,
-) -> Result<(), EvalStatus> {
-    let mut saw_named = false;
-
-    for arg in args {
-        if arg.is_spread() {
-            if saw_named {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            let spread = acquire_expr_lease(arg.value(), context, caller_scope, values)?;
-            let spread_value = spread.owner;
-            leases.push(spread);
-            if !values.is_array_like(spread_value)? {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            let mut unpacked_owners = Vec::new();
-            let unpacked = append_unpacked_call_arg_values_with_owners(
-                spread_value,
-                evaluated_args,
-                &mut saw_named,
-                context,
-                values,
-                Some(&mut unpacked_owners),
-            );
-            leases.extend(
-                unpacked_owners
-                    .into_iter()
-                    .map(EvalValueLease::preserving_metadata),
-            );
-            unpacked?;
-            continue;
-        }
-
-        if arg.name().is_none() && saw_named {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let name = arg.name().map(str::to_string);
-        saw_named |= name.is_some();
-        let (value, ref_target) =
-            eval_call_arg_value(arg.value(), context, caller_scope, values)?;
-        let lease = acquire_value_lease(value, values)?;
-        let value = lease.owner;
-        leases.push(lease);
-        evaluated_args.push(EvaluatedCallArg {
-            name,
-            value,
-            ref_target,
-        });
-    }
-
-    Ok(())
 }
 
 /// Evaluates source arguments with legacy targets or explicit owners selected by the parameter contract.
@@ -141,70 +79,82 @@ fn evaluate_call_arguments(
 ) -> Result<(), EvalStatus> {
     let mut saw_named = false;
 
-    let evaluated = (|| {
-        for arg in args {
-            if arg.is_spread() {
-                if saw_named {
-                    return Err(EvalStatus::RuntimeFatal);
-                }
-                let spread = eval_expr(arg.value(), context, caller_scope, values)?;
-                let unpacked = (|| {
-                    if !values.is_array_like(spread)? {
-                        return Err(EvalStatus::RuntimeFatal);
-                    }
-                    let first_unpacked = evaluated_args.len();
-                    append_unpacked_call_arg_values(
-                        spread, &mut evaluated_args, &mut saw_named, context, values,
-                    )?;
-                    for argument in &mut evaluated_args[first_unpacked..] {
-                        if argument.value.is_borrowed() {
-                            argument.value = values.retain(argument.value)?;
-                        }
-                    }
-                    Ok(())
-                })();
-                let released = release_expr_result(spread, context, values);
-                unpacked.and(released)?;
-                continue;
-            }
-
-            if let Some(name) = arg.name() {
-                saw_named = true;
-                let (value, ref_target) =
-                    eval_call_arg_value(arg.value(), context, caller_scope, values)?;
-                let value = if value.is_borrowed() {
-                    values.retain(value)?
-                } else { value };
-                evaluated_args.push(EvaluatedCallArg {
-                    name: Some(name.to_string()),
-                    value,
-                    ref_target,
-                });
-                continue;
-            }
-
+    for arg in args {
+        if arg.is_spread() {
             if saw_named {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
-            let value = if value.is_borrowed() {
-                values.retain(value)?
-            } else { value };
+            let spread = if let Some(owners) = owners.as_deref_mut() {
+                let spread = eval_owned_expr(arg.value(), context, caller_scope, values)?;
+                owners.push(spread);
+                spread
+            } else { eval_expr(arg.value(), context, caller_scope, values)? };
+            observe(arg.value(), spread);
+            if !values.is_array_like(spread)? {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if let Some(owners) = owners.as_deref_mut() {
+                if let Some(contract) = contract.filter(|contract| contract.params.iter().any(|param| param.by_ref)) {
+                    builtin_arguments::append_spread(contract, spread, evaluated_args, &mut saw_named, context, values, owners)?;
+                } else {
+                    append_unpacked_value_call_args(spread, evaluated_args, &mut saw_named, context, values, owners)?;
+                }
+                let index = owners.iter().position(|value| *value == spread).expect("captured spread owner");
+                owners.remove(index);
+                context.clear_array_metadata(spread);
+                eval_release_value(context, values, spread)?;
+            } else {
+                append_unpacked_call_arg_values(spread, evaluated_args, &mut saw_named, context, values)?;
+            }
+            continue;
+        }
+
+        if let Some(name) = arg.name() {
+            saw_named = true;
+            let (value, ref_target) =
+                evaluate_call_argument_value(arg.value(), context, caller_scope, values, owners.as_deref_mut(),
+                    builtin_arguments::by_reference(contract, Some(name), evaluated_args.len()))?;
+            observe(arg.value(), value);
             evaluated_args.push(EvaluatedCallArg {
-                name: None,
+                name: Some(name.to_string()),
                 value,
                 ref_target,
             });
+            continue;
         }
-        Ok(())
-    })();
-    if let Err(status) = evaluated {
-        for argument in evaluated_args {
-            let _ = release_expr_result(argument.value, context, values);
+
+        if saw_named {
+            return Err(EvalStatus::RuntimeFatal);
         }
-        return Err(status);
+        let (value, ref_target) = evaluate_call_argument_value(arg.value(), context, caller_scope, values, owners.as_deref_mut(),
+            builtin_arguments::by_reference(contract, None, evaluated_args.len()))?;
+        observe(arg.value(), value);
+        evaluated_args.push(EvaluatedCallArg {
+            name: None,
+            value,
+            ref_target,
+        });
     }
-    Ok(evaluated_args)
+
+    Ok(())
+}
+
+/// Captures an independent value or persistent reference owner, retaining legacy binding for unowned calls.
+fn evaluate_call_argument_value(
+    expr: &EvalExpr, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps, owners: Option<&mut Vec<RuntimeCellHandle>>,
+    by_reference: bool,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    if let Some(owners) = owners {
+        if by_reference {
+            let reference = builtin_arguments::reference(expr, context, scope, values)?;
+            owners.push(reference);
+            return Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference })));
+        }
+        let value = eval_owned_expr(expr, context, scope, values)?;
+        owners.push(value);
+        Ok((value, None))
+    } else { eval_call_arg_value(expr, context, scope, values) }
 }
 
 /// Evaluates one call arg and captures caller-side storage for by-reference parameters.

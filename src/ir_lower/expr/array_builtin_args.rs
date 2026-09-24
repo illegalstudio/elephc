@@ -129,7 +129,9 @@ pub(super) fn lower_builtin_call_args(
         }
     }
     if !crate::types::call_args::has_named_args(args)
-        && argument_lowering != crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted
+        && !matches!(argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted
+            | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues)
     {
         if let Some(sig) = sig {
             if let Some(operands) = lower_positional_spread_args_with_signature(
@@ -143,6 +145,9 @@ pub(super) fn lower_builtin_call_args(
         }
     }
     let lowered = match argument_lowering {
+        crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues => {
+            lower_builtin_args_preserving_values(ctx, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults => {
             lower_args_with_signature(ctx, sig, args)
         }

@@ -86,6 +86,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         }
     }
 
+    /// Transfers a generated-runtime exception into the eval catch context.
+    fn take_pending_runtime_throwable(&mut self) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(self.take_pending_native_throwable())
+    }
+
     /// Gets or replaces the process-wide PHP error-reporting mask.
     fn runtime_error_reporting(
         &mut self,

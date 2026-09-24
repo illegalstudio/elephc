@@ -17,6 +17,14 @@ use crate::value::RuntimeCell;
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Wraps a PHP value in an independently owned runtime reference cell.
+    pub(super) fn __elephc_eval_value_reference_new(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Reports whether a boxed value is a runtime reference cell.
+    pub(super) fn __elephc_eval_value_is_reference(value: *mut RuntimeCell) -> u64;
+    /// Replaces a reference payload and transfers its previous value to the caller.
+    pub(super) fn __elephc_eval_value_reference_replace(reference: *mut RuntimeCell, value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Makes an ordinary value copy detached from a reference cell.
+    pub(super) fn __elephc_eval_value_copy(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Updates the canonical resource subtype, or marks it closed when subtype is negative.
     pub(super) fn __elephc_eval_resource_state(resource: *mut RuntimeCell, subtype: i64);
     /// Writes an already-dispatched diagnostic without invoking the user handler again.

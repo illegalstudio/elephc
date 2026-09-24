@@ -642,14 +642,7 @@ impl Checker {
                         self.callable_array_target_versions.clone();
                     let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
 
-                    let guard = match self.guard_narrowing(cond, env) {
-                        Ok(guard) => guard,
-                        Err(error) => {
-                            self.guarded_union_types = saved_guarded_unions;
-                            return Err(error);
-                        }
-                    };
-                    if let Some(guard) = guard {
+                    if let Some(guard) = self.guard_narrowing(cond, env)? {
                         applied_any_guard = true;
                         // Remember the variable's pre-`if` type the first time we narrow it.
                         if !saved_vars.iter().any(|(v, _)| v == &guard.var) {
@@ -663,7 +656,6 @@ impl Checker {
 
                         // Check the guarded body with the "then" type.
                         let saved = env.get(&guard.var).cloned();
-                        remember_guarded_union(self, &guard.var, env);
                         env.insert(guard.var.clone(), guard.then_ty.clone());
                         for s in *body {
                             if let Err(error) = self.check_stmt(s, env) {
@@ -772,7 +764,6 @@ impl Checker {
                     Some((key.clone(), joined))
                 });
                 if !keep_complement_after_if {
-                    self.guarded_union_types = saved_guarded_unions;
                     for (var, original) in &saved_vars {
                         restore_narrowed_var(env, var, original);
                     }
@@ -824,7 +815,6 @@ impl Checker {
                     .as_ref()
                     .map(|g| self.enter_flow_narrowing(&g.var, env.get(&g.var), &g.then_ty));
                 if let Some(g) = &guard {
-                    remember_guarded_union(self, &g.var, env);
                     env.insert(g.var.clone(), g.then_ty.clone());
                 }
                 let errors = self.check_break_continue_target_body(body, env);

@@ -57,11 +57,7 @@ pub(super) fn lower_arg_with_signature(
         return lowered.value;
     }
     let lowered = lower_expr(ctx, arg);
-    if capture_values && !sig.ref_params.get(index).copied().unwrap_or(false) {
-        capture_call_argument_value(ctx, lowered, index, arg.span).value
-    } else {
-        coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
-    }
+    coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 
 /// Promotes a runtime-parser output local at its source-order argument evaluation point.

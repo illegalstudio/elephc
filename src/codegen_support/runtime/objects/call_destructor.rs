@@ -108,9 +108,6 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bic w9, w9, w12");                                     // clear the temporary eval guard before static lookup
     emitter.instruction("str w9, [x0, #-12]");                                  // persist the restored refcount guard state
     emitter.instruction("b __rt_call_object_destructor_static");                // continue ordinary lookup after restoring a missed eval guard
-    emitter.label("__rt_call_object_destructor_eval_throw");
-    emitter.instruction("mov x0, x13");                                         // transfer the callback-owned boxed Throwable to native publication
-    emitter.instruction("b __rt_destructor_throw_mixed");                       // consume the box and enter the enclosing native cleanup handler
     emitter.label("__rt_call_object_destructor_static");
     emitter.instruction("ldr x11, [x0]");                                       // x11 = runtime class_id (object payload offset 0)
     // emit_load_symbol_to_reg uses x9 as scratch, so class_id is kept in x11.
@@ -174,9 +171,6 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and eax, 0x7fffffff");                                 // clear the temporary eval guard before static lookup
     emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the restored refcount guard state
     emitter.instruction("jmp __rt_call_object_destructor_static_x86");          // continue static lookup after restoring a missed eval guard
-    emitter.label("__rt_call_object_destructor_eval_throw");
-    emitter.instruction("mov rax, r11");                                        // transfer the owned boxed Throwable through the native unary convention
-    emitter.instruction("jmp __rt_destructor_throw_mixed");                     // consume the returned owner inside the nearest native exception boundary
     emitter.label("__rt_call_object_destructor_static_x86");
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = runtime class_id (object payload offset 0)
     abi::emit_cmp_reg_to_symbol(emitter, "rax", "_class_destruct_count");       // is class_id within the destructor table?

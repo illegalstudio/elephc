@@ -18,6 +18,9 @@ use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
 use crate::value::RuntimeCellHandle;
 
+mod builtins;
+pub(crate) use builtins::default_builtin_call;
+
 thread_local! {
     /// Fallback recursion chain for embedders without the generated Fiber-aware runtime hook.
     static FALLBACK_MAGIC_SET_GUARDS: std::cell::RefCell<Vec<(usize, u64, String)>> =
@@ -656,6 +659,11 @@ pub trait RuntimeValueOps {
     /// Releases one owned runtime cell that is no longer held by the eval scope.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
+    /// Collects native cycles after an explicit root removal.
+    fn collect_cycles(&mut self) -> Result<(), EvalStatus> {
+        self.gc_collect_cycles().map(|_| ())
+    }
+
     /// Forces a cycle-collection pass and returns the number of reclaimed graph nodes.
     fn gc_collect_cycles(&mut self) -> Result<i64, EvalStatus>;
 
@@ -679,6 +687,25 @@ pub trait RuntimeValueOps {
 
     /// Retains one runtime cell so the eval caller receives an independent owner.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Reports whether the host stores PHP references independently of eval scope metadata.
+    fn supports_persistent_references(&self) -> bool { false }
+
+    /// Reports whether a boxed value is a writable persistent PHP reference.
+    fn is_reference(&mut self, _value: RuntimeCellHandle) -> Result<bool, EvalStatus> { Ok(false) }
+
+    /// Creates an owned reference containing an independent PHP value.
+    fn reference_new(&mut self, _value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Replaces a reference value and transfers its previous owner.
+    fn reference_replace(&mut self, _reference: RuntimeCellHandle, _value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Copies a PHP value independently from a persistent reference wrapper.
+    fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> { self.retain(value) }
 
     /// Retains hidden object-owned edges for native GC; arena-backed adapters need no extra owners.
     fn retain_object_children(

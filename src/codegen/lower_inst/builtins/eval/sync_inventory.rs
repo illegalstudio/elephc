@@ -106,8 +106,9 @@ pub(super) fn eval_sync_globals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncGlobal
         })
         .collect::<Vec<_>>();
     // Process globals share ordinary global Mixed storage, including their entry-point initializers.
-    push_eval_process_superglobal(&mut globals, "argc", PhpType::Mixed);
-    push_eval_process_superglobal(&mut globals, "argv", PhpType::Mixed);
+    let main_scope_locals = eval_sync_locals(ctx);
+    push_eval_process_superglobal(&mut globals, &main_scope_locals, "argc", PhpType::Mixed);
+    push_eval_process_superglobal(&mut globals, &main_scope_locals, "argv", PhpType::Mixed);
     globals
 }
 

@@ -18,21 +18,6 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
 /// Adapts compact and ordinary Throwable payloads using AArch64 native arguments.
 fn aarch64(emitter: &mut Emitter) {
-    emitter.label_global("__rt_throwable_previous");
-    emitter.instruction("ldrb w9, [x0, #-8]");                                  // inspect the owner heap kind without touching the inherited property
-    emitter.instruction("ldr x0, [x0, #40]");                                   // load the raw previous object or its nullable Mixed cell
-    emitter.instruction("cmp w9, #6");                                          // recognize compact Throwable storage
-    emitter.instruction("b.eq __rt_throwable_previous_done");                   // compact previous pointers need no unboxing
-    emitter.instruction("cbz x0, __rt_throwable_previous_done");                // zero-initialized ordinary properties have no previous owner
-    emitter.instruction("ldr x9, [x0]");                                        // inspect the nullable property runtime tag
-    emitter.instruction("cmp x9, #6");                                          // only an object-valued property contains a previous Throwable
-    emitter.instruction("b.ne __rt_throwable_previous_null");                   // normalize boxed null to the raw absent-pointer convention
-    emitter.instruction("ldr x0, [x0, #8]");                                    // borrow the previous object from its property cell
-    emitter.label("__rt_throwable_previous_done");
-    emitter.instruction("ret");                                                 // return a borrowed previous object without changing ownership
-    emitter.label("__rt_throwable_previous_null");
-    emitter.instruction("mov x0, #0");                                          // represent an absent previous object with zero
-    emitter.instruction("ret");                                                 // return without retaining the nullable property
     emitter.label_global("__rt_throwable_append_previous");
     emitter.instruction("ldrb w9, [x0, #-8]");                                  // distinguish compact raw ownership from a boxed property
     emitter.instruction("cmp w9, #6");                                          // check whether insertion can transfer the raw previous pointer
@@ -67,21 +52,6 @@ fn aarch64(emitter: &mut Emitter) {
 
 /// Applies the same previous-slot representation and owner-transfer rules under SysV.
 fn x86_64(emitter: &mut Emitter) {
-    emitter.label_global("__rt_throwable_previous");
-    emitter.instruction("movzx r10d, BYTE PTR [rax - 8]");                      // inspect the owner heap kind
-    emitter.instruction("mov rax, QWORD PTR [rax + 40]");                       // load the raw object or boxed nullable previous value
-    emitter.instruction("cmp r10d, 6");                                         // recognize compact Throwable storage
-    emitter.instruction("je __rt_throwable_previous_done");                     // return compact raw ownership without unboxing
-    emitter.instruction("test rax, rax");                                       // recognize an uninitialized empty ordinary previous slot
-    emitter.instruction("jz __rt_throwable_previous_done");                     // return zero for an empty previous property
-    emitter.instruction("cmp QWORD PTR [rax], 6");                              // check whether the nullable property contains an object
-    emitter.instruction("jne __rt_throwable_previous_null");                    // normalize boxed null to zero
-    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // borrow the previous object from its Mixed cell
-    emitter.label("__rt_throwable_previous_done");
-    emitter.instruction("ret");                                                 // return borrowed previous ownership
-    emitter.label("__rt_throwable_previous_null");
-    emitter.instruction("xor eax, eax");                                        // materialize the absent previous pointer
-    emitter.instruction("ret");                                                 // leave the null property owner unchanged
     emitter.label_global("__rt_throwable_append_previous");
     emitter.instruction("cmp BYTE PTR [rdi - 8], 6");                           // distinguish compact raw previous storage
     emitter.instruction("je __rt_throwable_append_previous_raw");               // transfer directly when no nullable cell is needed

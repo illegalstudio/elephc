@@ -113,7 +113,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     );
     frame.bind_scope(&function_scope);
     context.push_function_args(frame);
-    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    let result = binding_result.and_then(|()| execute_statements(function.body(), context, &mut function_scope, values));
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -148,6 +148,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     let return_result = release_function_args(return_result, context, values);
     context.pop_called_class_scope();
     context.pop_class_scope();
+    let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
     context.pop_function();
     return_result
 }
@@ -428,7 +429,7 @@ fn eval_closure_with_optional_binding(
     }
     let scope_parameter_is_by_ref =
         method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
-    bind_method_scope_args(
+    let binding_result = bind_method_scope_args(
         &mut function_scope,
         &binding_params,
         &scope_parameter_is_by_ref,
@@ -442,7 +443,7 @@ fn eval_closure_with_optional_binding(
         backtrace_object,
         backtrace_object.is_none(),
     );
-    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    let result = binding_result.and_then(|()| execute_statements(function.body(), context, &mut function_scope, values));
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -489,6 +490,7 @@ fn eval_closure_with_optional_binding(
         context.pop_class_scope();
     }
     let return_result = release_function_args(return_result, context, values);
+    let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
     context.pop_function();
     return_result
 }
@@ -578,31 +580,15 @@ pub(in crate::interpreter) fn persist_static_locals(
     Ok(())
 }
 
-/// Transfers an owned local return or retains a borrowed result before its activation disappears.
+/// Retains a borrowed return before its activation releases local owners.
 pub(in crate::interpreter) fn retain_static_local_return(
     result: Result<RuntimeCellHandle, EvalStatus>,
-    static_names: &[String],
-    scope: &ElephcEvalScope,
+    _static_names: &[String],
+    _scope: &ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let result = result?;
-    if !result.is_borrowed() {
-        return Ok(result);
-    }
-    if static_names
-        .iter()
-        .any(|name| scope.visible_cell(name) == Some(result))
-    {
-        values.retain(result)
-    } else if scope.visible_entries().iter().any(|(name, cell)| {
-        *cell == result && !scope.is_global_alias(name) && scope.entry(name)
-            .is_some_and(|entry| entry.flags().ownership == ScopeCellOwnership::Owned
-                && !entry.flags().by_ref)
-    }) {
-        Ok(result.owned())
-    } else {
-        values.retain(result)
-    }
+    if result.is_borrowed() { values.retain(result) } else { Ok(result) }
 }
 
 /// One source-order static local declaration and its initializer expression.

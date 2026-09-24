@@ -105,6 +105,7 @@ pub(in crate::interpreter) fn execute_matching_catch(
             scope,
             var_name.clone(),
             thrown,
+            values,
         )? {
             values.release(replaced)?;
         }

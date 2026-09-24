@@ -94,6 +94,7 @@ mod class_introspection_mixed;
 mod core_introspection;
 mod reflection_new_instance;
 mod nullable_method_calls;
+mod packed_builtin_args;
 mod method_metadata;
 mod static_method_calls;
 mod scoped_values;

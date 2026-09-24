@@ -116,6 +116,13 @@ pub(crate) fn forget_released_object(identity: u64) {
     }
 }
 
+/// Drops eval metadata when the native runtime frees an object's final owner.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_object_forget(object: *mut RuntimeCell) {
+    forget_released_object(object as u64);
+}
+
 /// Lifts an escaping eval Throwable out of a bridge result, retaining a borrowed one.
 ///
 /// Split out so the cleanup below can run even when taking or retaining the Throwable fails.

@@ -269,6 +269,24 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     roots: &[(usize, crate::ir::LocalSlotId)],
     span: Span,
 ) {
+    let owned_object_result = result.is_some_and(|result| {
+        matches!(ctx.builder.value_php_type(result).codegen_repr(), PhpType::Object(_))
+            && signature.is_some_and(|signature| !signature.by_ref_return)
+            && matches!(ctx.builder.value_defining_op(result),
+                Some(Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall))
+    });
+    let guarded_result = result.filter(|_| owned_object_result && args.iter().any(|value| {
+        ctx.value_is_owning_temporary(LoweredValue {
+            value: *value,
+            ir_type: ctx.builder.value_type(*value),
+        })
+    }));
+    if let Some(value) = guarded_result {
+        guard_descriptor_container(ctx, LoweredValue {
+            value,
+            ir_type: ctx.builder.value_type(value),
+        }, span);
+    }
     for (parameter_index, value) in args.iter().enumerate() {
         if let Some((_, slot)) = roots.iter().find(|(index, _)| *index == parameter_index) {
             retire_owned_call_operand(ctx, *slot, span);

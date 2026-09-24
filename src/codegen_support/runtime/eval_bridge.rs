@@ -27,15 +27,15 @@ fn x86_64_mixed_heap_kind_instruction() -> String {
 }
 
 /// Emits every eval value wrapper required by `libelephc-magician`.
-pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
-    emit_eval_value_runtime(emitter);
+pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
+    emit_eval_value_runtime(emitter, features);
     emit_object_clone_shallow_eval_export(emitter);
     emit_magic_set_guard_eval_exports(emitter);
     scope_release::emit(emitter);
 }
 
 /// Emits self-contained value wrappers shared by native eval fragments and Magician.
-pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter) {
+pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.blank();
     emitter.comment("--- runtime: eval bridge value wrappers ---");
     match emitter.target.arch {
@@ -47,6 +47,10 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter) {
     array_reference_query::emit_array_entry_reference_query(emitter);
     resources::emit_resource_inventory_wrapper(emitter);
     backtrace::emit_backtrace_entry_wrapper(emitter);
+    lifecycle::emit(emitter);
+    output::emit(emitter);
+    array_next_index::emit(emitter);
+    if features.mbstring || features.eval_bridge { string_literal::emit(emitter); }
 }
 
 /// Emits the boxed shallow-clone adapter shared by Magician and PHP 8.5 `clone()`.
@@ -91,6 +95,7 @@ pub(crate) mod array_next_index;
 mod reference_values;
 mod lifecycle;
 mod output;
+mod mbstring;
 pub(crate) mod string_literal;
 mod aarch64_casts;
 mod aarch64_numeric;

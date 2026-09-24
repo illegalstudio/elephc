@@ -49,6 +49,7 @@ use crate::context::{
 };
 
 use abstract_requirements::*;
+use array_append::eval_array_append_value;
 pub(crate) use array_updates::*;
 // Re-exported under a distinct name so the `class_resolution::*` glob below and the crate-level
 // re-export in `interpreter/mod.rs` cannot import the same name at two visibilities.

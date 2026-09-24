@@ -33,7 +33,6 @@ use externs::{
     __elephc_eval_install_closure_bind_hook, __elephc_eval_install_dynamic_object_clone_hook,
     __elephc_eval_install_dynamic_object_destructor_hook, __elephc_eval_value_array_new,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
-    __elephc_eval_value_release,
 };
 
 /// Runtime hook adapter that produces and consumes boxed elephc Mixed cells.
@@ -92,7 +91,7 @@ impl ElephcRuntimeOps {
             self.release_cells([arg_array])?;
             return Err(status);
         }
-        result
+        Ok(arg_array)
     }
 
     /// Returns the active eval class-scope bytes in the generated helper ABI shape.

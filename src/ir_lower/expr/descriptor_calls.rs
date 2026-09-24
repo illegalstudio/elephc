@@ -76,9 +76,23 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     if crate::types::call_args::has_named_args(args)
         || descriptor_args_need_runtime_unpack_keys(args)
     {
-        return lower_untyped_descriptor_invoker_hash_container(ctx, args, span);
+        return lower_untyped_descriptor_invoker_hash_container(ctx, args, span, false);
     }
-    lower_untyped_descriptor_invoker_indexed_container(ctx, args, span)
+    lower_untyped_descriptor_invoker_indexed_container(ctx, args, span, false)
+}
+
+/// Registers exceptional cleanup for an owning descriptor or argument container.
+pub(super) fn guard_descriptor_container(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
+    ctx.begin_argument_guard_scope();
+    ctx.guard_call_argument(value, 0, span);
+    ctx.end_argument_guard_scope();
+}
+
+/// Protects an owned callback while its arguments are evaluated.
+pub(super) fn guard_owned_descriptor_callback(ctx: &mut LoweringContext<'_, '_>, callback: LoweredValue, span: Span) {
+    if ctx.value_is_owning_temporary(callback) && !ctx.has_call_argument_guard(callback.value) {
+        guard_descriptor_container(ctx, callback, span);
+    }
 }
 
 /// Builds an indexed descriptor-invoker container for signature-unknown calls.

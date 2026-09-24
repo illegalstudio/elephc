@@ -94,7 +94,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("and w10, w9, #0x7fffffff");                            // exclude the temporary destructor guard from ownership
     emitter.instruction("cbz w10, __rt_object_free_deep_release");              // release properties only when no PHP owner remains
     emitter.instruction("str w10, [x0, #-12]");                                 // restore the ordinary count of a resurrected receiver
-    emitter.instruction("b __rt_object_free_deep_finish");                      // preserve its properties and pending throwable state
+    emitter.instruction("b __rt_object_free_deep_resurrected");                 // preserve its properties and pending throwable state
     emitter.label("__rt_object_free_deep_release");
     emitter.instruction("orr w9, w9, #0x80000000");                             // suppress recursive release while dismantling the final object graph
     emitter.instruction("str w9, [x0, #-12]");                                  // keep an in-progress allocation distinct from a free-list block
@@ -392,7 +392,7 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("and r10d, 0x7fffffff");                                // exclude the temporary destructor flag from remaining owners
     emitter.instruction("jz __rt_object_free_deep_release");                    // dismantle properties only for the final released owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // restore usable refcounts for a retained receiver
-    emitter.instruction("jmp __rt_object_free_deep_finish");                    // preserve resurrected identity while propagating pending exceptions
+    emitter.instruction("jmp __rt_object_free_deep_resurrected_x");             // preserve resurrected identity while propagating pending exceptions
     emitter.label("__rt_object_free_deep_release");
     emitter.instruction("or DWORD PTR [rax - 12], 0x80000000");                 // suppress recursive final release and preserve heap liveness during cleanup
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the final object identity after resurrection was ruled out

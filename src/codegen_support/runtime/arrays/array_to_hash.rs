@@ -165,6 +165,7 @@ fn emit_array_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_array_to_hash_set");                           // scalar elements need no retain
     emitter.instruction("cmp r9, 7");                                           // is the element above the heap-backed tag range?
     emitter.instruction("jg __rt_array_to_hash_set");                           // non-heap tags need no retain
+    emitter.label("__rt_array_to_hash_retain");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // pass the heap-backed element in the internal retain ABI register
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed element for the result hash
     emitter.instruction("jmp __rt_array_to_hash_set");                          // continue to insertion

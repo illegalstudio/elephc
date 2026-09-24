@@ -97,6 +97,7 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes: 0,
     })
 }
@@ -246,6 +247,7 @@ fn materialize_method_call_args_with_receiver_reg_and_refs_options(
         preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes: 0,
     })
 }

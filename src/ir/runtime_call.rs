@@ -128,10 +128,6 @@ impl RuntimeCallTarget {
                 min_operands: 2,
                 max_operands: Some(2),
             }),
-            RuntimeCallTarget::MixedArraySet => Some(RuntimeCallSignature::Polymorphic {
-                min_operands: 3,
-                max_operands: Some(3),
-            }),
             RuntimeCallTarget::MixedCellPromoteToHash(_)
             | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
             | RuntimeCallTarget::ArrayUnpackToHash => {

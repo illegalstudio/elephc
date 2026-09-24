@@ -417,7 +417,7 @@ fn lower_new_dynamic_generic(
     let mut operands = vec![name_value.value];
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
-    if uses_runtime_arg_container {
+    let arg_container = if uses_runtime_arg_container {
         let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
         operands.push(arg_container.value);
         let owns_arguments = ctx.value_is_owning_temporary(arg_container);

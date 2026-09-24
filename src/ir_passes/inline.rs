@@ -413,6 +413,29 @@ fn callee_param_slots(callee: &Function) -> HashSet<LocalSlotId> {
         .collect()
 }
 
+/// A written lifetime-tracked parameter needs its callee's owner semantics.
+fn callee_mutates_lifetime_tracked_parameter(callee: &Function) -> bool {
+    let parameter_slots = callee_param_slots(callee);
+    callee.instructions.iter().any(|instruction| {
+        if instruction.op != Op::StoreLocal { return false; }
+        let Some(Immediate::LocalSlot(slot)) = instruction.immediate else { return false; };
+        parameter_slots.contains(&slot)
+            && callee.locals.get(slot.as_raw() as usize).is_some_and(|local| {
+                Ownership::php_type_needs_lifetime_tracking(&local.php_type.codegen_repr())
+            })
+    })
+}
+
+/// A directly returned local can transfer ownership only at a real call boundary.
+fn callee_returns_lifetime_tracked_non_parameter_slot(callee: &Function) -> bool {
+    let parameter_slots = callee_param_slots(callee);
+    callee_directly_returned_slots(callee).into_iter()
+        .filter(|slot| !parameter_slots.contains(slot))
+        .any(|slot| callee.locals.get(slot.as_raw() as usize).is_some_and(|local| {
+            Ownership::php_type_needs_lifetime_tracking(&local.php_type.codegen_repr())
+        }))
+}
+
 /// Returns true when inlining would erase exceptional cleanup for an owned return slot.
 ///
 /// A non-parameter cleanup-tracked local is still owned by the callee until its `Return`

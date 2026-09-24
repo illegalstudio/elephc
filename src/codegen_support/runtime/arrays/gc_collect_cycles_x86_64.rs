@@ -92,7 +92,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_root_loop");
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the current candidate heap header for the x86_64 root scan
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // have we scanned every block in the initial heap window?
-    emitter.instruction("jae __rt_gc_collect_cycles_destruct_init");            // begin destruction of the still-unreachable graph nodes
+    emitter.instruction("jae __rt_gc_collect_cycles_free_init");                // begin destruction of the still-unreachable graph nodes
     emitter.instruction("mov r9d, DWORD PTR [r8]");                             // load this candidate block payload size before any nested rescans
     emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // load this candidate block refcount from the heap header
     emitter.instruction("test r10d, r10d");                                     // is this candidate block live?
@@ -382,10 +382,10 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_object_free_deep");                          // deep-free the remaining unreachable object node and its properties
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the object node
     emitter.label("__rt_gc_collect_cycles_free_array");
-    CLEANUP.call(emitter, "__rt_array_free_deep", false);                           // deep-free the unreachable array node and its nested payloads
+    emitter.instruction("call __rt_array_free_deep");                            // deep-free the unreachable array node and its nested payloads
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the array node
     emitter.label("__rt_gc_collect_cycles_free_hash");
-    CLEANUP.call(emitter, "__rt_hash_free_deep", false);                            // deep-free the unreachable hash node and its owned entries
+    emitter.instruction("call __rt_hash_free_deep");                             // deep-free the unreachable hash node and its owned entries
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the hash node
     emitter.label("__rt_gc_collect_cycles_free_mixed");
     emitter.instruction("call __rt_mixed_free_deep");                           // deep-free the unreachable mixed box and its boxed child

@@ -31,6 +31,9 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         // The checker model records object types by concrete class name. A neutral `object`
         // declaration therefore remains open until a builtin check hook can refine it.
         TypeSpec::Object => PhpType::Mixed,
+        TypeSpec::False => PhpType::False,
+        TypeSpec::Null => PhpType::Void,
+        TypeSpec::Union(members) => PhpType::Union(members.iter().map(type_spec_to_php).collect()),
         TypeSpec::Mixed => PhpType::Mixed,
         TypeSpec::Void => PhpType::Void,
         TypeSpec::Ptr => PhpType::Pointer(None),

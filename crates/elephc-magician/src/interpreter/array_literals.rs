@@ -19,6 +19,7 @@ pub(super) fn eval_indexed_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.array_new(elements.len())?;
+    context.clear_array_metadata(array);
     let mut operands = Vec::new();
     let result = (|| {
         for (index, element) in elements.iter().enumerate() {
@@ -27,9 +28,7 @@ pub(super) fn eval_indexed_array(
             let (value, target) = match element {
                 EvalArrayElement::Value(element) => (eval_owned_expr(element, context, scope, values)?, None),
                 EvalArrayElement::Reference(element) => {
-                    let (value, target) =
-                        eval_reference_array_element_value(element, context, scope, values)?;
-                    (value, Some(target))
+                    eval_reference_array_element_value(element, context, scope, values)?
                 }
                 EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
                     return Err(EvalStatus::UnsupportedConstruct);
@@ -87,8 +86,7 @@ pub(super) fn eval_assoc_array(
                 key
             };
             let (value, target) = if by_ref {
-                let (value, target) = eval_reference_array_element_value(value, context, scope, values)?;
-                (value, Some(target))
+                eval_reference_array_element_value(value, context, scope, values)?
             } else {
                 (eval_owned_expr(value, context, scope, values)?, None)
             };
@@ -129,14 +127,19 @@ fn eval_reference_array_element_value(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, EvalReferenceTarget), EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    if let EvalExpr::LoadVar(local) = value {
+        if let Some(reference) = eval_persistent_variable_reference(local, context, scope, values)? {
+            return Ok((values.retain(reference)?, None));
+        }
+    }
     let (value, target) = eval_call_arg_value(value, context, scope, values)?;
     let Some(target) = target else {
         release_expr_result(value, context, values)?;
         return Err(EvalStatus::RuntimeFatal);
     };
     let value = if value.is_borrowed() { values.retain(value)? } else { value };
-    Ok((value, target))
+    Ok((value, Some(persistent_reference_target(target)?)))
 }
 
 /// Records one by-reference array element on the eval context side table.
@@ -180,8 +183,8 @@ fn eval_array_next_key_after_explicit_key(
     operands: &mut Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let (numeric, owned) = match values.type_tag(key)? {
-        EVAL_TAG_INT => (key, false),
+    let key = match values.type_tag(key)? {
+        EVAL_TAG_INT => key,
         EVAL_TAG_STRING => {
             let bytes = values.string_bytes(key)?;
             let Some(key) = eval_numeric_string_array_key(&bytes) else {
