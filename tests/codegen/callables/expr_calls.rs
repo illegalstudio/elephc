@@ -1864,6 +1864,29 @@ echo implode(",", array_keys(call_user_func($fn, $h, 1, 2, true))), "\n";
     assert_eq!(out, "b,c:b,c:b,c\n");
 }
 
+/// A callable-builtin result map must keep same-coordinate included calls independent.
+#[test]
+fn test_first_class_builtin_result_types_do_not_collide_across_included_files() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire __DIR__ . '/int.php';\nrequire __DIR__ . '/assoc.php';\n$a = first_values();\n$b = second_values();\necho $a[0], $a[1], '|', implode(',', array_keys($b)), '|', $b['b'];\n",
+            ),
+            (
+                "int.php",
+                "<?php\nfunction first_values(): array {\n    $values = [1, 2, 3];\n    return call_user_func(array_slice(...), $values, 1, 2);\n}\n",
+            ),
+            (
+                "assoc.php",
+                "<?php\nfunction second_values(): array {\n    $values = ['a' => 1, 'b' => 2, 'c' => 3];\n    return call_user_func(array_slice(...), $values, 1, 2);\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "23|b,c|2");
+}
+
 /// `call_user_func_array()` reaches the same lowering entry point as `call_user_func()`, so all
 /// three of its resolved callback spellings need the same recording — the existing coverage
 /// used an INDEXED source and a variable callee, which passes for two independent reasons and
