@@ -293,10 +293,10 @@ fn test_implode_on_an_array_of_tagged_nullable_ints() {
     let out = compile_and_run(
         r#"<?php
 function f(?int $value): string { return implode(',', [$value]); }
-echo f(null), '|', f(7);
+echo f(null), '|', f(7), '|', f(-7), '|', f(0), '|', f(PHP_INT_MIN), '|', f(PHP_INT_MAX);
 "#,
     );
-    assert_eq!(out, "|7");
+    assert_eq!(out, "|7|-7|0|-9223372036854775808|9223372036854775807");
 }
 
 /// Passing an array containing a runtime `?int` into a nullable-array parameter keeps the

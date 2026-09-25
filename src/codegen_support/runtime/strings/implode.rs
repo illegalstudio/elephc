@@ -297,10 +297,17 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("add x12, x3, x12");                                    // add the slot offset to the array base
     emitter.instruction("add x12, x12, #24");                                   // skip the array header
     emitter.instruction("ldr x0, [x12]");                                       // load the non-null integer payload
-    emit_aarch64_scalar_cast_prologue(emitter, "tagged_scalar");
-    emitter.instruction("bl __rt_itoa");                                        // format the tagged integer payload as decimal text
-    emit_aarch64_scalar_cast_epilogue(emitter);
-    emitter.instruction("b __rt_implode_copy_value");                           // copy the formatted integer into the result
+    emitter.instruction("str x9, [sp, #56]");                                   // preserve the live result cursor across formatting
+    emitter.instruction("str x10, [sp, #64]");                                  // preserve array length across formatting
+    emitter.instruction("str x11, [sp, #72]");                                  // preserve the element cursor across formatting
+    emitter.instruction("mov x1, x9");                                         // format directly in the reserved implode destination window
+    emitter.instruction("bl __rt_itoa_into");                                   // write decimal digits without using concat scratch
+    emitter.instruction("mov x2, x1");                                         // move the formatted length into the copy-loop argument
+    emitter.instruction("mov x1, x0");                                         // move the formatted slice pointer into the copy-loop argument
+    emitter.instruction("ldr x9, [sp, #56]");                                   // restore the live result cursor
+    emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length
+    emitter.instruction("ldr x11, [sp, #72]");                                  // restore the element cursor
+    emitter.instruction("b __rt_implode_copy_value");                           // compact the right-aligned digits to the destination cursor
     emitter.label("__rt_implode_tagged_scalar_null");
     emitter.instruction("mov x1, xzr");                                         // a null element contributes no bytes
     emitter.instruction("mov x2, xzr");                                         // publish the empty string length
@@ -601,10 +608,11 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer
     emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // recompute the tagged slot address after the array header
     emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the non-null integer payload
-    emit_x86_64_scalar_cast_prologue(emitter, "tagged_scalar");
-    emitter.instruction("call __rt_itoa");                                      // format the tagged integer payload as decimal text
+    emitter.instruction("mov rdi, rax");                                       // pass the tagged integer to the destination formatter
+    emitter.instruction("mov rsi, r10");                                       // format directly in the reserved implode destination window
+    emitter.instruction("call __rt_itoa_into");                                // write decimal digits without using concat scratch
     emit_x86_64_scalar_copy_setup(emitter);
-    emitter.instruction("jmp __rt_implode_copy");                               // copy the formatted integer into the result
+    emitter.instruction("jmp __rt_implode_copy");                               // compact the right-aligned digits to the destination cursor
     emitter.label("__rt_implode_tagged_scalar_null_x");
     emitter.instruction("xor r8d, r8d");                                        // a null element contributes no source bytes
     emitter.instruction("xor r9d, r9d");                                        // publish the empty string length
@@ -763,10 +771,9 @@ mod tests {
         assert_eq!(asm.matches("add rsp, 112").count(), 1);
     }
 
-    /// The element arms that format through `_concat_buf`: boxed Mixed, raw int, raw float,
-    /// raw bool, and tagged nullable int. Each one publishes the live destination cursor first;
-    /// the string-slot arm and false-bool arm copy bytes they already hold and publish nothing.
-    const FORMATTING_ARMS: usize = 5;
+    /// The element arms that format through concat scratch: boxed Mixed, raw int, raw float,
+    /// and true bool. Tagged nullable ints format directly into the reserved result destination.
+    const FORMATTING_ARMS: usize = 4;
 
     /// The owned mixed-cast slot must be cleared at the TOP of every element iteration, so a
     /// borrowed (typed-array) element can never inherit the previous iteration's owned pointer
@@ -825,13 +832,35 @@ mod tests {
         );
     }
 
+    /// Tagged nullable integers format into the reserved join destination, never into the
+    /// shared concat scratch whose remaining capacity can be smaller than 21 bytes.
+    #[test]
+    fn test_implode_tagged_scalar_uses_destination_integer_formatter() {
+        for (target, call, old_call, null_label) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), "bl __rt_itoa_into", "bl __rt_itoa\n", "\n__rt_implode_tagged_scalar_null:"),
+            (Target::new(Platform::Linux, Arch::X86_64), "call __rt_itoa_into", "call __rt_itoa\n", "\n__rt_implode_tagged_scalar_null_x:"),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_implode(&mut emitter);
+            let asm = emitter.output();
+            let tagged = asm
+                .split("__rt_implode_tagged_scalar_elem:")
+                .nth(1)
+                .expect("tagged scalar renderer must be emitted")
+                .split(null_label)
+                .next()
+                .expect("tagged scalar null case must follow its integer arm");
+            assert!(tagged.contains(call), "{tagged}");
+            assert!(!tagged.contains(old_call), "{tagged}");
+        }
+    }
+
     /// Issue #515: every destination write is preceded by a room check, so a join larger than
     /// the 64 KiB scratch grows into an owned heap block instead of running into the adjacent
     /// BSS globals.
     ///
     /// Four sites are load-bearing: the glue, the element, mixed-cast headroom, and the
-    /// tagged-scalar int formatter headroom. Both formatters write into scratch before implode
-    /// can measure their output, so their room must be reserved first.
+    /// tagged-scalar destination formatter. Both formatters reserve room before writing output.
     ///
     /// Asserted per target because the bug was invisible on one of them: the CLI corrupted the
     /// result silently while a `--web` worker took SIGSEGV for the same input.

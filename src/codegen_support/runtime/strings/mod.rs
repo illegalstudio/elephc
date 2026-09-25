@@ -110,7 +110,7 @@ mod resource_type_name;
 mod resource_write_stdout;
 mod parse_url;
 
-pub use itoa::emit_itoa;
+pub use itoa::{emit_itoa, emit_itoa_into};
 pub use offset_warning::emit_string_offset_warning;
 /// Emit integer-to-string conversion helper.
 pub use concat::emit_concat;
