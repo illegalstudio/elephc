@@ -544,6 +544,22 @@ echo $s->getDefaultValue();
     assert_eq!(out, "nyy7");
 }
 
+/// The same array constant one level down, as an object default's argument, must not fail the
+/// build either. The dump still prints the default as written (`new \Box(ITEMS)`, as PHP does);
+/// only the folded value is missing, as it is at the top level.
+#[test]
+fn test_an_unfoldable_global_constant_in_an_object_default_still_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+const ITEMS = [1, 2];
+class Box { public function __construct(public array $items = []) {} }
+function f(Box $box = new Box(ITEMS)) {}
+echo (new ReflectionFunction('f'))->getParameters()[0], "\n";
+"#,
+    );
+    assert_eq!(out, "Parameter #0 [ <optional> Box $box = new \\Box(ITEMS) ]\n");
+}
+
 /// Verifies the compiler's own hidden variadic never reaches the dump.
 ///
 /// Every callable carries a synthesized `mixed ...$__elephc_func_args` so `func_get_args()` can
