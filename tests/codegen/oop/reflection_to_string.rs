@@ -10,8 +10,9 @@
 //!   `__string` slot was declared and never filled) and a parameter returned its bare NAME
 //!   (`__toString` read `__name`).
 //! - Every expected string here is real `LC_ALL=C php` 8.5.10 output with one line removed: PHP
-//!   prints `  @@ <file> <line> - <line>` plus a blank line after the header, which a compiled
-//!   binary cannot honestly answer — the source it was built from need not exist where it runs.
+//!   prints `  @@ <file> <line> - <line>` after the header, which a compiled binary cannot
+//!   honestly answer — the source it was built from need not exist where it runs. The blank line
+//!   after it stays: it opens the parameter block, and PHP prints it for internal callables too.
 //!   The eval bridge omits the same line, but still differs in three places the compiled path
 //!   gets right: the prototype marker, the empty body, and the union order (#1117).
 //! - A union prints in PHP's type-mask order, not the declared one: `int|string` comes back as
