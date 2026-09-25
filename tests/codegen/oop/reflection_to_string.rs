@@ -315,6 +315,62 @@ echo (new ReflectionFunction('f'))->__toString();
     );
 }
 
+/// An object default keeps what was WRITTEN: a constant stays a name instead of its value, a
+/// named argument keeps its name, a nested `new` and an array holding a constant print as
+/// written, and a string is escaped. An array made only of literals is folded by PHP, so it
+/// prints every key. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_object_default_exports_its_written_argument_expressions() {
+    let out = compile_and_run(
+        r#"<?php
+const LIMIT = 3;
+class Foo {
+    const VALUE = 7;
+    public function __construct(public mixed $a = 0, public mixed $b = 0) {}
+}
+function f(Foo $o = new Foo(Foo::VALUE, LIMIT), $x = Foo::VALUE) {}
+function g(Foo $o = new Foo(b: [1, 'k' => LIMIT], a: new Foo("it's\\")), $y = new Foo([[1], true, null, -2, 2.0])) {}
+echo (new ReflectionFunction('f'))->getParameters()[0], "\n";
+echo (new ReflectionFunction('f'))->getParameters()[1], "\n";
+echo (new ReflectionFunction('g'))->getParameters()[0], "\n";
+echo (new ReflectionFunction('g'))->getParameters()[1], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Parameter #0 [ <optional> Foo $o = new \\Foo(Foo::VALUE, LIMIT) ]\n\
+         Parameter #1 [ <optional> $x = Foo::VALUE ]\n\
+         Parameter #0 [ <optional> Foo $o = new \\Foo(b: [1, 'k' => LIMIT], a: new \\Foo('it\\'s\\\\')) ]\n\
+         Parameter #1 [ <optional> $y = new \\Foo([0 => [0 => 1], 1 => true, 2 => null, 3 => -2, 4 => 2.0]) ]\n"
+    );
+}
+
+/// Inside a namespace a resolved class prints fully qualified, `self::class` folds to the
+/// escaped class name, and `parent::` stays as written. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_namespaced_object_default_exports_resolved_names() {
+    let out = compile_and_run(
+        r#"<?php
+namespace N;
+const LIMIT = 3;
+class Foo {
+    const VALUE = 7;
+    public function __construct(public mixed $a = 0, public mixed $b = 0) {}
+}
+class Bar extends Foo {
+    public function m($o = new Foo(parent::VALUE, self::class), $x = Foo::VALUE) {}
+}
+echo (new \ReflectionMethod('N\Bar', 'm'))->getParameters()[0], "\n";
+echo (new \ReflectionMethod('N\Bar', 'm'))->getParameters()[1], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Parameter #0 [ <optional> $o = new \\N\\Foo(parent::VALUE, 'N\\\\Bar') ]\n\
+         Parameter #1 [ <optional> $x = \\N\\Foo::VALUE ]\n"
+    );
+}
+
 /// PHP switches a float default to its exponent form outside a narrow decimal range, where Rust's
 /// own `to_string` expands every digit. Measured on 8.5.10.
 #[test]
