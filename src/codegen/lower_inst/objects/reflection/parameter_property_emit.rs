@@ -19,11 +19,18 @@ pub(super) fn emit_reflection_parameter_properties(
         .class_infos
         .get("ReflectionParameter")
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let public_name_offset = reflection_property_offset(class_info, "name")?;
     let name_offset = reflection_property_offset(class_info, "__name")?;
     let default_value_constant_name_offset =
         reflection_property_offset(class_info, "__default_value_constant_name")?;
     let default_value_object_class_offset =
         reflection_property_offset(class_info, "__default_value_object_class")?;
+    emit_reflection_string_property(
+        ctx,
+        &parameter.name,
+        public_name_offset,
+        public_name_offset + 8,
+    );
     emit_reflection_string_property(ctx, &parameter.name, name_offset, name_offset + 8);
     emit_reflection_attrs_property(
         ctx,

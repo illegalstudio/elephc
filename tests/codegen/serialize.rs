@@ -1,6 +1,6 @@
 //! Purpose:
-//! Provides end-to-end codegen tests for the `serialize()` / `unserialize()` builtins.
-//! Exercises the runtime serialize/unserialize helpers through compiled PHP programs.
+//! Provides end-to-end codegen tests for `serialize()` / `unserialize()` and object-property
+//! projections, exercising their runtime helpers through compiled PHP programs.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests` through the serialize codegen test module.
@@ -9,6 +9,7 @@
 //! - Output must match PHP's serialize() wire format byte-for-byte for the scalar
 //!   subset (null/bool/int/float/string); array support is added in a later increment.
 //! - Round-trips go through both helpers so a regression in either is caught.
+//! - Object casts and `get_object_vars()` retain PHP visibility, key, and built-in property rules.
 
 use crate::support::*;
 use elephc::codegen_support::platform::Target;
@@ -1084,6 +1085,43 @@ echo serialize((array) $object);
         out,
         "a:1:{i:9;s:4:\"nine\";}\na:1:{i:9;s:4:\"nine\";}"
     );
+}
+
+/// User-defined object casts must continue to retain visibility-mangled private properties.
+#[test]
+fn test_user_object_array_cast_keeps_private_mangled_property() {
+    let out = compile_and_run(
+        r#"<?php
+class CastProperties {
+    private string $hidden = 'secret';
+    public string $name = 'public';
+}
+$cast = (array) new CastProperties();
+echo count($cast), '|';
+echo array_key_exists("\0CastProperties\0hidden", $cast) ? '1' : '0', '|';
+echo array_key_exists('name', $cast) ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "2|1|1");
+}
+
+/// Builtin Reflection objects expose PHP's public `ReflectionParameter::$name` in array casts
+/// and get_object_vars(), while their compiler-only `__*` backing slots stay invisible.
+#[test]
+fn test_reflection_parameter_array_cast_exposes_only_public_name() {
+    let out = compile_and_run(
+        r#"<?php
+$parameter = new ReflectionParameter("strlen", "string");
+$cast = (array) $parameter;
+$vars = get_object_vars($parameter);
+echo serialize($cast), "|", count($vars), "|", $vars["name"], "|", $parameter->name, "|";
+foreach ($cast as $value) {
+    if (is_object($value)) { echo get_class($value), ":", (string) $value, "|"; }
+}
+echo "end";
+"#,
+    );
+    assert_eq!(out, "a:1:{s:4:\"name\";s:6:\"string\";}|1|string|string|end");
 }
 
 /// Verifies an array cast of a runtime `mixed` value preserves PHP semantics

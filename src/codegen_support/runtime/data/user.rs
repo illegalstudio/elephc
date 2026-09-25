@@ -418,6 +418,16 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    out.push_str(".globl _class_reflection_parameter_cast_public_flags\n_class_reflection_parameter_cast_public_flags:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let flag = class_name_by_id
+                .get(&class_id)
+                .is_some_and(|class_name| class_name.as_str() == "ReflectionParameter");
+            out.push_str(&format!("    .quad {}\n", u8::from(flag)));
+        }
+    }
+
     out.push_str(".globl _class_gc_desc_count\n_class_gc_desc_count:\n");
     out.push_str(&format!(
         "    .quad {}\n",
