@@ -49,6 +49,14 @@ fn native_hash_owned_growth_preserves_identity_and_entries() {
             emitter.instruction(&format!("b {destination}"));                   // pass the standard AArch64 argument unchanged
         }
     }
+    for symbol in [
+        "__rt_reference_cell_clone", "__rt_hash_to_mixed_x86_box_owned",
+        "__rt_mixed_from_value", "__rt_decref_mixed", "__rt_reference_cell_new",
+        "__rt_reference_cell_value_release",
+    ] {
+        emitter.label_global(symbol);
+        emitter.instruction(if target.arch == Arch::X86_64 { "ud2" } else { "brk #0" }); // reject reference paths outside this growth fixture
+    }
     emitter.label_global("__rt_object_handle_acquire");
     emitter.instruction("ret");                                                 // fixture Error objects need no external handle registry
     emitter.label_global("fixture_grow_owned");
