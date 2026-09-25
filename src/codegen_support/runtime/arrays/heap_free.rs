@@ -77,7 +77,9 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
         super::eval_array_references::emit_eval_array_reference_retirement(emitter);
     }
     if mbstring {
-        emitter.instruction("bl __rt_mbstring_ini_forget");                    // retire the string identity before allocator reuse
+        emitter.instruction("stp x0, x30, [sp, #-16]!");                        // preserve the freed pointer and caller return address across the metadata callback
+        emitter.instruction("bl __rt_mbstring_ini_forget");                     // retire the string identity before allocator reuse
+        emitter.instruction("ldp x0, x30, [sp], #16");                          // restore the frameless allocator's input and original return address
     }
 
     // -- debug mode: validate the free list before mutating it --
@@ -388,7 +390,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     }
     if mbstring {
         emitter.instruction("sub rsp, 8");                                      // align the identity-retirement call from the frameless entry
-        emitter.instruction("call __rt_mbstring_ini_forget");                  // retire the string identity before allocator reuse
+        emitter.instruction("call __rt_mbstring_ini_forget");                   // retire the string identity before allocator reuse
         emitter.instruction("add rsp, 8");                                      // restore the allocator's entry stack
     }
 
@@ -615,6 +617,19 @@ mod tests {
             let skip = output.find("__rt_heap_free_object_handle_done").unwrap();
             let call = output.find("__rt_object_handle_release").unwrap();
             assert!(probe < skip && skip < call, "{name}");
+        }
+    }
+
+    /// The optional metadata callback must not replace the frameless AArch64 return address.
+    #[test]
+    fn heap_free_preserves_aarch64_linkage_across_mbstring_retirement() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_heap_free(&mut emitter, false, true);
+            let output = emitter.output();
+            assert!(output.contains(
+                "stp x0, x30, [sp, #-16]!\n    bl __rt_mbstring_ini_forget\n    ldp x0, x30, [sp], #16"
+            ), "{name}");
         }
     }
 }
