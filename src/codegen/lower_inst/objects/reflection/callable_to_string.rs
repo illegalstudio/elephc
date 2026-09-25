@@ -15,8 +15,10 @@
 //!   prototype marker, the empty body, and the union order (#1117).
 //! - Union members print in PHP's order, not the declared one — see `reflection_union_member_rank`,
 //!   which the property dump shares.
-//! - Internal function origins come from the shared builtin contract, and internal method origins
-//!   come from the declaring class contract, printed under the module's registered name (`SPL`).
+//! - Whether a callable is internal is decided by the caller (the builtin signature registry for a
+//!   function, the class catalog for a method), the same answer `isInternal()` gives. Only the
+//!   MODULE comes from here: the shared builtin contract for a function, the declaring class's
+//!   contract for a method, printed under the module's registered name (`SPL`).
 
 use super::{
     ReflectionDefaultArrayKey, ReflectionListedMember, ReflectionMemberFlags,
