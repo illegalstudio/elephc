@@ -344,6 +344,21 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         deprecation: None, extension: false, internal: false, requirements: &[],
     },
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("mb_convert_variables"), name: "mb_convert_variables",
+        area: Area::String, module: PhpModule::Mbstring, since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec { name: "to_encoding", ty: TypeSpec::Str, default: None, by_ref: false },
+            ParamSpec { name: "from_encoding", ty: TypeSpec::Union(&[TypeSpec::Array, TypeSpec::Str]), default: None, by_ref: false },
+            ParamSpec { name: "var", ty: TypeSpec::Mixed, default: None, by_ref: true },
+        ],
+        variadic: Some("vars"), variadic_by_ref: true, min_args: None, max_args: None, arity_error: None,
+        returns: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::False]), by_ref_return: false,
+        summary: "Detects one source encoding and converts strings in variables, nested arrays, and object properties by reference.", examples: &[],
+        php_manual: Some("https://www.php.net/manual/en/function.mb-convert-variables.php"),
+        deprecation: None, extension: false, internal: false, requirements: &[],
+    },
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("mb_convert_encoding"), name: "mb_convert_encoding",
         area: Area::String, module: PhpModule::Mbstring, since: None,
         kind: BuiltinKind::Function,

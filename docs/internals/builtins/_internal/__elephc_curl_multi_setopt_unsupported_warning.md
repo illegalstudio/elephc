@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_setopt_unsupported_warning() - internals"
 description: "Compiler internals for __elephc_curl_multi_setopt_unsupported_warning(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1101
+  order: 1102
 ---
 
 ## `__elephc_curl_multi_setopt_unsupported_warning()` - internals

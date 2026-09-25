@@ -2,7 +2,7 @@
 title: "mb_ord()"
 description: "Returns the first Unicode codepoint, or false for malformed input."
 sidebar:
-  order: 860
+  order: 861
 ---
 
 ## mb_ord()

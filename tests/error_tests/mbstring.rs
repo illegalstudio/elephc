@@ -262,3 +262,14 @@ fn test_error_mbstring_conversion_contract() {
         ("<?php declare(strict_types=1); mb_convert_encoding(\"A\", \"UTF-8\", 123);", "mb_convert_encoding() from_encoding argument must be array or string or null"),
     ] { expect_error(source, message); }
 }
+
+/// Rejects invalid encoding shapes and non-writable required or variadic roots.
+#[test]
+fn test_error_mbstring_convert_variables_contract() {
+    for (source, message) in [
+        ("<?php mb_convert_variables();", "mb_convert_variables() takes at least 3 arguments"),
+        ("<?php declare(strict_types=1); $value = \"\"; mb_convert_variables(\"UTF-8\", 1, $value);", "mb_convert_variables() from_encoding argument must be array or string"),
+        ("<?php mb_convert_variables(\"UTF-8\", \"UTF-8\", null);", "mb_convert_variables(): Argument #3 ($var) could not be passed by reference"),
+        ("<?php $value = \"\"; mb_convert_variables(\"UTF-8\", \"UTF-8\", $value, null);", "mb_convert_variables(): Argument #4 ($vars) could not be passed by reference"),
+    ] { expect_error(source, message); }
+}

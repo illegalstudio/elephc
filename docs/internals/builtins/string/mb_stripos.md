@@ -2,7 +2,7 @@
 title: "mb_stripos() - internals"
 description: "Compiler internals for mb_stripos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 874
+  order: 875
 ---
 
 ## `mb_stripos()` - internals

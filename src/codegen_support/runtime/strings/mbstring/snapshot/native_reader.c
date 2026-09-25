@@ -5,9 +5,11 @@
 #include <stdlib.h>
 
 /* The hash iterator emits mutating siblings that the borrowed reader must never call. */
-#define UNUSED_RUNTIME_HELPER(name) __attribute__((noreturn)) void name(void) { abort(); }
+#define UNUSED_RUNTIME_HELPER(name) __attribute__((noreturn)) void name(void) __asm__(#name); \
+    __attribute__((noreturn)) void name(void) { abort(); }
 UNUSED_RUNTIME_HELPER(__rt_decref_mixed)
 UNUSED_RUNTIME_HELPER(__rt_hash_get)
+UNUSED_RUNTIME_HELPER(__rt_hash_to_mixed_box_owned)
 UNUSED_RUNTIME_HELPER(__rt_hash_to_mixed_x86_box_owned)
 UNUSED_RUNTIME_HELPER(__rt_mixed_from_value)
 UNUSED_RUNTIME_HELPER(__rt_reference_cell_new)

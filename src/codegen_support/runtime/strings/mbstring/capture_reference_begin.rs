@@ -38,8 +38,16 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("cmp x2, #1");                                      // accept only untyped or already-type-checked initialization
         emitter.instruction(&format!("b.hi {invalid}"));                        // reject unknown publication modes without changing the caller
         emitter.instruction(&format!("cbz x1, {invalid}"));                     // require a live reference identity
+        emitter.instruction("sub sp, sp, #32");                                 // preserve caller inputs and linkage across child-slot resolution
+        emitter.instruction("stp x1, x2, [sp]");                                // retain reference identity and publication mode
+        emitter.instruction("stp x3, x30, [sp, #16]");                          // retain output and the original return address
         emitter.instruction("mov x0, x1");                                      // resolve native and eval persistent references alike
         emitter.instruction("bl __rt_mbstring_reference_child_slot");           // return the writable child slot
+        emitter.instruction("mov x9, x0");                                      // keep the resolved slot while restoring source inputs
+        emitter.instruction("ldp x1, x2, [sp]");                                // restore C arguments clobbered by the helper
+        emitter.instruction("ldp x3, x30, [sp, #16]");                          // restore output storage and caller linkage
+        emitter.instruction("add sp, sp, #32");                                 // retire the aligned helper-call save area
+        emitter.instruction("mov x0, x9");                                      // pass the original child-slot result to validation
         emitter.instruction(&format!("cbz x0, {invalid}"));                     // preserve malformed inputs without allocating a writer
         emitter.instruction("sub sp, sp, #80");                                 // reserve stable inputs and owners across reentrant old-value destruction
         emitter.instruction("stp x29, x30, [sp, #64]");                         // preserve caller linkage across native allocation and protected cleanup
@@ -59,9 +67,13 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("test rsi, rsi");                                   // require a persistent reference address
         emitter.instruction(&format!("jz {invalid}"));                          // reject a missing reference
         emitter.instruction("mov rax, rsi");                                    // resolve native and eval persistent references alike
-        emitter.instruction("sub rsp, 8");                                      // align the borrowed reference helper call
+        emitter.instruction("push rsi");                                        // retain reference identity across the helper call
+        emitter.instruction("push rdx");                                        // retain publication mode across the helper call
+        emitter.instruction("push rcx");                                        // retain output storage and align the helper call
         emitter.instruction("call __rt_mbstring_reference_child_slot");         // return the writable child slot
-        emitter.instruction("add rsp, 8");                                      // restore the callback entry stack
+        emitter.instruction("pop rcx");                                         // restore output storage
+        emitter.instruction("pop rdx");                                         // restore publication mode
+        emitter.instruction("pop rsi");                                         // restore reference identity and callback entry stack
         emitter.instruction("test rax, rax");                                   // reject ordinary boxed PHP values
         emitter.instruction(&format!("jz {invalid}"));
         emitter.instruction("push rbp");                                        // preserve linkage and align nested calls

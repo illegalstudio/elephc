@@ -2,7 +2,7 @@
 title: "session_status() - internals"
 description: "Compiler internals for session_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 997
+  order: 998
 ---
 
 ## `session_status()` - internals

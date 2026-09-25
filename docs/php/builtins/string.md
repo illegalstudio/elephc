@@ -59,6 +59,7 @@ sidebar:
 | [`mb_convert_case()`](./string/mb_convert_case.md) | `(string $string, int $mode, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`mb_convert_encoding()`](./string/mb_convert_encoding.md) | `(array|string $string, string $to_encoding, array|string|null $from_encoding = null): array|string|false` | `array|string|false` | ✓ | ✓ |
 | [`mb_convert_kana()`](./string/mb_convert_kana.md) | `(string $string, string $mode = 'KV', ?string $encoding = null): string` | `string` | ✓ | ✓ |
+| [`mb_convert_variables()`](./string/mb_convert_variables.md) | `(string $to_encoding, array|string $from_encoding, mixed $var, ...$vars): string|false` | `string|false` | ✓ | ✓ |
 | [`mb_decode_mimeheader()`](./string/mb_decode_mimeheader.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`mb_decode_numericentity()`](./string/mb_decode_numericentity.md) | `(string $string, array $map, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`mb_detect_encoding()`](./string/mb_detect_encoding.md) | `(string $string, array|string|null $encodings = null, bool $strict = false): string|false` | `string|false` | ✓ | ✓ |

@@ -422,6 +422,12 @@ fn lower_builtin_args_preserving_values(
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
+    if name.eq_ignore_ascii_case("mb_convert_variables")
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+    {
+        return lower_live_mb_convert_variables_args(ctx, args);
+    }
     let mut storage = sig.clone();
     for (index, (_, ty)) in storage.params.iter_mut().enumerate() {
         if !storage.ref_params.get(index).copied().unwrap_or(false) {
@@ -433,13 +439,60 @@ fn lower_builtin_args_preserving_values(
         .filter(|id| matches!(id,
             elephc_builtin_contract::RuntimeBuiltinId::MbEreg
                 | elephc_builtin_contract::RuntimeBuiltinId::MbEregi
-                | elephc_builtin_contract::RuntimeBuiltinId::MbParseStr))
+                | elephc_builtin_contract::RuntimeBuiltinId::MbParseStr
+                | elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables))
         .and_then(|id| elephc_builtin_contract::lookup_id(id.builtin_id()))
         .and_then(|contract| contract.params.iter().position(|param| param.by_ref));
     ctx.begin_argument_guard_scope();
     let operands = lower_args_with_signature_options_for_capture(
         ctx, Some(&storage), args, true, true, capture_output_index,
     );
+    ctx.end_argument_guard_scope();
+    operands
+}
+
+/// Keeps each variable's existing reference-cell shape while staging value arguments first.
+fn lower_live_mb_convert_variables_args(
+    ctx: &mut LoweringContext<'_, '_>, args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    ctx.begin_argument_guard_scope();
+    let mut operands = Vec::with_capacity(4);
+    for (index, arg) in args.iter().take(2).enumerate() {
+        let lowered = lower_expr(ctx, arg);
+        operands.push(capture_call_argument_value(ctx, lowered, index, arg.span).value);
+    }
+    if let Some(root) = args.get(2) {
+        if let ExprKind::Variable(name) = &root.kind {
+            ctx.promote_local_ref_cell(name, Some(root.span));
+        }
+        operands.push(lower_expr(ctx, root).value);
+    }
+    let tail = &args[args.len().min(3)..];
+    let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let array = ctx.emit_value(
+        Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(tail.len() as u32)),
+        array_ty, Op::ArrayNew.default_effects(),
+        tail.first().map(|arg| arg.span),
+    );
+    for arg in tail {
+        let marker = if let ExprKind::Variable(name) = &arg.kind {
+            ctx.promote_local_ref_cell(name, Some(arg.span));
+            let ty = ctx.local_type(name);
+            let slot = ctx.declare_local(name, ty);
+            ctx.emit_value(
+                Op::InvokerRefArg, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                PhpType::Mixed, Op::InvokerRefArg.default_effects(), Some(arg.span),
+            )
+        } else { lower_expr(ctx, arg) };
+        ctx.emit_void(
+            Op::ArrayPush, vec![array.value, marker.value], None,
+            Op::ArrayPush.default_effects(), Some(arg.span),
+        );
+        crate::ir_lower::stmt::release_indexed_array_write_operand(
+            ctx, Some(&PhpType::Mixed), marker, arg.span,
+        );
+    }
+    operands.push(array.value);
     ctx.end_argument_guard_scope();
     operands
 }

@@ -2,7 +2,7 @@
 title: "mb_detect_order() - internals"
 description: "Compiler internals for mb_detect_order(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 836
+  order: 837
 ---
 
 ## `mb_detect_order()` - internals

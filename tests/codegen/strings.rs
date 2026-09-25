@@ -78,6 +78,9 @@ mod mbstring_detect;
 #[path = "strings/mbstring_conversion.rs"]
 mod mbstring_conversion;
 
+#[path = "strings/mbstring_variables.rs"]
+mod mbstring_variables;
+
 #[path = "strings/mbstring_mime.rs"]
 mod mbstring_mime;
 

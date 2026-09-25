@@ -67,6 +67,12 @@ echo "Imported labels are valid UTF-8: ", mb_check_encoding($labels) ? "yes" : "
 // Decode a supplier export before using the same UTF-8 label pipeline.
 $legacy_label = "Caf" . chr(233);
 echo "Decoded supplier label: ", mb_convert_encoding($legacy_label, "UTF-8", "ISO-8859-1"), "\n";
+// Normalize a catalog array and its product object in place with one source encoding.
+$legacy_catalog = ["supplier" => "Caf" . chr(233)];
+$legacy_product = new ProductLabel("Cr" . chr(232) . "me");
+$source_encoding = mb_convert_variables("UTF-8", "ISO-8859-1", $legacy_catalog, $legacy_product);
+echo "Converted supplier labels: ", $legacy_catalog["supplier"], ", ", $legacy_product->text,
+    " (", $source_encoding, ")\n";
 $label = mb_convert_kana(mb_trim($imported));
 echo "Product: ", $label, "\n";
 echo "Display width: ", mb_strwidth(new ProductLabel($label)), "\n";

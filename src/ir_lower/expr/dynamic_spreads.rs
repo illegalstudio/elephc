@@ -20,6 +20,13 @@ struct SpreadBindings {
     span: Span,
 }
 
+/// An evaluated argument stays rooted until every source expression has completed.
+enum StagedSpreadArgument {
+    Spread(String),
+    Named(usize, String),
+    Positional(String),
+}
+
 /// Lowers boxed unpack sources for fixed signatures without references or hidden parameters.
 pub(super) fn lower_boxed_spread_args(
     ctx: &mut LoweringContext<'_, '_>,
@@ -44,6 +51,18 @@ pub(super) fn lower_boxed_spread_args(
     }
     let span = args.first()?.span;
     let plan = crate::types::call_args::plan_call_args(sig, args, span, false, false).ok()?;
+    let mut staged = Vec::with_capacity(plan.source_args.len());
+    for arg in &plan.source_args {
+        staged.push(match &arg.kind {
+            ExprKind::Spread(source) => StagedSpreadArgument::Spread(root_value(ctx, source)),
+            ExprKind::NamedArg { name, value } => {
+                let index = crate::types::call_args::named_param_index(sig, sig.params.len(), name)
+                    .expect("shared planner validated fixed named argument");
+                StagedSpreadArgument::Named(index, root_value(ctx, value))
+            }
+            _ => StagedSpreadArgument::Positional(root_value(ctx, arg)),
+        });
+    }
     let mut state = SpreadBindings {
         slots: Vec::new(), filled: Vec::new(),
         next: initialize_slot(ctx, PhpType::Int, &Expr::new(ExprKind::IntLiteral(0), span)),
@@ -60,22 +79,11 @@ pub(super) fn lower_boxed_spread_args(
             ));
         state.filled.push(initialize_slot(ctx, PhpType::Bool, &Expr::new(ExprKind::BoolLiteral(false), span)));
     }
-    let mut sources = Vec::new();
-    for arg in &plan.source_args {
-        match &arg.kind {
-            ExprKind::Spread(source) => sources.push(lower_source(ctx, sig, &state, source)),
-            ExprKind::NamedArg { name, value } => {
-                let value = root_value(ctx, value);
-                let index = crate::types::call_args::named_param_index(sig, sig.params.len(), name)
-                    .expect("shared planner validated fixed named argument");
-                bind_named(ctx, &state, index, &value);
-                retire_slot(ctx, &value, span);
-            }
-            _ => {
-                let value = root_value(ctx, arg);
-                bind_positional(ctx, &state, &value);
-                retire_slot(ctx, &value, span);
-            }
+    for arg in &staged {
+        match arg {
+            StagedSpreadArgument::Spread(source) => lower_source(ctx, sig, &state, source),
+            StagedSpreadArgument::Named(index, value) => bind_named(ctx, &state, *index, value),
+            StagedSpreadArgument::Positional(value) => bind_positional(ctx, &state, value),
         }
     }
     let count = ctx.load_local(&state.next, Some(span));
@@ -89,11 +97,6 @@ pub(super) fn lower_boxed_spread_args(
         let ready = ctx.load_local(filled, Some(span));
         require(ctx, ready, "ArgumentCountError", "Too few arguments for unpacked call", span);
     }
-    // An invalid surplus value can own an object with a PHP destructor. Keep
-    // every source alive until all source effects and arity checks have run.
-    for source in sources.into_iter().rev() {
-        retire_slot(ctx, &source, span);
-    }
     let mut operands = Vec::with_capacity(state.slots.len());
     for slot in &state.slots {
         let value = ctx.load_local(&slot, Some(span));
@@ -103,6 +106,14 @@ pub(super) fn lower_boxed_spread_args(
     }
     for slot in state.slots.into_iter().rev() {
         retire_slot(ctx, &slot, span);
+    }
+    for arg in staged.into_iter().rev() {
+        let source = match arg {
+            StagedSpreadArgument::Spread(source)
+            | StagedSpreadArgument::Named(_, source)
+            | StagedSpreadArgument::Positional(source) => source,
+        };
+        retire_slot(ctx, &source, span);
     }
     Some(if preserve_values { operands } else { coerce_operands_to_params(ctx, sig, operands) })
 }
@@ -147,9 +158,8 @@ fn retire_slot(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
 }
 
 /// Iterates a boxed source with the normal runtime iterator, preserving sparse and named keys.
-fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &SpreadBindings, source: &Expr) -> String {
-    let source_slot = root_value(ctx, source);
-    let source = ctx.load_local(&source_slot, Some(state.span));
+fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &SpreadBindings, source_slot: &str) {
+    let source = ctx.load_local(source_slot, Some(state.span));
     let (iterator, iterator_owner, _) = ctx.emit_iter_start(source, false, state.span);
     let key_slot = initialize_owned_slot(
         ctx,
@@ -213,7 +223,6 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
     if let Some(slot) = iterator_owner {
         ctx.retire_iter_start_owner(slot, state.span);
     }
-    source_slot
 }
 
 /// Binds a string-keyed value after checking that the parameter has not already been populated.

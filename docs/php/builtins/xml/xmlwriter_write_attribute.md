@@ -2,7 +2,7 @@
 title: "xmlwriter_write_attribute()"
 description: "Writes a complete attribute."
 sidebar:
-  order: 1054
+  order: 1055
 ---
 
 ## xmlwriter_write_attribute()

@@ -164,7 +164,7 @@ fn lower_untyped_descriptor_invoker_hash_container(
             }
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
-                lower_descriptor_unpack_source(ctx, &state, source, arg.span);
+                lower_descriptor_unpack_source(ctx, &state, source, arg.span, None);
             }
             _ => {
                 let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);

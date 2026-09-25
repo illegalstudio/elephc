@@ -88,6 +88,7 @@ mod mb_list_encodings;
 mod mb_detect_order;
 mod mb_detect_encoding;
 mod mb_convert_encoding;
+mod mb_convert_variables;
 mod mb_encode_numericentity;
 mod mb_decode_numericentity;
 mod mb_decode_mimeheader;

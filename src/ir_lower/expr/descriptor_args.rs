@@ -126,6 +126,10 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
     );
     let owner = publish_constructed_container(ctx, hash, span);
     let state = begin_descriptor_unpack(ctx, owner, hash_ty.clone(), span);
+    let mb_variables = sig.is_some_and(|signature| {
+        crate::types::first_class_callable_builtin_sig("mb_convert_variables").as_ref()
+            == Some(signature)
+    });
     // The runtime key counter owns the argument numbering. This compile-time index only
     // selects a by-reference signature slot and, exactly as before, counts explicit
     // positional arguments rather than unpacked entries.
@@ -133,8 +137,11 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
     for arg in args {
         match &arg.kind {
             ExprKind::Spread(inner) => {
+                let by_ref_origin = (mb_variables && positional_index >= 2)
+                    .then(|| crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, inner, true))
+                    .flatten();
                 let source = lower_expr(ctx, inner);
-                lower_descriptor_unpack_source(ctx, &state, source, arg.span);
+                lower_descriptor_unpack_source(ctx, &state, source, arg.span, by_ref_origin);
             }
             ExprKind::NamedArg { name, value } => {
                 let key = lower_string_literal(ctx, name, arg);

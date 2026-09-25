@@ -2,7 +2,7 @@
 title: "strcasecmp()"
 description: "Binary safe case-insensitive string comparison. Returns negative, zero, or positive."
 sidebar:
-  order: 918
+  order: 919
 ---
 
 ## strcasecmp()

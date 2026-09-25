@@ -39,6 +39,7 @@ mod query_register;
 mod capture_destination;
 mod capture_reference;
 mod capture_reference_begin;
+mod variables;
 mod regex;
 mod callback;
 
@@ -74,6 +75,7 @@ pub fn emit_mbstring(emitter: &mut Emitter, eval_bridge: bool, mbregex: bool) {
     capture_destination::emit(emitter);
     capture_reference::emit(emitter);
     capture_reference_begin::emit(emitter);
+    variables::emit(emitter);
 }
 
 /// Emits AArch64 owned result/error materialization with value/status/length/kind returns.

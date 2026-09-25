@@ -53,6 +53,16 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = ref_place_args::lower_builtin_ref_place_call(ctx, name, args, expr) {
         return value;
     }
+    if php_symbol_key(canonical.trim_start_matches('\\')) == "mb_convert_variables"
+        && args.iter().any(is_spread_arg)
+        && !ctx.functions.contains_key(canonical)
+        && !ctx.extern_functions.contains_key(canonical)
+    {
+        let callback = Expr::new(ExprKind::StringLiteral("mb_convert_variables".to_string()), expr.span);
+        let sig = crate::types::first_class_callable_builtin_sig("mb_convert_variables");
+        return lower_call_user_func_descriptor_invoke(ctx, &callback, args, sig.as_ref(), expr)
+            .expect("mb_convert_variables descriptor invocation");
+    }
     if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
         return value;
     }

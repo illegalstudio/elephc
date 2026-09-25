@@ -2,7 +2,7 @@
 title: "mb_rtrim()"
 description: "Removes Unicode whitespace or the specified characters from the end."
 sidebar:
-  order: 866
+  order: 867
 ---
 
 ## mb_rtrim()

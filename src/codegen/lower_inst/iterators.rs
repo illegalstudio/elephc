@@ -330,6 +330,8 @@ pub(super) fn lower_iter_current_value(
     let iterator = expect_operand(inst, 0)?;
     let offset = iterator_state_offset(ctx, iterator, inst)?;
     let result_ty = iter_current_result_type(ctx, inst)?;
+    let preserve_reference = inst.immediate == Some(Immediate::Bool(true));
+    let promote_reference = inst.immediate == Some(Immediate::I64(1));
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { elem } => {
             match ctx.emitter.target.arch {
@@ -339,12 +341,9 @@ pub(super) fn lower_iter_current_value(
             retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
             box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
         }
-        IteratorSourceKind::Hash => match ctx.emitter.target.arch {
-            Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
-            Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
-        },
+        IteratorSourceKind::Hash => load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference),
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
-            lower_dynamic_iter_current_value(ctx, inst, offset)?;
+            lower_dynamic_iter_current_value(ctx, inst, offset, preserve_reference, promote_reference)?;
         }
         // Dead code in practice — `IterNext` already reported "no more elements" — but the
         // block is still emitted, so materialize a null Mixed rather than reading the
@@ -1355,6 +1354,8 @@ fn lower_dynamic_iter_current_value(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     offset: usize,
+    preserve_reference: bool,
+    promote_reference: bool,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_value_dyn_indexed");
     let hash_case = ctx.next_label("iter_value_dyn_hash");
@@ -1373,10 +1374,7 @@ fn lower_dynamic_iter_current_value(
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
-        Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
-    }
+    load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference);
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&object_case);
@@ -2259,6 +2257,64 @@ fn load_current_hash_key_as_mixed_x86_64(ctx: &mut FunctionContext<'_>, offset: 
     ctx.emitter.instruction("mov eax, 1");                                      // runtime tag 1 = string mixed key
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
     ctx.emitter.label(&key_done);
+}
+
+/// Keeps an unpacked PHP reference's cell while boxing ordinary iterator values by value.
+fn load_current_hash_call_value_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    preserve_reference: bool,
+    promote_reference: bool,
+) {
+    if preserve_reference || promote_reference {
+        let ordinary = ctx.next_label("iter_call_value_ordinary");
+        let done = ctx.next_label("iter_call_value_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::load_at_offset(ctx.emitter, "x10", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
+                if promote_reference {
+                    ctx.emitter.instruction("mov x0, x10");                   // promote this writable entry in the caller's array
+                    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+                    ctx.emitter.instruction("mov x10, x0");                   // carry the managed cell into the descriptor marker
+                } else {
+                    ctx.emitter.instruction("ldr x9, [x10, #16]");           // inspect the original entry before iterator dereferencing
+                    ctx.emitter.instruction("cmp x9, #11");                  // only a PHP reference shares caller storage
+                    ctx.emitter.instruction(&format!("b.ne {ordinary}"));    // ordinary entries keep their by-value result
+                    ctx.emitter.instruction("ldr x10, [x10]");                // borrow the cell from the pinned source
+                }
+                ctx.emitter.instruction("mov x9, #11");                       // encode a descriptor reference marker
+                ctx.emitter.instruction("mov x11, #7");                       // its referenced PHP value is boxed Mixed
+                emit_box_runtime_payload_as_mixed(ctx.emitter, "x9", "x10", "x11");
+            }
+            Arch::X86_64 => {
+                abi::load_at_offset(ctx.emitter, "r10", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
+                if promote_reference {
+                    ctx.emitter.instruction("mov rdi, r10");                 // promote this writable entry in the caller's array
+                    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+                    ctx.emitter.instruction("mov rcx, rax");                 // carry the managed cell into the descriptor marker
+                } else {
+                    ctx.emitter.instruction("cmp QWORD PTR [r10 + 16], 11"); // inspect the original entry before iterator dereferencing
+                    ctx.emitter.instruction(&format!("jne {ordinary}"));     // ordinary entries keep their by-value result
+                    ctx.emitter.instruction("mov rcx, QWORD PTR [r10]");     // borrow the cell from the pinned source
+                }
+                ctx.emitter.instruction("mov r9, 11");                        // encode a descriptor reference marker
+                ctx.emitter.instruction("mov r8, 7");                         // its referenced PHP value is boxed Mixed
+                emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
+            }
+        }
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&ordinary);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
+            Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
+        }
+        ctx.emitter.label(&done);
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
+            Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
+        }
+    }
 }
 
 /// Boxes the current AArch64 hash value payload saved by `IterNext` into `Mixed`.

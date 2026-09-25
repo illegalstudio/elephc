@@ -116,6 +116,7 @@ pub mod mb_list_encodings;
 pub mod mb_detect_order;
 pub mod mb_detect_encoding;
 mod mb_convert_encoding;
+mod mb_convert_variables;
 pub mod mb_encode_numericentity;
 pub mod mb_decode_numericentity;
 pub mod mb_decode_mimeheader;

@@ -15,6 +15,7 @@ use super::*;
 pub(super) fn emit(emitter: &mut Emitter, mbregex: bool) {
     emit_entry(emitter, "__rt_mbstring_native", "__rt_mbstring_invoke");
     emit_entry(emitter, "__rt_mbstring_query_native", "__rt_mbstring_query_invoke");
+    emit_entry(emitter, "__rt_mbstring_variables_native", "__rt_mbstring_variables_invoke");
     if mbregex { emit_entry(emitter, "__rt_mbstring_capture_native", "__rt_mbstring_capture_invoke"); }
 }
 

@@ -2,7 +2,7 @@
 title: "mb_str_pad() - internals"
 description: "Compiler internals for mb_str_pad(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 870
+  order: 871
 ---
 
 ## `mb_str_pad()` - internals

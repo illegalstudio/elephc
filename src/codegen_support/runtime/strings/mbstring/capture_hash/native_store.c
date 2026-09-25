@@ -288,7 +288,8 @@ void unsupported_resource(void) __asm__("__rt_resource_id_of");
 void unsupported_resource(void) { CHECK(0 && "unexpected resource payload"); }
 
 /* The emitted hash helpers include reference/resource branches excluded by this fixture. */
-#define UNUSED_RUNTIME_HELPER(name) __attribute__((noreturn)) void name(void) { abort(); }
+#define UNUSED_RUNTIME_HELPER(name) __attribute__((noreturn)) void name(void) __asm__(#name); \
+    __attribute__((noreturn)) void name(void) { abort(); }
 UNUSED_RUNTIME_HELPER(__rt_decref_mixed)
 UNUSED_RUNTIME_HELPER(__rt_reference_cell_new)
 UNUSED_RUNTIME_HELPER(__rt_reference_cell_value_release)

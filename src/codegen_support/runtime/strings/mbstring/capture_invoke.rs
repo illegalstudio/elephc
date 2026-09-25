@@ -13,6 +13,7 @@
 
 use super::*;
 use elephc_builtin_contract::mbstring_abi::invoke::{MbInvokeHostV4, MbInvokeHostV5, MbNativeCaptureV1, MbNativeQueryV1};
+use elephc_builtin_contract::mbstring_abi::variables::MbInvokeHostV6;
 
 mod initialize;
 mod query_policy;
@@ -23,9 +24,11 @@ use frame::Frame;
 /// Emits both reference hosts with one shared callback inventory and ownership implementation.
 pub(super) fn emit(emitter: &mut Emitter, mbregex: bool) {
     assert_eq!(std::mem::size_of::<MbInvokeHostV5>(), 144);
+    assert_eq!(std::mem::size_of::<MbInvokeHostV6>(), 176);
     assert_eq!(std::mem::size_of::<MbNativeQueryV1>(), 40);
     if mbregex { emit_invocation(emitter, Frame::capture(), true); }
     emit_invocation(emitter, Frame::query(), mbregex);
+    emit_invocation(emitter, Frame::variables(), mbregex);
     for (index, callback) in invoke::CALLBACKS.iter().enumerate() {
         context_wrapper(emitter, &wrapper(index), callback);
     }
@@ -59,17 +62,19 @@ fn emit_invocation(emitter: &mut Emitter, frame: Frame, mbregex: bool) {
         emitter.instruction(&format!("mov QWORD PTR [rsp + {state}], r9"));     // preserve capture state before the five-input provider initializer
     }
     if mbregex { abi::emit_call_label(emitter, "__rt_mbregex_init"); }
-    if arm {
-        emitter.instruction(&format!("ldr x9, [sp, #{state}]"));                // recover optional capture output state after provider registration
-        emitter.instruction(&format!("cbz x9, {name}_state_ready"));            // two-argument calls require no output policy
-        emitter.instruction("str xzr, [x9, #8]");                               // initialize deferred ownership before argument coercion or validation
-    } else {
-        emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {state}]"));    // recover optional capture state
-        emitter.instruction("test r10, r10");                                   // distinguish two-argument invocations without output state
-        emitter.instruction(&format!("jz {name}_state_ready"));                 // leave absent optional state untouched
-        emitter.instruction("mov QWORD PTR [r10 + 8], 0");                      // initialize deferred ownership before any PHP callback
+    if frame.version != 6 {
+        if arm {
+            emitter.instruction(&format!("ldr x9, [sp, #{state}]"));            // recover optional capture output state after provider registration
+            emitter.instruction(&format!("cbz x9, {name}_state_ready"));        // two-argument calls require no output policy
+            emitter.instruction("str xzr, [x9, #8]");                           // initialize deferred ownership before argument coercion or validation
+        } else {
+            emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {state}]")); // recover optional capture state
+            emitter.instruction("test r10, r10");                               // distinguish two-argument invocations without output state
+            emitter.instruction(&format!("jz {name}_state_ready"));             // leave absent optional state untouched
+            emitter.instruction("mov QWORD PTR [r10 + 8], 0");                  // initialize deferred ownership before any PHP callback
+        }
+        emitter.label(&format!("{name}_state_ready"));
     }
-    emitter.label(&format!("{name}_state_ready"));
     let scratch = if arm { "x9" } else { "r10" };
     abi::emit_load_int_immediate(emitter, scratch, ((frame.table_bytes as i64) << 32) | frame.version);
     emitter.instruction(if arm { "str x9, [sp]" } else { "mov QWORD PTR [rsp], r10" }); // publish the complete host table version and size
@@ -80,6 +85,24 @@ fn emit_invocation(emitter: &mut Emitter, frame: Frame, mbregex: bool) {
     table_entry(emitter, 104, "__rt_mbstring_capture_fill_context");
     table_entry(emitter, 112, &wrapper(5));
     if frame.version == 5 { query_policy::table(emitter, frame.state); }
+    if frame.version == 6 {
+        for (offset, symbol) in [
+            (144, "elephc_mbstring_variable_inspect_v1"),
+            (152, "elephc_mbstring_variable_child_next_v1"),
+            (160, "elephc_mbstring_variable_prepare_write_v1"),
+            (168, "elephc_mbstring_variable_write_string_v1"),
+        ] { table_entry(emitter, offset, &emitter.target.extern_symbol(symbol)); }
+        for (offset, symbol) in [
+            (16, "_class_gc_desc_count"),
+            (24, "_class_object_payload_sizes"),
+            (32, "_class_object_dynamic_prop_flags"),
+            (40, "_class_gc_desc_ptrs"),
+        ] {
+            abi::emit_symbol_address(emitter, scratch, symbol);
+            emitter.instruction(&if arm { format!("str x9, [sp, #{}]", context + offset) }
+                else { format!("mov QWORD PTR [rsp + {}], r10", context + offset) });
+        }
+    }
     if arm {
         emitter.instruction("mov x4, sp");                                      // supply the complete callback table as the fifth C input
         emitter.instruction(&format!("add x5, sp, #{result}"));                 // supply bridge-owned result storage after the wrapped context
@@ -87,7 +110,9 @@ fn emit_invocation(emitter: &mut Emitter, frame: Frame, mbregex: bool) {
         emitter.instruction("mov r8, rsp");                                     // pass the host table in the fifth C register
         emitter.instruction(&format!("lea r9, [rsp + {result}]"));              // pass bridge-owned result storage in the sixth C register
     }
-    emitter.bl_c("elephc_mbstring_invoke_v1");
+    emitter.bl_c(if frame.version == 6 {
+        "elephc_mbstring_variables_native_invoke_v1"
+    } else { "elephc_mbstring_invoke_v1" });
     finish(emitter, frame);
 }
 
@@ -156,6 +181,7 @@ fn finish(emitter: &mut Emitter, frame: Frame) {
 
 /// Transfers displaced ownership to the request while preserving every native result word.
 fn adopt_deferred(emitter: &mut Emitter, frame: Frame) {
+    if frame.version == 6 { return; }
     let name = frame.name;
     let state = frame.state;
     let result = frame.result;

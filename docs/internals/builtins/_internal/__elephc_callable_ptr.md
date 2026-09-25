@@ -2,7 +2,7 @@
 title: "__elephc_callable_ptr() - internals"
 description: "Compiler internals for __elephc_callable_ptr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1066
+  order: 1067
 ---
 
 ## `__elephc_callable_ptr()` - internals

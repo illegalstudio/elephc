@@ -56,6 +56,7 @@ pub(super) fn lower(
         | RuntimeFnId::MbDetectOrder
         | RuntimeFnId::MbDetectEncoding
         | RuntimeFnId::MbConvertEncoding
+        | RuntimeFnId::MbConvertVariables
         | RuntimeFnId::MbEncodeNumericentity
         | RuntimeFnId::MbDecodeMimeheader
         | RuntimeFnId::MbEncodeMimeheader

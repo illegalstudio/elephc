@@ -14,11 +14,19 @@ use std::ffi::c_void;
 use super::invoke::MbInvokeHostV5;
 
 /// Opaque host storage for one writable root or nested array/object value slot.
-/// Roots are already dereferenced by the caller. Nested handles retain their original
-/// slot identity so replacing a string can detach a nested reference as PHP does.
+/// Roots retain caller storage and are dereferenced by the host. Nested handles
+/// retain their original slot identity so replacing a string can detach a nested reference.
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub struct MbVariableHandleV1 { pub words: [u64; 4] }
+
+impl MbVariableHandleV1 {
+    /// Selects one caller-owned root storage address for a synchronous V6 invocation.
+    /// Hosts interpret word zero as the original argument address and word one as the root marker.
+    pub fn root(storage: *const c_void) -> Option<Self> {
+        (!storage.is_null()).then_some(Self { words: [storage as usize as u64, 1, 0, 0] })
+    }
+}
 
 /// A scalar, string, array, or object observed after following reference cells.
 /// String bytes remain borrowed and readable until the next host callback.

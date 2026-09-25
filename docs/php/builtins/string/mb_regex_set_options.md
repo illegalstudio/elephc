@@ -2,7 +2,7 @@
 title: "mb_regex_set_options()"
 description: "Reads multibyte regex options, or changes them and returns the previous canonical option string."
 sidebar:
-  order: 865
+  order: 866
 ---
 
 ## mb_regex_set_options()

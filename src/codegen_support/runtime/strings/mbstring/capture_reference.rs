@@ -62,14 +62,13 @@ pub(super) fn emit_store(emitter: &mut Emitter) {
     emitter.label_global("__rt_mbstring_capture_reference_store");
     if arm {
         emitter.instruction("cbz x1, __rt_mbstring_capture_reference_invalid"); // reject an absent writer before inspecting its marker
-        emitter.instruction("mov x10, x0");                                     // preserve the opaque host context across reference validation
+        emitter.instruction("sub sp, sp, #48");                                 // preserve the caller inputs before reference validation calls a helper
+        emitter.instruction("stp x29, x30, [sp, #32]");                         // retain the original caller linkage across every nested call
+        emitter.instruction("str x0, [sp]");                                    // retain the opaque host context
+        emitter.instruction("stp x2, x3, [sp, #8]");                            // retain borrowed key and capture descriptors
         emitter.instruction("mov x0, x1");                                      // resolve either managed reference representation
         emitter.instruction("bl __rt_mbstring_reference_child_slot");           // return the writable child slot
-        emitter.instruction("cbz x0, __rt_mbstring_capture_reference_invalid"); // reject malformed references
-        emitter.instruction("sub sp, sp, #48");                                 // preserve the caller inputs across current-value resolution
-        emitter.instruction("stp x29, x30, [sp, #32]");                         // retain caller linkage for the protected store
-        emitter.instruction("str x10, [sp]");                                   // retain the opaque host context
-        emitter.instruction("stp x2, x3, [sp, #8]");                            // retain borrowed key and capture descriptors
+        emitter.instruction("cbz x0, __rt_mbstring_capture_reference_failed");  // leave malformed references untouched and restore the frame
         emitter.instruction("ldr x0, [x0]");                                    // dereference the writer afresh for this entry
         emitter.instruction("bl __rt_mbstring_capture_destination");            // select a current hash or promote a unique indexed payload
         emitter.instruction("cbz x0, __rt_mbstring_capture_reference_failed");  // leave unsupported shared indexed storage untouched

@@ -15,6 +15,18 @@ use elephc_builtin_contract::{
     BuiltinContract, DefaultSpec, TypeSpec,
 };
 
+/// Keeps variadic passing modes in the AOT signature aligned with the shared contract.
+#[test]
+fn builtin_variadic_reference_modes_match_contracts() {
+    for name in registry::names() {
+        let def = registry::lookup(name).expect("registered builtin");
+        if def.spec.variadic.is_some() {
+            assert_eq!(def.ref_params.last().copied(), Some(def.spec.variadic_by_ref),
+                "{name} variadic passing mode");
+        }
+    }
+}
+
 /// Returns the PHP-visible extension builtins a prelude must never call directly.
 fn php_visible_extension_builtins() -> Vec<String> {
     let mut names: Vec<String> = vec!["buffer_new".to_string()];

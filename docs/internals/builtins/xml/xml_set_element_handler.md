@@ -2,7 +2,7 @@
 title: "xml_set_element_handler() - internals"
 description: "Compiler internals for xml_set_element_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1016
+  order: 1017
 ---
 
 ## `xml_set_element_handler()` - internals

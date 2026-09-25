@@ -80,6 +80,7 @@ pub(super) fn lower_builtin_ref_place_call(
         return None;
     }
     let sig = call_signature(ctx, canonical, prefer_extension)?;
+    let mb_variables = canonical.eq_ignore_ascii_case("mb_convert_variables");
     if !sig.ref_params.iter().any(|is_ref| *is_ref) {
         return None;
     }
@@ -107,9 +108,19 @@ pub(super) fn lower_builtin_ref_place_call(
         .iter()
         .enumerate()
         .filter(|(index, arg)| {
-            ref_param_binding(&sig, *index, arg).is_some_and(|(param_index, place)| {
-                is_array_place(ctx, place, &sig.params[param_index].1)
-            })
+            if mb_variables {
+                let place = match &arg.kind {
+                    ExprKind::NamedArg { name, value } if name == "var" || name == "vars" => value.as_ref(),
+                    ExprKind::NamedArg { .. } => return false,
+                    _ if *index >= 2 => arg,
+                    _ => return false,
+                };
+                is_candidate_place_shape(place)
+            } else {
+                ref_param_binding(&sig, *index, arg).is_some_and(|(param_index, place)| {
+                    is_array_place(ctx, place, &sig.params[param_index].1)
+                })
+            }
         })
         .map(|(index, _)| index)
         .collect();
@@ -120,7 +131,12 @@ pub(super) fn lower_builtin_ref_place_call(
     let mut plans: Vec<RefPlacePlan> = Vec::with_capacity(rewrite_indices.len());
     for index in rewrite_indices {
         let arg = &args[index];
-        let place_arg = ref_param_place(&sig, index, arg)?;
+        let place_arg = if mb_variables {
+            match &arg.kind {
+                ExprKind::NamedArg { value, .. } => value.as_ref(),
+                _ => arg,
+            }
+        } else { ref_param_place(&sig, index, arg)? };
         let place = stabilize_place(ctx, place_arg);
         let read = lower_expr(ctx, &place);
         let value_type = normalize_value_php_type(ctx.builder.value_php_type(read.value));

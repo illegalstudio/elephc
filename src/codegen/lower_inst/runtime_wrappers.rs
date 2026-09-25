@@ -38,6 +38,9 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
     let Some(operation) = operation else {
         return emit_runtime_callable_invoker_inline(ctx, sig, &[]);
     };
+    if operation == elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables {
+        return emit_runtime_callable_invoker_inline(ctx, sig, &[]);
+    }
     let label = ctx.next_global_label("callable_invoker");
     let done_label = ctx.next_label("callable_invoker_done");
     let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(

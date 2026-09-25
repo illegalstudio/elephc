@@ -11,7 +11,7 @@
 
 use crate::encoding::{Encoding, EncodingList, Substitute};
 use crate::error::{MbError, MbResult};
-use crate::state::State;
+use crate::state::{ResolvedEncoding, State};
 
 use super::{LiveFailure, LiveHost, convert_live};
 
@@ -36,6 +36,16 @@ impl VariablePlan {
         let resolved = state.resolve_encoding(
             Some(to), "mb_convert_variables", 1, "to_encoding",
         )?;
+        Self::prepare_with_destination(state, resolved, from, order_significant)
+    }
+
+    /// Prepares sources after a host has delivered any destination deprecation.
+    pub fn prepare_with_destination(
+        state: &State,
+        resolved: ResolvedEncoding,
+        from: EncodingList<'_>,
+        order_significant: bool,
+    ) -> MbResult<Self> {
         let mut sources = state.parse_encodings(
             from, "mb_convert_variables", 2, "from_encoding",
         )?;

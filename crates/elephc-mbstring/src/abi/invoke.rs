@@ -16,6 +16,7 @@ mod conversion;
 mod regex;
 mod capture;
 mod query;
+mod variables;
 mod ini;
 mod output;
 mod callback;
@@ -98,6 +99,9 @@ unsafe fn invoke(
     let operation = RuntimeBuiltinId::from_u32(op).filter(|id| id.is_mbstring()).ok_or(Status::Fatal)?;
     if operation == RuntimeBuiltinId::MbParseStr {
         return unsafe { query::invoke(args, count, strict, host, session) }.map(Into::into);
+    }
+    if operation == RuntimeBuiltinId::MbConvertVariables {
+        return unsafe { variables::invoke(args, count, strict, host, session) }.map(Into::into);
     }
     if matches!(operation, RuntimeBuiltinId::MbEreg | RuntimeBuiltinId::MbEregi) {
         return unsafe { capture::invoke(operation, args, count, strict, host, session) }.map(Into::into);

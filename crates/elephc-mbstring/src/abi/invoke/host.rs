@@ -11,6 +11,7 @@
 
 use super::*;
 use elephc_builtin_contract::mbstring_abi::callback::{MbCallbackCallV1, MbCallbackHostV1};
+use elephc_builtin_contract::mbstring_abi::variables::MbInvokeHostV6;
 
 mod graph;
 mod capture;
@@ -49,6 +50,7 @@ pub(super) struct Session {
     capture_host: Option<MbInvokeHostV4>,
     capture_output: MbCaptureOutputV1,
     query_host: Option<MbInvokeHostV5>,
+    variable_host: Option<MbInvokeHostV6>,
     callback_host: Option<MbCallbackHostV1>,
     callback: *mut c_void,
 }
@@ -69,16 +71,27 @@ impl Session {
                 self.pin_value = Some(extended.pin_value.ok_or(Status::Fatal)?);
                 Some(extended.base.array_value.ok_or(Status::Fatal)?)
             },
-            (version @ (4 | 5), size) if size == if version == 4 { std::mem::size_of::<MbInvokeHostV4>() } else { std::mem::size_of::<MbInvokeHostV5>() } => {
+            (version @ (4 | 5 | 6), size) if size == match version {
+                4 => std::mem::size_of::<MbInvokeHostV4>(),
+                5 => std::mem::size_of::<MbInvokeHostV5>(),
+                _ => std::mem::size_of::<MbInvokeHostV6>(),
+            } => {
                 if version == 5 {
                     let query = unsafe { &*(host as *const MbInvokeHostV1).cast::<MbInvokeHostV5>() };
                     if query.query_configuration.is_none() || query.query_register.is_none() { return Err(Status::Fatal); }
                     self.query_host = Some(*query);
                 }
+                if version == 6 {
+                    let variables = unsafe { &*(host as *const MbInvokeHostV1).cast::<MbInvokeHostV6>() };
+                    if crate::variables::host::HostAdapter::new(variables).is_none() { return Err(Status::Fatal); }
+                    self.variable_host = Some(*variables);
+                }
                 let extended = unsafe { &*(host as *const MbInvokeHostV1).cast::<MbInvokeHostV4>() };
-                if extended.capture_initialize.is_none() || extended.capture_fill.is_none()
-                    || extended.capture_release.is_none() { return Err(Status::Fatal); }
-                self.capture_host = Some(*extended);
+                if version != 6 {
+                    if extended.capture_initialize.is_none() || extended.capture_fill.is_none()
+                        || extended.capture_release.is_none() { return Err(Status::Fatal); }
+                    self.capture_host = Some(*extended);
+                }
                 self.graph_value = Some(extended.base.graph_value.ok_or(Status::Fatal)?);
                 self.pin_value = Some(extended.base.pin_value.ok_or(Status::Fatal)?);
                 Some(extended.base.base.array_value.ok_or(Status::Fatal)?)
@@ -94,6 +107,9 @@ impl Session {
         self.pins = vec![std::ptr::null_mut(); count];
         Ok(())
     }
+
+    /// Returns the optional live-variable host after complete V6 validation.
+    pub(super) fn variable_host(&self) -> Option<MbInvokeHostV6> { self.variable_host }
 
     /// Gives the invocation an independent by-value copy before any parameter is converted.
     pub(super) unsafe fn clone_argument(&mut self, index: usize, argument: *const c_void) -> Result<(), Status> {

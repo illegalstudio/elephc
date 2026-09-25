@@ -189,6 +189,8 @@ pub enum RuntimeBuiltinId {
     MbEregReplaceCallback = 85,
     /// Encodes and sends a mail message using the active language settings.
     MbSendMail = 86,
+    /// Converts live variables and nested storage through one detected source encoding.
+    MbConvertVariables = 87,
 }
 
 /// Status returned by `__elephc_runtime_builtin_call_v1`.
@@ -220,7 +222,7 @@ impl RuntimeBuiltinStatus {
 
 impl RuntimeBuiltinId {
     /// Every version-one runtime builtin in stable ABI order.
-    pub const ALL: [Self; 86] = [
+    pub const ALL: [Self; 87] = [
         Self::Boolval,
         Self::Floatval,
         Self::Intval,
@@ -307,10 +309,11 @@ impl RuntimeBuiltinId {
         Self::MbOutputHandler,
         Self::MbEregReplaceCallback,
         Self::MbSendMail,
+        Self::MbConvertVariables,
     ];
 
     /// Every operation currently implemented by the optional mbstring engine.
-    pub const MBSTRING: [Self; 65] = [
+    pub const MBSTRING: [Self; 66] = [
         Self::MbStrlen,
         Self::MbStrwidth,
         Self::MbStrtoupper,
@@ -376,6 +379,7 @@ impl RuntimeBuiltinId {
         Self::MbOutputHandler,
         Self::MbEregReplaceCallback,
         Self::MbSendMail,
+        Self::MbConvertVariables,
     ];
 
     /// Reports whether this identity belongs to the shared mbstring bridge.
@@ -383,7 +387,7 @@ impl RuntimeBuiltinId {
         if matches!(self, Self::SharedIni | Self::MbOutputHandler | Self::MbSendMail) { return true; }
         if self.is_mbregex() { return true; }
         matches!(self, Self::MbRegexEncoding | Self::MbRegexSetOptions | Self::MbStrlen | Self::MbStrwidth | Self::MbStrtoupper | Self::MbStrtolower | Self::MbConvertCase | Self::MbUcfirst | Self::MbLcfirst | Self::MbStrimwidth
-            | Self::MbSubstr | Self::MbStrcut | Self::MbScrub | Self::MbTrim | Self::MbLtrim | Self::MbRtrim | Self::MbStrPad | Self::MbConvertKana | Self::MbSubstrCount | Self::MbOrd | Self::MbChr | Self::MbStrpos | Self::MbStripos | Self::MbStrrpos | Self::MbStrripos | Self::MbStrstr | Self::MbStristr | Self::MbStrrchr | Self::MbStrrichr | Self::MbLanguage | Self::MbInternalEncoding | Self::MbHttpOutput | Self::MbEncodingAliases | Self::MbStrSplit | Self::MbPreferredMimeName | Self::MbCheckEncoding | Self::MbSubstituteCharacter | Self::MbListEncodings | Self::MbDetectOrder | Self::MbDetectEncoding | Self::MbConvertEncoding | Self::MbEncodeNumericentity | Self::MbDecodeNumericentity | Self::MbDecodeMimeheader | Self::MbEncodeMimeheader | Self::MbGetInfo | Self::MbHttpInput | Self::MbParseStr)
+            | Self::MbSubstr | Self::MbStrcut | Self::MbScrub | Self::MbTrim | Self::MbLtrim | Self::MbRtrim | Self::MbStrPad | Self::MbConvertKana | Self::MbSubstrCount | Self::MbOrd | Self::MbChr | Self::MbStrpos | Self::MbStripos | Self::MbStrrpos | Self::MbStrripos | Self::MbStrstr | Self::MbStristr | Self::MbStrrchr | Self::MbStrrichr | Self::MbLanguage | Self::MbInternalEncoding | Self::MbHttpOutput | Self::MbEncodingAliases | Self::MbStrSplit | Self::MbPreferredMimeName | Self::MbCheckEncoding | Self::MbSubstituteCharacter | Self::MbListEncodings | Self::MbDetectOrder | Self::MbDetectEncoding | Self::MbConvertEncoding | Self::MbConvertVariables | Self::MbEncodeNumericentity | Self::MbDecodeNumericentity | Self::MbDecodeMimeheader | Self::MbEncodeMimeheader | Self::MbGetInfo | Self::MbHttpInput | Self::MbParseStr)
     }
 
     /// Identifies shared operations that require the managed Oniguruma provider.
@@ -456,6 +460,7 @@ impl RuntimeBuiltinId {
             Self::MbDetectOrder => "mb_detect_order",
             Self::MbDetectEncoding => "mb_detect_encoding",
             Self::MbConvertEncoding => "mb_convert_encoding",
+            Self::MbConvertVariables => "mb_convert_variables",
             Self::MbDecodeMimeheader => "mb_decode_mimeheader",
             Self::MbEncodeMimeheader => "mb_encode_mimeheader",
             Self::MbGetInfo => "mb_get_info",
@@ -580,6 +585,7 @@ impl RuntimeBuiltinId {
             84 => Some(Self::MbOutputHandler),
             85 => Some(Self::MbEregReplaceCallback),
             86 => Some(Self::MbSendMail),
+            87 => Some(Self::MbConvertVariables),
             _ => None,
         }
     }
@@ -643,6 +649,7 @@ impl RuntimeBuiltinId {
             Self::MbDetectOrder => arg_count <= 1,
             Self::MbDetectEncoding => arg_count >= 1 && arg_count <= 3,
             Self::MbConvertEncoding => arg_count >= 2 && arg_count <= 3,
+            Self::MbConvertVariables => arg_count >= 3,
             Self::MbSendMail => arg_count >= 3 && arg_count <= 5,
             Self::MbEncodeNumericentity => arg_count >= 2 && arg_count <= 4,
             Self::MbDecodeNumericentity => arg_count >= 2 && arg_count <= 3,
@@ -688,7 +695,7 @@ mod tests {
                 | RuntimeBuiltinId::ObEndClean
                 | RuntimeBuiltinId::ObEndFlush => 0,
                 RuntimeBuiltinId::MbEncodeNumericentity | RuntimeBuiltinId::MbDecodeNumericentity | RuntimeBuiltinId::MbConvertEncoding => 2,
-                RuntimeBuiltinId::MbStrimwidth | RuntimeBuiltinId::MbSendMail => 3,
+                RuntimeBuiltinId::MbStrimwidth | RuntimeBuiltinId::MbSendMail | RuntimeBuiltinId::MbConvertVariables => 3,
                 RuntimeBuiltinId::MbSubstr => 2,
                 RuntimeBuiltinId::MbStrcut => 2,
                 RuntimeBuiltinId::MbScrub => 1,

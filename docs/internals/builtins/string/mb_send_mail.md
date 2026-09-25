@@ -2,7 +2,7 @@
 title: "mb_send_mail() - internals"
 description: "Compiler internals for mb_send_mail(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 868
+  order: 869
 ---
 
 ## `mb_send_mail()` - internals

@@ -591,6 +591,8 @@ pub enum RuntimeFnId {
     MbEreg,
     /// Parses multibyte query input into a live output reference using Core INI settings.
     MbParseStr,
+    /// Converts live variables, arrays, and object properties through shared mbstring policy.
+    MbConvertVariables,
     /// Encodes and sends a message using shared mbstring language settings.
     MbSendMail,
     /// Searches a multibyte pattern without case sensitivity and preserves capture identity.
@@ -1680,6 +1682,7 @@ impl RuntimeFnId {
             | RuntimeFnId::MbDetectOrder
             | RuntimeFnId::MbDetectEncoding
             | RuntimeFnId::MbConvertEncoding
+            | RuntimeFnId::MbConvertVariables
             | RuntimeFnId::MbEncodeNumericentity
             | RuntimeFnId::MbDecodeMimeheader
             | RuntimeFnId::MbEncodeMimeheader
@@ -1870,6 +1873,7 @@ impl RuntimeFnId {
             | RuntimeFnId::MbDetectOrder
             | RuntimeFnId::MbDetectEncoding
             | RuntimeFnId::MbConvertEncoding
+            | RuntimeFnId::MbConvertVariables
             | RuntimeFnId::MbEncodeNumericentity
             | RuntimeFnId::MbDecodeMimeheader
             | RuntimeFnId::MbEncodeMimeheader
@@ -1934,6 +1938,7 @@ impl RuntimeFnId {
             Self::MbDetectOrder => Some(RuntimeBuiltinId::MbDetectOrder),
             Self::MbDetectEncoding => Some(RuntimeBuiltinId::MbDetectEncoding),
             Self::MbConvertEncoding => Some(RuntimeBuiltinId::MbConvertEncoding),
+            Self::MbConvertVariables => Some(RuntimeBuiltinId::MbConvertVariables),
             Self::MbEncodeNumericentity => Some(RuntimeBuiltinId::MbEncodeNumericentity),
             Self::MbDecodeNumericentity => Some(RuntimeBuiltinId::MbDecodeNumericentity),
             Self::MbDecodeMimeheader => Some(RuntimeBuiltinId::MbDecodeMimeheader),
@@ -3024,6 +3029,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbDetectOrder => "mb_detect_order",
             RuntimeFnId::MbDetectEncoding => "mb_detect_encoding",
             RuntimeFnId::MbConvertEncoding => "mb_convert_encoding",
+            RuntimeFnId::MbConvertVariables => "mb_convert_variables",
             RuntimeFnId::MbEncodeNumericentity => "mb_encode_numericentity",
             RuntimeFnId::MbDecodeNumericentity => "mb_decode_numericentity",
             RuntimeFnId::MbDecodeMimeheader => "mb_decode_mimeheader",

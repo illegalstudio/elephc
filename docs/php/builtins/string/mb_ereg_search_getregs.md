@@ -2,7 +2,7 @@
 title: "mb_ereg_search_getregs()"
 description: "Returns the retained multibyte regex captures from the last successful progressive search."
 sidebar:
-  order: 845
+  order: 846
 ---
 
 ## mb_ereg_search_getregs()

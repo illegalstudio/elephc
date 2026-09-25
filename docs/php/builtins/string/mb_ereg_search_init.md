@@ -2,7 +2,7 @@
 title: "mb_ereg_search_init()"
 description: "Initializes the retained multibyte regex subject and optionally compiles a search pattern."
 sidebar:
-  order: 846
+  order: 847
 ---
 
 ## mb_ereg_search_init()

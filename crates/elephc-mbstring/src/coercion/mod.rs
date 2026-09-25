@@ -166,7 +166,7 @@ pub fn arity_error(operation: RuntimeBuiltinId, count: usize) -> Option<Vec<u8>>
 /// Formats a PHP argument-count error directly from the neutral contract before host access.
 pub(crate) fn arity_error_contract(contract: &BuiltinContract, count: usize) -> Option<Vec<u8>> {
     let minimum = contract.min_args.unwrap_or_else(|| contract.params.iter().take_while(|parameter| parameter.default.is_none()).count());
-    let maximum = contract.max_args.unwrap_or(contract.params.len());
+    let maximum = contract.max_args.unwrap_or_else(|| if contract.variadic.is_some() { usize::MAX } else { contract.params.len() });
     if (minimum..=maximum).contains(&count) { return None; }
     let (bound, number) = if minimum == maximum { ("exactly", maximum) }
         else if count < minimum { ("at least", minimum) } else { ("at most", maximum) };

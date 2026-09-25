@@ -36,6 +36,19 @@ impl Frame {
         Self::layout("__rt_mbstring_query_invoke", 5, 144, 144)
     }
 
+    /// Reserves the V6 table and native layout pointers for live variable traversal.
+    pub(super) fn variables() -> Self {
+        let mut frame = Self::layout("__rt_mbstring_variables_invoke", 6, 176, 176);
+        frame.result = 224;
+        frame.result_status = 232;
+        frame.result_length = 240;
+        frame.result_kind = 248;
+        frame.status = 272;
+        frame.linkage = 288;
+        frame.allocation = 304;
+        frame
+    }
+
     /// Derives aligned native result and linkage slots from the end of a reviewed host table.
     fn layout(name: &'static str, version: i64, table_bytes: usize, context: usize) -> Self {
         let result = context + 16;

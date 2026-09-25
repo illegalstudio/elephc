@@ -2,7 +2,7 @@
 title: "session_start() - internals"
 description: "Compiler internals for session_start(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 996
+  order: 997
 ---
 
 ## `session_start()` - internals

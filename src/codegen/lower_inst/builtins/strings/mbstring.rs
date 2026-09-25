@@ -18,7 +18,8 @@ mod capture;
 pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, operation: RuntimeBuiltinId) -> Result<()> {
     let capture = matches!(operation, RuntimeBuiltinId::MbEreg | RuntimeBuiltinId::MbEregi);
     let query = operation == RuntimeBuiltinId::MbParseStr;
-    let output = if query { Some(1) } else if capture { Some(2) } else { None };
+    let variables = operation == RuntimeBuiltinId::MbConvertVariables;
+    let output = if query { Some(1) } else if capture || variables { Some(2) } else { None };
     if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ProfiledFunction {
         arguments: crate::ir::RuntimeArgumentLayout::IndexedArray, ..
     }))) {
@@ -38,8 +39,17 @@ pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
     };
     abi::emit_reserve_temporary_stack(ctx.emitter, size);
     for (index, &value) in inst.operands.iter().enumerate() {
+        if variables && index == 3 {
+            ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction(&format!("str x0, [sp, #{}]", index * 8)),
+                Arch::X86_64 => ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", index * 8)),
+            }
+            continue;
+        }
         if output == Some(index) {
-            capture::stage_reference(ctx, value, index * 8)?;
+            if variables { capture::stage_live_reference(ctx, value, index * 8)?; }
+            else { capture::stage_reference(ctx, value, index * 8)?; }
             continue;
         }
         let record = pointers_size + index * 48;
@@ -62,6 +72,9 @@ pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
     } else if capture {
         capture::stage_state(ctx, state_offset);
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_capture_native");
+    } else if variables {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 5), 1);
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_variables_native");
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_native");
     }

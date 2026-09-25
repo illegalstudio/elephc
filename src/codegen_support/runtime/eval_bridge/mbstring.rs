@@ -52,14 +52,29 @@ pub(super) fn emit_x86_64_mbstring(emitter: &mut Emitter, mbregex: bool) {
     emitter.instruction("jmp __elephc_runtime_builtin_v1_done_x86");            // restore caller linkage without crossing Magician via longjmp
 }
 
-/// Selects the V5 query host, optional V4 regex host, or ordinary shared-value coordinator.
+/// Selects V6 live variables, V5 query, optional V4 regex, or ordinary values.
 fn emit_invoke(emitter: &mut Emitter, mbregex: bool) {
     use elephc_builtin_contract::RuntimeBuiltinId;
     let arm = emitter.target.arch == crate::codegen_support::platform::Arch::AArch64;
     let capture = "__elephc_runtime_builtin_v1_mbstring_capture";
     let ordinary = "__elephc_runtime_builtin_v1_mbstring_values";
     let done = "__elephc_runtime_builtin_v1_mbstring_invoked";
+    let not_variables = "__elephc_runtime_builtin_v1_mbstring_not_variables";
     let not_query = "__elephc_runtime_builtin_v1_mbstring_not_query";
+    if arm {
+        emitter.instruction(&format!("cmp x19, #{}", RuntimeBuiltinId::MbConvertVariables.as_u32())); // identify live caller roots by the shared runtime identity
+        emitter.instruction(&format!("b.ne {not_variables}"));                 // keep all other mbstring calls on their existing hosts
+        emitter.instruction("mov x5, #0");                                     // select flat eval argument references in the V6 context
+        emitter.instruction("bl __rt_mbstring_variables_invoke");              // convert through the protected live-variable callback table
+        emitter.instruction(&format!("b {done}"));                             // use ordinary result boxing and pending-exception handling
+    } else {
+        emitter.instruction(&format!("cmp ebx, {}", RuntimeBuiltinId::MbConvertVariables.as_u32())); // select live caller roots
+        emitter.instruction(&format!("jne {not_variables}"));                  // preserve existing operation routing
+        emitter.instruction("xor r9d, r9d");                                   // select flat eval argument references in the V6 context
+        emitter.instruction("call __rt_mbstring_variables_invoke");            // run the same protected V6 conversion coordinator
+        emitter.instruction(&format!("jmp {done}"));                           // share result and status translation
+    }
+    emitter.label(not_variables);
     if arm {
         emitter.instruction(&format!("cmp x19, #{}", RuntimeBuiltinId::MbParseStr.as_u32())); // distinguish query output from ordinary values and regex captures
         emitter.instruction(&format!("b.ne {not_query}"));                      // keep existing operation families on their current adapters

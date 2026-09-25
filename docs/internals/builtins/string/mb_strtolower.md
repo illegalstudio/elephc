@@ -2,7 +2,7 @@
 title: "mb_strtolower() - internals"
 description: "Compiler internals for mb_strtolower(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 883
+  order: 884
 ---
 
 ## `mb_strtolower()` - internals

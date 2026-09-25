@@ -2,7 +2,7 @@
 title: "mb_decode_mimeheader()"
 description: "Decodes MIME header words into the current internal encoding and unfolds whitespace."
 sidebar:
-  order: 833
+  order: 834
 ---
 
 ## mb_decode_mimeheader()

@@ -34,6 +34,54 @@ pub(super) fn stage_reference(ctx: &mut FunctionContext<'_>, value: ValueId, poi
     Ok(())
 }
 
+/// Stages an existing concrete or Mixed reference cell without changing its PHP storage type.
+pub(super) fn stage_live_reference(ctx: &mut FunctionContext<'_>, value: ValueId, pointer: usize) -> Result<()> {
+    let slot = local_slot_for_loaded_value(ctx, value)?;
+    if !live_local(ctx, slot, &mut HashSet::new()) {
+        return Err(CodegenIrError::unsupported("mb_convert_variables requires a live PHP reference place"));
+    }
+    ctx.materialize_local_storage_address(slot, abi::int_result_reg(ctx.emitter))?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("str x0, [sp, #{pointer}]")),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {pointer}], rax")),
+    }
+    Ok(())
+}
+
+/// Follows only compiler-created reference cells, allowing their original concrete type.
+fn live_local(ctx: &FunctionContext<'_>, slot: LocalSlotId, visiting: &mut HashSet<LocalSlotId>) -> bool {
+    if !visiting.insert(slot) { return false; }
+    let Some(local) = ctx.function.locals.get(slot.as_raw() as usize) else { return false; };
+    if local.kind != crate::ir::LocalKind::PhpLocal { return false; }
+    if ctx.function.params.get(slot.as_raw() as usize)
+        .is_some_and(|param| param.by_ref && param.php_type.codegen_repr() == PhpType::Mixed)
+    {
+        visiting.remove(&slot);
+        return true;
+    }
+    if ctx.function.instructions.iter().any(|inst| inst.op == Op::BindRefCellPtr
+        && inst.immediate == Some(Immediate::LocalSlot(slot))) { return false; }
+    let mut backed = false;
+    for inst in &ctx.function.instructions {
+        let Some(Immediate::LocalSlotPair { first, second }) = inst.immediate else { continue; };
+        if first != slot { continue; }
+        match inst.op {
+            Op::PromoteLocalRefCell => {
+                if !ctx.function.locals.get(second.as_raw() as usize)
+                    .is_some_and(|owner| owner.kind == crate::ir::LocalKind::RefCell) { return false; }
+                backed = true;
+            },
+            Op::AliasLocalRefCell => {
+                if !live_local(ctx, second, visiting) { return false; }
+                backed = true;
+            },
+            _ => {},
+        }
+    }
+    visiting.remove(&slot);
+    backed
+}
+
 /// Creates the reviewed untyped publication state after all other native call inputs are staged.
 pub(super) fn stage_state(ctx: &mut FunctionContext<'_>, offset: usize) {
     match ctx.emitter.target.arch {

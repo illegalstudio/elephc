@@ -23,6 +23,8 @@ mod replacement_callback;
 mod graph;
 #[path = "invoke/query.rs"]
 mod query;
+#[path = "invoke/variables.rs"]
+mod variables;
 #[path = "invoke/regex.rs"]
 mod regex;
 #[path = "invoke/regex_request.rs"]

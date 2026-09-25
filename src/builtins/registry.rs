@@ -41,7 +41,7 @@ pub struct BuiltinDef {
     /// The variadic parameter always carries `Some(ArrayLiteral([]))`.
     pub defaults: Vec<Option<Expr>>,
     /// Per-parameter by-reference flag, in the same order as `params`.
-    /// The variadic parameter is never by-reference (`false`).
+    /// The variadic parameter follows the shared contract's passing mode.
     pub ref_params: Vec<bool>,
     /// Name of the variadic parameter, if any.
     pub variadic: Option<String>,
@@ -103,7 +103,7 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
                 ExprKind::ArrayLiteral(Vec::new()),
                 Span::dummy(),
             )));
-            ref_params.push(false);
+            ref_params.push(spec.variadic_by_ref);
         }
 
         let def = BuiltinDef {

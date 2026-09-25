@@ -12,11 +12,24 @@
 use std::collections::HashSet;
 use elephc_builtin_contract::mbstring_abi::array::{ArrayGraph, Key, Value};
 use crate::{encoding::EncodingListBuilder, error::MbError};
+use crate::encoding::Encoding;
 use super::{host::{Session, Status}, REQUEST};
 
 /// Resolves ordered host values into a canonical-name graph without capturing host pointers.
 pub(super) unsafe fn prepare(session: &mut Session, index: usize, operation: elephc_builtin_contract::RuntimeBuiltinId)
     -> Result<Result<Vec<u8>, MbError>, Status>
+{
+    let names = match unsafe { prepare_names(session, index, operation)? } {
+        Ok(names) => names, Err(error) => return Ok(Err(error)),
+    };
+    let entries = names.into_iter().enumerate().map(|(index, encoding)|
+        (Key::Int(index as i64), Value::String(encoding.name().as_bytes().to_vec()))).collect();
+    Ok(Ok(ArrayGraph::new(0, vec![entries]).expect("canonical encoding names form a valid list").encode()))
+}
+
+/// Resolves one source list for reference operations without snapshotting caller roots.
+pub(super) unsafe fn prepare_names(session: &mut Session, index: usize, operation: elephc_builtin_contract::RuntimeBuiltinId)
+    -> Result<Result<Vec<Encoding>, MbError>, Status>
 {
     let contract = elephc_builtin_contract::lookup_id(operation.builtin_id()).ok_or(Status::Fatal)?;
     let parameter = contract.params.get(index).ok_or(Status::Fatal)?;
@@ -30,8 +43,5 @@ pub(super) unsafe fn prepare(session: &mut Session, index: usize, operation: ele
         unsafe { session.release_entry()?; }
         if let Err(error) = parsed { return Ok(Err(error)); }
     }
-    let names = match builder.finish() { Ok(names) => names, Err(error) => return Ok(Err(error)) };
-    let entries = names.into_iter().enumerate().map(|(index, encoding)|
-        (Key::Int(index as i64), Value::String(encoding.name().as_bytes().to_vec()))).collect();
-    Ok(Ok(ArrayGraph::new(0, vec![entries]).expect("canonical encoding names form a valid list").encode()))
+    Ok(builder.finish())
 }

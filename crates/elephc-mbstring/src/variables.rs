@@ -10,6 +10,7 @@
 
 mod live;
 pub mod host;
+mod native_host;
 mod plan;
 
 pub use live::{Container, LiveFailure, LiveHost, LiveValue, convert_live};
