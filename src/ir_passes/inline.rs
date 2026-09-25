@@ -436,6 +436,16 @@ fn callee_returns_lifetime_tracked_non_parameter_slot(callee: &Function) -> bool
         }))
 }
 
+/// A borrowed parameter return needs the compiled call boundary's ownership marker.
+fn callee_returns_lifetime_tracked_parameter_slot(callee: &Function) -> bool {
+    let parameter_slots = callee_param_slots(callee);
+    callee_directly_returned_slots(callee).into_iter()
+        .filter(|slot| parameter_slots.contains(slot))
+        .any(|slot| callee.locals.get(slot.as_raw() as usize).is_some_and(|local| {
+            Ownership::php_type_needs_lifetime_tracking(&local.php_type.codegen_repr())
+        }))
+}
+
 /// Returns true when inlining would erase exceptional cleanup for an owned return slot.
 ///
 /// A non-parameter cleanup-tracked local is still owned by the callee until its `Return`
@@ -531,7 +541,7 @@ fn call_string_args_are_stable(host: &Function, call_inst: &Instruction, callee:
 /// must be uniform (all value or all void, never mixed and never absent) and, when the
 /// site consumes a result, the callee must actually return a value. Selecting only such
 /// sites lets `apply_inline_at_site` run infallibly.
-fn site_is_inlinable(callee: &Function, has_result: bool) -> bool {
+fn site_is_inlinable(callee: &Function, has_result: bool, result_ownership: Ownership) -> bool {
     let (saw_value, saw_void) = callee_return_shape(callee);
     if saw_value && saw_void {
         return false; // mixed value/void returns
@@ -541,6 +551,14 @@ fn site_is_inlinable(callee: &Function, has_result: bool) -> bool {
     }
     if has_result && !saw_value {
         return false; // result consumed but callee returns void
+    }
+    // A borrowed parameter return keeps its caller owner at a real call boundary.
+    // A MaybeOwned continuation normalizes that borrow to an owner, and the
+    // host's ordinary assignment acquires it again, leaving the extra owner live.
+    if result_ownership == Ownership::MaybeOwned
+        && callee_returns_lifetime_tracked_parameter_slot(callee)
+    {
+        return false;
     }
     if !has_result
         && Ownership::php_type_needs_lifetime_tracking(&callee.return_php_type.codegen_repr())
@@ -1106,7 +1124,7 @@ fn inline_into_function(
                                 if is_eligible_callee(callee, recursive)
                                     && (loops.loop_depth(block.id) == 0
                                         || !callee_stores_a_refcounted_local(callee))
-                                    && site_is_inlinable(callee, has_result)
+                                    && site_is_inlinable(callee, has_result, inst.result_ownership)
                                     && call_args_bind_directly(host, inst, callee)
                                     && call_string_args_are_stable(host, inst, callee)
                                 {

@@ -597,10 +597,10 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     constructor: &ConstructorCallTarget,
     constructor_args: &[ValueId],
     dummy_receiver_operand: ValueId,
-    _object_stack_offset: usize,
+    object_stack_offset: usize,
 ) -> Result<()> {
     let object_reg = abi::nested_call_reg(ctx.emitter);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, object_stack_offset);
     let mut operands = Vec::with_capacity(constructor_args.len() + 1);
     operands.push(dummy_receiver_operand);
     operands.extend(constructor_args.iter().copied());
