@@ -151,7 +151,9 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         for (index, value) in args.iter().copied().enumerate() {
             let key = self.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
             let retained = self.retain(value)?;
-            arg_array = self.array_set(arg_array, key, retained)?;
+            let stored = self.array_set(arg_array, key, retained);
+            self.release_cells([key, retained])?;
+            arg_array = stored?;
         }
         let mut result = std::ptr::null_mut();
         let mut invoked = 0u64;
