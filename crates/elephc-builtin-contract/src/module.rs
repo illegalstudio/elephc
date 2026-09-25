@@ -130,6 +130,25 @@ impl PhpModule {
             .find(|module| module.php_name().eq_ignore_ascii_case(name))
     }
 
+    /// Returns the name PHP registers this module under, which is the spelling a Reflection dump
+    /// prints (`<internal:SPL>`) and `get_loaded_extensions()` lists. It differs from the lowercase
+    /// `php_name()` key only for the modules below (measured with `get_loaded_extensions()` on
+    /// PHP 8.5.10).
+    pub const fn registered_name(self) -> &'static str {
+        match self {
+            Self::Core => "Core",
+            Self::Spl => "SPL",
+            Self::Ffi => "FFI",
+            Self::ZendOpcache => "Zend OPcache",
+            Self::Pdo => "PDO",
+            Self::PdoOdbc => "PDO_ODBC",
+            Self::Phar => "Phar",
+            Self::Reflection => "Reflection",
+            Self::Simplexml => "SimpleXML",
+            _ => self.php_name(),
+        }
+    }
+
     /// Returns whether this module is a real PHP module rather than the elephc pseudo-module.
     pub const fn is_php(self) -> bool {
         !matches!(self, Self::Elephc)
@@ -165,5 +184,16 @@ mod tests {
         assert!(!PhpModule::Elephc.is_php());
         assert_eq!(PhpModule::ALL.len(), 68 + 4 + 1);
         assert!(!PhpModule::Imagick.is_bundled() && PhpModule::Imagick.is_php());
+    }
+
+    /// Verifies each registered spelling is only a recasing of the module's key.
+    #[test]
+    fn registered_names_recase_the_reflection_key() {
+        for module in PhpModule::ALL {
+            assert_eq!(module.registered_name().to_ascii_lowercase(), module.php_name());
+            assert_eq!(PhpModule::parse(module.registered_name()), Some(*module));
+        }
+        assert_eq!(PhpModule::Spl.registered_name(), "SPL");
+        assert_eq!(PhpModule::Standard.registered_name(), "standard");
     }
 }

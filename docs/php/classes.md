@@ -1552,7 +1552,7 @@ Limitations today:
 - `ReflectionObject` supports the inherited class-metadata methods for object arguments and materializes the same metadata through a `ReflectionObject` instance.
 - `ReflectionEnum` additionally supports backing metadata (`isBacked()`, `getBackingType()`); inside eval fragments it also supports enum-case lookup (`hasCase()`, `getCase()`, `getCases()`). Enum-case reflectors expose `getEnum()`.
 - `ReflectionNamedType`, `ReflectionUnionType`, and `ReflectionIntersectionType` also support `__toString()` for retained named, nullable, union, and intersection metadata.
-- The `__toString()` dumps follow PHP's format with one line removed. PHP prints `  @@ <file> <line> - <line>` under the header, and a compiled binary cannot honestly answer it: the source it was built from need not exist where the binary runs, and baking the build machine's path in would be worse than leaving it out. The eval bridge omits the same line. It still differs from the compiled path in three places where the compiled path matches PHP and it does not — it omits the prototype marker, prints an empty parameters block where PHP prints an empty body, and keeps a union in its declared order (#1117). Everything else matches, including the `<user, prototype Interface>` marker on an override, the modifier order, `<required>` / `<optional>`, by-reference and variadic markers, array and constant defaults, and the empty body PHP prints for a callable with no parameters and no return type:
+- The `__toString()` dumps follow PHP's format with one line removed. PHP prints `  @@ <file> <line> - <line>` under the header, and a compiled binary cannot honestly answer it: the source it was built from need not exist where the binary runs, and baking the build machine's path in would be worse than leaving it out. The blank line that follows it stays, because PHP prints it for internal callables too, which have no such line. An internal callable names its module the way PHP registers it: `<internal:Core>`, `<internal:SPL>`, `<internal:standard>`. The eval bridge omits the same line. It still differs from the compiled path in three places where the compiled path matches PHP and it does not — it omits the prototype marker, prints an empty parameters block where PHP prints an empty body, and keeps a union in its declared order (#1117). Everything else matches, including the `<user, prototype Interface>` marker on an override, the modifier order, `<required>` / `<optional>`, by-reference and variadic markers, array and constant defaults, and the empty body PHP prints for a callable with no parameters and no return type:
 
 ```php
 <?php
@@ -1566,6 +1566,7 @@ abstract class Base implements Shape {
 
 echo (new ReflectionMethod('Base', 'area'));
 // Method [ <user, prototype Shape> abstract public method area ] {
+//
 //   - Parameters [0] {
 //   }
 //   - Return [ float ]
