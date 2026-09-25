@@ -148,9 +148,16 @@ pub(super) fn reflection_parameter_default_non_object_value(
         return Ok(Some(value));
     }
     match &default.kind {
-        ExprKind::ClassConstant { .. }
-            | ExprKind::ScopedConstantAccess { .. }
-            | ExprKind::ConstRef(_) => {
+        // A global constant inside an object default's arguments must not fail the build either,
+        // for the reason `reflection_parameter_default_value` gives at the top level: an array
+        // constant cannot fold, and `new Box(ITEMS)` compiled before global constants reached
+        // this helper. The object default then has no value, as it had before.
+        ExprKind::ConstRef(_) => Ok(
+            reflection_constant_value(ctx, current_class, current_info, default, 0)
+                .ok()
+                .and_then(reflection_parameter_default_from_constant_value),
+        ),
+        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
         }
