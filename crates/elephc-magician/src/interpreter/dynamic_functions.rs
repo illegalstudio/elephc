@@ -117,19 +117,6 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
     Ok(evaluated_args)
 }
 
-/// Reports each directly evaluated argument before binding so callers can manage known temporary owners.
-pub(in crate::interpreter) fn eval_call_arg_values_observed(
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    caller_scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-    mut observe: impl FnMut(&EvalExpr, RuntimeCellHandle),
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    let mut evaluated = Vec::with_capacity(args.len());
-    evaluate_call_arguments(args, context, caller_scope, values, &mut observe, None, &mut evaluated, None)?;
-    Ok(evaluated)
-}
-
 /// Captures owned builtin inputs, using shared reference modes when a contract is supplied.
 /// Without a contract, call_user_func captures independent values even for reference parameters.
 pub(in crate::interpreter) fn eval_owned_builtin_call_arg_values(

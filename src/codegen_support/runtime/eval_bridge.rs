@@ -100,7 +100,6 @@ pub(crate) mod string_literal;
 mod aarch64_casts;
 mod aarch64_numeric;
 mod aarch64_compare;
-mod concat;
 mod aarch64_output;
 mod x86_64_values_classes;
 mod x86_64_arrays;

@@ -4354,21 +4354,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.argument_guards.contains_key(&value)
     }
 
-    /// Adds an already active value guard to the current parameter-order insertion chain.
-    pub(crate) fn reuse_call_argument_guard_anchor(
-        &mut self,
-        value: ValueId,
-        parameter: usize,
-    ) -> bool {
-        let Some(&token) = self.argument_guards.get(&value) else {
-            return false;
-        };
-        self.argument_guard_scopes
-            .last_mut()
-            .expect("active call capture scope")
-            .push((parameter, token));
-        true
-    }
 
     /// Refreshes an active indexed or associative argument guard after mutation can replace its heap address.
     pub(crate) fn refresh_argument_array_guard(&mut self, array: LoweredValue, span: Span) {

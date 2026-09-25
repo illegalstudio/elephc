@@ -900,15 +900,6 @@ fn extern_decl_signature(decl: &crate::ir::ExternDecl) -> FunctionSig {
     }
 }
 
-/// Builds runtime descriptor cases for PHP builtins that support callable dispatch.
-fn runtime_builtin_descriptor_cases(
-    ctx: &mut FunctionContext<'_>,
-    source_arg_ty: Option<&PhpType>,
-    candidate_names: Option<&[String]>,
-    strict_php: bool,
-) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
-    runtime_builtin_descriptor_cases_at_arity(ctx, source_arg_ty, candidate_names, strict_php, None)
-}
 
 /// Builds descriptor cases with an optional host-proven callback arity.
 fn runtime_builtin_descriptor_cases_at_arity(

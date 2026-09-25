@@ -124,27 +124,6 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     )
 }
 
-/// Loads dynamic-constructor arguments and guards any caller-owned conversion temporaries.
-pub(super) fn materialize_dynamic_constructor_call_args_with_receiver_reg_and_refs(
-    ctx: &mut FunctionContext<'_>,
-    receiver_reg: &str,
-    receiver_ty: &PhpType,
-    operands: &[ValueId],
-    param_types: &[PhpType],
-    ref_params: &[bool],
-    lifetime: RefArgCellLifetime,
-) -> Result<CallArgMaterialization> {
-    materialize_method_call_args_with_receiver_reg_and_refs_options(
-        ctx,
-        receiver_reg,
-        receiver_ty,
-        operands,
-        param_types,
-        ref_params,
-        lifetime,
-        true,
-    )
-}
 
 /// Loads receiver-register method arguments with optional guarded conversion cleanup.
 fn materialize_method_call_args_with_receiver_reg_and_refs_options(
@@ -155,7 +134,7 @@ fn materialize_method_call_args_with_receiver_reg_and_refs_options(
     param_types: &[PhpType],
     ref_params: &[bool],
     lifetime: RefArgCellLifetime,
-    guard_conversion_temporaries: bool,
+    _guard_conversion_temporaries: bool,
 ) -> Result<CallArgMaterialization> {
     if operands.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(

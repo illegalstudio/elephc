@@ -57,7 +57,6 @@ struct EvalMethodSlot {
     is_hidden_shadow: bool,
     entry_symbol: String,
     runtime_helper: Option<&'static str>,
-    consumed_mixed_params: &'static [usize],
 }
 
 /// Static method metadata needed by eval static method-call bridge dispatch.
@@ -317,9 +316,6 @@ fn collect_class_method_slots(
             is_hidden_shadow: false,
             entry_symbol: entry_symbol.clone(),
             runtime_helper,
-            consumed_mixed_params: runtime_intrinsic
-                .map(IntrinsicCall::consumed_mixed_params)
-                .unwrap_or(&[]),
         });
     }
 }
@@ -373,7 +369,6 @@ fn collect_hidden_private_ancestor_method_slots(
                 is_hidden_shadow: true,
                 entry_symbol: entry_symbol.clone(),
                 runtime_helper: None,
-                consumed_mixed_params: &[],
             });
         }
     }
@@ -1978,37 +1973,6 @@ fn materialize_static_method_args(
     abi::materialize_outgoing_args(emitter, &assignments)
 }
 
-/// Gives staged boxed `Mixed` arguments the owners a consuming runtime intrinsic requires.
-///
-/// This runs only after every argument has been validated, so a later coercion failure cannot
-/// strand an owner. Temporary argument slots remain authoritative until ABI materialization.
-fn emit_retain_consumed_eval_mixed_args(
-    emitter: &mut Emitter,
-    params: &[PhpType],
-    consumed_params: &[usize],
-) {
-    let mut offsets = vec![0usize; params.len()];
-    let mut offset = 0;
-    for index in (0..params.len()).rev() {
-        offsets[index] = offset;
-        offset += eval_arg_temp_slot_size(&params[index]);
-    }
-    for index in consumed_params {
-        let Some(param) = params.get(*index) else {
-            continue;
-        };
-        if param.codegen_repr() != PhpType::Mixed {
-            continue;
-        }
-        abi::emit_load_temporary_stack_slot(
-            emitter,
-            abi::int_result_reg(emitter),
-            offsets[*index],
-        );
-        abi::emit_call_label(emitter, "__rt_incref");
-    }
-}
-
 /// Prepares ARM64 stack cells for eval-supplied by-reference arguments.
 fn emit_aarch64_ref_arg_cells(
     module: &Module,
@@ -2677,7 +2641,6 @@ mod catalog_tests {
 
     use super::{
         EvalMethodResultSource, emit_box_method_result,
-        emit_retain_consumed_eval_mixed_args,
     };
 
     /// Every throwable this helper can materialize is a catalogued builtin class.
@@ -2744,31 +2707,6 @@ mod catalog_tests {
             assert!(!asm.contains("x15"), "{target:?}: {asm}");
             assert!(!asm.contains("r11"), "{target:?}: {asm}");
             assert!(!asm.contains("__rt_incref"), "{target:?}: {asm}");
-        }
-    }
-
-    /// Verifies consuming SPL arguments are retained from their final staged stack offsets.
-    #[test]
-    fn consumed_eval_mixed_args_are_retained_after_staging() {
-        for target in supported_targets() {
-            let mut emitter = Emitter::new(target);
-            emit_retain_consumed_eval_mixed_args(
-                &mut emitter,
-                &[PhpType::Mixed, PhpType::Mixed],
-                &[0, 1],
-            );
-            let asm = emitter.output();
-            assert_eq!(asm.matches("__rt_incref").count(), 2, "{target:?}: {asm}");
-            match target.arch {
-                Arch::AArch64 => {
-                    assert!(asm.contains("ldr x0, [sp, #16]"), "{target:?}: {asm}");
-                    assert!(asm.contains("ldr x0, [sp]"), "{target:?}: {asm}");
-                }
-                Arch::X86_64 => {
-                    assert!(asm.contains("mov rax, QWORD PTR [rsp + 16]"), "{target:?}: {asm}");
-                    assert!(asm.contains("mov rax, QWORD PTR [rsp]"), "{target:?}: {asm}");
-                }
-            }
         }
     }
 

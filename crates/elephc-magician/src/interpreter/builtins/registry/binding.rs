@@ -93,7 +93,7 @@ pub(in crate::interpreter) fn bind_builtin_named_arg(
 /// Materializes named-call gaps and optionally transfers each new default to call-boundary cleanup.
 fn collect_builtin_arguments(
     name: &str, bound_args: Vec<Option<RuntimeCellHandle>>, values: &mut impl RuntimeValueOps,
-    mut owners: Option<&mut Vec<RuntimeCellHandle>>,
+    owners: Option<&mut Vec<RuntimeCellHandle>>,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if !bound_args.iter().any(Option::is_some) {
         return Ok(Vec::new());
@@ -125,6 +125,8 @@ fn collect_builtin_arguments(
         for value in defaults { let _ = values.release(value); }
         return Err(status);
     }
+
+    if let Some(owners) = owners { owners.extend(defaults); }
 
     Ok(args)
 }

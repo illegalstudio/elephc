@@ -25,10 +25,6 @@ use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan};
 
 use super::LinkError;
 
-use crate::bridge_sources as sources;
-#[cfg(test)]
-use sources::any_file_newer_than;
-
 /// A Rust `staticlib` bridge that can be linked into generated programs.
 pub(super) struct BridgeStaticlib {
     /// Linker library name without the `lib` prefix or archive extension.

@@ -11,45 +11,6 @@
 
 use super::*;
 
-/// Owns a read's temporary receiver and key while preserving a variable receiver's live identity.
-pub(super) fn eval_owned_array_index_read(
-    array: &EvalExpr, index: &EvalExpr, context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_owned_read(context, values, |context, values, owners| {
-        let array = if matches!(array, EvalExpr::LoadVar(_)) {
-            eval_expr(array, context, scope, values)?
-        } else {
-            let value = eval_owned_expr(array, context, scope, values)?;
-            owners.push(value);
-            value
-        };
-        let index = eval_owned_expr(index, context, scope, values)?;
-        owners.push(index);
-        eval_owned_array_get_result(array, index, context, values)
-    })
-}
-
-/// Owns concat operands and Stringable conversions, releasing source temporaries in PHP operand order.
-pub(super) fn eval_owned_concat(
-    left: &EvalExpr, right: &EvalExpr, context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_owned_read(context, values, |context, values, owners| {
-        let left = eval_owned_expr(left, context, scope, values)?;
-        owners.push(left);
-        let right = eval_owned_expr(right, context, scope, values)?;
-        owners.push(right);
-        // The common cleanup pops owners, but concat releases the left source operand first.
-        owners.swap(0, 1);
-        let left_string = eval_string_context_value(left, context, values)?;
-        if left_string != left { owners.push(left_string); }
-        let right_string = eval_string_context_value(right, context, values)?;
-        if right_string != right { owners.push(right_string); }
-        values.concat(left_string, right_string)
-    })
-}
-
 /// Writes an independently owned expression and releases its source and string conversion on every path.
 pub(in crate::interpreter) fn eval_output_expr(
     expr: &EvalExpr,
@@ -111,25 +72,6 @@ pub(super) fn copy_scope_value(
         return Err(status);
     }
     Ok(copied)
-}
-
-/// Owns an array read even when a legacy alias redirects it to a borrowed variable.
-pub(super) fn eval_owned_array_get_result(
-    array: RuntimeCellHandle,
-    index: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    if values.type_tag(array)? != EVAL_TAG_OBJECT {
-        if let Some(target) = eval_array_reference_key(index, values)?
-            .and_then(|key| context.array_element_alias(array, &key).cloned())
-        {
-            return eval_owned_read(context, values, |context, values, owners| {
-                eval_owned_reference_target_value(&target, context, values, owners)
-            });
-        }
-    }
-    eval_array_get_result(array, index, context, values)
 }
 
 /// Selects an ordinary or owned instance-property read without changing access checks.

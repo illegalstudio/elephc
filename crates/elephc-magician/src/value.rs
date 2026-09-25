@@ -44,7 +44,8 @@ impl RuntimeCellHandle {
         Self { borrowed: true, ..self }
     }
 
-    /// Records a retained or transferred owner without changing the runtime reference count.
+    /// Marks a fixture value as independently owned without changing its runtime count.
+    #[cfg(test)]
     pub(crate) const fn owned(self) -> Self {
         Self { borrowed: false, ..self }
     }

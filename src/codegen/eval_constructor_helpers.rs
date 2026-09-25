@@ -39,10 +39,6 @@ use super::eval_ref_arg_helpers::{
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 use super::eval_argument_helpers::emit_borrowed_string_arg;
 
-mod throwable;
-
-use throwable::*;
-
 const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "Error",
     "TypeError",

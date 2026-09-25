@@ -100,7 +100,7 @@ fn lower_untyped_descriptor_invoker_indexed_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
-    guarded: bool,
+    _guarded: bool,
 ) -> LoweredValue {
     let elem_ty = PhpType::Mixed;
     let array_ty = PhpType::Array(Box::new(elem_ty.clone()));
@@ -139,7 +139,7 @@ fn lower_untyped_descriptor_invoker_hash_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
-    guarded: bool,
+    _guarded: bool,
 ) -> LoweredValue {
     let hash_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),

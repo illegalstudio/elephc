@@ -10,7 +10,6 @@
 
 mod autoload;
 mod brand;
-mod bridge_sources;
 mod builtins;
 mod cli;
 mod codegen;

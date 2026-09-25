@@ -223,7 +223,7 @@ class ValidationTests(unittest.TestCase):
         ]
         code, out = run_gen(registry=reg, baseline=baseline)
         self.assertEqual(code, 0)
-        self.assertIn("| `core` | 2 / 2 · 100% | — | — |", out)
+        self.assertIn("| `core` | 2 / 2 · 100% | - | - |", out)
         self.assertIn("elephc implements 1 PHP language constructs", out)
         self.assertIn("`isset()`", out)
         self.assertNotIn("`exit()`, `isset()`", out)

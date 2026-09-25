@@ -10,10 +10,7 @@
 
 use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 use crate::codegen_support::platform::Arch;
-
-const CLEANUP: Scope = Scope { arm: 32, x86: 48 };
 
 /// Frees a hash table and all owned key/value payloads recursively.
 ///

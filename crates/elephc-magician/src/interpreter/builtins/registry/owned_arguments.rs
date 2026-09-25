@@ -49,19 +49,6 @@ pub(in crate::interpreter) fn eval_builtin_call_array_expr(
         })
 }
 
-/// Expands an independently owned snapshot without consuming the caller's borrowed argument array.
-pub(in crate::interpreter) fn eval_builtin_call_array_value(
-    name: &str, array: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_owned_builtin_arguments(name, true, None, context, values,
-        |contract, _, context, values, owners, evaluated| {
-            let copy = values.copy_value(array)?;
-            context.copy_array_metadata(array, copy);
-            owners.push(copy);
-            capture_array(contract, copy, context, values, owners, evaluated)
-        })
-}
-
 /// Copies already evaluated callback inputs, optionally preserving explicit persistent output references.
 pub(in crate::interpreter) fn eval_builtin_callback_with_arguments(
     name: &str, arguments: Vec<EvaluatedCallArg>, preserve_references: bool,

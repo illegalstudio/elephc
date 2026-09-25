@@ -12,9 +12,6 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
-
-const CLEANUP: Scope = Scope { arm: 32, x86: 48 };
 
 
 /// Emits the `__rt_callable_descriptor_release` runtime helper for the active target.

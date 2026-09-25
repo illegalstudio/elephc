@@ -335,22 +335,6 @@ pub(crate) fn lower_owned_ref_assign_array_elem(
     ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
-/// Boxes a local indexed array before exposing an element as a dynamically writable reference.
-fn prepare_array_reference_source(
-    ctx: &mut LoweringContext<'_, '_>, array: &Expr, span: Span,
-) -> LoweredValue {
-    let value = lower_expr(ctx, array);
-    let ExprKind::Variable(name) = &array.kind else { return value; };
-    let PhpType::Array(_) = ctx.builder.value_php_type(value.value).codegen_repr() else { return value; };
-    // Captured references may later store any PHP type. Their source array must
-    // use the same boxed element representation before a cell address escapes.
-    // ArrayToMixed also separates preexisting COW copies of an already boxed array.
-    let ty = PhpType::Array(Box::new(PhpType::Mixed));
-    let converted = ctx.emit_value(Op::ArrayToMixed, vec![value.value], None,
-        ty.clone(), Op::ArrayToMixed.default_effects(), Some(span));
-    ctx.store_mutated_local(name, converted, ty, Some(span));
-    converted
-}
 
 /// Lowers a named property read once the receiver is already evaluated.
 pub(super) fn lower_property_get_from_value(

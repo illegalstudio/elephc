@@ -460,7 +460,7 @@ pub(in crate::interpreter) fn eval_match_expr(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-    own_result: bool,
+    _own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_operands(&[subject], context, scope, values, |args, context, scope, values| {
         for arm in arms {

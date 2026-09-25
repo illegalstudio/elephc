@@ -31,31 +31,6 @@ pub(in crate::interpreter) fn with_array_call_arguments<V: RuntimeValueOps>(
     )
 }
 
-/// Keeps argument owners through an optional reflection result and releases an escaped object on cleanup failure.
-pub(in crate::interpreter) fn with_optional_array_call_arguments<V: RuntimeValueOps>(
-    array: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut V,
-    invoke: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut V) -> Result<Option<RuntimeCellHandle>, EvalStatus>,
-) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    with_array_call_argument_result(
-        array,
-        context,
-        values,
-        invoke,
-        |result, values| {
-            let result = result
-                .map(|value| promote_borrowed_result(value, values))
-                .transpose()?;
-            Ok((result, result))
-        },
-        |result, context, values| match result {
-            Some(value) => eval_release_value(context, values, value),
-            None => Ok(()),
-        },
-    )
-}
-
 /// Shares argument acquisition and cleanup across ordinary and optional invocation results.
 fn with_array_call_argument_result<R, V: RuntimeValueOps>(
     array: RuntimeCellHandle,
@@ -108,17 +83,6 @@ fn with_array_call_argument_result<R, V: RuntimeValueOps>(
             Err(status)
         }
     }
-}
-
-/// Appends one unpacked array's values using PHP named-argument key semantics.
-pub(in crate::interpreter) fn append_unpacked_call_arg_values(
-    array: RuntimeCellHandle,
-    evaluated_args: &mut Vec<EvaluatedCallArg>,
-    saw_named: &mut bool,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    append_unpacked_call_arg_values_with_owners(array, evaluated_args, saw_named, context, values, None)
 }
 
 /// Expands PHP array arguments while optionally tracking reference-preserving read owners.

@@ -224,21 +224,6 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     call
 }
 
-/// Applies the same argument ownership contract to direct and statically resolved user calls.
-pub(super) fn release_user_call_argument_temporaries(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    arguments: &[ValueId],
-    result: LoweredValue,
-    signature: Option<&FunctionSig>,
-    span: Span,
-) {
-    let return_alias = ctx.return_alias_summaries.function(name)
-        .cloned().unwrap_or(ReturnArgAlias::Unknown);
-    release_owned_call_arg_temporaries_with_signature(
-        ctx, arguments, Some(result.value), &return_alias, signature, span,
-    );
-}
 
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 pub(super) fn emit_builtin_call_value(

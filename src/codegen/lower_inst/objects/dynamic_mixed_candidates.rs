@@ -8,7 +8,7 @@
 //! - Candidate matching, constructor calls, and runtime fallback preserve scratch state.
 
 use super::*;
-use crate::codegen::lower_inst::{callable_guards, emit_call_arg_temp_cleanups};
+use crate::codegen::lower_inst::callable_guards;
 
 /// Materializes the dynamic class name as a string result pair, branching for non-string Mixed.
 pub(super) fn emit_generic_dynamic_new_class_string(
@@ -597,7 +597,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     constructor: &ConstructorCallTarget,
     constructor_args: &[ValueId],
     dummy_receiver_operand: ValueId,
-    object_stack_offset: usize,
+    _object_stack_offset: usize,
 ) -> Result<()> {
     let object_reg = abi::nested_call_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
