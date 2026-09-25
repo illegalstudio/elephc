@@ -68,3 +68,16 @@ echo $n;
     );
     assert_clean(out, "896");
 }
+
+/// Growing `implode()` past the concat scratch produces an owned heap string. Persisting the
+/// result for a caller must transfer or release that allocation instead of leaking a duplicate.
+#[test]
+fn test_implode_large_retained_result_leaves_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$joined = implode('', array_fill(0, 7000, '0123456789'));
+echo strlen($joined);
+"#,
+    );
+    assert_clean(out, "70000");
+}

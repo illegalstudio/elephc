@@ -617,7 +617,9 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
         // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
         // dereference an element, so the generic string helper is the safe choice and
         // keeps `implode("", [])` / `join([])` from being rejected at lowering time.
-        PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => Ok("__rt_implode"),
+        PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar | PhpType::Never | PhpType::Void => {
+            Ok("__rt_implode")
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "implode array element PHP type {:?}",
             other

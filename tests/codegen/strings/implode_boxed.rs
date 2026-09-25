@@ -285,3 +285,30 @@ echo $hits;
     );
     assert_eq!(out, "2");
 }
+
+/// A runtime `?int` local is stored inline as `{payload, tag}` in a one-element array. The
+/// array header's tag 11 must route through the generic renderer instead of string-slot loads.
+#[test]
+fn test_implode_on_an_array_of_tagged_nullable_ints() {
+    let out = compile_and_run(
+        r#"<?php
+function f(?int $value): string { return implode(',', [$value]); }
+echo f(null), '|', f(7);
+"#,
+    );
+    assert_eq!(out, "|7");
+}
+
+/// Passing an array containing a runtime `?int` into a nullable-array parameter keeps the
+/// inline tagged-scalar header for the generic runtime renderer to inspect.
+#[test]
+fn test_implode_on_tagged_nullable_ints_through_nullable_array_param() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe(bool $present): ?int { return $present ? 7 : null; }
+function f(?array $values): string { return implode(',', $values); }
+echo f([maybe(false)]), '|', f([maybe(true)]);
+"#,
+    );
+    assert_eq!(out, "|7");
+}

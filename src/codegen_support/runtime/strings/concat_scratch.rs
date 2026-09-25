@@ -11,6 +11,8 @@
 //! - `__rt_concat_reserve` returns scratch storage when the request still fits inside
 //!   `_concat_buf`, and an owned heap block (kind word 1 stamped at `[ptr-8]`) otherwise.
 //!   It never advances `_concat_off`; the caller publishes the *written* length afterwards.
+//! - `__rt_concat_grow` marks its in-progress result with `CONCAT_TEMP_HEAP_KIND`, allowing
+//!   `__rt_str_persist` to take over the buffer without allocating a leaking duplicate.
 //! - `__rt_concat_publish` derives the storage class from the pointer itself: only pointers
 //!   inside `[_concat_buf, _concat_buf + 65536)` move `_concat_off`, so heap-backed results
 //!   leave the shared scratch offset untouched with no extra flag register.
@@ -25,6 +27,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::runtime::data::ALLOC_OVERFLOW_MSG;
 
 /// Byte capacity of the shared `_concat_buf` scratch buffer declared in `runtime::data::fixed`.
@@ -49,7 +52,8 @@ pub(crate) const CONCAT_BUF_CAPACITY: usize = 65536;
 ///
 /// # `__rt_concat_grow`
 /// - Input: `x0`/`rax` = current buffer, `x1`/`rdi` = bytes to preserve, `x2`/`rsi` = new capacity.
-/// - Output: `x0`/`rax` = larger owned heap buffer holding the preserved prefix.
+/// - Output: `x0`/`rax` = transient heap string holding the preserved prefix; `__rt_str_persist`
+///   can adopt it.
 /// - Releases the superseded buffer through `__rt_heap_free_safe` (a no-op for scratch).
 ///
 /// # `__rt_alloc_overflow`
@@ -159,8 +163,8 @@ fn emit_concat_grow_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, x9");                                          // is the grown capacity impossible to satisfy?
     emitter.instruction("b.hi __rt_concat_grow_too_large");                     // report a PHP-style allocation overflow instead of writing past any buffer
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the larger owned accumulation buffer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap allocation as a string payload
+    emitter.instruction(&format!("mov x9, #{}", CONCAT_TEMP_HEAP_KIND));        // stamp a transient string until a consumer persists it
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap allocation as a transient string payload
     emitter.instruction("str x0, [sp, #16]");                                   // save the grown buffer for the return value
 
     // -- copy the bytes written so far into the grown buffer --
@@ -281,8 +285,8 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, r8");                                         // is the grown capacity impossible to satisfy?
     emitter.instruction("ja __rt_concat_grow_too_large_x86");                   // report a PHP-style allocation overflow instead of writing past any buffer
     emitter.instruction("call __rt_heap_alloc");                                // allocate the larger owned accumulation buffer
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap allocation as a string payload
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND))); // materialize the transient-string heap kind word with the x86_64 heap marker
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap allocation as a transient string payload
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the grown buffer for the return value
 
     // -- copy the bytes written so far into the grown buffer --
@@ -369,5 +373,34 @@ fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
             emitter.instruction("jmp __rt_throw_current");                      // unwind to the cdylib handler with allocation status recorded
             emitter.label("__rt_alloc_overflow_fatal");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// The shared grow helper returns a transient string on both ABIs, while exact reservations
+    /// remain ordinary owned strings. This lets `__rt_str_persist` adopt grown results in place.
+    #[test]
+    fn concat_grow_marks_results_transient_on_both_architectures() {
+        let mut arm = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_concat_scratch(&mut arm);
+        let arm_asm = arm.output();
+        assert!(arm_asm.contains("mov x9, #1"));
+        assert!(arm_asm.contains(&format!("mov x9, #{}", CONCAT_TEMP_HEAP_KIND)));
+
+        let mut x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_concat_scratch(&mut x86);
+        let x86_asm = x86.output();
+        assert!(x86_asm.contains(&format!(
+            "mov r10, 0x{:x}",
+            crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
+        )));
+        assert!(x86_asm.contains(&format!(
+            "mov r10, 0x{:x}",
+            crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND)
+        )));
     }
 }

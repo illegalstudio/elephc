@@ -38,6 +38,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL;
 use super::concat_scratch::CONCAT_BUF_CAPACITY;
 
 /// Destination headroom guaranteed before a nested `__rt_mixed_cast_string`.
@@ -273,12 +274,37 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_implode_raw_float_elem");                    // render the double through __rt_ftoa
     emitter.instruction("cmp x13, #3");                                         // value_type 3 = raw bool elements
     emitter.instruction("b.eq __rt_implode_raw_bool_elem");                     // PHP renders true as "1" and false as ""
+    emitter.instruction(&format!("cmp x13, #{}", crate::codegen_support::sentinels::TAGGED_SCALAR_ARRAY_VALUE_TYPE)); // are elements inline tagged nullable ints?
+    emitter.instruction("b.eq __rt_implode_tagged_scalar_elem");                // render payload/tag slots as int or empty null
     emitter.instruction("lsl x12, x11, #4");                                    // compute byte offset: index * 16
     emitter.instruction("add x12, x3, x12");                                    // add to array base
     emitter.instruction("add x12, x12, #24");                                   // skip 24-byte array header
     emitter.instruction("ldr x1, [x12]");                                       // load element string pointer
     emitter.instruction("ldr x2, [x12, #8]");                                   // load element string length
     emitter.instruction("b __rt_implode_copy_value");                           // copy the loaded string payload into the result buffer
+
+    emitter.label("__rt_implode_tagged_scalar_elem");
+    emitter.instruction("lsl x12, x11, #4");                                    // compute byte offset: index * 16 for tagged scalar slots
+    emitter.instruction("add x12, x3, x12");                                    // add the tagged slot offset to the array base
+    emitter.instruction("add x12, x12, #24");                                   // skip the 24-byte array header
+    emitter.instruction("ldr x13, [x12, #8]");                                  // load the runtime tag beside the nullable integer payload
+    emitter.instruction(&format!("cmp x13, #{}", TAGGED_SCALAR_TAG_NULL));      // is this tagged nullable integer PHP null?
+    emitter.instruction("b.eq __rt_implode_tagged_scalar_null");                // null contributes an empty string
+    emitter.instruction(&format!("mov x15, #{}", MIXED_CAST_HEADROOM));         // reserve formatter headroom before __rt_itoa writes into scratch
+    emit_implode_ensure_room_aarch64(emitter, "tagged_scalar");
+    emitter.instruction("ldr x3, [sp, #16]");                                   // reload the array pointer after possible growth
+    emitter.instruction("lsl x12, x11, #4");                                    // recompute the tagged scalar slot offset
+    emitter.instruction("add x12, x3, x12");                                    // add the slot offset to the array base
+    emitter.instruction("add x12, x12, #24");                                   // skip the array header
+    emitter.instruction("ldr x0, [x12]");                                       // load the non-null integer payload
+    emit_aarch64_scalar_cast_prologue(emitter, "tagged_scalar");
+    emitter.instruction("bl __rt_itoa");                                        // format the tagged integer payload as decimal text
+    emit_aarch64_scalar_cast_epilogue(emitter);
+    emitter.instruction("b __rt_implode_copy_value");                           // copy the formatted integer into the result
+    emitter.label("__rt_implode_tagged_scalar_null");
+    emitter.instruction("mov x1, xzr");                                         // a null element contributes no bytes
+    emitter.instruction("mov x2, xzr");                                         // publish the empty string length
+    emitter.instruction("b __rt_implode_copy_value");                           // advance past the null element without reading a slot
 
     emitter.label("__rt_implode_mixed_elem");
     // The cast FORMATS an int/float element straight into the scratch before implode can
@@ -547,6 +573,8 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_implode_raw_float_elem");                      // render the double through __rt_ftoa
     emitter.instruction("cmp QWORD PTR [rbp - 64], 3");                         // value_type 3 = raw bool elements
     emitter.instruction("je __rt_implode_raw_bool_elem");                       // PHP renders true as "1" and false as ""
+    emitter.instruction(&format!("cmp QWORD PTR [rbp - 64], {}", crate::codegen_support::sentinels::TAGGED_SCALAR_ARRAY_VALUE_TYPE)); // are elements inline tagged nullable ints?
+    emitter.instruction("je __rt_implode_tagged_scalar_elem");                  // render payload/tag slots as int or empty null
     emitter.instruction("mov rcx, r11");                                        // copy the indexed-array loop cursor before scaling it into a string-slot byte offset
     emitter.instruction("shl rcx, 4");                                          // convert the indexed-array loop cursor into the 16-byte offset of the current string slot
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current string slot
@@ -555,6 +583,33 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                         // load the current indexed-array string length before copying the element bytes
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor before copying the element bytes
     emitter.instruction("jmp __rt_implode_copy_value");                         // copy the loaded string payload into the result buffer
+
+    emitter.label("__rt_implode_tagged_scalar_elem");
+    emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a tagged slot offset
+    emitter.instruction("shl rcx, 4");                                          // convert the loop cursor into a 16-byte slot offset
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer
+    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the tagged slot address after the array header
+    emitter.instruction(&format!("cmp QWORD PTR [rcx + 8], {}", TAGGED_SCALAR_TAG_NULL)); // is the nullable integer payload PHP null?
+    emitter.instruction("je __rt_implode_tagged_scalar_null_x");                // null contributes an empty string
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // live destination cursor for the headroom check
+    emitter.instruction("xor r8d, r8d");                                        // no pending source bytes across the growth call
+    emitter.instruction(&format!("mov r9, {}", MIXED_CAST_HEADROOM));           // reserve formatter headroom before __rt_itoa writes into scratch
+    emit_implode_ensure_room_x86_64(emitter, "tagged_scalar");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the loop cursor after possible growth
+    emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a tagged slot offset
+    emitter.instruction("shl rcx, 4");                                          // convert the loop cursor into a 16-byte slot offset
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer
+    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // recompute the tagged slot address after the array header
+    emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the non-null integer payload
+    emit_x86_64_scalar_cast_prologue(emitter, "tagged_scalar");
+    emitter.instruction("call __rt_itoa");                                      // format the tagged integer payload as decimal text
+    emit_x86_64_scalar_copy_setup(emitter);
+    emitter.instruction("jmp __rt_implode_copy");                               // copy the formatted integer into the result
+    emitter.label("__rt_implode_tagged_scalar_null_x");
+    emitter.instruction("xor r8d, r8d");                                        // a null element contributes no source bytes
+    emitter.instruction("xor r9d, r9d");                                        // publish the empty string length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // restore the current destination cursor
+    emitter.instruction("jmp __rt_implode_copy");                               // advance past the null element without reading a slot
 
     emitter.label("__rt_implode_mixed_elem");
     // The cast FORMATS an int/float element straight into the scratch before implode can
@@ -708,10 +763,10 @@ mod tests {
         assert_eq!(asm.matches("add rsp, 112").count(), 1);
     }
 
-    /// The element arms that format through `_concat_buf`: boxed Mixed, raw int, raw float and
-    /// raw bool. Each one publishes the live destination cursor first; the string-slot arm and
-    /// the false-bool arm copy bytes they already hold and publish nothing.
-    const FORMATTING_ARMS: usize = 4;
+    /// The element arms that format through `_concat_buf`: boxed Mixed, raw int, raw float,
+    /// raw bool, and tagged nullable int. Each one publishes the live destination cursor first;
+    /// the string-slot arm and false-bool arm copy bytes they already hold and publish nothing.
+    const FORMATTING_ARMS: usize = 5;
 
     /// The owned mixed-cast slot must be cleared at the TOP of every element iteration, so a
     /// borrowed (typed-array) element can never inherit the previous iteration's owned pointer
@@ -774,10 +829,9 @@ mod tests {
     /// the 64 KiB scratch grows into an owned heap block instead of running into the adjacent
     /// BSS globals.
     ///
-    /// Three sites, and all three are load-bearing: the glue, the element, and the headroom a
-    /// nested `__rt_mixed_cast_string` needs *before* it formats an int or float straight into
-    /// the scratch — that one writes before implode can measure what it produced, so it cannot
-    /// be checked afterwards like the other two.
+    /// Four sites are load-bearing: the glue, the element, mixed-cast headroom, and the
+    /// tagged-scalar int formatter headroom. Both formatters write into scratch before implode
+    /// can measure their output, so their room must be reserved first.
     ///
     /// Asserted per target because the bug was invisible on one of them: the CLI corrupted the
     /// result silently while a `--web` worker took SIGSEGV for the same input.
@@ -802,8 +856,8 @@ mod tests {
             let asm = emitter.output();
             assert_eq!(
                 asm.matches(grow).count(),
-                3,
-                "glue, element and mixed-cast headroom must each be able to grow on {:?}",
+                4,
+                "glue, element, mixed-cast, and tagged-scalar headroom must each grow on {:?}",
                 target.arch
             );
             assert!(
