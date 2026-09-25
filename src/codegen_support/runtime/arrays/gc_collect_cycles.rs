@@ -12,7 +12,7 @@ use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 
-const CLEANUP: Scope = Scope { arm: 80, x86: 64 };
+const CLEANUP: Scope = Scope { arm: 104, x86: 64 };
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 
@@ -64,11 +64,16 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     //   [sp, #64] = saved x29
     //   [sp, #72] = saved x30
     //   [sp, #80] = collected graph-node count
-    emitter.instruction("sub sp, sp, #96");                                     // allocate collector stack frame
+    //   [sp, #96] = destructor rescan state
+    //   [sp, #104] = pending cleanup exception
+    //   [sp, #112] = enclosing GC suppression
+    emitter.instruction("sub sp, sp, #128");                                    // allocate collector stack frame
     emitter.instruction("str x19, [sp, #48]");                                  // preserve the callee-saved scratch register used during child scans
     emitter.instruction("str x20, [sp, #56]");                                  // preserve the callee-saved payload-size register used during heap scans
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // set up the collector frame pointer
+    emitter.instruction("str xzr, [sp, #96]");                                  // start with no destructor-driven rescan
+    CLEANUP.begin(emitter);
     emitter.instruction("bl __rt_gc_collector_begin");                          // start timing this complete collector pass
 
     // -- refresh heap bounds after destructor callbacks have mutated the graph --
@@ -450,10 +455,18 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("str xzr, [x9]");                                       // mark the collector as inactive again
     CLEANUP.finish(emitter);
+    emitter.instruction("cbz x0, __rt_gc_collect_cycles_cleanup_done");        // preserve a cleanup throw until the collector frame is gone
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x1", "_gc_pending_throw", 0);
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x0", "_gc_pending_throw", 0);
+    crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    emitter.instruction("bl __rt_exception_chain");                             // keep an earlier destructor throw behind the cleanup throw
+    emitter.label("__rt_gc_collect_cycles_cleanup_done");
+    emitter.instruction("ldr x0, [sp, #80]");                                  // return the collection count when no exception escaped
     emitter.instruction("ldr x19, [sp, #48]");                                  // restore the callee-saved scratch register after collection
     emitter.instruction("ldr x20, [sp, #56]");                                  // restore the callee-saved payload-size register after collection
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // tear down the collector stack frame
+    emitter.instruction("add sp, sp, #128");                                    // tear down the collector stack frame
     emitter.instruction("b __rt_gc_rethrow_pending");                           // propagate captured throws only after all collector state is balanced
 
     emitter.label("__rt_gc_collect_cycles_done");
@@ -476,6 +489,23 @@ mod tests {
             let active = output[skip..].find("str x10, [x9]").unwrap() + skip;
             assert!(skip < active, "{name}");
             assert!(!output[..skip].contains("str x10, [x9]"), "{name}");
+        }
+    }
+
+    #[test]
+    fn aarch64_collector_keeps_count_rescan_and_cleanup_in_separate_frame_slots() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_gc_collect_cycles(&mut emitter);
+            let output = emitter.output();
+            assert!(output.contains("sub sp, sp, #128"), "{name}");
+            assert!(output.contains("str xzr, [sp, #96]"), "{name}: rescan state");
+            assert!(output.contains("str xzr, [sp, #104]"), "{name}: pending exception");
+            assert!(output.contains("str x10, [sp, #112]"), "{name}: suppression state");
+            let restore = output.rfind("ldr x0, [sp, #80]").unwrap();
+            let rethrow = output.rfind("b __rt_gc_rethrow_pending").unwrap();
+            assert!(restore < rethrow, "{name}: collected count survives cleanup");
+            assert!(output.contains("add sp, sp, #128"), "{name}");
         }
     }
 }

@@ -12,12 +12,12 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Locates the pending raw Throwable owner within the active target-specific cleanup frame.
 fn pending_offset(emitter: &Emitter) -> usize {
-    match emitter.target.arch { Arch::AArch64 => 32, Arch::X86_64 => 40 }
+    match emitter.target.arch { Arch::AArch64 => 16, Arch::X86_64 => 40 }
 }
 
 /// Locates the enclosing GC suppression value without disturbing existing object-loop slots.
 fn suppression_offset(emitter: &Emitter) -> usize {
-    match emitter.target.arch { Arch::AArch64 => 40, Arch::X86_64 => 48 }
+    match emitter.target.arch { Arch::AArch64 => 8, Arch::X86_64 => 48 }
 }
 
 /// Initializes pending ownership and suppresses collection without discarding an outer suppression.
@@ -76,10 +76,15 @@ mod tests {
             finish(&mut emitter, "__rt_deep_cleanup_test_return");
             assert_ne!(pending_offset(&emitter), suppression_offset(&emitter), "{name}");
             if target.arch == Arch::AArch64 {
-                assert_eq!(pending_offset(&emitter), 32, "{name}");
-                assert_eq!(suppression_offset(&emitter), 40, "{name}");
+                // The 64-byte prologue places x29 at sp+48, while container locals use sp+0..24.
+                assert_eq!(48 - pending_offset(&emitter), 32, "{name}");
+                assert_eq!(48 - suppression_offset(&emitter), 40, "{name}");
             }
             let asm = emitter.output();
+            if target.arch == Arch::AArch64 {
+                assert!(asm.contains("stur x10, [x29, #-16]"), "{name}: pending slot");
+                assert!(asm.contains("stur x10, [x29, #-8]"), "{name}: suppression slot");
+            }
             assert_eq!(asm.matches("__rt_cleanup_invoke").count(), 2, "{name}");
             let first = asm.find("__rt_decref_any").unwrap();
             let second = asm.find("__rt_callable_descriptor_release").unwrap();
