@@ -15,10 +15,8 @@
 //!   prototype marker, the empty body, and the union order (#1117).
 //! - Union members print in PHP's order, not the declared one — see `reflection_union_member_rank`,
 //!   which the property dump shares.
-//! - An internal callable prints `<internal>` where PHP prints `<internal:Core>`,
-//!   `<internal:standard>`, `<internal:json>` and so on. The extension a builtin belongs to is not
-//!   carried in the metadata that reaches here, and `<user>` would contradict the same object's
-//!   `isInternal()`, which answers true.
+//! - Internal function origins come from the shared builtin contract, and internal method origins
+//!   come from the declaring class contract, printed under the module's registered name (`SPL`).
 
 use super::{
     ReflectionDefaultArrayKey, ReflectionListedMember, ReflectionMemberFlags,
@@ -108,8 +106,7 @@ fn reflection_origin_label(is_internal: bool, module: Option<PhpModule>) -> Stri
         return "user".to_string();
     }
     match module {
-        Some(PhpModule::Core) => "internal:Core".to_string(),
-        Some(module) => format!("internal:{}", module.php_name()),
+        Some(module) => format!("internal:{}", module.registered_name()),
         None => "internal".to_string(),
     }
 }
@@ -119,6 +116,9 @@ fn reflection_origin_label(is_internal: bool, module: Option<PhpModule>) -> Stri
 /// A callable with no parameters AND no declared return type prints an EMPTY body — PHP omits the
 /// `- Parameters [0]` block entirely there, and prints it as soon as either half has something to
 /// say. Measured on 8.5.10 with `function f() {}` against `function f(): void {}`.
+///
+/// The blank line before `- Parameters` belongs to that block, not to the omitted `@@` line: an
+/// internal callable has no `@@` line and PHP still prints it (`ReflectionFunction('pi')`).
 fn reflection_callable_body(
     header: &str,
     parameters: &[ReflectionParameterMember],
@@ -136,7 +136,7 @@ fn reflection_callable_body(
     if parameters.is_empty() && return_type.is_none() {
         return format!("{header} {{\n}}\n");
     }
-    let mut rendered = format!("{header} {{\n  - Parameters [{}] {{\n", parameters.len());
+    let mut rendered = format!("{header} {{\n\n  - Parameters [{}] {{\n", parameters.len());
     for (visible_position, parameter) in parameters.into_iter().enumerate() {
         rendered.push_str("    ");
         rendered.push_str(&reflection_parameter_to_string_at_position(

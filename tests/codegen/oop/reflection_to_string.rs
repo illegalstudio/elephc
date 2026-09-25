@@ -16,8 +16,8 @@
 //!   gets right: the prototype marker, the empty body, and the union order (#1117).
 //! - A union prints in PHP's type-mask order, not the declared one: `int|string` comes back as
 //!   `string|int`. See `reflection_union_member_rank`.
-//! - Internal callable origins include the owning module, including PHP's capitalized
-//!   `<internal:Core>` spelling for Zend functions.
+//! - Internal callable origins include their owning PHP module under the name PHP registers it
+//!   with: `<internal:Core>`, `<internal:SPL>`, `<internal:standard>`.
 
 use super::*;
 
@@ -34,7 +34,7 @@ echo (new ReflectionMethod('Demo', 'plain'))->__toString();
     );
     assert_eq!(
         out,
-        "Method [ <user> public method plain ] {\n  \
+        "Method [ <user> public method plain ] {\n\n  \
          - Parameters [2] {\n    \
          Parameter #0 [ <required> int $a ]\n    \
          Parameter #1 [ <optional> string $b = 'x' ]\n  \
@@ -61,9 +61,9 @@ echo (new ReflectionMethod('Base', 'tag'))->__toString();
     );
     assert_eq!(
         out,
-        "Method [ <user, prototype Shape> abstract public method area ] {\n  \
+        "Method [ <user, prototype Shape> abstract public method area ] {\n\n  \
          - Parameters [0] {\n  }\n  - Return [ float ]\n}\n\
-         Method [ <user> final static protected method tag ] {\n  \
+         Method [ <user> final static protected method tag ] {\n\n  \
          - Parameters [0] {\n  }\n  - Return [ string ]\n}\n"
     );
 }
@@ -88,9 +88,9 @@ echo (new ReflectionMethod('D', 'oneNoRet'))->__toString();
     assert_eq!(
         out,
         "Method [ <user> public method noneNoRet ] {\n}\n\
-         Method [ <user> public method noneWithRet ] {\n  \
+         Method [ <user> public method noneWithRet ] {\n\n  \
          - Parameters [0] {\n  }\n  - Return [ void ]\n}\n\
-         Method [ <user> public method oneNoRet ] {\n  \
+         Method [ <user> public method oneNoRet ] {\n\n  \
          - Parameters [1] {\n    Parameter #0 [ <required> $a ]\n  }\n}\n"
     );
 }
@@ -109,7 +109,7 @@ echo (new ReflectionMethod('Demo', 'mixup'))->__toString();
     );
     assert_eq!(
         out,
-        "Method [ <user> public method mixup ] {\n  \
+        "Method [ <user> public method mixup ] {\n\n  \
          - Parameters [4] {\n    \
          Parameter #0 [ <required> string|int $v ]\n    \
          Parameter #1 [ <optional> ?Base $b = NULL ]\n    \
@@ -145,7 +145,7 @@ echo (new ReflectionMethod('E', 'defs'))->__toString();
     );
     assert_eq!(
         out,
-        "Method [ <user> public method defs ] {\n  \
+        "Method [ <user> public method defs ] {\n\n  \
          - Parameters [8] {\n    \
          Parameter #0 [ <optional> array $empty = [] ]\n    \
          Parameter #1 [ <optional> array $filled = [1, 2] ]\n    \
@@ -172,7 +172,7 @@ echo (new ReflectionFunction('bare'))->__toString();
     );
     assert_eq!(
         out,
-        "Function [ <user> function freeFn ] {\n  \
+        "Function [ <user> function freeFn ] {\n\n  \
          - Parameters [3] {\n    \
          Parameter #0 [ <required> float $f ]\n    \
          Parameter #1 [ <optional> array $a = [] ]\n    \
@@ -221,7 +221,7 @@ echo $listed->__toString();
     );
     assert_eq!(
         out,
-        "same\nMethod [ <user> public method only ] {\n  \
+        "same\nMethod [ <user> public method only ] {\n\n  \
          - Parameters [1] {\n    Parameter #0 [ <required> int $a ]\n  \
          }\n  - Return [ bool ]\n}\n"
     );
@@ -287,7 +287,7 @@ echo (new \ReflectionFunction("N\\f"))->__toString();
     );
     assert_eq!(
         out,
-        "N\\LIMIT|7\nFunction [ <user> function N\\f ] {\n  \
+        "N\\LIMIT|7\nFunction [ <user> function N\\f ] {\n\n  \
          - Parameters [1] {\n    Parameter #0 [ <optional> int $n = N\\LIMIT ]\n  }\n}\n"
     );
 }
@@ -308,7 +308,7 @@ echo (new ReflectionFunction('f'))->__toString();
     );
     assert_eq!(
         out,
-        "Function [ <user> function f ] {\n  \
+        "Function [ <user> function f ] {\n\n  \
          - Parameters [2] {\n    \
          Parameter #0 [ <optional> $x = new \\Foo(1, 'a') ]\n    \
          Parameter #1 [ <optional> $y = new \\Foo() ]\n  }\n}\n"
@@ -327,7 +327,7 @@ echo (new ReflectionFunction('f'))->__toString();
     );
     assert_eq!(
         out,
-        "Function [ <user> function f ] {\n  \
+        "Function [ <user> function f ] {\n\n  \
          - Parameters [5] {\n    \
          Parameter #0 [ <optional> float $big = 1.0E+100 ]\n    \
          Parameter #1 [ <optional> float $small = 1.0E-5 ]\n    \
@@ -357,11 +357,11 @@ echo $q->getDeclaringFunction()->__toString();
     );
     assert_eq!(
         out,
-        "Method [ <user> public method plain ] {\n  \
+        "Method [ <user> public method plain ] {\n\n  \
          - Parameters [2] {\n    \
          Parameter #0 [ <required> int $a ]\n    \
          Parameter #1 [ <required> string $b ]\n  }\n  - Return [ bool ]\n}\n\
-         Function [ <user> function freeFn ] {\n  \
+         Function [ <user> function freeFn ] {\n\n  \
          - Parameters [2] {\n    \
          Parameter #0 [ <required> int $x ]\n    \
          Parameter #1 [ <required> string $y ]\n  }\n  - Return [ void ]\n}\n"
@@ -390,6 +390,26 @@ echo substr($date_dump, 0, strpos($date_dump, ']') + 1), "\n";
     );
 }
 
+/// A module prints under the name PHP registers it with, not the lowercase key (`SPL`, not
+/// `spl`), and an internal dump keeps the blank line before `- Parameters` although it has no
+/// `@@` line. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_internal_callable_dumps_use_the_registered_module_name_and_blank_line() {
+    let out = compile_and_run(
+        r#"<?php
+$spl = (string) new ReflectionMethod('ArrayIterator', 'count');
+echo substr($spl, 0, strpos($spl, ']') + 1), "\n";
+echo (new ReflectionFunction('pi'))->__toString();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Method [ <internal:SPL, prototype Countable> public method count ]\n\
+         Function [ <internal:standard> function pi ] {\n\n  \
+         - Parameters [0] {\n  }\n  - Return [ float ]\n}\n"
+    );
+}
+
 /// Verifies a supported callable BUILTIN's declaring dump keeps its parameters.
 ///
 /// `function_by_name` only knows generated functions and closures, so `strlen` missed and the
@@ -414,7 +434,7 @@ echo (string) $f;
     );
     assert_eq!(
         out,
-        "string|strlen|Function [ <internal:Core> function strlen ] {\n  \
+        "string|strlen|Function [ <internal:Core> function strlen ] {\n\n  \
          - Parameters [1] {\n    \
          Parameter #0 [ <required> string $string ]\n  }\n  - Return [ int ]\n}\n"
     );
@@ -433,7 +453,7 @@ echo (string) new ReflectionFunction('nonFinite');
     );
     assert_eq!(
         out,
-        "Function [ <user> function nonFinite ] {\n  \
+        "Function [ <user> function nonFinite ] {\n\n  \
          - Parameters [3] {\n    \
          Parameter #0 [ <optional> float $x = INF ]\n    \
          Parameter #1 [ <optional> float $y = -INF ]\n    \
@@ -490,11 +510,11 @@ echo (string) new ReflectionFunction('freePlain');
 
     assert_eq!(
         out,
-        "Method [ <user> public method plain ] {\n  \
+        "Method [ <user> public method plain ] {\n\n  \
          - Parameters [2] {\n    \
          Parameter #0 [ <required> int $a ]\n    \
          Parameter #1 [ <optional> string $b = 'x' ]\n  }\n  - Return [ bool ]\n}\n\
-         Function [ <user> function freePlain ] {\n  \
+         Function [ <user> function freePlain ] {\n\n  \
          - Parameters [1] {\n    \
          Parameter #0 [ <required> int $a ]\n  }\n  - Return [ bool ]\n}\n"
     );

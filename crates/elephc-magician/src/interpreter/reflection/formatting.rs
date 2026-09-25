@@ -246,11 +246,14 @@ pub(super) fn eval_reflection_method_summary_to_string(
 }
 
 /// Formats one reflected function or method similarly to PHP's `__toString()` output.
+///
+/// PHP prints a blank line before `- Parameters` even when it omits the `@@ <file>` line, as it
+/// does for every internal callable; the compiled renderer prints the same line.
 pub(super) fn eval_reflection_function_method_to_string(
     target: &EvalReflectionFunctionMethodTarget,
 ) -> String {
     let mut rendered = format!(
-        "{} {{\n  - Parameters [{}] {{\n",
+        "{} {{\n\n  - Parameters [{}] {{\n",
         eval_reflection_function_method_header(target),
         eval_reflection_function_method_parameters(target).len()
     );
