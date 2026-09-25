@@ -11,8 +11,8 @@
 //! - The rendering follows PHP 8.5 except for the `@@ <file> <line> - <line>` header line, which a
 //!   compiled binary cannot honestly answer: the source it was built from need not exist where it
 //!   runs, and baking the build machine's path in would be worse than leaving it out. The eval
-//!   bridge omits the same line, but still differs in three places this renderer gets right: the
-//!   prototype marker, the empty body, and the union order (#1117).
+//!   bridge omits the same line, but still differs in two places this renderer gets right: the
+//!   prototype marker and the empty body. Both now print a union in the same PHP order (#1118).
 //! - Union members print in PHP's order, not the declared one — see `reflection_union_member_rank`,
 //!   which the property dump shares.
 //! - Whether a callable is internal is decided by the caller (the builtin signature registry for a

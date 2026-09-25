@@ -13,8 +13,8 @@
 //!   prints `  @@ <file> <line> - <line>` after the header, which a compiled binary cannot
 //!   honestly answer — the source it was built from need not exist where it runs. The blank line
 //!   after it stays: it opens the parameter block, and PHP prints it for internal callables too.
-//!   The eval bridge omits the same line, but still differs in three places the compiled path
-//!   gets right: the prototype marker, the empty body, and the union order (#1117).
+//!   The eval bridge omits the same line, but still differs in two places the compiled path gets
+//!   right: the prototype marker and the empty body. Both print a union in PHP's order (#1118).
 //! - A union prints in PHP's type-mask order, not the declared one: `int|string` comes back as
 //!   `string|int`. See `reflection_union_member_rank`.
 //! - Internal callable origins include their owning PHP module under the name PHP registers it
