@@ -146,9 +146,15 @@ fn emit_named_parameter_error_aarch64(
             emitter.instruction("ldr x4, [sp, #24]");                           // and its byte length
             emitter.instruction("bl __rt_concat");                              // build the message up to the parameter name
             if let Some((suffix_symbol, suffix_len)) = suffix {
+                emitter.instruction("bl __rt_str_persist");                     // own a heap-backed first concat across the second allocation
+                emitter.instruction("stp x1, x2, [sp, #32]");                   // retain the intermediate owner until the complete message exists
                 abi::emit_symbol_address(emitter, "x3", suffix_symbol);         // right operand pointer
                 emitter.instruction(&format!("mov x4, #{suffix_len}"));         // right operand length
                 emitter.instruction("bl __rt_concat");                          // append the trailing clause
+                emitter.instruction("stp x1, x2, [sp]");                        // protect the completed bytes while retiring the intermediate
+                emitter.instruction("ldr x0, [sp, #32]");                       // release the first concat after its bytes were consumed
+                emitter.instruction("bl __rt_heap_free_safe");                 // free only managed storage, never the shared concat buffer
+                emitter.instruction("ldp x1, x2, [sp]");                        // recover the completed result for ownership transfer
             }
             emitter.instruction("bl __rt_str_persist");                         // give the Error stable message ownership
         }
@@ -194,7 +200,7 @@ fn emit_named_parameter_error_x86_64(
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish an Error-construction frame
-    emitter.instruction("sub rsp, 32");                                         // reserve the message and name pairs, keeping rsp aligned
+    emitter.instruction("sub rsp, 48");                                         // reserve message, name, and intermediate pairs with aligned calls
 
     match message {
         NamedParameterMessage::AroundName { prefix_symbol, prefix_len, suffix } => {
@@ -206,9 +212,17 @@ fn emit_named_parameter_error_x86_64(
             emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");               // and its byte length
             abi::emit_call_label(emitter, "__rt_concat");                       // build the message up to the parameter name
             if let Some((suffix_symbol, suffix_len)) = suffix {
+                abi::emit_call_label(emitter, "__rt_str_persist");             // own a heap-backed first concat across the second allocation
+                emitter.instruction("mov QWORD PTR [rbp - 40], rax");          // retain the intermediate owner for release after its bytes are copied
                 emitter.instruction(&format!("lea rdi, [rip + {suffix_symbol}]")); // right operand pointer
                 emitter.instruction(&format!("mov rsi, {suffix_len}"));         // right operand length
                 abi::emit_call_label(emitter, "__rt_concat");                   // append the trailing clause
+                emitter.instruction("mov QWORD PTR [rbp - 8], rax");           // protect the completed pointer while retiring the intermediate
+                emitter.instruction("mov QWORD PTR [rbp - 16], rdx");          // protect its byte length across the release call
+                emitter.instruction("mov rax, QWORD PTR [rbp - 40]");          // select the first concat's owned payload
+                abi::emit_call_label(emitter, "__rt_heap_free_safe");          // release it after the final concat consumed its bytes
+                emitter.instruction("mov rax, QWORD PTR [rbp - 8]");           // recover the completed result for ownership transfer
+                emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");          // restore its exact byte length
             }
             abi::emit_call_label(emitter, "__rt_str_persist");                  // give the Error stable message ownership
         }
