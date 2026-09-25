@@ -18,7 +18,9 @@ pub(in crate::interpreter) fn eval_builtin_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if eval_builtin_uses_owned_arguments(name) {
+    // Direct count/strlen reads need no writable array-element target. Capture the value
+    // itself so its temporary key is released with source evaluation.
+    if matches!(name, "count" | "strlen") || eval_builtin_uses_owned_arguments(name) {
         return eval_owned_builtin_call(name, args, false, context, scope, values);
     }
     with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
@@ -161,11 +163,10 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
     None
 }
 
-/// Selects builtins whose source values need owned call-boundary storage.
-/// `count()` and `strlen()` can consume a temporary array element without retaining its unused lvalue key.
+/// Selects shared runtime builtins and callback wrappers that own their argument values through invocation.
 pub(in crate::interpreter) fn eval_builtin_uses_owned_arguments(name: &str) -> bool {
     eval_declared_builtin_spec(name).is_some_and(|spec|
         spec.runtime_builtin.is_some_and(|id| id.is_mbstring())
-            || matches!(spec.name, "call_user_func" | "call_user_func_array" | "count" | "strlen" | "var_dump"
+            || matches!(spec.name, "call_user_func" | "call_user_func_array" | "var_dump"
                 | "bin2hex" | "header" | "ob_start"))
 }
