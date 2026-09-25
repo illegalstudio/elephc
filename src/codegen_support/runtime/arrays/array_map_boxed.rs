@@ -34,7 +34,7 @@ const PREVIOUS: usize = 112;
 const PENDING: usize = 120;
 const RAW_RETURN: usize = 128;
 
-/// Borrows callback, source box and environment in ABI args 0..2, with result kind/tag in args 3..4.
+/// Borrows callback, source box and environment in internal-runtime ABI args 0..2, with result kind/tag in args 3..4.
 /// The callback borrows a Mixed cell and returns owned Mixed, int/bool, or a string pair.
 /// Returns a fresh raw Hash<Mixed>, zero for invalid input, or propagates a callback exception.
 pub fn emit_array_map_boxed(emitter: &mut Emitter) {
@@ -43,16 +43,19 @@ pub fn emit_array_map_boxed(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_map_boxed");
     // -- preserve the callback contract before validating and retaining the source payload --
     abi::emit_frame_prologue(emitter, FRAME_SIZE);
+    // This is a hand-written `__rt_*` helper, so its x86_64 entry keeps the
+    // runtime's SysV-shaped register contract even under the Windows dispatcher.
+    // The callback below is generated code and deliberately uses the target ABI instead.
     for (index, offset) in [CALLBACK, SOURCE, ENV, RESULT_KIND, RESULT_TAG].into_iter().enumerate() {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     for offset in [INPUT, OUTPUT, PENDING] { clear_slot(emitter, offset); }
     abi::load_at_offset(emitter, result, SOURCE);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
     validate_source_and_acquire_snapshot(emitter);
     abi::store_at_offset(emitter, result, SOURCE);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), 7);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), 8);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), 7);
     abi::emit_call_label(emitter, "__rt_hash_new");
     abi::store_at_offset(emitter, result, RESULT);
     initialize_cursor(emitter);
@@ -331,11 +334,11 @@ fn box_callback_result(emitter: &mut Emitter) {
 /// Transfers the mapped owner to its original source key, persisting string-key bytes in the hash.
 fn insert_mapped_value(emitter: &mut Emitter) {
     for (index, offset) in [RESULT, KEY_LO, KEY_HI, OUTPUT].into_iter().enumerate() {
-        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     clear_slot(emitter, OUTPUT);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 4), 0);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 5), 7);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 4), 0);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 5), 7);
     abi::emit_call_label(emitter, "__rt_hash_set");
     abi::store_at_offset(emitter, abi::int_result_reg(emitter), RESULT);
 }
@@ -355,7 +358,7 @@ fn install_boundary(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
+    abi::emit_frame_slot_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.bl_c("setjmp");                                                     // preserve map-owned inputs and partial results when a callback throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_map_boxed_caught");
 }
@@ -417,5 +420,72 @@ mod tests {
             assert!(asm.contains("__rt_decref_hash"), "{name}");
             assert!(asm.contains("__rt_throw_current"), "{name}");
         }
+    }
+
+    /// Separates the internal six-register x86 runtime contract from callback and C-call ABIs.
+    ///
+    /// Windows generated PHP callbacks use MS x64 (`rcx`, `rdx`), but this hand-written
+    /// helper and its `__rt_hash_new`/`__rt_hash_set` callees use the runtime's SysV-shaped
+    /// register sequence. In particular, the latter's fifth and sixth words may not spill to
+    /// MS x64 shadow-space slots.
+    #[test]
+    fn boxed_array_map_windows_x86_64_keeps_runtime_and_callback_abis_separate() {
+        let mut emitter = Emitter::new(Target::new(
+            crate::codegen_support::platform::Platform::Windows,
+            crate::codegen_support::platform::Arch::X86_64,
+        ));
+        emit_array_map_boxed(&mut emitter);
+        let asm = emitter.output();
+        let entry = asm
+            .split_once("__rt_array_map_boxed:\n")
+            .expect("array-map boxed entry")
+            .1
+            .split_once("__rt_array_map_boxed_loop:\n")
+            .expect("array-map boxed loop")
+            .0;
+        for expected in [
+            "mov QWORD PTR [rbp - 8], rdi",
+            "mov QWORD PTR [rbp - 16], rsi",
+            "mov QWORD PTR [rbp - 40], rdx",
+            "mov QWORD PTR [rbp - 48], rcx",
+            "mov QWORD PTR [rbp - 56], r8",
+            "mov rdi, 8",
+            "mov rsi, 7",
+        ] {
+            assert!(entry.contains(expected), "missing runtime ABI move: {expected}\n{entry}");
+        }
+
+        let callback = asm
+            .split_once("__rt_array_map_boxed_value:\n")
+            .expect("array-map boxed callback setup")
+            .1
+            .split_once("call r10")
+            .expect("array-map boxed callback call")
+            .0;
+        for expected in [
+            "mov rcx, QWORD PTR [rbp - 96]",
+            "mov rdx, QWORD PTR [rbp - 40]",
+        ] {
+            assert!(callback.contains(expected), "missing callback ABI move: {expected}\n{callback}");
+        }
+
+        let hash_set = asm
+            .split_once("call __rt_hash_set")
+            .expect("array-map boxed hash-set call")
+            .0;
+        for expected in [
+            "mov rdi, QWORD PTR [rbp - 64]",
+            "mov rsi, QWORD PTR [rbp - 80]",
+            "mov rdx, QWORD PTR [rbp - 88]",
+            "mov rcx, QWORD PTR [rbp - 104]",
+            "mov r8, 0",
+            "mov r9, 7",
+        ] {
+            assert!(hash_set.contains(expected), "missing hash-set ABI move: {expected}\n{hash_set}");
+        }
+        assert!(
+            !hash_set.contains("[rsp + 32]"),
+            "the internal six-word helper must not use MS x64 stack arguments:\n{hash_set}"
+        );
     }
 }

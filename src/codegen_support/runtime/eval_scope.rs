@@ -12,6 +12,7 @@
 //!   name pointers instead of copying name bytes.
 //! - Owned Mixed cells are released on overwrite and scope free.
 
+use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
@@ -429,6 +430,5 @@ fn emit_x86_64_eval_scope_get(emitter: &mut Emitter) {
 
 /// Emits a global label with platform C-symbol mangling.
 fn label_c_global(emitter: &mut Emitter, name: &str) {
-    let symbol = emitter.target.extern_symbol(name);
-    emitter.label_global(&symbol);
+    abi::emit_c_callback_entry(emitter, name);
 }

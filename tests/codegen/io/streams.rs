@@ -9,6 +9,36 @@
 
 use super::*;
 
+/// Renders a host path for insertion into a PHP double-quoted string literal.
+///
+/// Win32 accepts forward slashes, while raw Windows backslashes can form PHP
+/// escapes such as `\r` and `\t` inside the generated source fixture.
+fn php_fixture_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// Returns the stream-socket-pair domain that php-src supports on this target.
+///
+/// Windows implements `socketpair()` only through its IPv4 loopback emulation;
+/// Unix targets retain the native Unix-domain variant used by these fixtures.
+fn socket_pair_fixture_domain() -> &'static str {
+    if target().platform == Platform::Windows {
+        "STREAM_PF_INET"
+    } else {
+        "STREAM_PF_UNIX"
+    }
+}
+
+/// Verifies fixture paths never leave a PHP-recognized backslash escape in the
+/// generated source, even when the host path uses Windows separators.
+#[test]
+fn php_fixture_path_uses_php_safe_forward_slashes() {
+    assert_eq!(
+        php_fixture_path(std::path::Path::new(r"C:\runner\Temp\archive.phar")),
+        "C:/runner/Temp/archive.phar"
+    );
+}
+
 /// Verifies STDIN constant evaluates to the expected resource display string.
 #[test]
 fn test_stdin_constant() {
@@ -119,6 +149,61 @@ echo ($empty === false ? "e" : "!");
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ze");
     assert_eq!(out.stderr, "");
+}
+
+/// Verifies `+` is recognized after either binary-mode spelling and permits read/write access.
+#[test]
+fn test_fopen_binary_read_write_mode_orders() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("rb-plus.txt", "abc");
+$rb = fopen("rb-plus.txt", "rb+");
+fseek($rb, 1);
+fwrite($rb, "X");
+rewind($rb);
+echo fread($rb, 3) . "|";
+fclose($rb);
+
+file_put_contents("r-plus-b.txt", "abc");
+$r = fopen("r-plus-b.txt", "r+b");
+fseek($r, 1);
+fwrite($r, "Y");
+rewind($r);
+echo fread($r, 3);
+fclose($r);
+"#,
+    );
+    assert_eq!(out, "aXc|aYc");
+}
+
+/// Verifies exclusive `x` mode creates once and returns false for an existing path.
+#[test]
+fn test_fopen_x_mode_is_exclusive() {
+    let out = compile_and_run(
+        r#"<?php
+$first = fopen("exclusive.txt", "x");
+fwrite($first, "created");
+fclose($first);
+$second = @fopen("exclusive.txt", "x+");
+echo $second === false ? file_get_contents("exclusive.txt") : "opened";
+"#,
+    );
+    assert_eq!(out, "created");
+}
+
+/// Verifies `c` mode creates a missing file without truncating an existing one.
+#[test]
+fn test_fopen_c_mode_preserves_existing_contents() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("preserved.txt", "abc");
+$stream = fopen("preserved.txt", "c+");
+fwrite($stream, "X");
+fclose($stream);
+echo file_get_contents("preserved.txt");
+"#,
+    );
+    assert_eq!(out, "Xbc");
 }
 
 /// Verifies a stream resource passed through a mixed-type parameter preserves its resource type.
@@ -620,14 +705,19 @@ fn test_stream_get_wrappers_lists_known_wrappers() {
 /// Verifies compiled PHP output for stream get transports and filters.
 #[test]
 fn test_stream_get_transports_and_filters() {
-    // Full PHP-published transport and filter lists. tlsv1.0/1.1/1.2/1.3
-    // + sslv2/3 route through the same enable_crypto path; the extended
-    // filter list registers strip_tags / base64-* / qp-* / dechunk as
-    // passthrough stubs so stream_filter_append succeeds.
+    // Advertise only transports that the runtime can negotiate. SSLv2/SSLv3
+    // are intentionally absent, matching modern PHP/OpenSSL registration.
+    // The extended filter list registers strip_tags / base64-* / qp-* /
+    // dechunk as passthrough stubs so stream_filter_append succeeds.
     let out = compile_and_run(
         r#"<?php echo count(stream_get_transports()) . "," . count(stream_get_filters());"#,
     );
-    assert_eq!(out, "12,14");
+    let expected_transport_count = if target().platform == Platform::Windows {
+        8
+    } else {
+        10
+    };
+    assert_eq!(out, format!("{expected_transport_count},14"));
 }
 
 /// Verifies compiled PHP output for stream filter rot13 on read.
@@ -1771,6 +1861,19 @@ fn build_tar_phar_container(entries: &[(&str, &[u8])]) -> Vec<u8> {
 }
 
 /// Builds a ZIP archive with ordinary store/deflate entries and a central directory.
+/// Computes ZIP's standard reflected CRC32 for test archive payloads.
+fn zip_fixture_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &byte in bytes {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
 fn build_zip_phar_container(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central = Vec::new();
@@ -1785,13 +1888,14 @@ fn build_zip_phar_container(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
             content.to_vec()
         };
         let method = if *deflate { 8u16 } else { 0u16 };
+        let crc = zip_fixture_crc32(content);
         out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
         out.extend_from_slice(&20u16.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&method.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&crc.to_le_bytes());
         out.extend_from_slice(&(stored.len() as u32).to_le_bytes());
         out.extend_from_slice(&(content.len() as u32).to_le_bytes());
         out.extend_from_slice(&(name.len() as u16).to_le_bytes());
@@ -1806,7 +1910,7 @@ fn build_zip_phar_container(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
         central.extend_from_slice(&method.to_le_bytes());
         central.extend_from_slice(&0u16.to_le_bytes());
         central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&0u32.to_le_bytes());
+        central.extend_from_slice(&crc.to_le_bytes());
         central.extend_from_slice(&(stored.len() as u32).to_le_bytes());
         central.extend_from_slice(&(content.len() as u32).to_le_bytes());
         central.extend_from_slice(&(name.len() as u16).to_le_bytes());
@@ -1856,7 +1960,7 @@ fclose($g);
 $m = @fopen("phar://{p}/nope.txt", "r");
 echo "|" . ($m === false ? "false" : "open");
 "#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -1913,7 +2017,7 @@ fclose($f);
 $m = @fopen("phar://" . $p . "/nope.txt", "r");
 echo "|" . ($m === false ? "false" : "open");
 "#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -2691,7 +2795,7 @@ fn test_file_get_contents_phar_literal_entry() {
 echo file_get_contents("phar://{p}/dir/inner.txt");
 echo "|" . (file_get_contents("phar://{p}/nope.txt") === false ? "false" : "open");
 "#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -2751,7 +2855,7 @@ fn test_fopen_phar_reads_gzip_entry() {
     std::fs::write(&path, &phar).unwrap();
     let src = format!(
         r#"<?php $f = fopen("phar://{p}/z.txt", "r"); $s = fread($f, 8192); fclose($f); echo strlen($s) . "|" . substr($s, 0, 4);"#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -2780,7 +2884,7 @@ fn test_fopen_phar_runtime_path_reads_gzip_entry() {
     std::fs::write(&path, &phar).unwrap();
     let src = format!(
         r#"<?php $p = "{p}"; $f = fopen("phar://" . $p . "/z.txt", "r"); $s = fread($f, 8192); fclose($f); echo strlen($s) . "|" . substr($s, 0, 4);"#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -2813,7 +2917,7 @@ fn test_fopen_phar_reads_bzip2_entry() {
     std::fs::write(&path, &phar).unwrap();
     let src = format!(
         r#"<?php $f = fopen("phar://{p}/b.txt", "r"); $s = fread($f, 4096); fclose($f); echo strlen($s) . "|" . substr($s, 0, 26);"#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -2835,7 +2939,7 @@ fn test_file_get_contents_phar_runtime_path_reads_bzip2_entry() {
     std::fs::write(&path, &phar).unwrap();
     let src = format!(
         r#"<?php $p = "{p}"; $s = file_get_contents("phar://" . $p . "/b.txt"); echo strlen($s) . "|" . substr($s, 0, 26);"#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -2853,7 +2957,7 @@ fn test_fopen_phar_literal_tar_entry() {
     std::fs::write(&path, &archive).unwrap();
     let src = format!(
         r#"<?php $f = fopen("phar://{p}/dir/tar.txt", "r"); echo fread($f, 64); fclose($f);"#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -2871,7 +2975,7 @@ fn test_file_get_contents_phar_literal_zip_deflate_entry() {
     std::fs::write(&path, &archive).unwrap();
     let src = format!(
         r#"<?php echo file_get_contents("phar://{p}/deflated.txt");"#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -2889,7 +2993,7 @@ fn test_file_get_contents_phar_runtime_tar_entry() {
     std::fs::write(&path, &archive).unwrap();
     let src = format!(
         r#"<?php $p = "{p}"; echo file_get_contents("phar://" . $p . "/dir/runtime.txt");"#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -2907,7 +3011,7 @@ fn test_fopen_phar_runtime_zip_deflate_entry() {
     std::fs::write(&path, &archive).unwrap();
     let src = format!(
         r#"<?php $p = "{p}"; $f = fopen("phar://" . $p . "/dir/deflated.txt", "r"); echo fread($f, 64); fclose($f);"#,
-        p = path.display()
+        p = php_fixture_path(&path)
     );
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
@@ -2925,6 +3029,24 @@ echo get_resource_type($srv);
 "#,
     );
     assert_eq!(out, "rstream");
+}
+
+/// Verifies the complete PHP `stream_socket_server` argument surface reaches
+/// the by-reference output lowering and accepts the optional context/flags.
+#[test]
+fn test_stream_socket_server_accepts_error_outputs_flags_and_context() {
+    let out = compile_and_run(
+        r#"<?php
+$code = -1;
+$message = "stale";
+$ctx = stream_context_create(["ssl" => ["local_cert" => "/missing.pem"]]);
+$srv = stream_socket_server("tcp://127.0.0.1:0", $code, $message, 3, $ctx);
+echo is_resource($srv) ? "r" : "f";
+echo ":" . $code . ":" . $message;
+if ($srv) { fclose($srv); }
+"#,
+    );
+    assert_eq!(out, "r:0:");
 }
 
 /// Verifies compiled PHP output for stream socket client tcp nodelay does not crash.
@@ -3064,6 +3186,9 @@ if ($srv) { fclose($srv); }
 /// Verifies compiled PHP output for unix socket server backlog does not crash.
 #[test]
 fn test_unix_socket_server_backlog_does_not_crash() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     // Exercises the unix_socket_server backlog site (whose ARM64 path is a leaf
     // that now spills x30 around the __rt_socket_backlog call).
     let out = compile_and_run(
@@ -3189,6 +3314,9 @@ echo substr($peer, 0, 10);
 /// Verifies compiled PHP output for stream socket accept peer name unix.
 #[test]
 fn test_stream_socket_accept_peer_name_unix() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     // Unix-domain peers are anonymous unless the client bound a name first,
     // which stream_socket_client() does not do — so the peer_name slot ends
     // up as an empty string (matching PHP for unnamed Unix peers).
@@ -3278,9 +3406,8 @@ echo stream_set_blocking(STDIN, true) ? "b" : "B";
 /// Verifies nonblocking fread/fgets misses do not mark the stream EOF.
 #[test]
 fn test_nonblocking_socket_reads_do_not_mark_eof() {
-    let out = compile_and_run(
-        r#"<?php
-$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+    let out = compile_and_run(&r#"<?php
+$pair = stream_socket_pair(SOCKET_PAIR_FIXTURE_DOMAIN, STREAM_SOCK_STREAM, 0);
 stream_set_blocking($pair[0], false);
 $first = fread($pair[0], 5);
 echo $first === "" ? "empty" : "data";
@@ -3300,17 +3427,16 @@ echo "|";
 fwrite($pair[1], "hi\n");
 echo fgets($pair[0]);
 echo feof($pair[0]) ? "eof" : "open";
-"#,
-    );
+"#
+    .replace("SOCKET_PAIR_FIXTURE_DOMAIN", socket_pair_fixture_domain()));
     assert_eq!(out, "empty|open|false|open|false|open|hi\nopen");
 }
 
 /// Verifies `stream_get_line()` treats a nonblocking miss as transient instead of EOF.
 #[test]
 fn test_nonblocking_stream_get_line_does_not_mark_eof() {
-    let out = compile_and_run(
-        r#"<?php
-$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+    let out = compile_and_run(&r#"<?php
+$pair = stream_socket_pair(SOCKET_PAIR_FIXTURE_DOMAIN, STREAM_SOCK_STREAM, 0);
 stream_set_blocking($pair[0], false);
 $miss = stream_get_line($pair[0], 8);
 echo $miss === "" ? "empty" : "data";
@@ -3319,8 +3445,8 @@ echo feof($pair[0]) ? "eof" : "open";
 echo "|";
 fwrite($pair[1], "ready\n");
 echo stream_get_line($pair[0], 8, "\n");
-"#,
-    );
+"#
+    .replace("SOCKET_PAIR_FIXTURE_DOMAIN", socket_pair_fixture_domain()));
     assert_eq!(out, "empty|open|ready");
 }
 
@@ -3483,9 +3609,11 @@ fn test_getservbyname_alias_and_missing() {
 echo getservbyname("www", "tcp");
 echo "|";
 echo getservbyname("no_such_service", "tcp") === false ? "false" : "?";
+echo "|";
+echo getservbyname("http", "") === false ? "false" : "?";
 "#,
     );
-    assert_eq!(out, "80|false");
+    assert_eq!(out, "80|false|false");
 }
 
 /// Verifies compiled PHP output for getservbyport known ports.
@@ -3598,6 +3726,13 @@ fn test_stream_socket_recvfrom_address_overwrites_slot() {
     // A `socketpair`-created Unix-domain socket has no bound name, so the
     // PHP-compatible sender address is the empty string. The pre-seeded
     // "PRESEED" length still has to be reset to 0 by the writeback.
+    if target().platform == Platform::Windows {
+        // php-src's Windows socketpair emulation accepts only AF_INET, whose
+        // sender address is intentionally non-empty. This fixture asserts the
+        // AF_UNIX-specific empty-address contract below; address write-back on
+        // IPv4 is covered by test_stream_socket_recvfrom_address_out_param.
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
@@ -3642,6 +3777,9 @@ echo fread($a, 16);
 /// Verifies compiled PHP output for unix socket round trip.
 #[test]
 fn test_unix_socket_round_trip() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $path = "/tmp/elephc_unix_codegen_test.sock";
@@ -3660,6 +3798,9 @@ unlink($path);
 /// Verifies compiled PHP output for udg socket round trip.
 #[test]
 fn test_udg_socket_round_trip() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     // udg:// is the Unix-domain datagram transport: the server binds (no
     // listen/accept, since datagrams are connectionless), and the client's
     // connect() sets the default destination so fwrite can send a datagram.
@@ -3680,6 +3821,9 @@ unlink($path);
 /// Verifies compiled PHP output for stream socket sendto to udg address.
 #[test]
 fn test_stream_socket_sendto_to_udg_address() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     // stream_socket_sendto() accepts a udg:// target: the sender must be a
     // bound Unix-domain datagram socket, but it doesn't have to be connected
     // to the receiver. The kernel routes the datagram by sockaddr_un path.
@@ -3703,6 +3847,9 @@ unlink($cli_path);
 /// Verifies compiled PHP output for stream socket sendto to unix address.
 #[test]
 fn test_stream_socket_sendto_to_unix_address() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     // stream_socket_sendto() can also target a unix:// (SOCK_STREAM) listener
     // for connectionless writes from a separately-opened socket. The kernel
     // requires the sender's socket type and the target's type to be
@@ -3928,6 +4075,27 @@ echo file_get_contents($url);
 "#,
     );
     assert_eq!(out, "dynamic contents fetched over ftp");
+}
+
+/// An oversized dynamic FTP body must release the slurp block after persisting it.
+#[test]
+fn test_file_get_contents_dynamic_ftp_url_releases_slurped_block() {
+    let body: &'static [u8] = Box::leak(vec![b'B'; 200_000].into_boxed_slice());
+    let _server = spawn_ftp_server(54967, body);
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$url = "ftp://127.0.0.1:54967/pub/file.txt";
+$b = file_get_contents($url);
+$intact = (str_starts_with($b, "BBB") && str_ends_with($b, "BBB")) ? 1 : 0;
+echo strlen($b), ":", $intact;
+"#,
+    );
+    assert_eq!(out.stdout, "200000:1", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
 }
 
 /// `file_get_contents($url)` routes a runtime `ftps://` URL through the FTP
@@ -4157,6 +4325,24 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
 -----END PRIVATE KEY-----
 ";
 
+/// Accepts one connection and closes it immediately, without speaking TLS.
+///
+/// A TLS client handshaking against this peer hits EOF while waiting for the
+/// ServerHello and fails deterministically. An echo server cannot serve that role:
+/// it blocks reading until a `\r\n\r\n` that a ClientHello never contains, so both
+/// sides wait for each other until the test times out.
+fn spawn_tls_refusing_peer() -> (std::thread::JoinHandle<()>, u16) {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("refusing peer: bind port");
+    let port = listener.local_addr().expect("refusing peer: local addr").port();
+    let handle = std::thread::spawn(move || {
+        if let Ok((sock, _)) = listener.accept() {
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        }
+    });
+    (handle, port)
+}
+
 /// Minimal one-shot HTTPS server for deterministic `https://` wrapper tests.
 /// Binds an ephemeral port and returns it alongside the handle.
 fn spawn_https_server(content: &'static [u8]) -> (std::thread::JoinHandle<()>, u16) {
@@ -4355,6 +4541,7 @@ fn test_file_get_contents_over_https_local_server() {
     let out = compile_and_run(&format!(
         r#"<?php
 stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer_name", "0");
 echo "[" . file_get_contents("https://127.0.0.1:{port}/page.txt") . "]";
 "#
     ));
@@ -4369,6 +4556,7 @@ fn test_file_get_contents_dynamic_https_local_server() {
     let out = compile_and_run(&format!(
         r#"<?php
 stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer_name", "0");
 $url = "https://127.0.0.1:{port}/page.txt";
 echo "[" . file_get_contents($url) . "]";
 "#
@@ -4548,11 +4736,10 @@ fn test_fopen_https_invalid_url_is_false() {
 /// Verifies compiled PHP output for fopen https cafile bad path is false.
 #[test]
 fn test_fopen_https_cafile_bad_path_is_false() {
-    // ssl.cafile routes the connect through elephc_tls_connect_cafile, which
-    // loads the CA bundle BEFORE any TCP connect. A nonexistent cafile fails to
-    // load → the connect returns -1 → fopen() returns false. This exercises the
-    // cafile dispatch branch + the elephc-tls linkage deterministically (no
-    // network), since the failure happens during cafile load.
+    // ssl.cafile is combined with the remaining SSL options in the uniform TLS
+    // client-options ABI. A nonexistent cafile fails while building the client
+    // configuration, before any TCP connect, so fopen() returns false. This
+    // exercises custom trust loading and elephc-tls linkage deterministically.
     let out = compile_and_run(
         r#"<?php
 stream_context_set_option(stream_context_get_default(), "ssl", "cafile", "/nonexistent/elephc/ca.pem");
@@ -4566,10 +4753,10 @@ echo ($f === false) ? "false" : "open";
 /// Verifies compiled PHP output for fopen https capath bad path is false.
 #[test]
 fn test_fopen_https_capath_bad_path_is_false() {
-    // OOS Phase C: ssl.capath routes the connect through elephc_tls_connect_capath,
-    // which scans the directory for CA certs BEFORE any TCP connect. A nonexistent
-    // directory yields no certs → the connect returns -1 → fopen() returns false.
-    // Exercises the capath dispatch branch + linkage deterministically (no network).
+    // ssl.capath is combined with the remaining SSL options in the uniform TLS
+    // client-options ABI. A nonexistent directory yields no trust anchors
+    // before any TCP connect, so fopen() returns false. This exercises custom
+    // trust loading and bridge linkage deterministically without live network.
     let out = compile_and_run(
         r#"<?php
 stream_context_set_option(stream_context_get_default(), "ssl", "capath", "/nonexistent/elephc/cadir");
@@ -4580,15 +4767,15 @@ echo ($f === false) ? "false" : "open";
     assert_eq!(out, "false");
 }
 
-/// Verifies compiled PHP output for fopen https peer name and relaxed options fail closed.
+/// Verifies independent HTTPS peer policies and peer-name overrides fail closed.
 #[test]
-fn test_fopen_https_peer_name_and_relaxed_options_fail_closed() {
-    // OOS Phase C: ssl.peer_name routes through elephc_tls_connect_peer_name
-    // (verify the cert for a different name), and ssl.allow_self_signed /
-    // ssl.verify_peer_name = "0" route through the relaxed (insecure) verifier.
-    // Each connects to an unreachable port, so the connect fails and fopen()
-    // returns false — this exercises the new dispatch branches + the elephc-tls
-    // linkage deterministically (no live TLS server needed).
+fn test_fopen_https_peer_name_and_independent_policies_fail_closed() {
+    // peer_name, allow_self_signed, and verify_peer_name are combined in one
+    // options struct. The verification bits stay independent: allowing a
+    // self-signed leaf does not disable chain verification, and disabling name
+    // verification does not disable peer verification. Each attempt targets an
+    // unreachable port, so it deterministically exercises option propagation
+    // and bridge linkage without requiring a live TLS server.
     let out = compile_and_run(
         r#"<?php
 $d = stream_context_get_default();
@@ -4625,9 +4812,9 @@ fclose($f);
 
 /// End-to-end smoke against a real HTTPS host with `ssl.verify_peer = false`.
 /// example.com obviously has a valid cert, so this just exercises the
-/// dispatcher: with verify_peer disabled the runtime must pick the insecure
-/// connect path and still return a usable body. `#[ignore]` because it
-/// requires outbound network access.
+/// independent policy bit: chain verification is disabled while the default
+/// peer-name verification remains active, and the runtime must still return a
+/// usable body. `#[ignore]` because it requires outbound network access.
 #[test]
 #[ignore]
 fn test_fopen_https_real_example_com_with_verify_peer_disabled() {
@@ -4805,6 +4992,29 @@ fclose($s);
 "#,
     );
     assert_eq!(out, "ok|errno=0|errstr=[]|data over fsockopen");
+}
+
+/// Verifies fsockopen accepts a transport prefix in its hostname.
+#[test]
+fn test_fsockopen_hostname_carries_its_own_transport() {
+    // php formats fsockopen's address as "%s:%d" and lets php_stream_xport_create
+    // parse a leading "scheme://", defaulting to tcp only when the hostname has no
+    // transport of its own (ext/standard/fsock.c). The helper used to prepend
+    // "tcp://" unconditionally, turning this into "tcp://tcp://127.0.0.1:54993" --
+    // an address that cannot resolve -- so every prefixed hostname failed.
+    let _server = spawn_tcp_server(54993, b"prefixed hostname");
+    let out = compile_and_run(
+        r#"<?php
+$errno = -1;
+$errstr = "unset";
+$s = fsockopen("tcp://127.0.0.1", 54993, $errno, $errstr);
+echo ($s === false) ? "FAIL" : "ok";
+echo "|errno=" . $errno;
+echo "|" . stream_get_contents($s);
+fclose($s);
+"#,
+    );
+    assert_eq!(out, "ok|errno=0|prefixed hostname");
 }
 
 /// Verifies compiled PHP output for fsockopen refused sets error.
@@ -5050,7 +5260,7 @@ fn test_stream_socket_enable_crypto_reads_peer_name_from_context() {
     // _stream_context_options["ssl"]["peer_name"] for the SNI hint via
     // __rt_get_ssl_peer_name. We can't reach a real TLS server in tests
     // (the rustls handshake needs a live remote), so the contract pinned
-    // here is "this code path doesn't crash and still returns a bool" —
+    // here is "this code path doesn't crash and returns a terminal bool" —
     // exercising the helper's two nested hash_get's plus its hit branch
     // (peer_name is in context). Also asserts the options round-trip
     // through stream_context_get_options.
@@ -5067,34 +5277,29 @@ fclose($m);
     assert_eq!(out, "bool|1");
 }
 
-/// Verifies compiled PHP output for stream socket enable crypto returns bool.
+/// Verifies a terminal TLS-attach failure returns PHP `false`.
 #[test]
 fn test_stream_socket_enable_crypto_returns_bool() {
-    // Phase 11 B3: stream_socket_enable_crypto invokes elephc_tls_attach_fd
-    // on the fd. The rustls ClientConnection::new completes synchronously
-    // (no I/O yet), so attach reports success even on degenerate fds like
-    // php://memory; the failure surfaces on the first fread/fwrite when the
-    // handshake actually runs. The shape of the return is the contract this
-    // test pins — production code should also verify by attempting a read.
+    // php://memory is not a TCP socket, so the rustls handshake fails
+    // terminally and the builtin must expose PHP boolean false rather than
+    // the integer-zero signal reserved for an in-progress nonblocking socket.
     let out = compile_and_run(
         r#"<?php
 $m = fopen("php://memory", "r+");
 $r = stream_socket_enable_crypto($m, true);
-echo is_bool($r) ? "bool" : "non-bool";
+echo $r === false ? "false" : "unexpected";
 fclose($m);
 "#,
     );
-    assert_eq!(out, "bool");
+    assert_eq!(out, "false");
 }
 
 /// `stream_socket_enable_crypto($s, false)` unwinds a live TLS session: the
 /// disable path reloads the fd and runs the shared `emit_tls_session_teardown`,
 /// which (because the prior enable installed a non-zero `_tls_sessions[fd]`
-/// handle) calls `_elephc_tls_close_fn` to send `close_notify` and zeroes the
-/// slot, then reports `true`. The contract pinned here is that the enable→disable
-/// sequence runs the real teardown branch without crashing and returns a `bool`
-/// `true`; a plain-stream read-back is intentionally not asserted because the
-/// `close_notify` record pollutes a degenerate `php://memory` backing buffer.
+/// handle) calls `_elephc_tls_close_fn` when needed and zeroes the slot, then
+/// reports `true`. The degenerate memory stream makes enablement fail, and this
+/// test pins that disabling afterward is still an idempotent boolean success.
 #[test]
 fn test_stream_socket_enable_crypto_disable_tears_down_session() {
     let out = compile_and_run(
@@ -5130,7 +5335,7 @@ fclose($m);
 /// `ssl.local_cert` + `ssl.local_pk` select the mutual-TLS (client-certificate)
 /// attach variant. A bogus cert/key path fails the client-auth config load
 /// before any network I/O, so enable_crypto returns `false` — unlike the plain
-/// server-auth attach, which reports `true` synchronously (see
+/// server-auth attach, which reaches the handshake path (see
 /// `test_stream_socket_enable_crypto_returns_bool`). This pins that the
 /// client-cert path is selected from the context and fails gracefully. A
 /// successful client-cert handshake needs a client-auth-requiring server, so it
@@ -5247,6 +5452,7 @@ function create_before_open(string $path): bool {
     return false;
 }
 $path = tempnam(sys_get_temp_dir(), "elephc_fopen_order_");
+if ($path === false) { throw new RuntimeException("tempnam failed"); }
 unlink($path);
 $f = fopen($path, "r", create_before_open($path));
 echo is_resource($f) ? "R" : "F";
@@ -5282,9 +5488,10 @@ echo $out;
     assert_eq!(out, "wrappers:2|http:2|ssl:1");
 }
 
-/// Verifies compiled PHP output for TLS cipher/security-level options accepted as no-ops.
+/// Verifies TLS cipher/security options remain visible in the stream context
+/// until the TLS bridge applies or rejects their explicit policy.
 #[test]
-fn test_stream_context_ssl_cipher_options_are_accepted_noops() {
+fn test_stream_context_ssl_cipher_options_are_persisted() {
     let out = compile_and_run(
         r#"<?php
 $ctx = stream_context_create();
@@ -6913,31 +7120,39 @@ fn test_stream_socket_client_unresolvable_host_is_false() {
     assert_eq!(out, "false");
 }
 
-/// Verifies compiled PHP output for stream socket pair unsupported domain is false.
+/// Verifies each target rejects a socket-pair domain that PHP does not support there.
 #[test]
 fn test_stream_socket_pair_unsupported_domain_is_false() {
-    // socketpair() refuses STREAM_PF_INET on every platform we target.
-    // PHP's contract is `array|false`, so the return must be strictly
-    // false (not an empty array) for === comparisons to work.
-    let out = compile_and_run(
+    let unsupported_domain = if target().platform == Platform::Windows {
+        "STREAM_PF_UNIX"
+    } else {
+        "STREAM_PF_INET"
+    };
+    let source = format!(
         r#"<?php
-$pair = stream_socket_pair(STREAM_PF_INET, STREAM_SOCK_STREAM, 0);
+$pair = stream_socket_pair({unsupported_domain}, STREAM_SOCK_STREAM, 0);
 echo gettype($pair);
 echo "|";
 echo ($pair === false) ? "strict_false" : "not_false";
-"#,
+"#
     );
+    let out = compile_and_run(&source);
     assert_eq!(out, "boolean|strict_false");
 }
 
-/// Verifies compiled PHP output for stream socket pair round trip.
+/// Verifies socket-pair round trips through each target's PHP-compatible domain.
 #[test]
 fn test_stream_socket_pair_round_trip() {
     // Also a regression test for indexed reads of an array<resource>:
     // $pair[0] / $pair[1] must yield the stored descriptors, not the index.
-    let out = compile_and_run(
+    let supported_domain = if target().platform == Platform::Windows {
+        "STREAM_PF_INET"
+    } else {
+        "STREAM_PF_UNIX"
+    };
+    let source = format!(
         r#"<?php
-$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$pair = stream_socket_pair({supported_domain}, STREAM_SOCK_STREAM, 0);
 echo count($pair);
 echo "|";
 fwrite($pair[0], "ping");
@@ -6945,8 +7160,9 @@ echo fread($pair[1], 16);
 echo "|";
 fwrite($pair[1], "pong");
 echo fread($pair[0], 16);
-"#,
+"#
     );
+    let out = compile_and_run(&source);
     assert_eq!(out, "2|ping|pong");
 }
 
@@ -6971,6 +7187,9 @@ echo stream_socket_get_name($cli, true);
 /// Verifies compiled PHP output for stream socket get name unix.
 #[test]
 fn test_stream_socket_get_name_unix() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     // Phase 5 audit: stream_socket_get_name on a Unix-domain socket must
     // surface the filesystem path, not garbage parsed out of a sockaddr_in.
     // Use a process-unique path so parallel tests do not collide.
@@ -6989,14 +7208,20 @@ unlink($path);
 /// Verifies compiled PHP output for popen read mode.
 #[test]
 fn test_popen_read_mode() {
-    let out = compile_and_run(
+    let command = if target().platform == Platform::Windows {
+        "echo|set /p=abc& exit /b 0"
+    } else {
+        "printf abc"
+    };
+    let source = format!(
         r#"<?php
-$p = popen("printf abc", "r");
+$p = popen("{command}", "r");
 echo fread($p, 16);
 echo "|";
 echo pclose($p);
 "#,
     );
+    let out = compile_and_run(&source);
     assert_eq!(out, "abc|0");
 }
 
@@ -7182,9 +7407,8 @@ echo is_string($names[2]) ? "s" : "?";
 /// Verifies compiled PHP output for stream select detects ready socket.
 #[test]
 fn test_stream_select_detects_ready_socket() {
-    let out = compile_and_run(
-        r#"<?php
-$pair = stream_socket_pair(1, 1, 0);
+    let out = compile_and_run(&r#"<?php
+$pair = stream_socket_pair(SOCKET_PAIR_FIXTURE_DOMAIN, STREAM_SOCK_STREAM, 0);
 $a = $pair[0];
 $b = $pair[1];
 fwrite($a, "ping");
@@ -7193,26 +7417,25 @@ $n1 = stream_select($r1, $w1, $e1, 0, 0);
 $r2 = [$a]; $w2 = []; $e2 = [];
 $n2 = stream_select($r2, $w2, $e2, 0, 0);
 echo "n1=" . $n1 . " r1=" . count($r1) . " n2=" . $n2 . " r2=" . count($r2);
-"#,
-    );
+"#
+    .replace("SOCKET_PAIR_FIXTURE_DOMAIN", socket_pair_fixture_domain()));
     assert_eq!(out, "n1=1 r1=1 n2=0 r2=0");
 }
 
 /// Verifies compiled PHP output for stream select compacts to ready subset.
 #[test]
 fn test_stream_select_compacts_to_ready_subset() {
-    let out = compile_and_run(
-        r#"<?php
-$p1 = stream_socket_pair(1, 1, 0);
-$p2 = stream_socket_pair(1, 1, 0);
+    let out = compile_and_run(&r#"<?php
+$p1 = stream_socket_pair(SOCKET_PAIR_FIXTURE_DOMAIN, STREAM_SOCK_STREAM, 0);
+$p2 = stream_socket_pair(SOCKET_PAIR_FIXTURE_DOMAIN, STREAM_SOCK_STREAM, 0);
 fwrite($p1[0], "x");
 $r = [$p1[1], $p2[1]];
 $w = [];
 $e = [];
 $n = stream_select($r, $w, $e, 0, 0);
 echo $n . ":" . count($r);
-"#,
-    );
+"#
+    .replace("SOCKET_PAIR_FIXTURE_DOMAIN", socket_pair_fixture_domain()));
     assert_eq!(out, "1:1");
 }
 
@@ -7427,7 +7650,7 @@ echo stream_context_set_params($ctx, []) ? "ok" : "FAIL";
 fn test_stream_resolve_include_path_existing_and_missing() {
     let out = compile_and_run(
         r#"<?php
-$r = stream_resolve_include_path("/tmp");
+$r = stream_resolve_include_path(".");
 $miss = stream_resolve_include_path("/non/existent/xyz");
 echo (is_string($r) ? "s" : "n") . "|" . ($miss === false ? "f" : "x");
 "#,
@@ -7674,6 +7897,25 @@ echo "ok";
 "#,
     );
     assert_eq!(out, "ok");
+}
+
+/// Verifies separate context resources retain separate option hashes instead
+/// of every `stream_context_create()` aliasing the first registered slot.
+#[test]
+fn test_stream_context_resources_keep_independent_options() {
+    let out = compile_and_run(
+        r#"<?php
+$a = stream_context_create(["http" => ["method" => "GET"]]);
+$b = stream_context_create(["ssl" => ["peer_name" => "example.com"]]);
+stream_context_set_option($a, "http", "header", "X-Test: one");
+$oa = stream_context_get_options($a);
+$ob = stream_context_get_options($b);
+echo ($a !== $b ? "distinct" : "alias") . "|";
+echo count($oa["http"]) . "|" . count($ob["ssl"]) . "|";
+echo isset($oa["ssl"]) || isset($ob["http"]) ? "leak" : "isolated";
+"#,
+    );
+    assert_eq!(out, "distinct|2|1|isolated");
 }
 
 /// A stream-context `notification` closure must fire STREAM_NOTIFY_FAILURE
@@ -8097,4 +8339,141 @@ mkdir("pathop://dir", 0700, true);
         out,
         "M(pathop://dir,511,8)M(pathop://dir,448,8)M(pathop://dir,448,9)"
     );
+}
+
+/// `stream_socket_client("tls://...")` must complete a TLS handshake before returning.
+#[test]
+fn test_stream_socket_client_tls_scheme_performs_handshake() {
+    let (_server, port) = spawn_https_server(b"tls transport body");
+    let out = compile_and_run(&format!(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer_name", "0");
+$fp = stream_socket_client("tls://127.0.0.1:{port}");
+fwrite($fp, "GET /x HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n");
+$resp = stream_get_contents($fp);
+fclose($fp);
+$pos = strpos($resp, "\r\n\r\n");
+echo "[" . substr($resp, $pos + 4) . "]";
+"#
+    ));
+    assert_eq!(out, "[tls transport body]");
+}
+
+/// `ssl://` is the same crypto transport under its legacy name.
+#[test]
+fn test_stream_socket_client_ssl_scheme_performs_handshake() {
+    let (_server, port) = spawn_https_server(b"ssl transport body");
+    let out = compile_and_run(&format!(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer_name", "0");
+$fp = stream_socket_client("ssl://127.0.0.1:{port}");
+fwrite($fp, "GET /x HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n");
+$resp = stream_get_contents($fp);
+fclose($fp);
+$pos = strpos($resp, "\r\n\r\n");
+echo "[" . substr($resp, $pos + 4) . "]";
+"#
+    ));
+    assert_eq!(out, "[ssl transport body]");
+}
+
+/// A crypto transport must fail closed when its peer never completes the handshake.
+#[test]
+fn test_stream_socket_client_tls_scheme_fails_against_plaintext_peer() {
+    let (_server, port) = spawn_tls_refusing_peer();
+    let out = compile_and_run(&format!(
+        r#"<?php
+$fp = @stream_socket_client("tls://127.0.0.1:{port}");
+echo $fp === false ? "false" : "stream";
+"#
+    ));
+    assert_eq!(out, "false");
+}
+
+/// `tcp://` stays plaintext and must not enter the crypto handshake path.
+#[test]
+fn test_stream_socket_client_tcp_scheme_stays_plaintext() {
+    let (_server, port) = spawn_http_echo_server();
+    let out = compile_and_run(&format!(
+        r#"<?php
+$fp = stream_socket_client("tcp://127.0.0.1:{port}");
+fwrite($fp, "GET /plain HTTP/1.0\r\n\r\n");
+$resp = stream_get_contents($fp);
+fclose($fp);
+echo strpos($resp, "GET /plain HTTP") !== false ? "echoed" : "no-echo";
+"#
+    ));
+    assert_eq!(out, "echoed");
+}
+
+/// A default client context rejects the harness's untrusted self-signed certificate.
+#[test]
+fn test_stream_socket_client_tls_default_context_rejects_untrusted_cert() {
+    let (_server, port) = spawn_https_server(b"must not be reachable");
+    let out = compile_and_run(&format!(
+        r#"<?php
+$fp = @stream_socket_client("tls://127.0.0.1:{port}");
+echo $fp === false ? "false" : "stream";
+"#
+    ));
+    assert_eq!(out, "false");
+}
+
+/// Every crypto scheme registered by php-src must negotiate, including mixed casing.
+#[test]
+fn test_stream_socket_client_recognises_every_crypto_scheme() {
+    let schemes = [
+        "ssl", "sslv3", "tls", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3", "TLS", "Ssl",
+    ];
+    for scheme in schemes {
+        let (_server, port) = spawn_tls_refusing_peer();
+        let out = compile_and_run(&format!(
+            r#"<?php
+$fp = @stream_socket_client("{scheme}://127.0.0.1:{port}");
+echo $fp === false ? "false" : "stream";
+"#
+        ));
+        assert_eq!(
+            out, "false",
+            "scheme {scheme} was not treated as a crypto transport"
+        );
+    }
+}
+
+/// Unknown and explicitly unsupported schemes stay on the plaintext path.
+#[test]
+fn test_stream_socket_client_non_crypto_schemes_stay_plaintext() {
+    for scheme in ["tcp", "sslv2", "tlsv1.4", "tlsx"] {
+        let (_server, port) = spawn_http_echo_server();
+        let out = compile_and_run(&format!(
+            r#"<?php
+$fp = @stream_socket_client("{scheme}://127.0.0.1:{port}");
+fwrite($fp, "GET /plain HTTP/1.0\r\n\r\n");
+$resp = stream_get_contents($fp);
+fclose($fp);
+echo strpos($resp, "GET /plain HTTP") !== false ? "echoed" : "no-echo";
+"#
+        ));
+        assert_eq!(out, "echoed", "scheme {scheme} must not negotiate TLS");
+    }
+}
+
+/// A closed socket reports write failure without terminating the process via SIGPIPE.
+#[test]
+fn test_write_to_closed_peer_does_not_kill_the_process() {
+    let (_server, port) = spawn_tls_refusing_peer();
+    let out = compile_and_run(&format!(
+        r#"<?php
+$fp = stream_socket_client("tcp://127.0.0.1:{port}");
+usleep(200000);
+for ($i = 0; $i < 4; $i++) {{
+    @fwrite($fp, str_repeat("x", 65536));
+}}
+fclose($fp);
+echo "survived";
+"#
+    ));
+    assert_eq!(out, "survived");
 }

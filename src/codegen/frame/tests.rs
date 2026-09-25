@@ -8,8 +8,10 @@
 //! - Fixtures inspect both supported ABIs so runtime calls never precede later argument saves.
 
 use super::*;
+use crate::codegen::data_section::DataSection;
 use crate::codegen::generate_user_asm_from_ir;
 use crate::codegen::platform::{Arch, Platform, Target};
+use crate::codegen::shared_state::SharedCodegenState;
 use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership, Terminator};
 use crate::types::FunctionSig;
 
@@ -366,4 +368,110 @@ fn owned_string_then_mixed_prologue_asm(target: Target) -> String {
 
     generate_user_asm_from_ir(&module, false, false)
         .expect("parameter-prologue fixture should lower")
+}
+
+/// Verifies Windows leaves argv release to the process-exit shim after tearing down main.
+///
+/// The exit shim owns the final stack alignment and calls `__rt_sys_free_argv` before
+/// `ExitProcess`; doing that directly from `{main}` used to couple argv lifetime to a
+/// frame that has already been dismantled for probe/instrumentation teardown.
+#[test]
+fn windows_main_defers_argv_cleanup_to_the_process_exit_shim() {
+    let asm = empty_main_asm(Target::new(Platform::Windows, Arch::X86_64));
+    let restore = ["leave", "pop rbp"]
+        .iter()
+        .filter_map(|instruction| {
+            asm.find(instruction)
+        })
+        .min()
+        .expect("Windows main must restore its frame before process exit");
+    let exit = asm
+        .find("call __rt_sys_exit")
+        .expect("Windows main must enter the process-exit shim");
+
+    assert!(
+        !asm.contains("__rt_sys_free_argv"),
+        "argv ownership belongs to the Windows process-exit shim, not the torn-down main frame:\n{asm}"
+    );
+    assert!(restore < exit, "main must tear down before entering the exit shim:\n{asm}");
+}
+
+/// Verifies non-Windows main epilogues do not acquire the Windows argv cleanup call.
+#[test]
+fn non_windows_main_epilogues_omit_argv_cleanup() {
+    for target in [
+        Target::new(Platform::Linux, Arch::X86_64),
+        Target::new(Platform::Linux, Arch::AArch64),
+    ] {
+        let asm = empty_main_asm(target);
+        assert!(!asm.contains("__rt_sys_free_argv"), "{target:?}:\n{asm}");
+    }
+}
+
+/// Builds an empty top-level function for target-specific epilogue assertions.
+fn empty_main_asm(target: Target) -> String {
+    let mut module = Module::new(target);
+    let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+    main.flags.is_main = true;
+    {
+        let mut builder = Builder::new(&mut main);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.terminate(Terminator::Return { value: None });
+    }
+    module.add_function(main);
+
+    generate_user_asm_from_ir(&module, false, false).expect("empty main fixture should lower")
+}
+
+/// Verifies the Windows web process-entry stub reserves the mandatory MSx64
+/// shadow area around its direct platform-ABI call into `elephc_web_run`.
+#[test]
+fn windows_web_entry_stub_reserves_native_shadow_space() {
+    let asm = web_entry_stub_asm(Target::new(Platform::Windows, Arch::X86_64));
+    let reserve = asm.find("sub rsp, 32").expect("Windows shadow-space reserve");
+    let call = asm
+        .find("\n    call elephc_web_run\n")
+        .expect("web bridge entry call");
+    let release = asm.find("add rsp, 32").expect("Windows shadow-space release");
+    assert!(reserve < call && call < release, "{asm}");
+    assert!(asm.contains("mov rcx"), "argc must use the first MSx64 register: {asm}");
+    assert!(asm.contains("mov rdx"), "argv must use the second MSx64 register: {asm}");
+}
+
+/// Verifies Linux x86 retains the direct web-entry call without Windows shadow space.
+#[test]
+fn linux_web_entry_stub_remains_direct() {
+    let asm = web_entry_stub_asm(Target::new(Platform::Linux, Arch::X86_64));
+    assert!(asm.contains("call elephc_web_run"));
+    assert!(!asm.contains("sub rsp, 32"));
+    assert!(!asm.contains("add rsp, 32"));
+}
+
+/// Renders only the web process-entry stub for ABI-structure assertions.
+fn web_entry_stub_asm(target: Target) -> String {
+    let module = Module::new(target);
+    let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+    function.flags.is_main = true;
+    let layout = layout_for_function(&function, target, false, false, false);
+    let mut emitter = Emitter::new(target);
+    let mut data = DataSection::new();
+    let mut shared = SharedCodegenState::default();
+    {
+        let mut ctx = FunctionContext::new(
+            &module,
+            &function,
+            &mut emitter,
+            &mut data,
+            &mut shared,
+            layout,
+            true,
+            false,
+            false,
+            None,
+        );
+        emit_web_entry_stub(&mut ctx, super::super::WebIsolation::Worker);
+    }
+    emitter.output()
 }

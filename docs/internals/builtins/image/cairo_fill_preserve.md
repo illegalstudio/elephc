@@ -2,7 +2,7 @@
 title: "cairo_fill_preserve() - internals"
 description: "Compiler internals for cairo_fill_preserve(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 405
+  order: 409
 ---
 
 ## `cairo_fill_preserve()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13621](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13621) (`cairo_fill_preserve`)
+- **Lowering**: [`src/image_prelude.rs`:13692](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13692) (`cairo_fill_preserve`)
 - **Function symbol**: `cairo_fill_preserve()`
 
 

@@ -21,8 +21,10 @@ use crate::types::PhpType;
 use super::{
     boundary, emit_boundary_pop_aarch64, emit_boundary_pop_x86_64,
     emit_boundary_push_aarch64, emit_boundary_push_x86_64, emit_clear_error_inline,
+    emit_restore_windows_callee_saved, emit_save_windows_callee_saved,
     emit_set_static_error_aarch64, emit_set_static_error_x86_64,
-    emit_store_immediate_to_symbol, label_suffix, BOUNDARY_STATUS, STATUS_ALLOCATION_FAILURE,
+    emit_store_immediate_to_symbol, label_suffix, windows_callee_saved_base,
+    windows_callee_saved_frame_size, BOUNDARY_STATUS, STATUS_ALLOCATION_FAILURE,
     STATUS_INVALID_ARGUMENT, STATUS_OK, STATUS_PHP_EXCEPTION, STATUS_RUNTIME_FAILURE,
 };
 
@@ -37,6 +39,7 @@ struct OwnedStringBoundaryLayout {
     owned_ptr_offset: usize,
     concat_offset: usize,
     handler_base: usize,
+    windows_callee_saved_base: Option<usize>,
     frame_size: usize,
 }
 
@@ -66,7 +69,7 @@ pub(super) fn emit_owned_string_export(
     let suffix = label_suffix(&export.c_name);
     let internal = function_symbol(&export.name);
     let exported = target.extern_symbol(&export.c_name);
-    let layout = owned_string_boundary_layout(export);
+    let layout = owned_string_boundary_layout(target, export);
     let labels = owned_string_labels(&suffix);
 
     emitter.blank();
@@ -76,6 +79,7 @@ pub(super) fn emit_owned_string_export(
     ));
     emitter.label_global(&exported);
     abi::emit_frame_prologue(emitter, layout.frame_size);
+    emit_save_windows_callee_saved(emitter, layout.windows_callee_saved_base);
     emit_save_public_arguments(emitter, export, &layout);
     boundary::emit_initialize_hidden_collector_owner(emitter, layout.hidden_collector_offset);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
@@ -147,11 +151,11 @@ pub(super) fn emit_owned_string_export(
 
     emitter.label(&labels.invalid);
     emit_set_static_error(emitter, invalid_error);
-    emit_unentered_return(emitter, layout.frame_size, STATUS_INVALID_ARGUMENT);
+    emit_unentered_return(emitter, &layout, STATUS_INVALID_ARGUMENT);
 }
 
 /// Computes stable frame slots for all flattened inputs, outputs, result state, and recovery data.
-fn owned_string_boundary_layout(export: &ExportedFunction) -> OwnedStringBoundaryLayout {
+fn owned_string_boundary_layout(target: Target, export: &ExportedFunction) -> OwnedStringBoundaryLayout {
     let mut offset = 0usize;
     let mut param_offsets = Vec::with_capacity(export.source_sig.params.len());
     for (_, ty) in &export.source_sig.params {
@@ -182,7 +186,8 @@ fn owned_string_boundary_layout(export: &ExportedFunction) -> OwnedStringBoundar
     offset += 8;
     let concat_offset = offset;
     let handler_base = boundary::align_16(offset + TRY_HANDLER_SLOT_SIZE);
-    let frame_size = boundary::align_16(handler_base + 16);
+    let windows_callee_saved_base = windows_callee_saved_base(target, handler_base + 16);
+    let frame_size = windows_callee_saved_frame_size(target, handler_base + 16);
     OwnedStringBoundaryLayout {
         param_offsets,
         hidden_collector_offset,
@@ -193,6 +198,7 @@ fn owned_string_boundary_layout(export: &ExportedFunction) -> OwnedStringBoundar
         owned_ptr_offset,
         concat_offset,
         handler_base,
+        windows_callee_saved_base,
         frame_size,
     }
 }
@@ -493,15 +499,21 @@ fn emit_entered_return(
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, status as i64);
     boundary::emit_leave_boundary(emitter, layout.concat_offset);
     emit_status_result(emitter, status);
+    emit_restore_windows_callee_saved(emitter, layout.windows_callee_saved_base);
     abi::emit_frame_restore(emitter, layout.frame_size);
     abi::emit_return(emitter);
 }
 
 /// Records an argument failure before boundary entry and returns through the native frame.
-fn emit_unentered_return(emitter: &mut Emitter, frame_size: usize, status: i32) {
+fn emit_unentered_return(
+    emitter: &mut Emitter,
+    layout: &OwnedStringBoundaryLayout,
+    status: i32,
+) {
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, status as i64);
     emit_status_result(emitter, status);
-    abi::emit_frame_restore(emitter, frame_size);
+    emit_restore_windows_callee_saved(emitter, layout.windows_callee_saved_base);
+    abi::emit_frame_restore(emitter, layout.frame_size);
     abi::emit_return(emitter);
 }
 

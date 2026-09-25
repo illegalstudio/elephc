@@ -9,7 +9,7 @@
 //! - Results are written to fixed value-placement slots immediately after definition.
 //! - Unsupported opcodes fail explicitly instead of silently emitting invalid code.
 
-use crate::codegen::platform::Arch;
+use crate::codegen::platform::{Arch, Platform};
 use crate::codegen::{
     abi, callable_descriptor, callable_invoker_args, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, runtime,
@@ -150,6 +150,33 @@ pub(super) use runtime_wrappers::{
 };
 
 const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
+
+/// Remaps generated-call argument registers to the runtime helper convention.
+///
+/// Generated Windows functions use MS x64 register positions, but hand-written
+/// `__rt_*` helpers keep the repository's internal SysV-shaped x86_64 ABI. The
+/// ascending move order keeps every source live until it has been consumed:
+/// `rcx -> rdi`, `rdx -> rsi`, `r8 -> rdx`, then `r9 -> rcx`.
+/// Other targets have one shared convention and therefore emit no instructions.
+pub(super) fn remap_platform_args_to_runtime_helper_regs(
+    emitter: &mut crate::codegen::emit::Emitter,
+    int_reg_count: usize,
+) {
+    if (emitter.target.platform, emitter.target.arch) != (Platform::Windows, Arch::X86_64) {
+        return;
+    }
+    assert!(
+        int_reg_count <= 4,
+        "generated-to-runtime ABI remap covers at most four MSx64 register arguments; {int_reg_count} needs stack staging"
+    );
+    for idx in 0..int_reg_count {
+        let source = abi::int_arg_reg_name(emitter.target, idx);
+        let destination = abi::runtime_helper_int_arg_reg(emitter, idx);
+        if source != destination {
+            emitter.instruction(&format!("mov {destination}, {source}"));       // MSx64 generated arg -> SysV-shaped runtime helper arg
+        }
+    }
+}
 
 /// Lowers one EIR instruction by opcode.
 pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {

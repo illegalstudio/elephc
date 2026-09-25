@@ -115,7 +115,7 @@ pub(crate) fn lower_fmod(
             ctx.emitter.instruction("movapd xmm2, xmm0");                       // preserve the divisor while ordering libc fmod arguments
             ctx.emitter.instruction("movapd xmm0, xmm1");                       // move the dividend into the first libc fmod argument
             ctx.emitter.instruction("movapd xmm1, xmm2");                       // move the divisor into the second libc fmod argument
-            ctx.emitter.bl_c("fmod");
+            ctx.emitter.emit_call_c("fmod");                                    // Windows-safe: shadow space via __rt_sys_fmod
         }
     }
     store_if_result(ctx, inst)
@@ -136,14 +136,14 @@ pub(crate) fn lower_pow(
         Arch::AArch64 => {
             ctx.emitter.instruction("fmov d1, d0");                             // move the exponent into the second libc pow argument
             abi::emit_pop_float_reg(ctx.emitter, "d0");
-            ctx.emitter.bl_c("pow");
+            ctx.emitter.emit_call_c("pow");
         }
         Arch::X86_64 => {
             abi::emit_pop_float_reg(ctx.emitter, "xmm1");
             ctx.emitter.instruction("movapd xmm2, xmm0");                       // preserve the exponent while ordering libc pow arguments
             ctx.emitter.instruction("movapd xmm0, xmm1");                       // move the base into the first libc pow argument
             ctx.emitter.instruction("movapd xmm1, xmm2");                       // move the exponent into the second libc pow argument
-            ctx.emitter.bl_c("pow");
+            ctx.emitter.emit_call_c("pow");                                     // Windows-safe: shadow space via __rt_sys_pow
         }
     }
     store_if_result(ctx, inst)
@@ -232,18 +232,18 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous) for the ArithmeticError
             ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the ArithmeticError object payload
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // materialize the x86_64 object heap-kind header
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
             );                                                                  // materialize the x86_64 object heap-kind header
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load ArithmeticError's runtime class id for this program
                 "mov r10, QWORD PTR [rip + _spl_arithmetic_error_class_id]"
             );                                                                  // load ArithmeticError's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the ArithmeticError class id in the Throwable header
             ctx.emitter.instruction(&format!("lea r10, [rip + {}]", msg_label));// materialize the static ArithmeticError message pointer
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the static ArithmeticError message pointer
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // store the exception message length
                 &format!("mov QWORD PTR [rax + 16], {}", msg_len)
             );                                                                  // store the exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // store the default zero exception code

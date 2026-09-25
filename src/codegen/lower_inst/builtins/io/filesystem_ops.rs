@@ -65,7 +65,30 @@ pub(crate) fn lower_rename(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
 /// Lowers `tempnam(directory, prefix)` through the target-aware runtime helper.
 pub(crate) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_binary_path_call(ctx, inst, "tempnam", "__rt_tempnam")
+    super::super::ensure_arg_count(inst, "tempnam", 2)?;
+    let directory = expect_operand(inst, 0)?;
+    let prefix = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_to_result(ctx, directory, "tempnam")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            load_string_to_result(ctx, prefix, "tempnam")?;
+            ctx.emitter.instruction("mov x3, x1");                              // pass the prefix pointer in the runtime helper's secondary string slot
+            ctx.emitter.instruction("mov x4, x2");                              // pass the prefix length beside its pointer
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        Arch::X86_64 => {
+            load_string_to_result(ctx, directory, "tempnam")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_string_to_result(ctx, prefix, "tempnam")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the prefix pointer while the directory remains stacked
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the prefix length beside its pointer
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_tempnam");
+    box_owned_string_or_false_result(ctx, "tempnam");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `scandir(path)` through the target-aware runtime directory listing helper.
@@ -287,4 +310,3 @@ pub(crate) fn lower_pathinfo(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     }
     store_if_result(ctx, inst)
 }
-

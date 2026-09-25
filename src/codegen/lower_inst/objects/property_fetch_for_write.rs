@@ -46,11 +46,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
     };
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let arg_reg = if split.boxed {
-        result_reg
-    } else {
-        abi::int_arg_reg_name(ctx.emitter.target, 0)
-    };
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, base_reg)?;
     emit_null_receiver_error(ctx, base_reg, &property);
     if slot_supports_untyped_unset_marker(&slot) {
@@ -66,6 +62,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
         abi::emit_load_from_address(ctx.emitter, arg_reg, arg_reg, 0);
     }
     if split.boxed {
+        abi::emit_reg_move(ctx.emitter, result_reg, arg_reg);
         abi::emit_push_reg(ctx.emitter, result_reg);
         abi::emit_call_label(ctx.emitter, split.helper);
         abi::emit_push_reg(ctx.emitter, result_reg);

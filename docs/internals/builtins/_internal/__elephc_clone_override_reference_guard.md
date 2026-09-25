@@ -2,7 +2,7 @@
 title: "__elephc_clone_override_reference_guard() - internals"
 description: "Compiler internals for __elephc_clone_override_reference_guard(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1006
+  order: 1022
 ---
 
 ## `__elephc_clone_override_reference_guard()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/__elephc_clone_override_reference_guard.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/__elephc_clone_override_reference_guard.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

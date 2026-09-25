@@ -54,6 +54,7 @@ impl EvalStreamResources {
             || self.socket_listeners.remove(&id).is_some();
         self.socket_names.remove(&id);
         if let Some(mut child) = self.process_children.remove(&id) {
+            self.process_commands.remove(&id);
             let _ = child.wait();
         }
         closed && ok
@@ -100,6 +101,7 @@ impl EvalStreamResources {
             filter_resources,
             hash_contexts,
             process_children,
+            process_commands: _,
             resource_types: _,
             socket_listeners,
             stream_contexts,
@@ -155,11 +157,7 @@ impl EvalStreamResources {
             2 => Shutdown::Both,
             _ => return Some(false),
         };
-        let result = unsafe {
-            // libc shutdown only observes the borrowed descriptor and mode.
-            libc::shutdown(stream.file.as_raw_fd(), eval_shutdown_how(shutdown))
-        };
-        Some(result == 0)
+        Some(stream.file.shutdown(shutdown).is_ok())
     }
 
     /// Allocates an eval-local stream filter resource handle.
@@ -178,9 +176,66 @@ impl EvalStreamResources {
     /// Closes a process pipe stream and returns the child exit status.
     pub(crate) fn pclose(&mut self, id: i64) -> Option<i64> {
         let mut child = self.process_children.remove(&id)?;
+        self.process_commands.remove(&id);
         self.streams.remove(&id)?;
         let status = child.wait().ok()?;
         Some(status.code().unwrap_or(0) as i64)
+    }
+
+    /// Waits for a process resource created by `proc_open` and returns its exit code.
+    pub(crate) fn close_process(&mut self, id: i64) -> Option<i64> {
+        let mut child = self.process_children.remove(&id)?;
+        self.process_commands.remove(&id);
+        let status = child.wait().ok()?;
+        Some(status.code().unwrap_or(0) as i64)
+    }
+
+    /// Returns a PHP-shaped status snapshot without consuming an eval process resource.
+    pub(crate) fn process_status(&mut self, id: i64) -> Option<EvalProcessStatus> {
+        let command = self.process_commands.get(&id)?.clone();
+        let child = self.process_children.get_mut(&id)?;
+        let pid = i64::from(child.id());
+        let status = child.try_wait().ok()?;
+        let running = status.is_none();
+        let exitcode = status.and_then(|status| status.code()).map_or(-1, i64::from);
+        #[cfg(unix)]
+        let termsig = status
+            .and_then(|status| std::os::unix::process::ExitStatusExt::signal(&status))
+            .map_or(0, i64::from);
+        #[cfg(windows)]
+        let termsig = 0;
+        #[cfg(unix)]
+        let cached = !running;
+        #[cfg(windows)]
+        let cached = false;
+        Some(EvalProcessStatus {
+            cached,
+            command,
+            exitcode,
+            pid,
+            running,
+            signaled: termsig != 0,
+            stopped: false,
+            stopsig: 0,
+            termsig,
+        })
+    }
+
+    /// Sends an eval process a requested Unix signal or terminates it through Windows.
+    pub(crate) fn terminate_process(&mut self, id: i64, signal: i64) -> Option<bool> {
+        let child = self.process_children.get_mut(&id)?;
+        #[cfg(unix)]
+        {
+            let signal = libc::c_int::try_from(signal).ok()?;
+            // `child.id()` identifies the child process owned by this table and libc only
+            // observes that pid while delivering the requested signal.
+            return Some(unsafe { libc::kill(child.id() as libc::pid_t, signal) == 0 });
+        }
+        #[cfg(windows)]
+        {
+            let _ = signal;
+            Some(child.kill().is_ok())
+        }
     }
 
     /// Removes a directory resource from the table.
@@ -284,17 +339,40 @@ impl EvalStreamResources {
 
     /// Returns whether a stream's file descriptor is attached to a terminal.
     pub(crate) fn isatty(&self, id: i64) -> Option<bool> {
-        let stream = self.streams.get(&id)?;
-        let result = unsafe {
-            // libc only reads the descriptor value during the terminal probe.
-            libc::isatty(stream.file.as_raw_fd())
+        #[cfg(unix)]
+        let result = {
+            let stream = self.streams.get(&id)?;
+            unsafe {
+                // libc only reads the descriptor value during the terminal probe.
+                libc::isatty(stream.file.as_raw_fd())
+            }
         };
-        Some(result == 1)
+        #[cfg(unix)]
+        return Some(result == 1);
+        #[cfg(windows)]
+        {
+            let handle = self.windows_raw_handle(id)?;
+            let mut mode = 0_u32;
+            Some(unsafe { GetConsoleMode(handle as *mut std::ffi::c_void, &mut mode) } != 0)
+        }
+    }
+
+    /// Resolves a standard CRT descriptor or an eval-owned stream to its
+    /// borrowed Windows HANDLE without transferring ownership.
+    #[cfg(windows)]
+    pub(crate) fn windows_raw_handle(&self, id: i64) -> Option<isize> {
+        if (0..=2).contains(&id) {
+            let handle = unsafe { _get_osfhandle(id as i32) };
+            return (handle != -1).then_some(handle);
+        }
+        self.streams.get(&id).map(|stream| stream.file.as_raw_handle())
     }
 
     /// Toggles blocking mode on a stream's file descriptor.
     pub(crate) fn set_blocking(&self, id: i64, enable: bool) -> Option<bool> {
         let stream = self.streams.get(&id)?;
+        #[cfg(unix)]
+        {
         let fd = stream.file.as_raw_fd();
         let flags = unsafe {
             // fcntl reads the current descriptor flags without taking ownership.
@@ -313,6 +391,9 @@ impl EvalStreamResources {
             libc::fcntl(fd, libc::F_SETFL, flags)
         };
         Some(result == 0)
+        }
+        #[cfg(windows)]
+        { Some(stream.file.set_nonblocking(!enable).is_ok()) }
     }
 
     /// Reports timeout-setting support for local file streams.
@@ -337,14 +418,23 @@ impl EvalStreamResources {
     pub(crate) fn flock(&self, id: i64, operation: i64) -> Option<(bool, bool)> {
         let stream = self.streams.get(&id)?;
         let operation = eval_flock_operation(operation)?;
+        #[cfg(unix)]
         let result = unsafe {
             // libc only observes the borrowed raw fd during this call.
             libc::flock(stream.file.as_raw_fd(), operation)
         };
+        #[cfg(windows)]
+        let result = stream.file.flock(i64::from(operation));
+        #[cfg(unix)]
         if result == 0 {
             Some((true, false))
         } else {
             Some((false, eval_flock_would_block()))
+        }
+        #[cfg(windows)]
+        match result {
+            Ok(()) => Some((true, false)),
+            Err(error) => Some((false, matches!(error.raw_os_error(), Some(33 | 997)))),
         }
     }
 
@@ -495,6 +585,16 @@ impl EvalStreamResources {
 
 }
 
+#[cfg(windows)]
+unsafe extern "C" {
+    fn _get_osfhandle(fd: i32) -> isize;
+}
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn GetConsoleMode(handle: *mut std::ffi::c_void, mode: *mut u32) -> i32;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,5 +641,25 @@ mod tests {
         let mut resources = EvalStreamResources::default();
         let id = resources.insert_stream_context(EvalStreamContext { options: None });
         assert!(resources.is_live(id));
+    }
+
+    /// A process status snapshot retains the original command until `proc_close`
+    /// consumes the child resource and its companion metadata.
+    #[cfg(unix)]
+    #[test]
+    fn process_status_keeps_command_until_process_is_closed() {
+        let mut resources = EvalStreamResources::default();
+        let result = resources
+            .open_process("exit 0", &[None, None, None], None, None, false)
+            .expect("start shell process");
+
+        let status = resources
+            .process_status(result.process_id)
+            .expect("status retains command metadata");
+        assert_eq!(status.command, "exit 0");
+        assert!(resources.is_live(result.process_id));
+        assert_eq!(resources.close_process(result.process_id), Some(0));
+        assert!(!resources.is_live(result.process_id));
+        assert!(resources.process_commands.get(&result.process_id).is_none());
     }
 }

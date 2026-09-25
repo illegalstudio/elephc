@@ -6,15 +6,24 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - No `check` hook: `tempnam` is a pure-data builtin whose `Str` return type is
-//!   fully determined by its declaration. The registry common path infers the
-//!   arguments and enforces the exactly-2-argument arity before falling back to
-//!   `returns`.
+//! - `tempnam` returns either an owned string or `false` when both its requested
+//!   directory and platform fallback directory cannot create a temporary file.
+//! - The registry common path infers the arguments and enforces the exactly-2-
+//!   argument arity before calling the check hook.
 
+use crate::builtins::spec::BuiltinCheckCtx;
+use crate::errors::CompileError;
+use crate::types::PhpType;
 
 builtin! {
     contract: "tempnam",
+    check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Tempnam,
     ),
+}
+
+/// Returns `string|false`, matching PHP when temporary-file creation fails.
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    Ok(PhpType::Union(vec![PhpType::Str, PhpType::False]))
 }

@@ -2,7 +2,7 @@
 title: "opcache_is_script_cached_in_file_cache()"
 description: "Reports whether a script is in the on-disk file cache."
 sidebar:
-  order: 641
+  order: 648
 ---
 
 ## opcache_is_script_cached_in_file_cache()

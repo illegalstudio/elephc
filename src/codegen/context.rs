@@ -72,6 +72,8 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) backtrace_activation: bool,
     pub(super) backtrace_enabled: bool,
     pub(super) epilogue_emitted: bool,
+    /// Bytes already staged above an eval bridge's fixed scratch frame.
+    pub(super) eval_native_staged_bytes: usize,
     /// `--instrument` id assigned to this function in its prologue, consumed by
     /// its epilogue's `elephc_instr_exit(id)`. `None` outside `--instrument`.
     pub(super) instr_id: Option<usize>,
@@ -115,7 +117,8 @@ impl<'a> FunctionContext<'a> {
         epilogue_label: Option<String>,
     ) -> Self {
         let callable_reachability = CallableReachabilityAnalysis::new(module, function);
-        let pcntl_async_signals = module_uses_pcntl_async_signals(module);
+        let pcntl_async_signals = module_uses_pcntl_async_signals(module)
+            || module_uses_sapi_windows_ctrl(module);
         let pcntl_signal_handlers = module_uses_pcntl_signal_handlers(module);
         let function_fragment = label_fragment(&function.name);
         // Indexed by raw block id, matching `Function::block()`'s positional lookup.
@@ -160,6 +163,7 @@ impl<'a> FunctionContext<'a> {
             backtrace_activation: layout.backtrace_activation,
             backtrace_enabled: super::frame::module_uses_backtrace(module),
             epilogue_emitted: false,
+            eval_native_staged_bytes: 0,
             instr_id: None,
             is_main,
             web: false,
@@ -961,7 +965,7 @@ impl<'a> FunctionContext<'a> {
             && matches!(source_ty.codegen_repr(), PhpType::Mixed)
         {
             let result_reg = abi::int_result_reg(self.emitter);
-            let arg_reg = abi::int_arg_reg_name(self.emitter.target, 0);
+            let arg_reg = abi::runtime_helper_int_arg_reg(self.emitter, 0);
             if result_reg != arg_reg {
                 abi::emit_reg_move(self.emitter, arg_reg, result_reg);
             }
@@ -1550,6 +1554,29 @@ impl<'a> FunctionContext<'a> {
 /// Scans every emitted function-like body for `pcntl_async_signals()` state changes.
 fn module_uses_pcntl_async_signals(module: &Module) -> bool {
     module_uses_pcntl_operation(module, crate::ir::PcntlRuntime::AsyncSignals)
+}
+
+/// Scans every emitted body for the Windows console callback registration that needs safe points.
+fn module_uses_sapi_windows_ctrl(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| {
+            function.instructions.iter().any(|inst| {
+                matches!(
+                    inst.immediate,
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                        crate::ir::RuntimeFnId::SapiWindowsSetCtrlHandler
+                    )))
+                )
+            })
+        })
 }
 
 /// Scans every emitted function-like body for `pcntl_signal()` registrations.

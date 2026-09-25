@@ -2,7 +2,7 @@
 title: "opcache_get_configuration() - internals"
 description: "Compiler internals for opcache_get_configuration(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 637
+  order: 644
 ---
 
 ## `opcache_get_configuration()` - internals

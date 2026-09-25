@@ -2801,6 +2801,31 @@ fn test_date_default_timezone_set_returns_true() {
     assert_eq!(out, "y");
 }
 
+/// Valid timezone identifiers commit atomically through the baked PHP/timelib
+/// authority: canonical names, aliases, DST-sensitive procedural helpers, and
+/// DateTime all observe the same selected zone. An invalid follow-up warns,
+/// returns false, and leaves the last successful selection unchanged.
+#[test]
+fn test_date_default_timezone_set_validates_transactionally_against_iana() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo date_default_timezone_set("UTC") ? "utc," : "utc-fail,";
+echo date_default_timezone_set("Europe/Paris") ? date("P", 1719835200) . "," : "paris-fail,";
+echo date_default_timezone_set("America/New_York") ? strtotime("2024-07-01 12:00:00") . "," : "ny-fail,";
+echo date_default_timezone_set("US/Eastern") ? date("P", 1719835200) . "," : "alias-fail,";
+$dt = new DateTime("2024-07-01 12:00:00");
+echo $dt->format("P"), ",";
+echo date_default_timezone_set("Europe/Nope") ? "bad" : "false", ",";
+echo date_default_timezone_get(), ",", date("P", 1719835200);
+"#,
+    );
+    assert_eq!(out.stdout, "utc,+02:00,1719849600,-04:00,-04:00,false,US/Eastern,-04:00");
+    assert_eq!(
+        out.stderr,
+        "Warning: date_default_timezone_set(): Timezone ID 'Europe/Nope' is invalid\n"
+    );
+}
+
 /// Verifies the date() 'P' specifier (UTC offset as +hh:mm) reflects the configured zone and its
 /// daylight-saving state: Europe/Paris is CEST (+02:00) on 2024-07-01 but CET (+01:00) on 2024-01-01.
 #[test]

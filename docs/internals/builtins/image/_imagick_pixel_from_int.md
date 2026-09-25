@@ -2,7 +2,7 @@
 title: "_imagick_pixel_from_int() - internals"
 description: "Compiler internals for _imagick_pixel_from_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1103
+  order: 1119
 ---
 
 ## `_imagick_pixel_from_int()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:4517](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4517) (`_imagick_pixel_from_int`)
+- **Lowering**: [`src/image_prelude.rs`:4588](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4588) (`_imagick_pixel_from_int`)
 - **Function symbol**: `_imagick_pixel_from_int()`
 
 

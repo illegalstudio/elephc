@@ -20,7 +20,7 @@ pub fn emit_array_take_boxed(emitter: &mut Emitter) {
 
 /// Accepts an array cell in the first C argument and consumes its old owner only when splitting.
 fn emit_cell_ensure_unique(emitter: &mut Emitter) {
-    let arg = abi::int_arg_reg_name(emitter.target, 0);
+    let arg = abi::runtime_helper_int_arg_reg(emitter, 0);
     let result = abi::int_result_reg(emitter);
     emitter.blank();
     emitter.label_global("__rt_array_cell_ensure_unique");
@@ -74,9 +74,9 @@ fn emit_cell_ensure_unique(emitter: &mut Emitter) {
 
 /// Mutates a published unique cell in argument zero; argument one selects shift rather than pop.
 fn emit_take(emitter: &mut Emitter) {
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
-    let arg2 = abi::int_arg_reg_name(emitter.target, 2);
+    let arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
+    let arg2 = abi::runtime_helper_int_arg_reg(emitter, 2);
     let result = abi::int_result_reg(emitter);
     emitter.blank();
     emitter.label_global("__rt_array_take_boxed");
@@ -187,9 +187,9 @@ fn emit_take(emitter: &mut Emitter) {
 /// The hash remains at the same address, so codegen can publish a COW split before entering this
 /// helper. The selected payload is retained or boxed before `hash_unset` retires the entry owner.
 fn emit_hash_pop(emitter: &mut Emitter) {
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
-    let arg2 = abi::int_arg_reg_name(emitter.target, 2);
+    let arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
+    let arg2 = abi::runtime_helper_int_arg_reg(emitter, 2);
     let result = abi::int_result_reg(emitter);
     emitter.blank();
     emitter.label_global("__rt_hash_pop_boxed");

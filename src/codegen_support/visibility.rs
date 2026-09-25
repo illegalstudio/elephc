@@ -19,6 +19,8 @@
 //!   for CORRECTNESS — two-level namespace binding means a same-image reference cannot be
 //!   preempted — but it needs one for SIZE: every `.globl` in a Mach-O image is an export, hence
 //!   a `-dead_strip` root, so without marking, dead stripping a dylib collects nothing.
+//! - PE/COFF has no GNU `.hidden` directive. Windows exports are controlled explicitly through
+//!   the generated `.drectve` allowlist, so this pass leaves Windows assembly unchanged.
 
 use std::collections::HashSet;
 
@@ -43,7 +45,8 @@ pub(crate) fn append_hidden_directives_with_extras(
 ) -> String {
     let directive = match platform {
         crate::codegen_support::platform::Platform::MacOS => ".private_extern",
-        _ => ".hidden",
+        crate::codegen_support::platform::Platform::Linux => ".hidden",
+        crate::codegen_support::platform::Platform::Windows => return asm.to_string(),
     };
     append_visibility_directives(asm, exported, directive, additional_internal)
 }
@@ -139,6 +142,17 @@ mod tests {
         let out = append_hidden_directives(asm, &exported, Platform::MacOS);
         assert!(out.contains(".private_extern __rt_heap_alloc\n"));
         assert!(!out.contains(".private_extern _roundtrip"));
+    }
+
+    /// Leaves PE/COFF visibility to the explicit `.drectve` export allowlist.
+    #[test]
+    fn leaves_windows_coff_without_unsupported_hidden_directives() {
+        let asm = ".globl elephc_init\nelephc_init:\n.globl __rt_heap_alloc\n__rt_heap_alloc:\n";
+        let exported: HashSet<String> = ["elephc_init".to_string()].into_iter().collect();
+        assert_eq!(
+            append_hidden_directives(asm, &exported, Platform::Windows),
+            asm
+        );
     }
 
     /// Hides ELF CRT globals that the compiler driver adds after assembly.

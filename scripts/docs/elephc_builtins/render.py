@@ -100,17 +100,13 @@ def _internals_short_description(b: dict) -> str:
 def _signature_line(b: dict) -> str:
     parts: list[str] = []
     for p in b["sig"]["params"]:
-        prefix = ""
-        if p["by_ref"]:
-            prefix += "&"
-        if not p.get("optional"):
-            prefix += ""
+        reference = "&" if p["by_ref"] else ""
         # PHP-style render: `string $name`
         if p.get("default") is not None:
             # already rendered PHP literal
-            parts.append(f"{p['type']} ${p['name']} = {p['default']}")
+            parts.append(f"{p['type']} {reference}${p['name']} = {p['default']}")
         else:
-            parts.append(f"{p['type']} ${p['name']}")
+            parts.append(f"{p['type']} {reference}${p['name']}")
     params = ", ".join(parts)
     if b["sig"]["variadic"]:
         sep = ", " if parts else ""
@@ -205,8 +201,8 @@ def _runtime_helpers_section(b: dict) -> str:
 def _semantic_descriptor_section(b: dict) -> str:
     """Render the backend-neutral registry fields shared by compiler consumers."""
     semantics = b.get("semantics")
+    route = (b.get("aot") or {}).get("kind")
     if not semantics:
-        route = (b.get("aot") or {}).get("kind")
         descriptions = {
             "language-construct": "Shared contract with a dedicated compiler language-construct implementation.",
             "dedicated-syntax": "Shared contract lowered through dedicated compiler syntax.",
@@ -214,6 +210,13 @@ def _semantic_descriptor_section(b: dict) -> str:
             "none": "Shared contract intentionally unsupported by the AOT backend.",
         }
         return descriptions.get(route, "Shared contract without a registry semantic descriptor.")
+    if route == "prelude" and set(semantics) <= {"target_support_kind", "target_support"}:
+        targets = semantics.get("target_support") or []
+        support = ", ".join(f"`{target}`" for target in targets) or "_none declared_"
+        return (
+            "Shared contract implemented by an injected elephc-PHP prelude.\n\n"
+            f"- **Target support**: {support}"
+        )
     validation = semantics.get("validation") or {}
     ownership = semantics.get("ownership") or {}
     callable_policy = semantics.get("callable") or {}
@@ -288,6 +291,7 @@ def _availability_section(b: dict) -> str:
     """Two-line support matrix: compiled (AOT) vs eval() interpreter."""
     lines = ["## Availability", ""]
     aot = b.get("aot") or {"supported": not b.get("eval_only"), "kind": "unknown"}
+    target_support_kind = (b.get("semantics") or {}).get("target_support_kind")
     if not aot.get("supported"):
         reason = aot.get("unsupported_reason")
         suffix = f" (`{reason}`)" if reason else ""
@@ -297,8 +301,12 @@ def _availability_section(b: dict) -> str:
         )
     else:
         route = aot.get("kind")
-        if route == "registry":
-            target_support_kind = (b.get("semantics") or {}).get("target_support_kind")
+        if target_support_kind == "windows":
+            lines.append(
+                "- **Compiled (AOT)**: supported on Windows x86_64; the function is absent "
+                "on non-Windows targets, matching php-src's `PHP_WIN32` guard."
+            )
+        elif route == "registry":
             if target_support_kind == "host_only":
                 lines.append(
                     "- **Compiled (AOT)**: supported on the three executable/release "

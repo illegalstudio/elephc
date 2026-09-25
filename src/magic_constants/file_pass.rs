@@ -25,13 +25,11 @@ use super::walker::{walk_program, Pass};
 ///
 /// Note: The file path is canonicalized before conversion to a string to resolve symlinks and relative paths.
 pub(super) fn substitute_file_constants(stmts: Vec<Stmt>, file_path: &Path) -> Vec<Stmt> {
-    let canonical = file_path
-        .canonicalize()
-        .unwrap_or_else(|_| file_path.to_path_buf());
-    let file = canonical.display().to_string();
+    let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+    let file = crate::source_path::source_path_display(&canonical);
     let dir = canonical
         .parent()
-        .map(|p| p.display().to_string())
+        .map(crate::source_path::source_path_display)
         .unwrap_or_default();
     let mut pass = FilePass { file, dir };
     walk_program(stmts, &mut pass)

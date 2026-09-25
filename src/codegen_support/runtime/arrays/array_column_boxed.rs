@@ -26,12 +26,12 @@ fn ins(emitter: &mut Emitter, arm: &str, x86: &str) {
     emitter.instruction(if emitter.target.arch == Arch::AArch64 { arm } else { x86 }); // keep the same operation on both native architectures
 }
 
-/// Borrows a source box and string key in C ABI args 0..2; returns an owned array or zero.
+/// Borrows a source box and string key in internal helper args 0..2; returns an owned array or zero.
 pub fn emit_array_column_boxed(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
-    let arg2 = abi::int_arg_reg_name(emitter.target, 2);
+    let arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
+    let arg2 = abi::runtime_helper_int_arg_reg(emitter, 2);
     let low = if emitter.target.arch == Arch::AArch64 { "x1" } else { "rdi" };
 
     emitter.blank();
@@ -94,7 +94,7 @@ pub fn emit_array_column_boxed(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_array_key_exists_mixed_key");
     abi::emit_branch_if_int_result_zero(emitter, "__rt_array_column_boxed_loop");
     load_row_key(emitter);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 3), 0);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 3), 0);
     abi::emit_call_label(emitter, "__rt_array_get_mixed_key");
     abi::emit_reg_move(emitter, arg1, result);
     abi::emit_load_temporary_stack_slot(emitter, arg0, OUTPUT);
@@ -115,7 +115,7 @@ pub fn emit_array_column_boxed(emitter: &mut Emitter) {
 /// Restores the borrowed row and normalized column key for presence and read helpers.
 fn load_row_key(emitter: &mut Emitter) {
     for (index, offset) in [ROW, KEY_LO, KEY_HI].into_iter().enumerate() {
-        abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::emit_load_temporary_stack_slot(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
 }
 

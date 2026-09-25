@@ -59,6 +59,7 @@ mod strtotime;
 mod time;
 mod microtime;
 mod php_uname;
+mod sapi_windows;
 
 pub(crate) use build_argv::emit_build_argv;
 pub(crate) use date::emit_date;
@@ -100,6 +101,11 @@ pub(crate) use microtime::emit_microtime_str;
 pub(crate) use microtime::emit_microtime_mixed;
 pub(crate) use mktime::emit_mktime;
 pub(crate) use php_uname::emit_php_uname;
+pub(crate) use sapi_windows::{
+    emit_sapi_windows, SAPI_CP_INPUT_CODEPAGE_ERROR, SAPI_CP_OUTPUT_CODEPAGE_ERROR,
+    SAPI_CP_SET_WARNING_PREFIX,
+};
+pub(crate) use sapi_windows::emit_sapi_windows_data;
 pub(crate) use mb_ereg_match::emit_mb_ereg_match;
 pub(crate) use pcre_to_posix::emit_pcre_to_posix;
 pub(crate) use pcntl::{

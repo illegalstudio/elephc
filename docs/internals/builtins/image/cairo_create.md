@@ -2,7 +2,7 @@
 title: "cairo_create() - internals"
 description: "Compiler internals for cairo_create(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 402
+  order: 406
 ---
 
 ## `cairo_create()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13354](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13354) (`cairo_create`)
+- **Lowering**: [`src/image_prelude.rs`:13425](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13425) (`cairo_create`)
 - **Function symbol**: `cairo_create()`
 
 

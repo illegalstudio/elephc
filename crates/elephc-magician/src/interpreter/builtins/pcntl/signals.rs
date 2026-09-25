@@ -12,6 +12,52 @@ use super::*;
 use crate::context::{pcntl_runtime, EvalPcntlSignalHandler};
 use elephc_pcntl::{ElephcPcntlSigInfo, ElephcPcntlSignalMask};
 
+// libc only exposes these POSIX signal constants on Unix targets.  Keep the
+// evaluator's PHP-level comparisons target-neutral; the non-Unix bridge still
+// rejects every operation with ENOSYS before any value can be applied.
+#[cfg(target_os = "linux")]
+const PCNTL_SIG_BLOCK: libc::c_int = libc::SIG_BLOCK;
+#[cfg(target_os = "linux")]
+const PCNTL_SIG_UNBLOCK: libc::c_int = libc::SIG_UNBLOCK;
+#[cfg(target_os = "linux")]
+const PCNTL_SIG_SETMASK: libc::c_int = libc::SIG_SETMASK;
+#[cfg(target_os = "macos")]
+const PCNTL_SIG_BLOCK: libc::c_int = libc::SIG_BLOCK;
+#[cfg(target_os = "macos")]
+const PCNTL_SIG_UNBLOCK: libc::c_int = libc::SIG_UNBLOCK;
+#[cfg(target_os = "macos")]
+const PCNTL_SIG_SETMASK: libc::c_int = libc::SIG_SETMASK;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const PCNTL_SIG_BLOCK: libc::c_int = 1;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const PCNTL_SIG_UNBLOCK: libc::c_int = 2;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const PCNTL_SIG_SETMASK: libc::c_int = 3;
+
+/// Enters the bridge's signal-dispatch critical section on Unix targets.
+#[cfg(unix)]
+fn pcntl_dispatch_begin(mask: &mut ElephcPcntlSignalMask) -> libc::c_int {
+    unsafe { elephc_pcntl::elephc_pcntl_dispatch_begin(mask) }
+}
+
+/// Enters the non-Unix dispatch stub, which records ENOSYS and returns failure.
+#[cfg(not(unix))]
+fn pcntl_dispatch_begin(mask: &mut ElephcPcntlSignalMask) -> libc::c_int {
+    elephc_pcntl::elephc_pcntl_dispatch_begin(mask)
+}
+
+/// Leaves the bridge's signal-dispatch critical section on Unix targets.
+#[cfg(unix)]
+fn pcntl_dispatch_end(mask: &ElephcPcntlSignalMask) -> libc::c_int {
+    unsafe { elephc_pcntl::elephc_pcntl_dispatch_end(mask) }
+}
+
+/// Leaves the non-Unix dispatch stub, which records ENOSYS and returns failure.
+#[cfg(not(unix))]
+fn pcntl_dispatch_end(mask: &ElephcPcntlSignalMask) -> libc::c_int {
+    elephc_pcntl::elephc_pcntl_dispatch_end(mask)
+}
+
 /// Pins one handler-owner context across every fallible step of callback dispatch.
 struct EvalHandlerDispatchGuard(*mut ElephcEvalContext);
 
@@ -177,7 +223,7 @@ fn eval_pcntl_signal(
 
 /// Returns PHP's omitted-argument restart policy for one signal.
 fn default_restart_syscalls(signal: i64) -> bool {
-    signal != i64::from(libc::SIGALRM)
+    signal != 14
 }
 
 /// Returns the retained callable or integer disposition registered for a signal.
@@ -245,7 +291,7 @@ fn eval_pcntl_sigprocmask(
     )?;
     if !matches!(
         how as libc::c_int,
-        libc::SIG_BLOCK | libc::SIG_UNBLOCK | libc::SIG_SETMASK
+        PCNTL_SIG_BLOCK | PCNTL_SIG_UNBLOCK | PCNTL_SIG_SETMASK
     ) {
         return eval_throw_builtin_value_error(
             "pcntl_sigprocmask(): Argument #1 ($mode) must be one of SIG_BLOCK, SIG_UNBLOCK, or SIG_SETMASK",
@@ -257,7 +303,7 @@ fn eval_pcntl_sigprocmask(
         "pcntl_sigprocmask",
         2,
         &signals,
-        how as libc::c_int == libc::SIG_SETMASK,
+        how as libc::c_int == PCNTL_SIG_SETMASK,
         context,
         values,
     )?;
@@ -427,7 +473,7 @@ fn eval_pcntl_dispatch_pending(
         return Ok(true);
     }
     let mut previous_mask = ElephcPcntlSignalMask::default();
-    if unsafe { elephc_pcntl::elephc_pcntl_dispatch_begin(&mut previous_mask) } == 0 {
+    if pcntl_dispatch_begin(&mut previous_mask) == 0 {
         pcntl_runtime::end_dispatch();
         return Ok(false);
     }
@@ -439,7 +485,7 @@ fn eval_pcntl_dispatch_pending(
     if result.is_err() {
         eval_pcntl_discard_masked_snapshot();
     }
-    let restored = unsafe { elephc_pcntl::elephc_pcntl_dispatch_end(&previous_mask) } != 0;
+    let restored = pcntl_dispatch_end(&previous_mask) != 0;
     pcntl_runtime::end_dispatch();
     let unpublished = values.set_pcntl_dispatching(false);
     match result {
@@ -548,7 +594,7 @@ mod tests {
     /// Keeps SIGALRM interruptible while retaining PHP's restart default for other signals.
     #[test]
     fn omitted_restart_syscalls_is_false_only_for_sigalrm() {
-        assert!(!default_restart_syscalls(i64::from(libc::SIGALRM)));
-        assert!(default_restart_syscalls(i64::from(libc::SIGUSR1)));
+        assert!(!default_restart_syscalls(14));
+        assert!(default_restart_syscalls(1));
     }
 }

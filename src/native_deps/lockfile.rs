@@ -257,6 +257,10 @@ mod tests {
             assert!(planned.contains(expected), "missing plan for {expected}: {planned:?}");
         }
         assert_eq!(lock.package[0].target[0].archives[0], "lib/libelephc_pcre2_shim.a");
+        assert!(lock.package[0]
+            .target
+            .iter()
+            .any(|target| target.name == "windows-x86_64"));
     }
 
     /// Verifies the committed curl example lock includes every current catalog target.

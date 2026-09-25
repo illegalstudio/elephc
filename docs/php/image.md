@@ -389,9 +389,13 @@ returns the interlace bit (the bundled encoders always write non-interlaced
 output). `imageantialias` is accepted as a no-op — antialiased primitive drawing
 is not implemented.
 
-> Deprecated/removed GD converters (`image2wbmp`, `jpeg2wbmp`, `png2wbmp`) and the
-> Windows-only screen-capture functions (`imagegrabscreen`, `imagegrabwindow`) are
-> not provided.
+On Windows, `imagegrabscreen()` captures the desktop and
+`imagegrabwindow(int $handle, bool $client_area = false)` captures either a full
+HWND or its client area. Both return an owned `GdImage` or `false`, matching
+php-src's Windows-only surface. They are undefined on the other targets.
+
+Deprecated/removed GD converters (`image2wbmp`, `jpeg2wbmp`, `png2wbmp`) are not
+provided.
 
 ## Exif and IPTC metadata
 
@@ -945,7 +949,7 @@ Classes: `CairoAntialias`, `CairoContext`, `CairoException`, `CairoFillRule`, `C
 | [`exif_imagetype()`](./builtins/image/exif_imagetype.md) | `(string $filename): mixed` | `mixed` | ✓ | — |
 | [`exif_read_data()`](./builtins/image/exif_read_data.md) | `(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed` | `mixed` | ✓ | — |
 | [`exif_tagname()`](./builtins/image/exif_tagname.md) | `(int $index): mixed` | `mixed` | ✓ | — |
-| [`exif_thumbnail()`](./builtins/image/exif_thumbnail.md) | `(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed` | `mixed` | ✓ | — |
+| [`exif_thumbnail()`](./builtins/image/exif_thumbnail.md) | `(string $filename, mixed &$width = 0, mixed &$height = 0, mixed &$image_type = 0): mixed` | `mixed` | ✓ | — |
 
 Constants: `EXIF_USE_MBSTRING`.
 
@@ -1011,6 +1015,8 @@ Constants: `EXIF_USE_MBSTRING`.
 | [`imagegammacorrect()`](./builtins/image/imagegammacorrect.md) | `(mixed $image, float $input_gamma, float $output_gamma): bool` | `bool` | ✓ | — |
 | [`imagegetinterpolation()`](./builtins/image/imagegetinterpolation.md) | `(mixed $image): int` | `int` | ✓ | — |
 | [`imagegif()`](./builtins/image/imagegif.md) | `(mixed $image, ?string $file = null): bool` | `bool` | ✓ | — |
+| [`imagegrabscreen()`](./builtins/image/imagegrabscreen.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`imagegrabwindow()`](./builtins/image/imagegrabwindow.md) | `(int $handle, bool $client_area = false): mixed` | `mixed` | ✓ | — |
 | [`imageinterlace()`](./builtins/image/imageinterlace.md) | `(mixed $image, ?bool $enable = null): int` | `int` | ✓ | — |
 | [`imageistruecolor()`](./builtins/image/imageistruecolor.md) | `(mixed $image): bool` | `bool` | ✓ | — |
 | [`imagejpeg()`](./builtins/image/imagejpeg.md) | `(mixed $image, ?string $file = null, int $quality = -1): bool` | `bool` | ✓ | — |

@@ -40,12 +40,12 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
     abi::emit_frame_prologue(emitter, frame_size);
     emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_callee_offset)); // preserve the fiber pointer and callable entry across helper calls
     emitter.instruction(&format!("str x21, [sp, #{}]", saved_callee_offset + 16)); // preserve the callable descriptor across helper calls
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // preserve the variadic tail scratch registers
         "stp x22, x23, [sp, #{}]",
         saved_callee_offset + 32
     )); // preserve variadic tail scratch registers across helper calls
     emitter.instruction("mov x19, x0");                                         // x19 = Fiber object passed by __rt_fiber_entry
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the callable descriptor stored on the Fiber
         "ldr x20, [x19, #{}]",
         runtime::FIBER_CALLABLE_OFFSET
     )); // x20 = callable descriptor stored on the Fiber
@@ -62,7 +62,7 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the Fiber callback returns
     box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
 
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // restore the variadic tail scratch registers
         "ldp x22, x23, [sp, #{}]",
         saved_callee_offset + 32
     )); // restore variadic tail scratch registers
@@ -100,11 +100,11 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction("str x25, [sp, #48]");                                  // preserve the boxed argument-container register
 
     emitter.instruction("mov x19, x0");                                         // x19 = Fiber object passed by __rt_fiber_entry
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the descriptor stored on the Fiber
         "ldr x20, [x19, #{}]",
         runtime::FIBER_CALLABLE_OFFSET
     )); // x20 = callable descriptor stored on the Fiber
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the number of boxed start arguments
         "ldr x21, [x19, #{}]",
         runtime::FIBER_START_ARG_COUNT_OFFSET
     )); // x21 = number of boxed start() values to forward
@@ -163,7 +163,7 @@ fn emit_copy_fiber_start_args_to_array_aarch64(
     emitter.instruction("cmp x23, x21");                                        // have all supplied start() arguments been copied?
     emitter.instruction(&format!("b.hs {}", done_label));                       // leave the copy loop once index >= count
     emitter.instruction("lsl x9, x23, #3");                                     // convert the argument index into an 8-byte slot offset
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // compute the Fiber start-argument array base
         "add x10, x19, #{}",
         runtime::FIBER_START_ARGS_OFFSET
     )); // x10 = base of Fiber start_args storage
@@ -213,11 +213,11 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     abi::store_at_offset(emitter, "rbx", saved_argbox_offset);
 
     emitter.instruction("mov r12, rdi");                                        // r12 = Fiber object passed by __rt_fiber_entry
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the callable descriptor for the x86 wrapper
         "mov r13, QWORD PTR [r12 + {}]",
         runtime::FIBER_CALLABLE_OFFSET
     )); // r13 = callable descriptor stored on the Fiber
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the boxed start-argument count
         "mov r14, QWORD PTR [r12 + {}]",
         runtime::FIBER_START_ARG_COUNT_OFFSET
     )); // r14 = number of boxed start() values to forward
@@ -231,7 +231,7 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction(&format!("test r10, r10"));                             // check whether the descriptor exposes a uniform invoker slot
     emitter.instruction(&format!("je {}", missing_label));                      // reject descriptors that cannot be called through the generic path
     emitter.instruction("mov rsi, rbx");                                        // pass boxed start-argument array as invoker argument 2
-    emitter.instruction("call r10");                                            // invoke descriptor adapter; rax = boxed Mixed return value
+    emitter.emit_platform_callback_call("r10", 2);
     emitter.instruction("mov r15, rax");                                        // preserve the Fiber callback return while releasing the argument container
     emitter.instruction("mov rax, rbx");                                        // move the boxed argument container into the decref helper input
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary boxed argument container
@@ -277,7 +277,7 @@ fn emit_copy_fiber_start_args_to_array_x86_64(
     emitter.label(loop_label);
     emitter.instruction("cmp rbx, r14");                                        // have all supplied start() arguments been copied?
     emitter.instruction(&format!("jae {}", done_label));                        // leave the copy loop once index >= count
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the boxed Fiber start argument
         "mov rax, QWORD PTR [r12 + rbx * 8 + {}]",
         runtime::FIBER_START_ARGS_OFFSET
     )); // load the boxed Mixed start argument
@@ -353,7 +353,7 @@ fn spill_variadic_start_arg_array_aarch64(
     let loop_label = format!("{}_variadic_copy", wrapper.label);
     let done_label = format!("{}_variadic_done", wrapper.label);
 
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the boxed start-argument count for the variadic tail
         "ldr x22, [x19, #{}]",
         runtime::FIBER_START_ARG_COUNT_OFFSET
     )); // x22 = number of boxed start() values supplied by the caller
@@ -385,7 +385,7 @@ fn spill_variadic_start_arg_array_aarch64(
         emitter.instruction("mov x9, x23");                                     // tail index already matches the Fiber start_args index
     }
     emitter.instruction("lsl x10, x9, #3");                                     // convert the start_args index into an 8-byte slot offset
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // compute the source index for the variadic tail
         "add x11, x19, #{}",
         runtime::FIBER_START_ARGS_OFFSET
     )); // x11 = base of Fiber start_args storage
@@ -424,14 +424,14 @@ fn spill_descriptor_hidden_arg(
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // spill the descriptor-captured string pair
                 "stp {}, {}, [sp, #{}]",
                 ptr_reg, len_reg, slot_offset
             )); // spill the descriptor-captured string pair for the final call
         }
         PhpType::Void | PhpType::Never => {}
         _ => {
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // spill the descriptor-captured payload
                 "str {}, [sp, #{}]",
                 abi::int_result_reg(emitter),
                 slot_offset
@@ -616,7 +616,7 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     abi::store_at_offset(emitter, "r15", saved_tail_count_offset); // preserve the caller's r15 before caching variadic tail count
     abi::store_at_offset(emitter, "rbx", saved_tail_index_offset); // preserve the caller's rbx before using it as a tail copy index
     emitter.instruction("mov r12, rdi");                                        // r12 = Fiber object passed by __rt_fiber_entry
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the callable descriptor stored on the Fiber
         "mov r13, QWORD PTR [r12 + {}]",
         runtime::FIBER_CALLABLE_OFFSET
     )); // r13 = callable descriptor stored on the Fiber
@@ -625,7 +625,10 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
 
     spill_wrapper_args_x86_64(emitter, wrapper, &arg_types, "r14");
     let overflow_bytes = materialize_spilled_args_for_closure_call_x86_64(emitter, &arg_types);
+    let call_stack_padding = abi::outgoing_call_stack_pad_bytes(emitter.target, overflow_bytes);
+    abi::emit_reserve_temporary_stack(emitter, call_stack_padding);
     abi::emit_call_reg(emitter, "r13");
+    abi::emit_release_temporary_stack(emitter, call_stack_padding);
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the Fiber callback returns
     box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
 
@@ -691,7 +694,7 @@ fn spill_variadic_start_arg_array_x86_64(
     let loop_label = format!("{}_variadic_copy", wrapper.label);
     let done_label = format!("{}_variadic_done", wrapper.label);
 
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the x86 Fiber start-argument count
         "mov r15, QWORD PTR [r12 + {}]",
         runtime::FIBER_START_ARG_COUNT_OFFSET
     )); // r15 = number of boxed start() values supplied by the caller
@@ -723,7 +726,7 @@ fn spill_variadic_start_arg_array_x86_64(
     } else {
         emitter.instruction("mov r10, rbx");                                    // tail index already matches the Fiber start_args index
     }
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the boxed x86 variadic tail value
         "mov rax, QWORD PTR [r12 + r10 * 8 + {}]",
         runtime::FIBER_START_ARGS_OFFSET
     )); // load the boxed Mixed tail value
@@ -856,4 +859,40 @@ fn frame_arg_slot_offset(idx: usize) -> usize {
 /// alignment at calls.
 fn align16(n: usize) -> usize {
     (n + 15) & !15
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 descriptor-invoker Fiber wrapper emits the
+    /// reverse-ABI SysV->MSx64 remap immediately before the indirect `call r10`
+    /// into the generated uniform invoker (finding F1, reverse-ABI): without it,
+    /// the invoker would read its descriptor/argument-array arguments from the
+    /// wrong registers (rdi/rsi instead of rcx/rdx) on windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_descriptor_invoker_wrapper_remaps_before_indirect_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_x86_64_descriptor_invoker_wrapper(&mut emitter, "fiber_invoker_0");
+        let asm = emitter.output();
+
+        let remap_idx = asm.find("mov rcx, rdi").expect("expected SysV->MSx64 remap");
+        let call_idx = asm.find("call r11").expect("expected relocated indirect call r11");
+        assert!(remap_idx < call_idx, "remap must precede the indirect invoker call");
+    }
+
+    /// Verifies linux-x86_64 emission never sees the reverse-ABI remap: the remap
+    /// is windows-x86_64-only, so a linux-x86_64 descriptor-invoker wrapper must
+    /// stay byte-identical to before the remap was introduced.
+    #[test]
+    fn test_linux_x86_64_descriptor_invoker_wrapper_has_no_reverse_abi_remap() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_x86_64_descriptor_invoker_wrapper(&mut emitter, "fiber_invoker_0");
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, rdi"));
+    }
 }

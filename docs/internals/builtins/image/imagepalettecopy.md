@@ -2,7 +2,7 @@
 title: "imagepalettecopy() - internals"
 description: "Compiler internals for imagepalettecopy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 519
+  order: 525
 ---
 
 ## `imagepalettecopy()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2599](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2599) (`imagepalettecopy`)
+- **Lowering**: [`src/image_prelude.rs`:2670](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2670) (`imagepalettecopy`)
 - **Function symbol**: `imagepalettecopy()`
 
 

@@ -8,7 +8,7 @@ sidebar:
 ## array_multisort()
 
 ```php
-function array_multisort(array $array1, array $array2): bool
+function array_multisort(array &$array1, array &$array2): bool
 ```
 
 Sorts exactly two equal-length indexed arrays in ascending tuple order. AOT accepts either two concrete integer arrays or two boxed scalar arrays, not a mixed pair. Concrete string/float arrays, sort flags, associative arrays, and eval are unsupported.

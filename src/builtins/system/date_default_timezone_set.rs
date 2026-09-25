@@ -15,4 +15,5 @@ builtin! {
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::DateDefaultTimezoneSet,
     ),
+    requirements: crate::builtins::semantics::timezone_validation_requirements,
 }

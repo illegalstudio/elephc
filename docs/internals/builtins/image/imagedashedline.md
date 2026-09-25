@@ -2,7 +2,7 @@
 title: "imagedashedline() - internals"
 description: "Compiler internals for imagedashedline(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 497
+  order: 501
 ---
 
 ## `imagedashedline()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2665](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2665) (`imagedashedline`)
+- **Lowering**: [`src/image_prelude.rs`:2736](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2736) (`imagedashedline`)
 - **Function symbol**: `imagedashedline()`
 
 

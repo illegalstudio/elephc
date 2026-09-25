@@ -8,6 +8,7 @@
 //! - Preserves callback ABI, target parity, array storage, and ownership contracts.
 
 use super::*;
+use crate::codegen_support::platform::Platform;
 
 /// Stack frame layout used by generated callback ABI adapters.
 pub(super) struct CallbackWrapperFrame {
@@ -94,12 +95,45 @@ pub(super) fn callback_arg_abi_slots(visible_arg_types: &[PhpType]) -> usize {
         .sum()
 }
 
+/// Loads the hidden callback environment after the visible raw callback words.
+///
+/// Windows runtime helpers cross from their SysV-shaped implementation ABI into
+/// generated callbacks through `Emitter::emit_platform_callback_call`.  That
+/// transition uses the native MSx64 positional layout: after `rcx`, `rdx`, `r8`,
+/// and `r9`, the environment lives at `rbp + 48` and every later raw word advances
+/// by eight bytes.  In particular, a two-string comparator consumes all four
+/// registers and its environment is the fifth word on the caller stack.
+pub(super) fn load_callback_environment_to_reg(
+    ctx: &mut FunctionContext<'_>,
+    visible_arg_types: &[PhpType],
+    destination: &str,
+) {
+    let environment_word = callback_arg_abi_slots(visible_arg_types);
+    if (ctx.emitter.target.platform, ctx.emitter.target.arch) == (Platform::Windows, Arch::X86_64)
+        && environment_word >= 4
+    {
+        let stack_offset = 48 + (environment_word - 4) * 8;
+        abi::load_from_caller_stack(ctx.emitter, destination, stack_offset);
+        return;
+    }
+
+    let source = abi::int_arg_reg_name(ctx.emitter.target, environment_word);
+    if source != destination {
+        ctx.emitter.instruction(&format!("mov {}, {}", destination, source));   // preserve the in-register callback environment while wrapper setup reuses argument registers
+    }
+}
+
 /// Saves the incoming runtime callback arguments before nested boxing calls can clobber them.
 pub(super) fn save_callback_visible_args(
     ctx: &mut FunctionContext<'_>,
     frame: &CallbackWrapperFrame,
     visible_arg_types: &[PhpType],
 ) {
+    if (ctx.emitter.target.platform, ctx.emitter.target.arch) == (Platform::Windows, Arch::X86_64) {
+        save_windows_callback_visible_args(ctx, frame, visible_arg_types);
+        return;
+    }
+
     let mut reg_index = 0usize;
     for (index, ty) in visible_arg_types.iter().enumerate() {
         let offset = frame.raw_offsets[index];
@@ -115,6 +149,45 @@ pub(super) fn save_callback_visible_args(
             reg_index += 1;
         }
     }
+}
+
+/// Saves raw MSx64 callback words from positional registers or overflow slots.
+///
+/// Unlike the generated PHP ABI, the runtime-to-callback bridge treats a string
+/// as two adjacent native words.  Keep the two words independently addressable so
+/// a string beginning in `r9` can continue at the first caller-stack slot.
+fn save_windows_callback_visible_args(
+    ctx: &mut FunctionContext<'_>,
+    frame: &CallbackWrapperFrame,
+    visible_arg_types: &[PhpType],
+) {
+    let mut word_index = 0usize;
+    for (index, ty) in visible_arg_types.iter().enumerate() {
+        let offset = frame.raw_offsets[index];
+        save_windows_callback_word(ctx, word_index, offset);
+        word_index += 1;
+        if matches!(ty.codegen_repr(), PhpType::Str) {
+            save_windows_callback_word(ctx, word_index, offset + 8);
+            word_index += 1;
+        }
+    }
+}
+
+/// Saves one raw callback word from its MSx64 register or caller-stack location.
+fn save_windows_callback_word(
+    ctx: &mut FunctionContext<'_>,
+    word_index: usize,
+    destination_offset: usize,
+) {
+    if word_index < 4 {
+        let source = abi::int_arg_reg_name(ctx.emitter.target, word_index);
+        abi::emit_store_to_sp(ctx.emitter, source, destination_offset);
+        return;
+    }
+
+    let stack_offset = 48 + (word_index - 4) * 8;
+    abi::load_from_caller_stack(ctx.emitter, "r10", stack_offset);
+    abi::emit_store_to_sp(ctx.emitter, "r10", destination_offset);
 }
 
 /// Saves an already materialized hidden receiver or called-class id into the wrapper frame.
@@ -160,7 +233,15 @@ pub(super) fn load_callback_target_args(
     ctx: &mut FunctionContext<'_>,
     frame: &CallbackWrapperFrame,
     visible_arg_types: &[PhpType],
-) {
+) -> usize {
+    let target_arg_types = callback_target_arg_types(frame, visible_arg_types);
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &target_arg_types, 0);
+    if assignments.iter().any(|assignment| !assignment.in_register()) {
+        stage_callback_target_args(ctx, frame, visible_arg_types);
+        return abi::materialize_outgoing_args(ctx.emitter, &assignments);
+    }
+
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 0),
@@ -195,6 +276,78 @@ pub(super) fn load_callback_target_args(
                 frame.raw_offsets[index],
             );
             reg_index += 1;
+        }
+    }
+    0
+}
+
+/// Returns the actual generated-PHP ABI types after wrapper-only Mixed boxing.
+fn callback_target_arg_types(
+    frame: &CallbackWrapperFrame,
+    visible_arg_types: &[PhpType],
+) -> Vec<PhpType> {
+    let mut types = Vec::with_capacity(visible_arg_types.len() + 1);
+    types.push(PhpType::Int);
+    for (index, visible_ty) in visible_arg_types.iter().enumerate() {
+        if frame.boxed_offsets[index] != NO_CALLBACK_BOX_OFFSET {
+            types.push(PhpType::Mixed);
+        } else {
+            types.push(visible_ty.codegen_repr());
+        }
+    }
+    types
+}
+
+/// Stages the hidden receiver/class id and visible values for the regular
+/// generated-PHP outgoing argument materializer.
+fn stage_callback_target_args(
+    ctx: &mut FunctionContext<'_>,
+    frame: &CallbackWrapperFrame,
+    visible_arg_types: &[PhpType],
+) {
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        frame.hidden_offset,
+    );
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // stage the hidden receiver/class id before callback method arguments
+
+    for (index, visible_ty) in visible_arg_types.iter().enumerate() {
+        let box_offset = frame.boxed_offsets[index];
+        if box_offset != NO_CALLBACK_BOX_OFFSET {
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                box_offset,
+            );
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // stage the wrapper-owned boxed Mixed callback argument
+            continue;
+        }
+
+        match visible_ty.codegen_repr() {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, ptr_reg, frame.raw_offsets[index]);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, len_reg, frame.raw_offsets[index] + 8);
+                abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg); // stage the callback string pointer/length pair for ordinary call lowering
+            }
+            PhpType::Float => {
+                abi::emit_load_temporary_stack_slot(
+                    ctx.emitter,
+                    abi::float_result_reg(ctx.emitter),
+                    frame.raw_offsets[index],
+                );
+                abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter)); // stage the callback float argument for ordinary call lowering
+            }
+            PhpType::Void | PhpType::Never => {}
+            _ => {
+                abi::emit_load_temporary_stack_slot(
+                    ctx.emitter,
+                    abi::int_result_reg(ctx.emitter),
+                    frame.raw_offsets[index],
+                );
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // stage the raw callback scalar/pointer argument for ordinary call lowering
+            }
         }
     }
 }

@@ -2,7 +2,7 @@
 title: "imagesavealpha() - internals"
 description: "Compiler internals for imagesavealpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 526
+  order: 532
 ---
 
 ## `imagesavealpha()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2522](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2522) (`imagesavealpha`)
+- **Lowering**: [`src/image_prelude.rs`:2593](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2593) (`imagesavealpha`)
 - **Function symbol**: `imagesavealpha()`
 
 

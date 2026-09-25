@@ -2,7 +2,7 @@
 title: "imagecolorstotal()"
 description: "Returns how many colors a palette image holds."
 sidebar:
-  order: 478
+  order: 482
 ---
 
 ## imagecolorstotal()

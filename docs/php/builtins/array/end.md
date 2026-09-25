@@ -8,7 +8,7 @@ sidebar:
 ## end()
 
 ```php
-function end(array $array): mixed
+function end(array &$array): mixed
 ```
 
 Moves the array's internal pointer to the last element and returns it.

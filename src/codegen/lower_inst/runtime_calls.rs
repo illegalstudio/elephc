@@ -55,7 +55,7 @@ fn lower_array_unpack_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result);
-    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
+    abi::emit_reg_move(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0), result);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
     // The promotion lends its payload. Acquire a result owner before retiring the clone,
     // including the invalid-value path where the returned null pointer needs no retain.
@@ -272,6 +272,8 @@ fn unary_string_symbol(runtime: UnaryStringRuntime) -> &'static str {
         UnaryStringRuntime::AddSlashes => "__rt_addslashes",
         UnaryStringRuntime::Base64Encode => "__rt_base64_encode",
         UnaryStringRuntime::BinToHex => "__rt_bin2hex",
+        UnaryStringRuntime::EscapeShellArg => "__rt_escapeshellarg",
+        UnaryStringRuntime::EscapeShellCmd => "__rt_escapeshellcmd",
         UnaryStringRuntime::HexToBin => "__rt_hex2bin",
         UnaryStringRuntime::HtmlEntityDecode => "__rt_html_entity_decode",
         UnaryStringRuntime::NlToBr => "__rt_nl2br",

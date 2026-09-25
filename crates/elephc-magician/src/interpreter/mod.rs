@@ -87,9 +87,10 @@ pub(crate) use statements::eval_property_set_for_ffi;
 pub(crate) use output_handlers::eval_ob_handler_callback;
 use statements::*;
 use throwables::*;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::net::ToSocketAddrs;
+#[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};

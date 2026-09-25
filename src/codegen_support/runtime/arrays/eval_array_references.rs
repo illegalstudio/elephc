@@ -36,7 +36,7 @@ pub(super) fn emit_eval_array_reference_retirement(emitter: &mut Emitter) {
             emitter.instruction("jz __rt_heap_free_eval_references_done");      // keep non-eval programs independent of the Rust bridge
             emitter.instruction("push rax");                                    // preserve the dying payload and align the SysV call from entry parity
             emitter.instruction("mov rdi, rax");                                // pass the validated cell address as the first C argument
-            emitter.instruction("call r10");                                    // invalidate observers before the allocator recycles this address
+            emitter.emit_native_bridge_call("r10", 1);                          // invalidate observers through the target Rust ABI before the allocator recycles this address
             emitter.instruction("pop rax");                                     // restore the allocator input after the Rust callback
         }
     }
@@ -46,21 +46,32 @@ pub(super) fn emit_eval_array_reference_retirement(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::Target;
+    use crate::codegen_support::platform::{Platform, Target};
 
     /// All targets gate the callback on a Mixed allocation and preserve the allocator input.
     #[test]
     fn heap_free_retires_eval_array_reference_cells_on_every_target() {
-        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64", "windows-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             super::super::heap_free::emit_heap_free(&mut emitter, true);
             let output = emitter.output();
             assert_eq!(output.matches("__rt_heap_free_eval_references_done:").count(), 1, "{name}");
             assert!(output.contains("_elephc_eval_array_reference_retire_fn"), "{name}");
-            let required: &[&str] = match target.arch {
-                Arch::AArch64 => &["ldrb w9, [x0, #-8]", "cmp w9, #5", "blr x10", "ldp x0, x30, [sp], #16"],
-                Arch::X86_64 => &["cmp BYTE PTR [rax - 8], 5", "push rax", "mov rdi, rax", "call r10", "pop rax"],
+            let required: &[&str] = match (target.platform, target.arch) {
+                (Platform::Windows, Arch::X86_64) => &[
+                    "cmp BYTE PTR [rax - 8], 5",
+                    "push rax",
+                    "mov rdi, rax",
+                    "mov r11, r10",
+                    "sub rsp, 32",
+                    "mov rcx, rdi",
+                    "call r11",
+                    "add rsp, 32",
+                    "pop rax",
+                ],
+                (_, Arch::AArch64) => &["ldrb w9, [x0, #-8]", "cmp w9, #5", "blr x10", "ldp x0, x30, [sp], #16"],
+                (_, Arch::X86_64) => &["cmp BYTE PTR [rax - 8], 5", "push rax", "mov rdi, rax", "call r10", "pop rax"],
             };
             for instruction in required { assert!(output.contains(instruction), "{name}: {instruction}"); }
             let retirement = output.find("__rt_heap_free_eval_references_done:").unwrap();

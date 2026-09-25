@@ -72,6 +72,10 @@ use super::*;
         );
         let variants = [
             RuntimeFeatures { regex: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { tls: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { zlib: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { bzip2: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { iconv: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { mb_strlen: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { phar_archive: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { descriptor_invoker: true, ..RuntimeFeatures::none() },

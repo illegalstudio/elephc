@@ -31,7 +31,7 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x2, #0");                              // no bytes at all is EOF, tested BEFORE any stripping
-            ctx.emitter.instruction(&format!("b.le {}", false_label));
+            ctx.emitter.instruction(&format!("b.le {}", false_label));          // branch to PHP false when readline reached EOF
             ctx.emitter.instruction("sub x9, x2, #1");                          // offset of the last byte read
             ctx.emitter.instruction("ldrb w10, [x1, x9]");                      // load it to see whether it terminates the line
             ctx.emitter.instruction("cmp w10, #10");                            // 10 = '\n'
@@ -40,17 +40,17 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
             ctx.emitter.label(&keep_label);
             ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after producing the string
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("mov x1, #0");                              // false carries no payload
-            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("mov x2, #0");                              // false carries no high payload word
             ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rdx, 0");                              // no bytes at all is EOF, tested BEFORE any stripping
-            ctx.emitter.instruction(&format!("jle {}", false_label));
+            ctx.emitter.instruction(&format!("jle {}", false_label));           // branch to PHP false when readline reached EOF
             ctx.emitter.instruction("lea r10, [rdx - 1]");                      // offset of the last byte read
             ctx.emitter.instruction("mov cl, BYTE PTR [rax + r10]");            // load it to see whether it terminates the line
             ctx.emitter.instruction("cmp cl, 10");                              // 10 = '\n'
@@ -61,10 +61,10 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
             ctx.emitter.instruction("mov rsi, rdx");                            // Mixed high payload = its length
             ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after producing the string
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // false carries no payload
-            ctx.emitter.instruction("xor esi, esi");
+            ctx.emitter.instruction("xor esi, esi");                            // false carries no high payload word
             ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = boolean false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
@@ -213,6 +213,24 @@ pub(super) fn box_stream_socket_pair_result(ctx: &mut FunctionContext<'_>) {
 
 /// Boxes an owned runtime string result into PHP `string|false` Mixed form.
 pub(in crate::codegen::lower_inst::builtins) fn box_owned_string_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
+    box_owned_string_or_tagged_result(ctx, label_prefix, 3);
+}
+
+/// Boxes an owned runtime string result into PHP `string|null` Mixed form.
+pub(in crate::codegen::lower_inst::builtins) fn box_owned_string_or_null_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
+    box_owned_string_or_tagged_result(ctx, label_prefix, 8);
+}
+
+/// Boxes an owned runtime string result, selecting the supplied runtime tag on a null pointer.
+///
+/// The runtime helper returns a raw `{pointer,length}` pair.  A nullable PHP return is a boxed
+/// Mixed value in EIR, so keeping only `rax` would reinterpret the string pointer as a cell and
+/// lose the length (the exact failure mode of `sapi_windows_cp_conv()` on PE).
+fn box_owned_string_or_tagged_result(
+    ctx: &mut FunctionContext<'_>,
+    label_prefix: &str,
+    failure_tag: i64,
+) {
     let false_label = ctx.next_label(&format!("{}_false", label_prefix));
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     match ctx.emitter.target.arch {
@@ -229,9 +247,9 @@ pub(in crate::codegen::lower_inst::builtins) fn box_owned_string_or_false_result
             ctx.emitter.instruction("stp x10, x11, [x0, #8]");                  // store the owned string pointer and length in the Mixed cell
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the string Mixed result
             ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload for the Mixed bool box
-            ctx.emitter.instruction("mov x2, #0");                              // clear the unused high payload word for bool Mixed boxes
-            ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for a boolean false Mixed value
+            ctx.emitter.instruction("mov x1, #0");                              // false and null Mixed values carry no payload
+            ctx.emitter.instruction("mov x2, #0");                              // clear the unused high payload word for nullable Mixed boxes
+            ctx.emitter.instruction(&format!("mov x0, #{}", failure_tag));      // select false or null according to the PHP return contract
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
         }
@@ -241,9 +259,9 @@ pub(in crate::codegen::lower_inst::builtins) fn box_owned_string_or_false_result
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // materialize the x86_64 Mixed heap kind word
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))
-            );                                                                  // materialize the x86_64 Mixed heap kind word
+            );
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction("mov r10, 1");                              // select runtime tag 1 for a string Mixed payload
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the string tag in the Mixed cell
@@ -252,9 +270,9 @@ pub(in crate::codegen::lower_inst::builtins) fn box_owned_string_or_false_result
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r11");           // store the owned string length in the Mixed cell
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the string Mixed result
             ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box
-            ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes
-            ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for a boolean false Mixed value
+            ctx.emitter.instruction("xor edi, edi");                            // false and null Mixed values carry no payload
+            ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for nullable Mixed boxes
+            ctx.emitter.instruction(&format!("mov eax, {}", failure_tag));      // select false or null according to the PHP return contract
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
         }
@@ -357,9 +375,9 @@ pub(super) fn box_owned_pathinfo_array_as_mixed(ctx: &mut FunctionContext<'_>) {
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // materialize the x86_64 Mixed heap kind word
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))
-            );                                                                  // materialize the x86_64 Mixed heap kind word
+            );
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction("mov QWORD PTR [rax], 5");                  // select runtime tag 5 for an associative-array Mixed payload
             abi::emit_pop_reg(ctx.emitter, "r10");
@@ -500,9 +518,9 @@ fn box_array_or_false_result(ctx: &mut FunctionContext<'_>, tag: u64, label_pref
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // materialize the x86_64 Mixed heap kind word
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))
-            );                                                                  // materialize the x86_64 Mixed heap kind word
+            );
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax], {}", tag));  // select the runtime tag matching this array's payload shape
             abi::emit_pop_reg(ctx.emitter, "r10");

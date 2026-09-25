@@ -610,6 +610,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'preg_replace_callback': ['string', 'callable', 'string'],
     'preg_split': ['string', 'string', 'int', 'int'],
     'prev': ['array'],
+    'proc_open': ['array|string', 'array', 'array', '?string', '?array', '?array'],
     'print_r': ['mixed', ('bool', 'return')],
     'printf': ['string'],
     'ptr': ['mixed'],
@@ -860,6 +861,8 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
     # registry records the union-covering `Mixed` for the whole arity, so the
     # documented return type is recovered here (reference PHP's own signature).
     "phpversion": "string|false",
+    "proc_open": "resource|false",
+    "proc_get_status": "array|false",
     # array_shift / array_pop return the shifted element which is `mixed`
     # in PHP's loose type system.
     "array_shift": "mixed",
@@ -989,6 +992,67 @@ DESCRIPTION_OVERRIDES: Dict[str, str] = {
         "Clones an incremental hashing context into an independent HashContext object. "
         "Provided by the compiler-injected hash prelude in compiled code."
     ),
+}
+
+
+# Structured user-facing details that cannot be recovered from the scalar
+# builtin descriptor alone. Keep target-specific behavior here so forced docs
+# regeneration preserves it instead of replacing it with a generic stub.
+DOCUMENTATION_OVERRIDES: Dict[str, Dict[str, List[str]]] = {
+    "escapeshellarg": {
+        "examples": [
+            "See [`examples/shell-escaping`](../../../../examples/shell-escaping/main.php) "
+            "for argument and command escaping together."
+        ],
+        "notes": [
+            "macOS and Linux use PHP's single-quoted shell form; Windows uses PHP's "
+            "double-quoted command-line escaping rules.",
+            "Embedded NUL bytes raise a catchable `ValueError`.",
+            "Windows enforces PHP's 8192-byte command-line limit for both input and output.",
+        ],
+    },
+    "escapeshellcmd": {
+        "examples": [
+            "See [`examples/shell-escaping`](../../../../examples/shell-escaping/main.php) "
+            "for argument and command escaping together."
+        ],
+        "notes": [
+            "Shell metacharacters follow PHP's platform-specific POSIX or Windows rules.",
+            "Embedded NUL bytes raise a catchable `ValueError`.",
+            "Windows enforces PHP's 8192-byte command-line limit for both input and output.",
+        ],
+    },
+    "proc_get_status": {
+        "notes": [
+            "The status record contains `command`, `pid`, `cached`, `running`, "
+            "`signaled`, `stopped`, `exitcode`, `termsig`, and `stopsig`.",
+            "Windows status queries do not reap the process and report `cached` as `false`.",
+            "Unix caches a normally exited child so `proc_close()` can still return its exit code.",
+        ],
+    },
+    "proc_open": {
+        "examples": [
+            "See [`examples/process-pipes`](../../../../examples/process-pipes/main.php) "
+            "for a complete stdin/stdout/stderr exchange and process-status query."
+        ],
+        "notes": [
+            "Windows accepts string and array commands, UTF-8 working directories and "
+            "environment maps, plus PHP's documented process options.",
+            "The Windows descriptor runtime supports `pipe`, `socket`, `file`, `redirect`, "
+            "stream-resource, and `null` entries while preserving sparse integer keys.",
+            "Descriptors above 2 are rejected on Windows because `STARTUPINFOW` cannot expose "
+            "them as matching numbered CRT descriptors.",
+            "The Windows `blocking_pipes` option selects blocking `ReadFile` behavior; the "
+            "default probes readable pipes and reports `EAGAIN` when no bytes are available.",
+        ],
+    },
+    "proc_terminate": {
+        "notes": [
+            "Unix forwards the optional signal to `kill(2)`.",
+            "Windows follows PHP by ignoring the signal value and terminating the process "
+            "with exit code 255.",
+        ],
+    },
 }
 
 

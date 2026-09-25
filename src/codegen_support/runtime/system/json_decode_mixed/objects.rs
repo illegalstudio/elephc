@@ -318,7 +318,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     //   [rbp - 64] = after_comma flag
     emitter.instruction("push rbp");                                            // preserve or restore JSON decoder scratch state
     emitter.instruction("mov rbp, rsp");                                        // load or prepare JSON decoder state
-    emitter.instruction("sub rsp, 64");                                         // update the JSON decoder cursor or counter
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned decoder scratch
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // load or prepare JSON decoder state
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // load or prepare JSON decoder state
 
@@ -353,13 +353,12 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     // Save key_start, scan to closing `"`.
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // load or prepare JSON decoder state
     emitter.instruction("add rcx, 1");                                          // step past opening `"`
-    emitter.instruction("push r12");                                            // preserve callee-saved
-    emitter.instruction("xor r12, r12");                                        // escape flag
+    emitter.instruction("xor r9, r9");                                          // clear the key escape flag
     emitter.label("__rt_json_decode_object_real_key_scan_x");
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON decoder condition
     emitter.instruction("jge __rt_json_decode_object_real_key_fail_x");         // branch on the current JSON decoder condition
     emitter.instruction("movzx r10, BYTE PTR [rax + rcx]");                     // load or prepare JSON decoder state
-    emitter.instruction("test r12, r12");                                       // check the current JSON decoder condition
+    emitter.instruction("test r9, r9");                                         // check the current JSON decoder condition
     emitter.instruction("jne __rt_json_decode_object_real_key_after_escape_x"); // branch on the current JSON decoder condition
     emitter.instruction("cmp r10, 92");                                         // '\\'
     emitter.instruction("je __rt_json_decode_object_real_key_set_escape_x");    // branch on the current JSON decoder condition
@@ -367,15 +366,14 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_decode_object_real_key_done_x");          // branch on the current JSON decoder condition
     emitter.instruction("jmp __rt_json_decode_object_real_key_advance_x");      // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_key_set_escape_x");
-    emitter.instruction("mov r12, 1");                                          // load or prepare JSON decoder state
+    emitter.instruction("mov r9, 1");                                           // mark the next key byte as escaped
     emitter.instruction("jmp __rt_json_decode_object_real_key_advance_x");      // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_key_after_escape_x");
-    emitter.instruction("xor r12, r12");                                        // update the JSON decoder cursor or counter
+    emitter.instruction("xor r9, r9");                                          // clear the consumed key escape flag
     emitter.label("__rt_json_decode_object_real_key_advance_x");
     emitter.instruction("add rcx, 1");                                          // update the JSON decoder cursor or counter
     emitter.instruction("jmp __rt_json_decode_object_real_key_scan_x");         // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_key_done_x");
-    emitter.instruction("pop r12");                                             // preserve or restore JSON decoder scratch state
     emitter.instruction("add rcx, 1");                                          // include the closing `"`
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // load or prepare JSON decoder state
 
@@ -412,15 +410,14 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // load or prepare JSON decoder state
 
     // Boundary scanner for the value.
-    emitter.instruction("push r12");                                            // preserve or restore JSON decoder scratch state
     emitter.instruction("xor r10, r10");                                        // depth
     emitter.instruction("xor r11, r11");                                        // in_string
-    emitter.instruction("xor r12, r12");                                        // escape
+    emitter.instruction("xor r9, r9");                                          // clear the value escape flag
     emitter.label("__rt_json_decode_object_real_value_scan_x");
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON decoder condition
     emitter.instruction("jge __rt_json_decode_object_real_value_done_x");       // branch on the current JSON decoder condition
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON decoder state
-    emitter.instruction("test r12, r12");                                       // check the current JSON decoder condition
+    emitter.instruction("test r9, r9");                                         // check the current JSON decoder condition
     emitter.instruction("jne __rt_json_decode_object_real_value_after_escape_x"); // branch on the current JSON decoder condition
     emitter.instruction("test r11, r11");                                       // check the current JSON decoder condition
     emitter.instruction("jne __rt_json_decode_object_real_value_in_string_x");  // branch on the current JSON decoder condition
@@ -458,15 +455,14 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r11, r11");                                        // update the JSON decoder cursor or counter
     emitter.instruction("jmp __rt_json_decode_object_real_value_advance_x");    // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_value_set_escape_x");
-    emitter.instruction("mov r12, 1");                                          // load or prepare JSON decoder state
+    emitter.instruction("mov r9, 1");                                           // mark the next value byte as escaped
     emitter.instruction("jmp __rt_json_decode_object_real_value_advance_x");    // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_value_after_escape_x");
-    emitter.instruction("xor r12, r12");                                        // update the JSON decoder cursor or counter
+    emitter.instruction("xor r9, r9");                                          // clear the consumed value escape flag
     emitter.label("__rt_json_decode_object_real_value_advance_x");
     emitter.instruction("add rcx, 1");                                          // update the JSON decoder cursor or counter
     emitter.instruction("jmp __rt_json_decode_object_real_value_scan_x");       // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_value_done_x");
-    emitter.instruction("pop r12");                                             // preserve or restore JSON decoder scratch state
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // load or prepare JSON decoder state
 
     // Recursively decode value sub-slice.
@@ -551,7 +547,6 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* (stdClass) in rax
 
     emitter.label("__rt_json_decode_object_real_key_fail_x");
-    emitter.instruction("pop r12");                                             // preserve or restore JSON decoder scratch state
     emitter.label("__rt_json_decode_object_real_fail_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load the object slice pointer for location reporting
     emitter.instruction("add rax, QWORD PTR [rbp - 24]");                       // convert the object-local cursor to an absolute source pointer

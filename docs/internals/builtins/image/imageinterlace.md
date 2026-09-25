@@ -2,7 +2,7 @@
 title: "imageinterlace() - internals"
 description: "Compiler internals for imageinterlace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 513
+  order: 519
 ---
 
 ## `imageinterlace()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3344](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3344) (`imageinterlace`)
+- **Lowering**: [`src/image_prelude.rs`:3415](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3415) (`imageinterlace`)
 - **Function symbol**: `imageinterlace()`
 
 

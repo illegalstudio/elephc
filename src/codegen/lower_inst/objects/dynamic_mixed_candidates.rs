@@ -545,17 +545,17 @@ pub(super) fn emit_dynamic_new_mixed_spl_fixed_array_candidate(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             class_id as i64,
         );
-        abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
+        abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1));
     } else {
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             class_id as i64,
         );
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
+        abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 0);
     }
     abi::emit_call_label(ctx.emitter, "__rt_spl_fixed_new");
     emit_box_current_owned_value_as_mixed(
@@ -573,7 +573,7 @@ pub(super) fn emit_dynamic_new_mixed_spl_dll_candidate(
 ) -> Result<()> {
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         class_id as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");

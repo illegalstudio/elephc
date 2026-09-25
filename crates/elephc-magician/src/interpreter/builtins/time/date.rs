@@ -23,9 +23,25 @@ eval_builtin! {
 
 static EVAL_TZ_MUTEX: Mutex<()> = Mutex::new(());
 
+#[cfg(unix)]
 unsafe extern "C" {
     /// Re-reads libc's process-global timezone environment.
     fn tzset();
+}
+
+#[cfg(windows)]
+unsafe extern "C" {
+    /// Converts a 64-bit Unix timestamp into local broken-down time through the Windows CRT.
+    #[link_name = "_localtime64_s"]
+    fn windows_localtime64_s(output: *mut libc::tm, timestamp: *const i64) -> libc::c_int;
+
+    /// Converts a 64-bit Unix timestamp into UTC broken-down time through the Windows CRT.
+    #[link_name = "_gmtime64_s"]
+    fn windows_gmtime64_s(output: *mut libc::tm, timestamp: *const i64) -> libc::c_int;
+
+    /// Re-reads the Windows CRT process-global timezone environment.
+    #[link_name = "_tzset"]
+    fn windows_tzset();
 }
 
 /// Evaluates PHP `date($format, $timestamp = time())` for the eval subset.
@@ -93,6 +109,8 @@ pub(in crate::interpreter) fn eval_context_localtime(
 
 /// Converts one Unix timestamp to process-local broken-down time through libc.
 pub(in crate::interpreter) fn eval_localtime(timestamp: i64) -> Result<libc::tm, EvalStatus> {
+    #[cfg(unix)]
+    {
     let raw: libc::time_t = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
     let mut tm = MaybeUninit::<libc::tm>::uninit();
     let result = unsafe { libc::localtime_r(&raw, tm.as_mut_ptr()) };
@@ -100,10 +118,22 @@ pub(in crate::interpreter) fn eval_localtime(timestamp: i64) -> Result<libc::tm,
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(unsafe { tm.assume_init() })
+    }
+    #[cfg(windows)]
+    {
+        let mut tm = MaybeUninit::<libc::tm>::uninit();
+        let status = unsafe { windows_localtime64_s(tm.as_mut_ptr(), &timestamp) };
+        if status != 0 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        Ok(unsafe { tm.assume_init() })
+    }
 }
 
 /// Converts one Unix timestamp to UTC broken-down time through libc.
 pub(in crate::interpreter) fn eval_gmtime(timestamp: i64) -> Result<libc::tm, EvalStatus> {
+    #[cfg(unix)]
+    {
     let raw: libc::time_t = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
     let mut tm = MaybeUninit::<libc::tm>::uninit();
     let result = unsafe { libc::gmtime_r(&raw, tm.as_mut_ptr()) };
@@ -111,6 +141,16 @@ pub(in crate::interpreter) fn eval_gmtime(timestamp: i64) -> Result<libc::tm, Ev
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(unsafe { tm.assume_init() })
+    }
+    #[cfg(windows)]
+    {
+        let mut tm = MaybeUninit::<libc::tm>::uninit();
+        let status = unsafe { windows_gmtime64_s(tm.as_mut_ptr(), &timestamp) };
+        if status != 0 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        Ok(unsafe { tm.assume_init() })
+    }
 }
 
 /// Runs one libc timezone-sensitive operation under the eval context timezone.
@@ -134,7 +174,12 @@ fn eval_apply_process_timezone(timezone: &str) -> Result<(), EvalStatus> {
         return Err(EvalStatus::RuntimeFatal);
     }
     std::env::set_var("TZ", timezone);
+    #[cfg(unix)]
     unsafe { tzset() };
+    #[cfg(windows)]
+    unsafe {
+        windows_tzset();
+    }
     Ok(())
 }
 
@@ -145,7 +190,12 @@ fn eval_restore_process_timezone(previous: Option<&OsStr>) -> Result<(), EvalSta
     } else {
         std::env::remove_var("TZ");
     }
+    #[cfg(unix)]
     unsafe { tzset() };
+    #[cfg(windows)]
+    unsafe {
+        windows_tzset();
+    }
     Ok(())
 }
 

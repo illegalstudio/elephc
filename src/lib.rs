@@ -88,6 +88,7 @@ pub(crate) mod prelude_prune;
 pub mod resolver;
 /// Physical source-file classification and per-file language profiles.
 pub mod source;
+mod source_path;
 /// Source span tracking.
 pub mod span;
 /// `--strict-php` mode state and PHP-compatibility audit pass.

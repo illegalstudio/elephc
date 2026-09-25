@@ -85,7 +85,7 @@ fn emit_exception_cleanup_frames_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // does this activation record have cleanup work to run?
     emitter.instruction("je __rt_exception_cleanup_frames_next");               // skip callback execution when the activation carries no cleanup hook
     emitter.instruction("mov rdi, r11");                                        // pass the unwound activation frame pointer into the cleanup callback ABI register
-    emitter.instruction("call r10");                                            // run the per-function cleanup callback for this unwound activation record
+    emitter.emit_platform_callback_call("r10", 1);
 
     emitter.label("__rt_exception_cleanup_frames_next");
     emitter.instruction("jmp __rt_exception_cleanup_frames_loop");              // continue unwinding older activation records until the survivor is reached

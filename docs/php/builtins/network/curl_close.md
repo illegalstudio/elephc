@@ -2,7 +2,7 @@
 title: "curl_close()"
 description: "Closes a cURL session."
 sidebar:
-  order: 694
+  order: 708
 ---
 
 ## curl_close()

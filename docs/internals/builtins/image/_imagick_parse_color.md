@@ -2,7 +2,7 @@
 title: "_imagick_parse_color() - internals"
 description: "Compiler internals for _imagick_parse_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1102
+  order: 1118
 ---
 
 ## `_imagick_parse_color()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:4255](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4255) (`_imagick_parse_color`)
+- **Lowering**: [`src/image_prelude.rs`:4326](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4326) (`_imagick_parse_color`)
 - **Function symbol**: `_imagick_parse_color()`
 
 

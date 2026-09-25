@@ -68,12 +68,23 @@ pub(super) fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instr
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
     abi::emit_frame_slot_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        setjmp_argument_reg(ctx.emitter),
         handler_offset - TRY_HANDLER_JMP_BUF_OFFSET,
     );
     ctx.emitter.bl_c("setjmp");
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &handler_label);
     Ok(())
+}
+
+/// Returns the first argument register for the hand-written `__rt_setjmp` helper.
+///
+/// Generated PHP calls use the platform ABI, but `__rt_setjmp` is one of the
+/// hand-written runtime helpers that deliberately keeps the internal SysV-shaped
+/// x86_64 ABI on Windows.  Using `int_arg_reg_name()` here would put the jump
+/// buffer in `rcx`, while the Windows helper reads `rdi`, corrupting the handler
+/// record before the first exception is thrown.
+fn setjmp_argument_reg(emitter: &crate::codegen::emit::Emitter) -> &'static str {
+    abi::runtime_helper_int_arg_reg(emitter, 0)
 }
 
 /// Pops an EIR exception handler and restores the saved diagnostic-suppression depth.
@@ -114,4 +125,25 @@ pub(super) fn lower_catch_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction
     ctx.store_result_value(result)?;
     abi::emit_store_zero_to_symbol(ctx.emitter, "_exc_value", 0);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::setjmp_argument_reg;
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::{Arch, Platform, Target};
+
+    /// The EIR try handler must pass its jump buffer using the runtime-helper ABI,
+    /// not the generated-function ABI used for ordinary PHP calls.
+    #[test]
+    fn setjmp_uses_runtime_helper_argument_register_on_windows() {
+        let windows = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        assert_eq!(setjmp_argument_reg(&windows), "rdi");
+
+        let linux = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        assert_eq!(setjmp_argument_reg(&linux), "rdi");
+
+        let arm64 = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        assert_eq!(setjmp_argument_reg(&arm64), "x0");
+    }
 }

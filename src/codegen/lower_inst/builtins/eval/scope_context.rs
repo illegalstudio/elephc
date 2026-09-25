@@ -25,14 +25,6 @@ pub(super) fn load_eval_context_to_arg(ctx: &mut FunctionContext<'_>, arg_index:
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, EVAL_CONTEXT_HANDLE_OFFSET);
 }
 
-/// Reloads the saved eval source string into the bridge code pointer/length arguments.
-pub(super) fn move_saved_eval_code_to_eval_args(ctx: &mut FunctionContext<'_>) {
-    let code_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    let code_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, code_ptr_arg, EVAL_CODE_PTR_OFFSET);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, code_len_arg, EVAL_CODE_LEN_OFFSET);
-}
-
 /// Ensures a persistent eval scope exists and stores its handle in the scratch frame.
 pub(super) fn ensure_eval_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let slot = eval_scope_slot(ctx)?;
@@ -41,8 +33,7 @@ pub(super) fn ensure_eval_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_new");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_native_c_abi_call(ctx, "__elephc_eval_scope_new", &[]);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
     ctx.emitter.label(&ready);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
@@ -66,8 +57,7 @@ pub(super) fn ensure_eval_global_scope(ctx: &mut FunctionContext<'_>) -> Result<
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_new");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_native_c_abi_call(ctx, "__elephc_eval_scope_new", &[]);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
     ctx.emitter.label(&ready);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
@@ -111,11 +101,11 @@ pub(super) fn load_eval_global_scope_to_arg(ctx: &mut FunctionContext<'_>, arg_i
 pub(super) fn set_eval_context_global_scope(ctx: &mut FunctionContext<'_>) {
     load_eval_context_to_arg(ctx, 0);
     load_eval_global_scope_to_arg(ctx, 1);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_context_set_global_scope");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_loaded_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_context_set_global_scope",
+        &[PhpType::Pointer(None), PhpType::Pointer(None)],
+    );
     emit_eval_status_check(ctx);
 }
 
@@ -128,33 +118,28 @@ pub(super) fn push_eval_context_class_scope(ctx: &mut FunctionContext<'_>) -> Re
     let (called_ptr_reg, called_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, called_ptr_reg, EVAL_CALLED_CLASS_PTR_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, called_len_reg, EVAL_CALLED_CLASS_LEN_OFFSET);
-    load_eval_context_to_arg(ctx, 0);
+    stage_eval_native_context(ctx);
     let (class_label, class_len) = ctx.data.add_string(class_name.as_bytes());
     abi::emit_symbol_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        abi::int_result_reg(ctx.emitter),
         &class_label,
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_len as i64,
+    stage_eval_native_word(ctx, PhpType::Pointer(None));
+    stage_eval_native_int(ctx, class_len as i64);
+    stage_eval_native_stack_word(ctx, EVAL_CALLED_CLASS_PTR_OFFSET);
+    stage_eval_native_stack_word_as(ctx, EVAL_CALLED_CLASS_LEN_OFFSET, PhpType::Int);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_context_push_class_scope",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Int,
+        ],
     );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        EVAL_CALLED_CLASS_PTR_OFFSET,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        EVAL_CALLED_CLASS_LEN_OFFSET,
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_context_push_class_scope");
-    abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
     Ok(true)
 }
@@ -167,11 +152,11 @@ pub(super) fn pop_eval_context_class_scope(ctx: &mut FunctionContext<'_>, pushed
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     load_eval_context_to_arg(ctx, 0);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_context_pop_class_scope");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_loaded_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_context_pop_class_scope",
+        &[PhpType::Pointer(None)],
+    );
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
 }
 

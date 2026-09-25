@@ -138,6 +138,7 @@ pub(crate) use host_directory_process::{
     lower_gethostbyaddr, lower_getprotobyname, lower_getprotobynumber, lower_getservbyname,
     lower_getservbyport, lower_opendir, lower_readdir, lower_closedir,
     lower_rewinddir, lower_popen, lower_pclose, lower_fsockopen,
+    lower_proc_close, lower_proc_get_status, lower_proc_open, lower_proc_terminate,
     lower_file, lower_realpath, lower_realpath_cache_get, lower_realpath_cache_size,
 };
 pub(crate) use phar_write::{
@@ -166,7 +167,7 @@ pub(crate) use stat_ops::{
     lower_is_file, lower_is_dir, lower_is_readable, lower_is_writable,
     lower_is_writeable, lower_is_executable, lower_is_link,
 };
-pub(super) use boxing_helpers::box_owned_string_or_false_result;
+pub(super) use boxing_helpers::{box_owned_string_or_false_result, box_owned_string_or_null_result};
 pub(super) use boxing_helpers::box_readline_result;
 pub(super) use resource_handles::load_stream_fd_to_result;
 pub(in crate::codegen::lower_inst) use string_validation::load_string_to_result;

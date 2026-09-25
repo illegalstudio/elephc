@@ -262,6 +262,7 @@ mod tests {
                 cc: "cc".into(),
                 ar: "ar".into(),
                 ranlib: "ranlib".into(),
+                mingw_sysroot: None,
                 target_tuple: "fixture".into(),
                 abi: "fixture-abi".into(),
                 fingerprint: "fixture-fingerprint".into(),

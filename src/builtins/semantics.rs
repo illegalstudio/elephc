@@ -20,8 +20,10 @@ use crate::types::PhpType;
 
 pub use crate::builtins::requirements::{
     file_get_contents_requirements, file_put_contents_requirements, fopen_requirements,
-    stream_filter_requirements, unlink_requirements, BuiltinRequirement,
-    BuiltinRequirementInput, BuiltinRequirements, RequirementsFn,
+    stream_socket_client_requirements,
+    stream_filter_requirements, timezone_validation_requirements, unlink_requirements,
+    windows_timezone_requirements,
+    BuiltinRequirement, BuiltinRequirementInput, BuiltinRequirements, RequirementsFn,
 };
 
 /// Inputs shared by backend-neutral validation, result-type, and effect resolvers.
@@ -135,6 +137,10 @@ pub enum BuiltinTargetSupport {
     All,
     /// The builtin is valid on the three executable hosts but explicitly refused on iOS.
     HostOnly,
+    /// The builtin is valid on Unix executable hosts but absent from Windows and iOS.
+    UnixHostOnly,
+    /// The builtin is valid only on the Windows executable target.
+    WindowsOnly,
     /// The semantic strategy is valid on Linux AArch64 and Linux x86_64 only.
     Linux,
     /// The semantic strategy is valid on macOS AArch64 only.
@@ -163,6 +169,12 @@ pub enum BuiltinArgumentLowering {
     Date,
     /// Preserve JSON decode's source-sensitive option handling.
     JsonDecode,
+    /// Build proc_open's hidden Windows command/environment/options ABI operands.
+    ///
+    /// The public call still uses the shared argument planner; this strategy only
+    /// appends the three backend-neutral marshalling values after it has preserved
+    /// source-order evaluation and PHP parameter order.
+    ProcOpen,
     /// Preserve getenv's nullable name until runtime selects lookup or enumeration.
     Getenv,
     /// Keep source-sensitive omitted PCNTL defaults absent after named/spread planning.
@@ -519,10 +531,17 @@ pub const fn host_only_runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSeman
     semantics
 }
 
+/// Builds runtime-call semantics for a builtin that exists only in PHP's Windows SAPI.
+pub const fn windows_only_runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(target);
+    semantics.target_support = BuiltinTargetSupport::WindowsOnly;
+    semantics
+}
+
 /// Builds the shared descriptor for one typed PCNTL bridge operation.
 pub const fn pcntl_semantics(target: crate::ir::PcntlRuntime) -> BuiltinSemantics {
     let target_support = match target.target_support() {
-        crate::ir::PcntlTargetSupport::All => BuiltinTargetSupport::HostOnly,
+        crate::ir::PcntlTargetSupport::All => BuiltinTargetSupport::UnixHostOnly,
         crate::ir::PcntlTargetSupport::Linux => BuiltinTargetSupport::Linux,
         crate::ir::PcntlTargetSupport::MacOs => BuiltinTargetSupport::MacOs,
     };

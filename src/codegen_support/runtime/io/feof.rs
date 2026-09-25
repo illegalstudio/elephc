@@ -8,7 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 use crate::codegen_support::abi;
 
 /// Emits the `__rt_feof` runtime helper.
@@ -53,7 +53,11 @@ fn emit_feof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdi, r9");                                         // is this a synthetic user-wrapper fd?
     emitter.instruction("jge __rt_user_wrapper_feof");                          // dispatch into the wrapper's stream_eof instead of reading the eof-flag table
 
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table base address for the queried file descriptor
-    emitter.instruction("movzx eax, BYTE PTR [r10 + rdi]");                     // load the tracked eof flag byte for the requested file descriptor into the integer result register
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("call __rt_win_stream_slot");                       // map opaque SOCKET/CRT descriptor to a bounded stream-state slot
+        emitter.instruction("mov rdi, rax");                                    // use only the compact slot for fixed-table addressing
+    }
+    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table base address for the queried stream slot
+    emitter.instruction("movzx eax, BYTE PTR [r10 + rdi]");                     // load the tracked eof flag byte without indexing by a raw Windows handle
     emitter.instruction("ret");                                                 // return the eof flag to the caller using the standard x86_64 integer result register
 }

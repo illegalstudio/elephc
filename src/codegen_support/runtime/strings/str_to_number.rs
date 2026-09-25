@@ -45,7 +45,7 @@ pub fn emit_str_to_number(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_php_num_scan");                                // clip the scratch to PHP's leading numeric run
     emitter.instruction("str x1, [sp, #0]");                                    // save the fully-numeric flag across strtod
     emitter.instruction("mov x1, #0");                                          // strtod endptr = NULL: the run is already clipped
-    emitter.bl_c("strtod");                                                     // parse the clipped numeric run into d0
+    emitter.emit_call_c("strtod");                                                     // parse the clipped numeric run into d0
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the fully-numeric flag as the result
 
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -336,7 +336,7 @@ fn emit_str_looks_like_int_for_coercion_normalized_aarch64(emitter: &mut Emitter
     emitter.instruction("strb wzr, [x3]");                                      // terminate the private normalized spelling for the single libc call
     emitter.instruction("mov x0, sp");                                          // pass the local normalized spelling as `strtod`'s first argument
     emitter.instruction("mov x1, #0");                                          // request no end-pointer because the bounded parser consumed the full grammar
-    emitter.bl_c("strtod");                                                     // convert once with libc's correctly-rounded binary64 decimal parser
+    emitter.emit_call_c("strtod");                                                     // convert once with libc's correctly-rounded binary64 decimal parser
     emitter.instruction("mov x0, #1");                                          // report a complete PHP numeric string while preserving d0
     emitter.instruction("add x17, sp, #880");                                   // rematerialize the frame-link address after the libc call clobbered scratch state
     emitter.instruction("ldp x29, x30, [x17]");                                 // restore the caller frame after the local conversion buffer is no longer needed

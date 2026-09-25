@@ -2,7 +2,7 @@
 title: "_cairo_fx() - internals"
 description: "Compiler internals for _cairo_fx(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1089
+  order: 1105
 ---
 
 ## `_cairo_fx()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:12421](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L12421) (`_cairo_fx`)
+- **Lowering**: [`src/image_prelude.rs`:12492](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L12492) (`_cairo_fx`)
 - **Function symbol**: `_cairo_fx()`
 
 

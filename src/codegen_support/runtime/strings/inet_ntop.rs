@@ -71,7 +71,7 @@ pub fn emit_inet_ntop(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x0, #{}", inet6));                        // AF_INET6 for this platform
     emitter.instruction("add x2, sp, #0");                                      // the stack buffer is its destination
     emitter.instruction("mov x3, #64");                                         // and its capacity
-    emitter.bl_c("inet_ntop");                                                  // render the address
+    emitter.emit_call_c("inet_ntop");                                           // render through the target-aware socket C ABI
     emitter.instruction("cbz x0, __rt_inet_ntop_v6_false");                     // a null answer means the family was refused
 
     // -- measure the rendering, then reserve exactly that much --
@@ -155,7 +155,7 @@ fn emit_inet_ntop_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 64]");                                 // the stack buffer is its destination
     emitter.instruction("mov ecx, 64");                                         // and its capacity
     emitter.instruction("xor eax, eax");                                        // no vector arguments in this call
-    emitter.bl_c("inet_ntop");                                                  // render the address
+    emitter.emit_call_c("inet_ntop");                                           // render through the target-aware socket C ABI
     emitter.instruction("test rax, rax");                                       // a null answer means the family was refused
     emitter.instruction("jz __rt_inet_ntop_v6_false_x86");                      // report it as an invalid address
 

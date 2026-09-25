@@ -2,7 +2,7 @@
 title: "imagecopyresized() - internals"
 description: "Compiler internals for imagecopyresized(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 485
+  order: 489
 ---
 
 ## `imagecopyresized()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3053](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3053) (`imagecopyresized`)
+- **Lowering**: [`src/image_prelude.rs`:3124](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3124) (`imagecopyresized`)
 - **Function symbol**: `imagecopyresized()`
 
 

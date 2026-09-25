@@ -66,7 +66,7 @@ pub(super) fn emit_instr_unpark_hook(emitter: &mut Emitter, skip: &str, coro_reg
         emitter.instruction(&format!("mov rdx, {coro_reg}"));                   // arg 2: the coroutine, before the loads below take rdi/rsi
         abi::emit_load_symbol_to_reg(emitter, "rdi", "_gc_allocs", 0);          // arg 0: allocations so far
         abi::emit_load_symbol_to_reg(emitter, "rsi", "_gc_frees", 0);           // arg 1: frees so far
-        emitter.instruction("call rax");                                        // put this coroutine's activations back before the raise
+        emitter.emit_native_bridge_call("rax", 3);                                   // call the Rust monitoring hook through the target native ABI
     } else {
         abi::emit_load_symbol_to_reg(emitter, "x9", &slot, 0);
         emitter.instruction(&format!("cbz x9, {skip}"));                        // no capability: skip the hook entirely

@@ -68,14 +68,14 @@ sidebar:
 | [`pcntl_signal()`](./misc/pcntl_signal.md) | `(int $signal, mixed $handler, bool $restart_syscalls = true): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_dispatch()`](./misc/pcntl_signal_dispatch.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_get_handler()`](./misc/pcntl_signal_get_handler.md) | `(int $signal): mixed` | `mixed` | ✓ | ✓ |
-| [`pcntl_sigprocmask()`](./misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed $old_signals = []): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_sigtimedwait()`](./misc/pcntl_sigtimedwait.md) | `(mixed $signals, mixed $info = [], int $seconds = 0, int $nanoseconds = 0): mixed` | `mixed` | ✓ | ✓ |
-| [`pcntl_sigwaitinfo()`](./misc/pcntl_sigwaitinfo.md) | `(mixed $signals, mixed $info = []): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_sigprocmask()`](./misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed &$old_signals = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_sigtimedwait()`](./misc/pcntl_sigtimedwait.md) | `(mixed $signals, mixed &$info = [], int $seconds = 0, int $nanoseconds = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_sigwaitinfo()`](./misc/pcntl_sigwaitinfo.md) | `(mixed $signals, mixed &$info = []): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_strerror()`](./misc/pcntl_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
 | [`pcntl_unshare()`](./misc/pcntl_unshare.md) | `(int $flags): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_wait()`](./misc/pcntl_wait.md) | `(mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
-| [`pcntl_waitid()`](./misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4, mixed $resource_usage = []): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_waitpid()`](./misc/pcntl_waitpid.md) | `(int $process_id, mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
+| [`pcntl_wait()`](./misc/pcntl_wait.md) | `(mixed &$status, int $flags = 0, mixed &$resource_usage = []): int` | `int` | ✓ | ✓ |
+| [`pcntl_waitid()`](./misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed &$info = [], int $flags = 4, mixed &$resource_usage = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_waitpid()`](./misc/pcntl_waitpid.md) | `(int $process_id, mixed &$status, int $flags = 0, mixed &$resource_usage = []): int` | `int` | ✓ | ✓ |
 | [`pcntl_wexitstatus()`](./misc/pcntl_wexitstatus.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_wifcontinued()`](./misc/pcntl_wifcontinued.md) | `(int $status): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_wifexited()`](./misc/pcntl_wifexited.md) | `(int $status): bool` | `bool` | ✓ | ✓ |
@@ -91,6 +91,13 @@ sidebar:
 | [`print_r()`](./misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`restore_error_handler()`](./misc/restore_error_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`restore_exception_handler()`](./misc/restore_exception_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`sapi_windows_cp_conv()`](./misc/sapi_windows_cp_conv.md) | `(mixed $in_codepage, mixed $out_codepage, string $subject): ?string` | `?string` | ✓ | ✓ |
+| [`sapi_windows_cp_get()`](./misc/sapi_windows_cp_get.md) | `(string $kind = ''): int` | `int` | ✓ | ✓ |
+| [`sapi_windows_cp_is_utf8()`](./misc/sapi_windows_cp_is_utf8.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`sapi_windows_cp_set()`](./misc/sapi_windows_cp_set.md) | `(int $codepage): bool` | `bool` | ✓ | ✓ |
+| [`sapi_windows_generate_ctrl_event()`](./misc/sapi_windows_generate_ctrl_event.md) | `(int $event, int $pid = 0): bool` | `bool` | ✓ | ✓ |
+| [`sapi_windows_set_ctrl_handler()`](./misc/sapi_windows_set_ctrl_handler.md) | `(?callable $handler, bool $add = true): bool` | `bool` | ✓ | ✓ |
+| [`sapi_windows_vt100_support()`](./misc/sapi_windows_vt100_support.md) | `(mixed $stream, ?bool $enable = null): bool` | `bool` | ✓ | ✓ |
 | [`serialize()`](./misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | — |
 | [`set_error_handler()`](./misc/set_error_handler.md) | `(mixed $callback, int $error_levels = E_ALL): mixed` | `mixed` | ✓ | ✓ |
 | [`set_exception_handler()`](./misc/set_exception_handler.md) | `(mixed $callback): mixed` | `mixed` | ✓ | ✓ |

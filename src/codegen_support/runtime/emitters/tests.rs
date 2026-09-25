@@ -150,6 +150,109 @@ fn test_linux_x86_64_runtime_uses_shared_surface() {
     }
 }
 
+/// Verifies the Windows reconciliation keeps every runtime helper required by the
+/// Windows-specific PHP surface connected to the aggregate emitter.
+#[test]
+fn test_windows_x86_64_runtime_emits_reconciled_helpers() {
+    let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+    emit_runtime(&mut emitter, RuntimeFeatures::all());
+    let asm = emitter.output();
+
+    for sym in [
+        "main",
+        "__rt_fd_to_handle",
+        "__rt_win_console_bootstrap",
+        "__rt_setjmp",
+        "__rt_longjmp",
+        "__rt_tls_abi_elephc_tls_connect",
+        "__rt_random_bytes",
+        "__rt_throw_static_exception",
+        "__rt_php_temp_dir",
+        "__rt_get_bool_context_option",
+        "__rt_tls_session_get",
+        "__rt_addr_tls_crypto_method",
+        "__rt_escapeshellarg",
+        "__rt_escapeshellcmd",
+    ] {
+        assert!(
+            asm.contains(&format!(".globl {sym}\n")),
+            "Windows x86_64 runtime missing reconciled helper {sym}",
+        );
+    }
+    for call in [
+        "call __rt_sys_memcpy",
+        "call __rt_sys_strlen",
+        "call __rt_sys_errno",
+        "call __rt_sys_strtoll",
+        "call __rt_sys_strtod",
+        "call __rt_sys_malloc",
+        "call __rt_sys_free",
+    ] {
+        assert!(asm.contains(call), "Windows x86_64 runtime bypasses ABI shim {call}");
+    }
+    assert_eq!(
+        asm.matches("call __rt_sys_memcpy").count(),
+        2,
+        "Windows x86_64 runtime must route the numeric parser and its x86 cURL callback-copy path through __rt_sys_memcpy",
+    );
+
+    for (offset, _) in asm.match_indices("call __rt_setjmp") {
+        let preparation = asm[..offset]
+            .lines()
+            .rev()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            preparation.contains("rdi"),
+            "Windows __rt_setjmp must receive its jmp_buf through the runtime SysV rdi register; nearby instructions were:\n{preparation}",
+        );
+    }
+}
+
+/// The warning dispatcher owns the public producer entry once; each target contributes
+/// only its raw diagnostic writer beneath that shared dispatch layer.
+#[test]
+fn aggregate_runtime_has_one_diagnostic_dispatcher_per_target() {
+    for (target, raw_writer, absent) in [
+        (
+            Target::new(Platform::Windows, Arch::X86_64),
+            "call WriteFile",
+            "syscall",
+        ),
+        (
+            Target::new(Platform::Linux, Arch::X86_64),
+            "syscall",
+            "call WriteFile",
+        ),
+    ] {
+        let mut emitter = Emitter::new(target);
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
+        let asm = emitter.output();
+        for symbol in ["__rt_diag_warning", "__rt_diag_write"] {
+            let label = format!("{symbol}:");
+            assert_eq!(
+                asm.lines().filter(|line| *line == label).count(),
+                1,
+                "{target:?}: {symbol} must have exactly one definition",
+            );
+        }
+        let writer_start = asm
+            .find("__rt_diag_write:")
+            .expect("diagnostic writer definition was counted above");
+        let writer_end = writer_start
+            + asm[writer_start..]
+                .find("__rt_php_float_to_int:")
+                .expect("numeric runtime follows the aggregate diagnostic writer");
+        let writer = &asm[writer_start..writer_end];
+        assert!(writer.contains(raw_writer), "{target:?}: missing target diagnostic writer");
+        assert!(
+            !writer.contains(absent),
+            "{target:?}: inherited the other target's diagnostic route",
+        );
+    }
+}
+
 /// Every process-fatal buffer, pointer-null, and container-capacity helper named by
 /// cdylib safety review must unwind an active boundary on all supported targets.
 #[test]

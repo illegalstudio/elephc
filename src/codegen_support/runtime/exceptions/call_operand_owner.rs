@@ -24,7 +24,7 @@ fn emit_owner_cleanup_entry(emitter: &mut Emitter, label: &str, release: &str) {
     abi::emit_frame_prologue(emitter, 16);
     let address = abi::secondary_scratch_reg(emitter);
     let result = abi::int_result_reg(emitter);
-    abi::emit_reg_move(emitter, address, abi::int_arg_reg_name(emitter.target, 0));
+    abi::emit_reg_move(emitter, address, abi::runtime_helper_int_arg_reg(emitter, 0));
     abi::emit_load_from_address(emitter, result, address, 0);
     abi::emit_store_zero_to_address(emitter, address, 0);
     abi::emit_unary_cleanup_preserving_exception(emitter, release, result);

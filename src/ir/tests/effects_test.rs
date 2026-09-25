@@ -21,6 +21,15 @@ fn string_replacement_results_do_not_keep_argument_owners_alive() {
     }
 }
 
+/// `fopen()` boxes its new resource or false result and never returns the input pathname.
+#[test]
+fn fopen_result_releases_owned_path_arguments() {
+    assert_eq!(
+        RuntimeFnId::Fopen.result_ownership(),
+        crate::builtins::semantics::BuiltinResultOwnership::Fresh,
+    );
+}
+
 /// Reference publication checks access borrow state and may allocate a catchable Error.
 #[test]
 fn reference_publication_effects_preserve_borrow_guards_and_local_promotion() {

@@ -197,21 +197,20 @@ fn emit_named_dynamic_property_creation_deprecation(
     if !deprecated {
         return Ok(());
     }
-    let target = ctx.emitter.target;
     let skip_label = ctx.next_label("named_dyn_prop_create_deprecation_skip");
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     let (key_label, key_len) = ctx.data.add_string(property.as_bytes());
     ctx.load_value_to_reg(object, object_reg)?;
     abi::emit_load_from_address(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         object_reg,
         hash_offset,
     );                                                                          // pass the receiver's dynamic-property hash to the existence probe
-    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &key_label);
+    abi::emit_symbol_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), &key_label);
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         key_len as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
@@ -312,27 +311,38 @@ pub(super) fn lower_runtime_allow_dynamic_prop_set(
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
     let boxed_reg = abi::secondary_scratch_reg(ctx.emitter).to_string();
     let object_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
-    let target = ctx.emitter.target;
     materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
     abi::emit_reg_move(ctx.emitter, &boxed_reg, abi::int_result_reg(ctx.emitter));
     abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
     abi::emit_load_from_address(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         &object_reg,
         hash_offset,
     );
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), name_offset);
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
+        name_offset,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         name_offset + 8,
     );
-    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(target, 3), &boxed_reg);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 4), 0);
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 3),
+        &boxed_reg,
+    );
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 5),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 4),
+        0,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 5),
         runtime_value_tag(&PhpType::Mixed) as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_set");
@@ -365,24 +375,39 @@ pub(super) fn lower_stacked_named_dynamic_prop_set(
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
     let boxed_reg = abi::secondary_scratch_reg(ctx.emitter).to_string();
     let object_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
-    let target = ctx.emitter.target;
     let (key_label, key_len) = ctx.data.add_string(property.as_bytes());
     materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
     abi::emit_reg_move(ctx.emitter, &boxed_reg, abi::int_result_reg(ctx.emitter));
     abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
     abi::emit_load_from_address(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         &object_reg,
         hash_offset,
     );
-    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &key_label);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
-    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(target, 3), &boxed_reg);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 4), 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
+        &key_label,
+    );
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 5),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
+        key_len as i64,
+    );
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 3),
+        &boxed_reg,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 4),
+        0,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 5),
         runtime_value_tag(&PhpType::Mixed) as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_set");
@@ -418,19 +443,18 @@ pub(super) fn emit_stacked_named_dynamic_property_creation_deprecation(
     if !deprecated {
         return Ok(());
     }
-    let target = ctx.emitter.target;
     let skip_label = ctx.next_label("stacked_dyn_prop_create_deprecation_skip");
     let object_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
     let (key_label, key_len) = ctx.data.add_string(property.as_bytes());
     abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
     abi::emit_load_from_address(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         &object_reg,
         hash_offset,
     );
-    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &key_label);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
+    abi::emit_symbol_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), &key_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2), key_len as i64);
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     emit_branch_if_hash_entry_found(ctx, &skip_label);                          // an existing key is a plain write, including false and null
     emit_property_warning_fragment(
@@ -555,14 +579,14 @@ pub(super) fn emit_dynamic_property_creation_deprecation(
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, receiver_offset);
     abi::emit_load_from_address(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         object_reg,
         hash_offset,
     );
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), name_offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), name_offset);
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         name_offset + 8,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");

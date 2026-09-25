@@ -455,7 +455,7 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
     }
-    ctx.load_value_to_reg(hash, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    ctx.load_value_to_reg(hash, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
     ctx.store_result_value(hash)?;
     receiver.store_back_container_writeback(ctx, hash)?;

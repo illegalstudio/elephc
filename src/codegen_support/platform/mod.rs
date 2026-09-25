@@ -11,6 +11,7 @@
 mod linux_transform;
 mod target;
 mod toolchain;
+mod windows_transform;
 
 pub use target::{AppleVariant, Arch, Platform, Target, APPLE_IOS_MIN_OS};
 
@@ -37,6 +38,13 @@ mod tests {
             Target::parse("aarch64-apple-darwin").unwrap(),
             Target::new(Platform::MacOS, Arch::AArch64)
         );
+        assert_eq!(
+            Target::parse("x86_64-pc-windows-gnu").unwrap(),
+            Target::new(Platform::Windows, Arch::X86_64)
+        );
+        let error = Target::parse("x86_64-pc-windows-msvc")
+            .expect_err("the MSVC spelling must not select the GNU ABI backend");
+        assert!(error.contains("x86_64-pc-windows-gnu"), "{error}");
     }
 
     /// Both spellings of each iOS target resolve to the same Darwin target with

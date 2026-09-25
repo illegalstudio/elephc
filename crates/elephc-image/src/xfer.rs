@@ -101,10 +101,16 @@ pub extern "C" fn elephc_img_in_ptr(len: i64) -> *mut u8 {
         if len <= 0 {
             return std::ptr::null_mut();
         }
+        let Ok(len) = usize::try_from(len) else {
+            return std::ptr::null_mut();
+        };
         in_cell().with(|slot| {
             let mut slot = slot.borrow_mut();
             slot.clear();
-            slot.resize(len as usize, 0);
+            if slot.try_reserve_exact(len).is_err() {
+                return std::ptr::null_mut();
+            }
+            slot.resize(len, 0);
             slot.as_mut_ptr()
         })
     })
@@ -158,4 +164,26 @@ pub extern "C" fn elephc_img_kv_val(index: i64) -> i64 {
         };
         set_out(bytes)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Regression tests for binary input staging at the image C ABI boundary.
+    //!
+    //! Called from:
+    //! - `cargo test -p elephc-image` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Allocation failure is an ordinary C-ABI failure sentinel; it must not
+    //!   unwind or attempt a fallible allocation with an unchecked byte count.
+
+    use super::*;
+
+    /// Rejects an impossible caller-provided input length without attempting an
+    /// aborting allocation.
+    #[test]
+    fn oversized_input_buffer_fails_cleanly() {
+        assert!(elephc_img_in_ptr(i64::MAX).is_null());
+    }
 }

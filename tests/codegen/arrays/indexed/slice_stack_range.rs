@@ -159,3 +159,37 @@ echo implode(",", $removed), "|", implode(",", $a3);
     );
     assert_eq!(out, "20,30|30,40,50|2,3|1,4,5");
 }
+
+/// Verifies `array_slice()` and `array_splice()` read a negative length as php does.
+#[test]
+fn test_array_slice_and_splice_negative_length() {
+    // php reads a negative length as "stop that many elements before the end".
+    // elephc used -1 in-band to mean "no length argument", so an explicit -1 was
+    // indistinguishable from an omitted one, and any other negative value slipped
+    // past the upper clamp. For array_splice that value then became the capacity
+    // handed to __rt_array_new and the shift-loop counter, so array_splice($a, 1, -1)
+    // turned [1,2,3,4,5] into [1,1,1,1,1,1].
+    let sliced = compile_and_run(
+        r#"<?php
+echo json_encode(array_slice([1,2,3,4,5], 1, -1)), "|";
+echo json_encode(array_slice([1,2,3,4,5], 1, -3)), "|";
+echo json_encode(array_slice([1,2,3,4,5], 1, -9)), "|";
+echo json_encode(array_slice([1,2,3,4,5], 1)), "|";
+echo json_encode(array_slice([1,2,3,4,5], 1, 2));
+"#,
+    );
+    assert_eq!(sliced, "[2,3,4]|[2]|[]|[2,3,4,5]|[2,3]");
+
+    let spliced = compile_and_run(
+        r#"<?php
+function sp(int $n): array { $a = [1,2,3,4,5]; array_splice($a, 1, $n); return $a; }
+function sp_all(): array { $a = [1,2,3,4,5]; array_splice($a, 1); return $a; }
+echo json_encode(sp(-1)), "|";
+echo json_encode(sp(-3)), "|";
+echo json_encode(sp(-9)), "|";
+echo json_encode(sp_all()), "|";
+echo json_encode(sp(2));
+"#,
+    );
+    assert_eq!(spliced, "[1,5]|[1,3,4,5]|[1,2,3,4,5]|[1]|[1,4,5]");
+}

@@ -233,7 +233,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, [r10+80]");                                   // pass the captured boxed callback
     emitter.instruction("mov rdx, [rsp+8]");                                    // pass the raw new $this receiver
     emitter.instruction("lea rcx, [rsp+16]");                                   // pass the bound-closure output slot
-    emitter.instruction("call r11");                                            // ask Magician to rebind $this on the eval closure
+    emitter.emit_native_bridge_call("r11", 4);                                  // ask Magician to rebind $this through the target Rust ABI
     emitter.instruction("test rax, rax");                                       // was the rebinding accepted?
     emitter.instruction("jz __rt_closure_bind_unsupported");                    // no: keep the fatal answer
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_elephc_eval_wrap_callback_fn");
@@ -243,7 +243,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, [rsp+0]");                                    // reload the adapter descriptor
     emitter.instruction("mov rdi, [r10+64]");                                   // pass the eval context to the wrapper
     emitter.instruction("mov rsi, [rsp+16]");                                   // pass the owned bound closure cell
-    emitter.instruction("call r11");                                            // rax = adapter descriptor for the bound closure
+    emitter.emit_native_bridge_call("r11", 2);                                  // rax = adapter descriptor for the bound closure through the target Rust ABI
     emitter.instruction("mov [rsp+24], rax");                                   // park the descriptor while Magician's owner is retired
     emitter.instruction("mov rax, [rsp+16]");                                   // the wrapper retained its own capture owner
     emitter.instruction("call __rt_decref_mixed");                              // so drop the owner Magician handed back
@@ -408,6 +408,38 @@ mod tests {
                     "{target:?}: {asm}"
                 );
             }
+        }
+    }
+
+    /// Eval closure rebinding calls Magician through the native MSx64 ABI, not
+    /// the runtime's internal SysV convention, on the Windows PE target.
+    #[test]
+    fn test_windows_x86_64_eval_closure_bind_callbacks_use_native_bridge_abi() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        let mut emitter = Emitter::new(target);
+        emit_closure_bind(&mut emitter);
+        let asm = emitter.output();
+
+        let bind = asm
+            .split_once("_elephc_eval_closure_bind_fn")
+            .expect("expected eval closure-bind callback")
+            .1
+            .split_once("_elephc_eval_wrap_callback_fn")
+            .expect("expected eval wrapper callback")
+            .0;
+        for instruction in ["sub rsp, 32", "mov r9, rcx", "mov r8, rdx", "mov rdx, rsi", "mov rcx, rdi", "call r11", "add rsp, 32"] {
+            assert!(bind.contains(instruction), "four-argument bind callback needs MSx64 staging: {instruction}");
+        }
+
+        let wrap = asm
+            .split_once("_elephc_eval_wrap_callback_fn")
+            .expect("expected eval wrapper callback")
+            .1
+            .split_once("__rt_decref_mixed")
+            .expect("expected owned callback release")
+            .0;
+        for instruction in ["sub rsp, 32", "mov rdx, rsi", "mov rcx, rdi", "call r11", "add rsp, 32"] {
+            assert!(wrap.contains(instruction), "two-argument wrapper callback needs MSx64 staging: {instruction}");
         }
     }
 }

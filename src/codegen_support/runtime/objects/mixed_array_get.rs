@@ -615,7 +615,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // reload class id, clobbered across the boxing call
     emitter.instruction("lea r12, [rip + _class_offsetget_ptrs]");              // dense ArrayAccess::offsetGet table
     emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // re-resolve offsetGet for the same class
-    emitter.instruction("call r12");                                            // read through PHP's ArrayAccess::offsetGet
+    emitter.emit_platform_callback_call("r12", 2);                                // call generated ArrayAccess::offsetGet with the target ABI
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // stash the owned result; the receiver is done
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed offset
     emitter.instruction("call __rt_decref_mixed");                              // a PHP method BORROWS its argument, so this frame frees the box

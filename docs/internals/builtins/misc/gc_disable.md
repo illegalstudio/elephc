@@ -2,7 +2,7 @@
 title: "gc_disable() - internals"
 description: "Compiler internals for gc_disable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 616
+  order: 623
 ---
 
 ## `gc_disable()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/gc_disable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gc_disable.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

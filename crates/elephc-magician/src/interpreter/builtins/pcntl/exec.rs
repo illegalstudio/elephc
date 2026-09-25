@@ -10,6 +10,64 @@
 
 use super::*;
 
+/// Calls the target bridge's exec runner without leaking target-specific FFI safety to callers.
+#[cfg(unix)]
+fn pcntl_exec_run(builder: *mut libc::c_void) -> libc::c_int {
+    unsafe { elephc_pcntl::elephc_pcntl_exec_run(builder) }
+}
+
+/// Calls the non-Unix exec stub, whose stable ABI is safe and always fails with ENOSYS.
+#[cfg(not(unix))]
+fn pcntl_exec_run(builder: *mut libc::c_void) -> libc::c_int {
+    elephc_pcntl::elephc_pcntl_exec_run(builder)
+}
+
+/// Appends one argument through the target bridge's ABI.
+#[cfg(unix)]
+fn pcntl_exec_add_arg(
+    builder: *mut libc::c_void,
+    value: *const u8,
+    value_len: usize,
+) -> libc::c_int {
+    unsafe { elephc_pcntl::elephc_pcntl_exec_add_arg(builder, value, value_len) }
+}
+
+/// Appends one argument through the non-Unix failure stub.
+#[cfg(not(unix))]
+fn pcntl_exec_add_arg(
+    builder: *mut libc::c_void,
+    value: *const u8,
+    value_len: usize,
+) -> libc::c_int {
+    elephc_pcntl::elephc_pcntl_exec_add_arg(builder, value, value_len)
+}
+
+/// Appends one environment entry through the target bridge's ABI.
+#[cfg(unix)]
+fn pcntl_exec_add_env(
+    builder: *mut libc::c_void,
+    key_low: u64,
+    key_high: i64,
+    value: *const u8,
+    value_len: usize,
+) -> libc::c_int {
+    unsafe {
+        elephc_pcntl::elephc_pcntl_exec_add_env(builder, key_low, key_high, value, value_len)
+    }
+}
+
+/// Appends one environment entry through the non-Unix failure stub.
+#[cfg(not(unix))]
+fn pcntl_exec_add_env(
+    builder: *mut libc::c_void,
+    key_low: u64,
+    key_high: i64,
+    value: *const u8,
+    value_len: usize,
+) -> libc::c_int {
+    elephc_pcntl::elephc_pcntl_exec_add_env(builder, key_low, key_high, value, value_len)
+}
+
 /// Releases an unconsumed native exec builder on early conversion failure.
 struct ExecBuilderGuard(*mut libc::c_void);
 
@@ -56,7 +114,7 @@ pub(super) fn eval_pcntl_exec_result(
         eval_pcntl_exec_add_environment(builder, environment.value, context, values)?;
     }
     guard.0 = std::ptr::null_mut();
-    let success = unsafe { elephc_pcntl::elephc_pcntl_exec_run(builder) };
+    let success = pcntl_exec_run(builder);
     if success == 0 {
         values.warning(&elephc_pcntl::pcntl_last_error_warning(
             elephc_pcntl::PCNTL_WARNING_EXEC,
@@ -86,10 +144,7 @@ fn eval_pcntl_exec_add_arguments(
                 values,
             )?;
         }
-        if unsafe {
-            elephc_pcntl::elephc_pcntl_exec_add_arg(builder, bytes.as_ptr(), bytes.len())
-        } == 0
-        {
+        if pcntl_exec_add_arg(builder, bytes.as_ptr(), bytes.len()) == 0 {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -132,15 +187,13 @@ fn eval_pcntl_exec_add_environment(
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         };
-        let success = unsafe {
-            elephc_pcntl::elephc_pcntl_exec_add_env(
-                builder,
-                key_low,
-                key_high,
-                value.as_ptr(),
-                value.len(),
-            )
-        };
+        let success = pcntl_exec_add_env(
+            builder,
+            key_low,
+            key_high,
+            value.as_ptr(),
+            value.len(),
+        );
         drop(key_bytes);
         if success == 0 {
             return Err(EvalStatus::RuntimeFatal);

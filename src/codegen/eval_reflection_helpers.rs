@@ -220,7 +220,7 @@ fn emit_alloc_reflection_attribute_object_x86_64(
     let payload_size = 8 + layout.property_count * 16;
     emitter.instruction(&format!("mov rax, {}", payload_size));                 // request ReflectionAttribute object payload storage
     abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // materialize the x86_64 object heap kind word
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
     ));                                                                         // materialize the x86_64 object heap kind word
@@ -354,6 +354,6 @@ fn emit_set_repeated_property_x86_64(emitter: &mut Emitter, layout: &ReflectionA
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
-    let symbol = module.target.extern_symbol(name);
-    emitter.label_global(&symbol);
+    debug_assert_eq!(module.target, emitter.target);
+    abi::emit_c_callback_entry(emitter, name);
 }

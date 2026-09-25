@@ -13,9 +13,10 @@ mod platform;
 
 use super::{
     bcmath, callables, curl, diagnostics, exceptions, generators, numeric, round_mode, strings,
-    system,
+    system, win32,
 };
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::platform::{Arch, Platform};
 use crate::codegen_support::RuntimeFeatures;
 
 /// Emits all runtime helper labels in dependency order for supported targets.
@@ -24,6 +25,24 @@ use crate::codegen_support::RuntimeFeatures;
 /// Each category is emitted before any code that depends on it, ensuring labels
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
+    // The compiler's internal call convention is SysV on every target. Windows TLS
+    // exports use MS x64, so their adapters must precede the runtime slots that
+    // publish them in user code.
+    if features.tls {
+        crate::codegen_support::tls::emit_tls_abi_adapters(emitter);
+    }
+
+    // PE32+ executable entry, C-library/syscall adapters, and the fd-to-HANDLE
+    // bridge only exist on the supported Windows x86_64 target. Keep them ahead of
+    // diagnostics and shared helpers: those helpers may call an imported Win32 API.
+    let windows_x86_64 =
+        emitter.platform == Platform::Windows && emitter.target.arch == Arch::X86_64;
+    if windows_x86_64 {
+        win32::emit_win32_shims(emitter, features);
+        win32::emit_fd_to_handle(emitter);
+        win32::emit_main_wrapper(emitter);
+    }
+
     diagnostics::emit_diagnostics(emitter, features);
 
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all
@@ -50,6 +69,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_to_int(emitter);
     strings::emit_str_to_int_base(emitter);
     strings::emit_str_loose_eq(emitter);
+    strings::emit_php_round(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
     strings::emit_str_persist(emitter);
@@ -110,6 +130,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_urlencode(emitter);
     strings::emit_urldecode(emitter);
     strings::emit_rawurlencode(emitter);
+    strings::emit_shell_escapes(emitter);
     strings::emit_parse_url(emitter);
     strings::emit_md5(emitter);
     strings::emit_sha1(emitter);
@@ -216,6 +237,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_class_implements_interface(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
+    exceptions::emit_throw_static_exception(emitter);
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
@@ -228,6 +250,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_local_ref_cell_release(emitter);
     exceptions::emit_throwable_boxed_owners(emitter);
     exceptions::emit_destructor_throw(emitter);
+    // Windows x86_64 uses elephc's SEH-free pair because runtime try/catch and
+    // Fiber stacks use SysV-shaped jmp_buf calls rather than MS x64 C-library ABI.
+    if windows_x86_64 {
+        exceptions::emit_setjmp_longjmp(emitter);
+    }
 
     // Generator runtime helpers for Iterator methods, send/throw, and return-value retrieval.
     generators::emit_generator_runtime(emitter);

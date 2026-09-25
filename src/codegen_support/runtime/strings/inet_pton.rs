@@ -106,7 +106,7 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
     emitter.instruction("mov x2, x0");                                          // inet_pton writes its answer there
     emitter.instruction("ldr x0, [sp, #272]");                                  // reload the selected family as the first C argument
     emitter.instruction("add x1, sp, #0");                                      // pass the NUL-terminated copy as the second
-    emitter.bl_c("inet_pton");                                                  // parse the address for the selected family
+    emitter.emit_call_c("inet_pton");                                           // parse through the target-aware socket C ABI
     emitter.instruction("cmp w0, #1");                                          // 1 means the address parsed; 0 and -1 do not
     emitter.instruction("b.ne __rt_inet_pton_unparsed");                        // release the reservation before reporting false
 
@@ -195,7 +195,7 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the selected family as the first argument
     emitter.instruction("lea rsi, [rbp - 304]");                                // pass the NUL-terminated copy as the second
     emitter.instruction("xor eax, eax");                                        // no vector arguments in this call
-    emitter.bl_c("inet_pton");                                                  // parse the address for the selected family
+    emitter.emit_call_c("inet_pton");                                           // parse through the target-aware socket C ABI
     emitter.instruction("cmp eax, 1");                                          // 1 means the address parsed; 0 and -1 do not
     emitter.instruction("jne __rt_inet_pton_unparsed_x86");                     // release the reservation before reporting false
 

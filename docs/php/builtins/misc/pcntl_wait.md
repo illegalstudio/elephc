@@ -2,13 +2,13 @@
 title: "pcntl_wait()"
 description: "Waits for any child process and writes its target-native status."
 sidebar:
-  order: 667
+  order: 674
 ---
 
 ## pcntl_wait()
 
 ```php
-function pcntl_wait(mixed $status, int $flags = 0, mixed $resource_usage = []): int
+function pcntl_wait(mixed &$status, int $flags = 0, mixed &$resource_usage = []): int
 ```
 
 Waits for any child process and writes its target-native status.
@@ -22,7 +22,7 @@ Waits for any child process and writes its target-native status.
 
 ## Availability
 
-- **Compiled (AOT)**: supported on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
+- **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_wait.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_wait.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

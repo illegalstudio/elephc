@@ -62,8 +62,9 @@ pub(super) static mut COOKIE_HTTPONLY: bool = false;
 pub(super) static mut COOKIE_SAMESITE: Option<CString> = None;
 /// Data snapshot for `session_reset`/`session_abort` (the original file content).
 pub(super) static mut SESSION_SNAPSHOT: Vec<u8> = Vec::new();
-/// Held session-file descriptor (`-1` = none). Kept open with `flock(LOCK_EX)`
-/// between `session_read` and `session_write`/`session_destroy`/`session_abort`.
+/// Held session-file sentinel (`-1` = none, `0` = held). The actual `File` and
+/// platform lock live in `file_io`, avoiding pointer-sized HANDLE truncation on
+/// Windows while preserving the existing sibling-module state contract.
 pub(super) static mut SESSION_FD: i32 = -1;
 
 // ── Extended session configuration (v3 additions) ──

@@ -59,6 +59,16 @@ pub(super) fn program_uses_image(program: &[Stmt]) -> bool {
     if all_image_functions_are_user_owned && !references_image_class {
         return false;
     }
+    // `prelude_prune::usage` records literal names passed to function_exists()
+    // and is_callable() as function references, but the structural AST walk
+    // below quite correctly sees those calls as calls to the introspection
+    // builtin rather than to the named image function. Preserve the reference
+    // here: otherwise a Windows-only probe such as
+    // `function_exists('imagegrabscreen')` answers false because the prelude
+    // was never injected.
+    if !image_function_references.is_empty() || references_image_class {
+        return true;
+    }
     program.iter().any(stmt_refs_image)
 }
 
@@ -755,6 +765,15 @@ mod tests {
     fn detects_gd_function_call() {
         assert!(program_uses_image(&parse(
             "<?php $im = imagecreatetruecolor(8, 8);"
+        )));
+    }
+
+    /// A literal function_exists() probe names the image function even though
+    /// the direct AST call target is the introspection builtin.
+    #[test]
+    fn detects_gd_function_exists_probe() {
+        assert!(program_uses_image(&parse(
+            "<?php echo function_exists('imagegrabscreen') ? 'yes' : 'no';"
         )));
     }
 

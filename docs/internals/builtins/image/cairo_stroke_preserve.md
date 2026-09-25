@@ -2,7 +2,7 @@
 title: "cairo_stroke_preserve() - internals"
 description: "Compiler internals for cairo_stroke_preserve(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 443
+  order: 447
 ---
 
 ## `cairo_stroke_preserve()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13643](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13643) (`cairo_stroke_preserve`)
+- **Lowering**: [`src/image_prelude.rs`:13714](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13714) (`cairo_stroke_preserve`)
 - **Function symbol**: `cairo_stroke_preserve()`
 
 

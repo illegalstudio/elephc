@@ -29,7 +29,8 @@
 //!   plus `ptr_write_string` / `ptr_read_string`, since extern `string` is
 //!   NUL-terminated and cannot carry encoded image bytes.
 
-use crate::parser::ast::{BinOp, CType, CastType, Program, Stmt, TypeExpr};
+use crate::codegen_support::platform::{Platform, Target};
+use crate::parser::ast::{BinOp, CType, CastType, Program, Stmt, StmtKind, TypeExpr};
 use crate::synthetic_class::{
     class, e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast, e_class_const, e_const,
     e_float, e_index, e_instance_of, e_int, e_method_call, e_neg, e_new, e_null, e_null_coalesce,
@@ -55,6 +56,31 @@ fn decl_extern_elephc_img_create() -> Stmt {
     extern_fn("elephc_img_create", "elephc_image")
         .param("width", CType::Int)
         .param("height", CType::Int)
+        .returns(CType::Int)
+        .build()
+}
+
+/// `elephc_img_grab_screen` — Windows-only desktop capture bridge entry.
+fn decl_extern_elephc_img_grab_screen() -> Stmt {
+    extern_fn("elephc_img_grab_screen", "elephc_image")
+        .returns(CType::Int)
+        .build()
+}
+
+/// `elephc_img_grab_window` — Windows-only HWND capture bridge entry.
+fn decl_extern_elephc_img_grab_window() -> Stmt {
+    extern_fn("elephc_img_grab_window", "elephc_image")
+        .param("handle", CType::Int)
+        .param("client_area", CType::Int)
+        .returns(CType::Int)
+        .build()
+}
+
+/// `elephc_img_grab_window_status` — Windows-only HWND capture status bridge.
+fn decl_extern_elephc_img_grab_window_status() -> Stmt {
+    extern_fn("elephc_img_grab_window_status", "elephc_image")
+        .param("handle", CType::Int)
+        .param("client_area", CType::Int)
         .returns(CType::Int)
         .build()
 }
@@ -2214,6 +2240,51 @@ fn decl_fn_imagecreate() -> Stmt {
         .body(vec![
             s_assign("handle", e_call("elephc_img_create", vec![e_var("width"), e_var("height")])),
             s_return(e_new("GdImage", vec![e_var("handle")])),
+        ])
+        .build()
+}
+
+/// `imagegrabscreen` — captures the Windows desktop or returns `false`.
+fn decl_fn_imagegrabscreen() -> Stmt {
+    function("imagegrabscreen")
+        .returns(t_union(vec![t_class("GdImage"), TypeExpr::Bool]))
+        .body(vec![
+            s_assign("handle", e_call("elephc_img_grab_screen", vec![])),
+            s_if(
+                e_binop(e_var("handle"), BinOp::Lt, e_int(0)),
+                vec![s_return(e_bool(false))],
+                vec![],
+                None,
+            ),
+            s_return(e_new("GdImage", vec![e_var("handle")])),
+        ])
+        .build()
+}
+
+/// `imagegrabwindow` — captures a complete HWND or its client area.
+fn decl_fn_imagegrabwindow() -> Stmt {
+    function("imagegrabwindow")
+        .param("handle", TypeExpr::Int)
+        .param_default("client_area", TypeExpr::Bool, e_bool(false))
+        .returns(t_union(vec![t_class("GdImage"), TypeExpr::Bool]))
+        .body(vec![
+            s_assign(
+                "image_handle",
+                e_call(
+                    "elephc_img_grab_window_status",
+                    vec![
+                        e_var("handle"),
+                        e_ternary(e_var("client_area"), e_int(1), e_int(0)),
+                    ],
+                ),
+            ),
+            s_if(
+                e_binop(e_var("image_handle"), BinOp::Lt, e_int(0)),
+                vec![s_return(e_bool(false))],
+                vec![],
+                None,
+            ),
+            s_return(e_new("GdImage", vec![e_var("image_handle")])),
         ])
         .build()
 }
@@ -13899,6 +13970,9 @@ pub(crate) fn image_declarations() -> Program {
         vec![
             decl_extern_elephc_img_create_truecolor(),
             decl_extern_elephc_img_create(),
+            decl_extern_elephc_img_grab_screen(),
+            decl_extern_elephc_img_grab_window(),
+            decl_extern_elephc_img_grab_window_status(),
             decl_extern_elephc_img_color_allocate(),
             decl_extern_elephc_img_color_allocate_alpha(),
             decl_extern_elephc_img_set_pixel(),
@@ -14172,6 +14246,8 @@ pub(crate) fn image_declarations() -> Program {
             decl_class_gdimage(),
             decl_fn_imagecreatetruecolor(),
             decl_fn_imagecreate(),
+            decl_fn_imagegrabscreen(),
+            decl_fn_imagegrabwindow(),
             decl_fn_imagecolorallocate(),
             decl_fn_imagecolorallocatealpha(),
             decl_fn_imagesetpixel(),
@@ -14377,6 +14453,33 @@ pub(crate) fn image_declarations() -> Program {
     })
 }
 
+/// Builds the PHP-visible image declarations for one compiler target.
+///
+/// php-src exposes desktop/window capture only under `PHP_WIN32`; retaining the
+/// complete declaration set for docs/transcription while filtering the actual
+/// injected program keeps `function_exists()` and direct calls target-correct.
+fn image_declarations_for_target(target: Target) -> Program {
+    let mut declarations = image_declarations();
+    if target.platform != Platform::Windows {
+        declarations.retain(|stmt| {
+            let name = match &stmt.kind {
+                StmtKind::FunctionDecl { name, .. }
+                | StmtKind::ExternFunctionDecl { name, .. } => name.as_str(),
+                _ => return true,
+            };
+            !matches!(
+                name,
+                "imagegrabscreen"
+                    | "imagegrabwindow"
+                    | "elephc_img_grab_screen"
+                    | "elephc_img_grab_window"
+                    | "elephc_img_grab_window_status"
+            )
+        });
+    }
+    declarations
+}
+
 /// Prepends the image prelude to `program` when it references an image symbol, so
 /// the classes, constants, functions, and `elephc_image` externs compile through
 /// the normal pipeline only for image-using programs. The prelude carries only
@@ -14393,6 +14496,7 @@ pub(crate) fn image_declarations() -> Program {
 pub fn inject_if_used(
     program: crate::parser::ast::Program,
     force: bool,
+    target: Target,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> crate::parser::ast::Program {
     if !force && !detect::program_uses_image(&program) {
@@ -14408,8 +14512,54 @@ pub fn inject_if_used(
     // program died with `Call to undefined function`, where PHP answers. The global declaration
     // reachability pass already treats an unknown `$fn()` conservatively, so the COMPLETE selected
     // prelude is recorded and that pass decides what survives.
-    let mut combined = image_declarations();
+    let mut combined = image_declarations_for_target(target);
     inventory.record_program("image", &combined);
     combined.extend(program);
     combined
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Target-visibility regression tests for the synthetic image prelude.
+    //!
+    //! Called from:
+    //! - `cargo test --lib image_prelude`.
+    //!
+    //! Key details:
+    //! - PHP's two desktop-capture functions and their bridge externs exist
+    //!   only when compiling for Windows.
+
+    use super::*;
+    use crate::codegen_support::platform::Arch;
+
+    fn declaration_names(program: &Program) -> Vec<&str> {
+        program
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::FunctionDecl { name, .. }
+                | StmtKind::ExternFunctionDecl { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn windows_only_screen_capture_declarations_follow_the_target() {
+        let windows = image_declarations_for_target(Target::new(Platform::Windows, Arch::X86_64));
+        let linux = image_declarations_for_target(Target::new(Platform::Linux, Arch::X86_64));
+        let windows_names = declaration_names(&windows);
+        let linux_names = declaration_names(&linux);
+
+        for name in [
+            "imagegrabscreen",
+            "imagegrabwindow",
+            "elephc_img_grab_screen",
+            "elephc_img_grab_window",
+            "elephc_img_grab_window_status",
+        ] {
+            assert!(windows_names.contains(&name), "Windows prelude must declare {name}");
+            assert!(!linux_names.contains(&name), "non-Windows prelude must omit {name}");
+        }
+    }
 }

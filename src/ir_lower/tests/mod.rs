@@ -63,7 +63,12 @@ mod xml_parser_arguments;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
 fn lower_source(source: &str) -> crate::ir::Module {
-    lower_source_at(source, Path::new("main.php"), Path::new("."))
+    lower_source_with_target(source, Target::detect_host())
+}
+
+/// Runs frontend and EIR lowering for a source string using an explicit target.
+fn lower_source_with_target(source: &str, target: Target) -> crate::ir::Module {
+    lower_source_at_for_target(source, Path::new("main.php"), Path::new("."), target)
 }
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a file.
@@ -133,16 +138,23 @@ fn try_lower_source_at_for_target(
     let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
-    let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::image_prelude::inject_if_used(
+        ast,
+        false,
+        crate::codegen_support::platform::Target::detect_host(),
+        &mut prelude_inventory,
+    );
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
-    let (ast, _) = crate::autoload::run_collecting_included_with_defines(
+    let ast = crate::name_resolver::resolve_for_platform(ast, target.platform)
+        .expect("name resolution failed");
+    let (ast, _) = crate::autoload::run_collecting_included_with_defines_for_platform(
         ast,
         parent,
         &autoload_registry,
         &defines,
+        target.platform,
     )
     .expect("autoload failed");
     // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
@@ -163,6 +175,116 @@ fn try_lower_source_at_for_target(
     let ast =
         crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     crate::ir_lower::lower_program(&ast, &check_result, target, false)
+}
+
+/// Verifies computed Windows proc_open settings remain real EIR operands while
+/// the three hidden marshalling operands preserve the nine-operand ABI shape.
+#[test]
+fn lowers_dynamic_windows_proc_open_marshalling_operands() {
+    let module = lower_source_with_target(
+        r#"<?php
+$pipes = [];
+$command = ['cmd.exe', '/c', 'exit 0'];
+$environment = ['VALUE' => 42];
+$options = ['bypass_shell' => true];
+proc_open($command, [1 => ['pipe', 'w']], $pipes, null, $environment, $options);
+"#,
+        Target::new(
+            crate::codegen::platform::Platform::Windows,
+            crate::codegen::platform::Arch::X86_64,
+        ),
+    );
+    let call = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.instructions)
+        .find(|instruction| {
+            instruction.op == crate::ir::Op::RuntimeCall
+                && instruction.immediate
+                    == Some(crate::ir::Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ProcOpen),
+                    ))
+        })
+        .unwrap_or_else(|| panic!("missing proc_open EIR call: {}", print_module(&module)));
+    assert_eq!(call.operands.len(), 9, "proc_open hidden marshalling ABI changed");
+}
+
+/// Verifies the proc_open semantic descriptor preserves named source order before
+/// materializing the six PHP parameters and three Windows marshalling operands.
+#[test]
+fn lowers_named_windows_proc_open_in_source_order_with_nine_operands() {
+    let module = lower_source_with_target(
+        r#"<?php
+function options(): array { return ['bypass_shell' => true]; }
+function environment(): array { return ['VALUE' => 'one']; }
+function cwd(): string { return 'C:\\temp'; }
+function descriptors(): array { return [1 => ['pipe', 'w']]; }
+function command(): array { return ['cmd.exe', '/c', 'exit 0']; }
+$pipes = [];
+proc_open(
+    options: options(),
+    env_vars: environment(),
+    cwd: cwd(),
+    pipes: $pipes,
+    descriptor_spec: descriptors(),
+    command: command(),
+);
+"#,
+        Target::new(
+            crate::codegen::platform::Platform::Windows,
+            crate::codegen::platform::Arch::X86_64,
+        ),
+    );
+    let calls = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.instructions)
+        .filter_map(|instruction| {
+            let Some(crate::ir::Immediate::Data(data_id)) = instruction.immediate.as_ref() else {
+                return None;
+            };
+            (instruction.op == crate::ir::Op::Call).then(|| {
+                module.data.function_names[data_id.as_raw() as usize].clone()
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(calls, ["options", "environment", "cwd", "descriptors", "command"]);
+    let call = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.instructions)
+        .find(|instruction| {
+            instruction.immediate
+                == Some(crate::ir::Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ProcOpen),
+                ))
+        })
+        .expect("missing proc_open runtime call");
+    assert_eq!(call.operands.len(), 9);
+}
+
+/// Verifies proc_open pipe reads retain the boxed Mixed resource published by
+/// the keyed runtime setter instead of treating its pointer as a raw fd.
+#[test]
+fn lowers_proc_open_pipe_readback_as_mixed_storage() {
+    let module = lower_source(
+        r#"<?php
+$pipes = [];
+$process = proc_open("echo hi", [1 => ["pipe", "w"]], $pipes);
+echo fread($pipes[1], 100);
+"#,
+    );
+    let read = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.instructions)
+        .find(|instruction| instruction.op == crate::ir::Op::HashGet)
+        .unwrap_or_else(|| panic!("missing proc_open pipe lookup: {}", print_module(&module)));
+    assert_eq!(
+        read.result_php_type.codegen_repr(),
+        crate::types::PhpType::Mixed,
+        "proc_open publishes boxed resource entries through the Mixed hash contract",
+    );
 }
 
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.

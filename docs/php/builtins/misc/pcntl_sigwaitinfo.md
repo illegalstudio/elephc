@@ -2,13 +2,13 @@
 title: "pcntl_sigwaitinfo()"
 description: "Waits synchronously for one selected Linux signal and returns its number or false."
 sidebar:
-  order: 664
+  order: 671
 ---
 
 ## pcntl_sigwaitinfo()
 
 ```php
-function pcntl_sigwaitinfo(mixed $signals, mixed $info = []): mixed
+function pcntl_sigwaitinfo(mixed $signals, mixed &$info = []): mixed
 ```
 
 Waits synchronously for one selected Linux signal and returns its number or false.

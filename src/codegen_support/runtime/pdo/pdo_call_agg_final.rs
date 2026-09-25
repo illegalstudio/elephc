@@ -337,7 +337,7 @@ fn emit_pdo_call_agg_final_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg0 = descriptor pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // arg1 = boxed Mixed argument cell
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the uniform invoker pointer
-    emitter.instruction("call r10");                                            // invoke finalize(...) → OWNED boxed Mixed return in rax
+    emitter.emit_platform_callback_call("r10", 2);                                // call generated PDO finalizer with the target ABI
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the boxed return for decode + release
 
     // pop the firewall handler before any further runtime calls

@@ -2,7 +2,7 @@
 title: "imagecrop() - internals"
 description: "Compiler internals for imagecrop(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 495
+  order: 499
 ---
 
 ## `imagecrop()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3124](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3124) (`imagecrop`)
+- **Lowering**: [`src/image_prelude.rs`:3195](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3195) (`imagecrop`)
 - **Function symbol**: `imagecrop()`
 
 

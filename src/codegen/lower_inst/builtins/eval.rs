@@ -243,6 +243,7 @@ mod argument_results;
 mod context_registration;
 mod registration_collection;
 mod member_collection;
+pub(in crate::codegen::lower_inst::builtins) mod native_calls;
 mod signature_metadata;
 mod default_expressions;
 mod default_constants;
@@ -288,6 +289,8 @@ pub(in crate::codegen::lower_inst) fn eval_context_local_slot(
 use registration_collection::*;
 #[allow(unused_imports)]
 use member_collection::*;
+#[allow(unused_imports)]
+use native_calls::*;
 #[allow(unused_imports)]
 use signature_metadata::*;
 #[allow(unused_imports)]

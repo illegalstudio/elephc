@@ -416,8 +416,8 @@ model](../beyond-php/web.md#concurrency-model) for process trees, state lifetime
 streaming, cancellation, and performance trade-offs.
 
 The served program also receives `$_COOKIE`, `$_REQUEST`, and `$_ENV`, and can
-emit cookies with `setcookie()`. The server shuts down cleanly on
-`SIGINT`/`SIGTERM` and respawns workers that die.
+emit cookies with `setcookie()`. Unix shuts down on `SIGINT`/`SIGTERM` and
+respawns failed workers; Windows handles Ctrl-C in its single process.
 
 The served program receives the HTTP request through the standard superglobals
 `$_SERVER`, `$_GET`, `$_POST`, and `php://input`, and controls the response
@@ -428,7 +428,7 @@ status and headers with `http_response_code()` and `header()`. See
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. iOS is ARM64-only and emits libraries for an app host, not standalone app executables. |
+| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`, `windows-x86_64` (plus alias spellings; other recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. iOS is ARM64-only and emits libraries for an app host, not standalone app executables. Windows emits GNU/MinGW-ABI PE32+ artifacts. |
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
 spellings. For `ios-arm64` and `ios-sim-arm64`, use `--emit staticlib` (normally)
@@ -438,7 +438,6 @@ Elephc CLI process, not a signed iOS application bundle.
 ## Optimization and code generation
 
 | Flag | Values | Default | Env override | Description |
-|---|---|---|---|---|
 | `--ir-opt=on\|off` | `on`, `off` | `on` | `ELEPHC_IR_OPT` | Toggle the EIR optimization passes: identity folding, peepholes, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, and the cross-function small-function inliner — run to a module-level fixed point. |
 | `--no-ir-opt` | — | — | `ELEPHC_IR_OPT=off` | Shorthand for `--ir-opt=off`. |
 | `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan, or stack-only fallback. |
@@ -851,3 +850,13 @@ as `LINUX_AARCH64`. All three tool overrides are required for a non-host target.
 The variables in this table are read by the **compiler**. A separate family,
 `ELEPHC_INI_<directive>`, is read by the **compiled binary** at run time — see
 [Runtime overrides](#runtime-overrides-elephc_ini_).
+
+Windows cross-compilation also accepts toolchain-only environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `ELEPHC_WINDOWS_TOOLCHAIN` | `gnu` (default) or `llvm`. |
+| `ELEPHC_WINDOWS_SYSROOT` | MinGW sysroot used by LLVM mode for CRT objects and import libraries. |
+| `ELEPHC_WINDOWS_GCC` | Override the GNU MinGW driver used directly and for sysroot discovery. |
+| `ELEPHC_WINDOWS_CLANG` | Override the Clang executable used in LLVM mode. |
+| `ELEPHC_WINDOWS_LLD` | Override the linker name/path passed through Clang's `-fuse-ld`. |

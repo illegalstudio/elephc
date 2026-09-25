@@ -38,6 +38,7 @@ elephc-iconv = { path = "../elephc-iconv" }
 elephc-phar = { path = "../elephc-phar" }
 elephc-pcntl = { path = "../elephc-pcntl" }
 flate2 = "1"
+getrandom = "0.2"
 inventory = "0.3"
 libc = "0.2"
 unicode-segmentation = "1"

@@ -2,7 +2,7 @@
 title: "gc_status() - internals"
 description: "Compiler internals for gc_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 620
+  order: 627
 ---
 
 ## `gc_status()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/gc_status.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gc_status.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

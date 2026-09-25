@@ -2,13 +2,13 @@
 title: "fsockopen()"
 description: "Open Internet or Unix domain socket connection."
 sidebar:
-  order: 777
+  order: 791
 ---
 
 ## fsockopen()
 
 ```php
-function fsockopen(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed
+function fsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): mixed
 ```
 
 Open Internet or Unix domain socket connection.

@@ -76,7 +76,7 @@ fn emit_entry(emitter: &mut Emitter) {
         .into_iter()
         .enumerate()
     {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     for offset in [SOURCE, PENDING, ARGUMENTS, CALLBACK_RESULT, BORROW_HEAD] {
         clear_slot(emitter, offset);
@@ -90,16 +90,16 @@ fn emit_entry(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_incref");
     abi::store_at_offset(emitter, result, SOURCE);
     for (index, offset) in [CALLBACK, SOURCE, MODE].into_iter().enumerate() {
-        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     abi::emit_frame_slot_address(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 3),
+        abi::runtime_helper_int_arg_reg(emitter, 3),
         CALLBACK_RESULT,
     );
     abi::load_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 4),
+        abi::runtime_helper_int_arg_reg(emitter, 4),
         INVOCATION_SCOPE,
     );
     abi::emit_call_label(emitter, "__rt_array_walk_boxed_visit");
@@ -155,7 +155,11 @@ fn emit_visitor(emitter: &mut Emitter) {
         .into_iter()
         .enumerate()
     {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::store_at_offset(
+            emitter,
+            abi::runtime_helper_int_arg_reg(emitter, index),
+            offset,
+        );
     }
     clear_slot(emitter, VISIT_CURSOR);
 
@@ -164,7 +168,7 @@ fn emit_visitor(emitter: &mut Emitter) {
     // split at the rooted outer cell or this promoted child hash before relocating its storage.
     abi::load_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(emitter, 0),
         VISIT_CELL,
     );
     abi::emit_call_label(emitter, "__rt_mixed_cell_promote_to_hash");
@@ -173,12 +177,12 @@ fn emit_visitor(emitter: &mut Emitter) {
     emitter.label("__rt_array_walk_boxed_visit_loop");
     abi::load_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(emitter, 0),
         VISIT_HASH,
     );
     abi::load_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(emitter, 1),
         VISIT_CURSOR,
     );
     abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
@@ -230,7 +234,11 @@ fn emit_visitor(emitter: &mut Emitter) {
         .into_iter()
         .enumerate()
     {
-        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::load_at_offset(
+            emitter,
+            abi::runtime_helper_int_arg_reg(emitter, index),
+            offset,
+        );
     }
     abi::emit_call_label(emitter, "__rt_array_walk_boxed_visit");
     abi::emit_jump(emitter, "__rt_array_walk_boxed_visit_loop");
@@ -239,25 +247,25 @@ fn emit_visitor(emitter: &mut Emitter) {
     prepare_arguments(emitter);
     abi::load_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(emitter, 0),
         VISIT_CALLBACK,
     );
     abi::load_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(emitter, 1),
         VISIT_ARGUMENT_OWNER,
     );
     load_indirect_at(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 1),
-        abi::int_arg_reg_name(emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(emitter, 1),
+        abi::runtime_helper_int_arg_reg(emitter, 1),
         ARGUMENT_OWNER_OFFSET,
     );
     abi::load_at_offset(emitter, scratch_reg(emitter), VISIT_ARGUMENT_OWNER);
     store_zero_indirect_at(emitter, scratch_reg(emitter), ARGUMENT_OWNER_OFFSET);
     abi::load_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 2),
+        abi::runtime_helper_int_arg_reg(emitter, 2),
         VISIT_INVOCATION_SCOPE,
     );
     install_visit_borrow(emitter);
@@ -328,8 +336,8 @@ fn restore_entry_borrow_head(emitter: &mut Emitter) {
 /// Builds owned `(value-ref, key)` callback arguments under the outer unwind owner slot.
 fn prepare_arguments(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
+    let arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
     abi::emit_load_int_immediate(emitter, arg0, 2);
     abi::emit_load_int_immediate(emitter, arg1, 8);
     abi::emit_call_label(emitter, "__rt_array_new");
@@ -430,7 +438,7 @@ fn install_boundary(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
     abi::emit_frame_slot_address(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(emitter, 0),
         HANDLER - TRY_HANDLER_JMP_BUF_OFFSET,
     );
     emitter.bl_c("setjmp");                                                     // keep descriptor and source owners reachable across callback and cleanup throws
@@ -663,6 +671,65 @@ mod tests {
             let registered = invoke_path[..invoked].rfind("_rt_unmanaged_ref_borrow_top").unwrap();
             let restored = invoke_path[invoked..].find("_rt_unmanaged_ref_borrow_top").unwrap();
             assert!(registered < invoked && restored > 0, "{name}: {asm}");
+        }
+    }
+
+    /// Keeps the recursive five-word visitor on the runtime ABI, not the four-word MS x64 ABI.
+    #[test]
+    fn boxed_walk_windows_x86_64_uses_sysv_registers_for_internal_visitor_calls() {
+        let mut emitter = Emitter::new(Target::parse("windows-x86_64").unwrap());
+        emit_array_walk_boxed(&mut emitter);
+        let asm = emitter.output();
+
+        let entry_call = asm
+            .split_once("__rt_array_walk_boxed:\n")
+            .expect("boxed walk entry")
+            .1
+            .split_once("call __rt_array_walk_boxed_visit")
+            .expect("boxed walk visitor call")
+            .0;
+        for expected in [
+            "mov rdi, QWORD PTR [rbp - 8]",
+            "mov rsi, QWORD PTR [rbp - 32]",
+            "mov rdx, QWORD PTR [rbp - 24]",
+            "lea rcx, [rbp - 64]",
+            "mov r8, QWORD PTR [rbp - 80]",
+        ] {
+            assert!(entry_call.contains(expected), "missing visitor runtime ABI move: {expected}\n{entry_call}");
+        }
+
+        let visitor_entry = asm
+            .split_once("__rt_array_walk_boxed_visit:\n")
+            .expect("boxed walk visitor entry")
+            .1
+            .split_once("__rt_array_walk_boxed_visit_loop:")
+            .expect("boxed walk visitor loop")
+            .0;
+        for expected in [
+            "mov QWORD PTR [rbp - 8], rdi",
+            "mov QWORD PTR [rbp - 16], rsi",
+            "mov QWORD PTR [rbp - 24], rdx",
+            "mov QWORD PTR [rbp - 88], rcx",
+            "mov QWORD PTR [rbp - 112], r8",
+        ] {
+            assert!(visitor_entry.contains(expected), "missing visitor runtime ABI save: {expected}\n{visitor_entry}");
+        }
+
+        let recursive_call = asm
+            .split_once("__rt_array_walk_boxed_visit_loop:")
+            .expect("boxed walk visitor loop")
+            .1
+            .split_once("call __rt_array_walk_boxed_visit")
+            .expect("recursive boxed walk visitor call")
+            .0;
+        for expected in [
+            "mov rdi, QWORD PTR [rbp - 8]",
+            "mov rsi, QWORD PTR [rbp - 80]",
+            "mov rdx, QWORD PTR [rbp - 24]",
+            "mov rcx, QWORD PTR [rbp - 88]",
+            "mov r8, QWORD PTR [rbp - 112]",
+        ] {
+            assert!(recursive_call.contains(expected), "missing recursive runtime ABI move: {expected}\n{recursive_call}");
         }
     }
 }

@@ -184,8 +184,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
 
 /// Emits a global label with platform C-symbol mangling.
 fn label_c_global(emitter: &mut Emitter, name: &str) {
-    let symbol = emitter.target.extern_symbol(name);
-    emitter.label_global(&symbol);
+    abi::emit_c_callback_entry(emitter, name);
 }
 
 /// Exposes GC controls, bounding collection exceptions before returning to Rust.
@@ -514,15 +513,13 @@ mod tests {
     #[test]
     fn aarch64_boxes_eval_hash_contexts_as_inert_kind_five() {
         let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        let body = body_of(&asm, "__elephc_eval_value_hash_context");
         assert!(
-            asm.contains(
-                "__elephc_eval_value_hash_context:\n\
-                 \x20   mov x1, x0\n\
-                 \x20   mov x0, #9\n\
-                 \x20   mov x2, #5\n\
-                 \x20   b __rt_mixed_from_value\n"
-            ),
-            "{asm}"
+            body.contains("mov x1, x0")
+                && body.contains("mov x0, #9")
+                && body.contains("mov x2, #5")
+                && body.contains("b __rt_mixed_from_value"),
+            "{body}"
         );
     }
 
@@ -535,14 +532,12 @@ mod tests {
     #[test]
     fn x86_64_boxes_eval_hash_contexts_as_inert_kind_five() {
         let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let body = body_of(&asm, "__elephc_eval_value_hash_context");
         assert!(
-            asm.contains(
-                "__elephc_eval_value_hash_context:\n\
-                 \x20   mov eax, 9\n\
-                 \x20   mov esi, 5\n\
-                 \x20   jmp __rt_mixed_from_value\n"
+            body.contains(
+                "    mov eax, 9\n    mov esi, 5\n    jmp __rt_mixed_from_value\n"
             ),
-            "{asm}"
+            "{body}"
         );
     }
 
@@ -669,19 +664,22 @@ mod tests {
         }
     }
 
-    /// Returns the instruction lines following `label` up to the next exported helper.
-    ///
-    /// `label_c_global` emits `.globl <sym>` immediately before each wrapper's label, so
-    /// the next `.globl` is where this wrapper's body ends. Splitting on a BLANK line
-    /// would not work — the bridge emits none between wrappers — and would silently hand
-    /// back the whole remainder of the file, making every negative assertion below
-    /// vacuous: `mov x2, xzr` from the very next wrapper would satisfy it.
+    /// Returns the instruction lines following a wrapper's private internal
+    /// entry up to the next exported helper. The public C label is a tiny
+    /// platform adapter; assertions here target the implementation body.
     fn body_of<'a>(asm: &'a str, label: &str) -> &'a str {
-        let marker = format!("{label}:\n");
+        // Exported C callback labels carry the platform's leading underscore
+        // on Mach-O. The hand-written internal labels remain unmangled, so
+        // snapshots must locate the exported wrapper without assuming one
+        // object-file symbol spelling.
+        let marker = [format!("{label}__internal:\n"), format!("_{label}__internal:\n")]
+            .into_iter()
+            .find(|candidate| asm.contains(candidate))
+            .unwrap_or_else(|| panic!("missing {label} in emitted assembly:\n{asm}"));
         let body = asm
             .split(&marker)
             .nth(1)
-            .unwrap_or_else(|| panic!("missing {label} in emitted assembly:\n{asm}"));
+            .expect("the exported wrapper marker must have a body");
         let body = body.split("\n.globl ").next().expect("split yields a first segment");
         assert!(
             !body.is_empty(),

@@ -10,7 +10,10 @@
 
 use super::{
     ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
-    DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
+    DIRNAME_LEVELS_MSG, ESCAPE_SHELL_ARG_INPUT_LENGTH_MSG, ESCAPE_SHELL_ARG_NUL_MSG,
+    ESCAPE_SHELL_ARG_OUTPUT_LENGTH_MSG, ESCAPE_SHELL_CMD_INPUT_LENGTH_MSG,
+    ESCAPE_SHELL_CMD_NUL_MSG, ESCAPE_SHELL_CMD_OUTPUT_LENGTH_MSG,
+    HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
     MB_STRLEN_UNKNOWN_ENCODING_MSG, MIXED_SORT_NON_SCALAR_MSG,
@@ -22,11 +25,12 @@ use super::{
     POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
-    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
+    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, RANDOM_BYTES_LENGTH_MSG,
+    RANDOM_BYTES_SOURCE_MSG, SPRINTF_ARGCOUNT_MSG,
     SPRINTF_ARRAY_TO_STRING_WARNING, SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX,
     SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX, SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX,
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
-    STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
+    STR_REPEAT_TIMES_MSG, TEMPNAM_FALLBACK_NOTICE, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
     UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
     UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
 };
@@ -36,17 +40,17 @@ use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
 use crate::codegen_support::data_section::comm_directive_aligned;
-use crate::codegen_support::platform::Target;
+use crate::codegen_support::platform::{Platform, Target};
 use crate::php_version::PhpVersion;
 use crate::types::checker::builtins::{
-    all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
+    supported_builtin_function_names_for_profile, supported_builtin_function_names_for_target,
 };
 
 /// Emit the fixed runtime `.data` section as assembly text.
-/// Cached across compilations because it contains only target-independent
-/// runtime data: heap globals, concat buffers, exception/fiber state,
-/// JSON/SPL error messages, base64 tables, PCRE regex patterns, and
-/// lookup tables for builtins, file types, and `pathinfo` keys.
+/// Cached across compilations per target because it contains heap globals,
+/// concat buffers, exception/fiber state, JSON/SPL error messages, base64
+/// tables, PCRE regex patterns, and lookup tables for builtins, file types,
+/// and `pathinfo` keys.
 ///
 /// `heap_size` is the maximum heap bytes requested by the user program;
 /// it is baked into `_heap_max` to enforce the heap limit at runtime.
@@ -214,6 +218,15 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(
         ".globl _ob_handler_name\n_ob_handler_name:\n    .ascii {OB_DEFAULT_HANDLER_NAME:?}\n"
     ));
+    out.push_str(&format!(
+        ".globl _tempnam_fallback_notice\n_tempnam_fallback_notice:\n    .ascii {TEMPNAM_FALLBACK_NOTICE:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _random_bytes_length_msg\n_random_bytes_length_msg:\n    .ascii {RANDOM_BYTES_LENGTH_MSG:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _random_bytes_source_msg\n_random_bytes_source_msg:\n    .ascii {RANDOM_BYTES_SOURCE_MSG:?}\n"
+    ));
     for (sym, key) in [
         ("_ob_k_name", "name"),
         ("_ob_k_type", "type"),
@@ -275,9 +288,54 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_php_tz_env", 264, target));
     out.push_str(&comm_directive("_php_default_tz_len", 8, target));
     out.push_str(&comm_directive("_php_tz_save", 264, target));
+    // The validator is published only by date_default_timezone_set()/strtotime
+    // lowering. Keeping this slot indirect prevents the always-emitted default
+    // timezone runtime helpers from linking elephc-tz into unrelated programs.
+    out.push_str(&comm_directive("_elephc_tz_validate_fn", 8, target));
     out.push_str(".globl _php_tz_utc\n");
     out.push_str("_php_tz_utc:\n");
     out.push_str("    .ascii \"UTC\"\n");
+    out.push_str(".globl _date_default_timezone_invalid_prefix\n");
+    out.push_str("_date_default_timezone_invalid_prefix:\n    .ascii \"Warning: date_default_timezone_set(): Timezone ID '\"\n");
+    out.push_str(".globl _date_default_timezone_invalid_suffix\n");
+    out.push_str("_date_default_timezone_invalid_suffix:\n    .ascii \"' is invalid\\n\"\n");
+    // _elephc_tz_offset_fn: indirect pointer to elephc_tz_offset, published only
+    // at a windows date()/mktime()/strtotime() call site so the windows-only
+    // __rt_sys_localtime/__rt_sys_mktime shims (codegen_support/runtime/win32/
+    // shims_time.rs) can call through it to resolve the active default
+    // timezone's IANA offset/DST. Programs that never reach a publishing call
+    // site leave the slot null, and the shims fall back to raw msvcrt
+    // localtime()/mktime() — so only windows programs that use date/time
+    // builtins pull in -lelephc_tz. The slot is emitted windows-only (like
+    // _win_tz_tm_buf below); no non-windows code references it.
+    if target.platform == Platform::Windows {
+        out.push_str(".comm _elephc_tz_offset_fn, 8, 3\n");
+        out.push_str(".comm _elephc_tz_abbreviation_fn, 8, 3\n");
+    }
+    // _win_tz_tm_buf: windows-only synthesized `struct tm` (glibc-layout: the 9
+    // standard int fields at +0..+36, `tm_gmtoff` (i64) at +40, `tm_zone`
+    // (char*) at +48) returned by __rt_sys_localtime when the offset bridge
+    // resolves the active zone. Needed because MinGW's own `struct tm` (see
+    // its <time.h>) is only the 9 plain ints — msvcrt's static localtime()/
+    // gmtime() buffer has no room for tm_gmtoff/tm_zone, so those fields must
+    // live in elephc's own storage, not msvcrt's, whenever the runtime's
+    // date() formatter reads them (the 'Z'/'O'/'P'/'I' specifiers).
+    if target.platform == Platform::Windows {
+        out.push_str(".comm _win_tz_tm_buf, 64, 3\n");
+        out.push_str(".comm _win_select_read_handles, 512, 3\n");
+        out.push_str(".comm _win_select_write_handles, 512, 3\n");
+        out.push_str(".comm _win_select_except_handles, 512, 3\n");
+        // 64 records of (active, descriptor/SOCKET, Linux status flags).  The
+        // Win32 fcntl shim uses this to preserve F_GETFL/F_SETFL semantics for
+        // CRT descriptors and opaque Winsock SOCKET values.
+        out.push_str(".comm _win_fd_status_records, 1536, 3\n");
+        // Process-wide impersonation-token cache for the php-parity ACL check
+        // behind is_readable()/is_writable() (win32/shims_fs.rs,
+        // __rt_win_acl_token_get). Tri-state: 0 = the token dance has never
+        // run, -1 = it ran and failed permanently (never retry; stay on the
+        // GetFileAttributesW answer), anything else = the cached token.
+        out.push_str(".comm _win_acl_token, 8, 3\n");
+    }
     // getdate() associative-array key strings (read by __rt_getdate).
     for (sym, key) in [
         ("_gd_k_seconds", "seconds"),
@@ -323,6 +381,39 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_call_frame", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_magic_set_guard", 8, target));
+    if target.platform == Platform::Windows {
+        // A manual Windows fiber switch temporarily makes a private runtime
+        // stack current. Keep the original thread's TEB stack metadata so the
+        // switch back to main restores its guard-page and deallocation bounds.
+        out.push_str(&comm_directive("_fiber_main_saved_stack_base", 8, target));
+        out.push_str(&comm_directive("_fiber_main_saved_stack_limit", 8, target));
+        out.push_str(&comm_directive(
+            "_fiber_main_saved_deallocation_stack",
+            8,
+            target,
+        ));
+    }
+    // proc_open() records its pipe table and status metadata in process-wide
+    // linked registries. Both runtime helpers are emitted on every supported
+    // target, so their mutable heads and PHP-visible status keys must share the
+    // target's object-format data spelling rather than being Windows-specific.
+    out.push_str(&comm_directive("_proc_pipe_registry_head", 8, target));
+    out.push_str(&comm_directive("_proc_status_registry_head", 8, target));
+    for (symbol, key) in [
+        ("_proc_status_k_command", "command"),
+        ("_proc_status_k_pid", "pid"),
+        ("_proc_status_k_cached", "cached"),
+        ("_proc_status_k_running", "running"),
+        ("_proc_status_k_signaled", "signaled"),
+        ("_proc_status_k_stopped", "stopped"),
+        ("_proc_status_k_exitcode", "exitcode"),
+        ("_proc_status_k_termsig", "termsig"),
+        ("_proc_status_k_stopsig", "stopsig"),
+    ] {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii \"{key}\"\n"
+        ));
+    }
     // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
     // execution context that is running right now: every compiled function prologue does an
     // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow
@@ -662,6 +753,22 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _mb_strlen_unknown_encoding_msg\n_mb_strlen_unknown_encoding_msg:\n    .ascii {:?}\n",
         MB_STRLEN_UNKNOWN_ENCODING_MSG
     ));
+    out.push_str(&format!(
+        ".globl _escapeshellarg_nul_msg\n_escapeshellarg_nul_msg:\n    .ascii {:?}\n",
+        ESCAPE_SHELL_ARG_NUL_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _escapeshellcmd_nul_msg\n_escapeshellcmd_nul_msg:\n    .ascii {:?}\n",
+        ESCAPE_SHELL_CMD_NUL_MSG
+    ));
+    for (label, message) in [
+        ("_escapeshellarg_input_length_msg", ESCAPE_SHELL_ARG_INPUT_LENGTH_MSG),
+        ("_escapeshellarg_output_length_msg", ESCAPE_SHELL_ARG_OUTPUT_LENGTH_MSG),
+        ("_escapeshellcmd_input_length_msg", ESCAPE_SHELL_CMD_INPUT_LENGTH_MSG),
+        ("_escapeshellcmd_output_length_msg", ESCAPE_SHELL_CMD_OUTPUT_LENGTH_MSG),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _mb_strlen_utf8_name\n_mb_strlen_utf8_name:\n    .asciz \"UTF-8\"\n");
     out.push_str(".globl _mb_strlen_utf8_alias\n_mb_strlen_utf8_alias:\n    .asciz \"UTF8\"\n");
     out.push_str(".globl _mb_strlen_utf32le_name\n_mb_strlen_utf32le_name:\n    .asciz \"UTF-32LE\"\n");
@@ -847,6 +954,13 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_cstr_buf", 4096, target));
     out.push_str(&comm_directive("_cstr_buf2", 4096, target));
     out.push_str(&comm_directive("_eof_flags", 256, target));
+    if target.platform == crate::codegen::platform::Platform::Windows {
+        // Opaque SOCKET/HANDLE values cannot index the legacy 256-entry fd tables. These
+        // arrays provide a bounded descriptor-to-slot registry and Windows timeout state.
+        out.push_str(&comm_directive("_win_stream_slot_handles", 2048, target));
+        out.push_str(&comm_directive("_win_stream_slot_used", 256, target));
+        out.push_str(&comm_directive("_win_stream_timed_out", 256, target));
+    }
     out.push_str(&comm_directive("_popen_files", 2048, target));
     out.push_str(&comm_directive("_dir_handles", 2048, target));
     // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
@@ -910,6 +1024,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // other than the connection host). Same late-binding/extra-args pattern.
     out.push_str(&comm_directive("_elephc_tls_connect_capath_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_connect_peer_name_fn", 8, target));
+    out.push_str(&comm_directive(
+        "_elephc_tls_connect_with_options_fn",
+        8,
+        target,
+    ));
     out.push_str(&comm_directive("_elephc_tls_write_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_read_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_close_fn", 8, target));
@@ -919,6 +1038,12 @@ pub(crate) fn emit_runtime_data_fixed(
     // late-binding pattern as the other tls fn slots so non-TLS programs
     // do not pull in elephc-tls at link time.
     out.push_str(&comm_directive("_elephc_tls_attach_fd_fn", 8, target));
+    out.push_str(&comm_directive(
+        "_elephc_tls_attach_fd_with_options_fn",
+        8,
+        target,
+    ));
+    out.push_str(&comm_directive("_elephc_tls_handshake_fn", 8, target));
     // _elephc_tls_attach_fd_client_cert_fn / _elephc_tls_connect_client_cert_fn:
     // mutual-TLS variants dispatched when the stream context carries both
     // ssl.local_cert and ssl.local_pk. The attach variant is used by
@@ -1069,6 +1194,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // fd up to 256; the runtime fread/fwrite/fclose paths consult this
     // table and route through the elephc-tls helpers when an entry is
     // non-zero, falling back to read/write/close syscalls otherwise.
+    out.push_str(&comm_directive("_tls_session_fds", 2048, target));
     out.push_str(&comm_directive("_tls_sessions", 2048, target));
     // _stream_chunk_size: per-fd read/write chunk size set by
     // stream_set_chunk_size, indexed by raw fd up to 256 (8 bytes each). A zero
@@ -1080,6 +1206,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // stream_socket_client so stream_socket_enable_crypto can default the TLS
     // SNI / peer-name to the connection host when no ssl.peer_name context
     // option is set. 256 fds * 16 bytes (ptr + len). A zero len means "unset".
+    out.push_str(&comm_directive("_stream_connect_host_fds", 2048, target));
     out.push_str(&comm_directive("_stream_connect_host", 4096, target));
     // _stream_notification_callback: the callable descriptor pointer for the
     // stream context's `notification` option, captured at codegen time by
@@ -1117,6 +1244,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(
         ".globl _ssl_local_pk_key_str\n_ssl_local_pk_key_str:\n    .ascii \"local_pk\"\n",
     );
+    out.push_str(
+        ".globl _ssl_passphrase_key_str\n_ssl_passphrase_key_str:\n    .ascii \"passphrase\"\n",
+    );
     // (_ssl_peer_name_key_str is already defined above for stream_context_get_ssl_peer_name)
     out.push_str(
         ".globl _ssl_allow_self_signed_key_str\n_ssl_allow_self_signed_key_str:\n    .ascii \"allow_self_signed\"\n",
@@ -1124,6 +1254,49 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(
         ".globl _ssl_verify_peer_name_key_str\n_ssl_verify_peer_name_key_str:\n    .ascii \"verify_peer_name\"\n",
     );
+    out.push_str(
+        ".globl _ssl_crypto_method_key_str\n_ssl_crypto_method_key_str:\n    .ascii \"crypto_method\"\n",
+    );
+    out.push_str(
+        ".globl _ssl_alpn_protocols_key_str\n_ssl_alpn_protocols_key_str:\n    .ascii \"alpn_protocols\"\n",
+    );
+    out.push_str(
+        ".globl _ssl_sni_enabled_key_str\n_ssl_sni_enabled_key_str:\n    .ascii \"SNI_enabled\"\n",
+    );
+    out.push_str(
+        ".globl _ssl_no_ticket_key_str\n_ssl_no_ticket_key_str:\n    .ascii \"no_ticket\"\n",
+    );
+    out.push_str(
+        ".globl _ssl_ciphers_key_str\n_ssl_ciphers_key_str:\n    .ascii \"ciphers\"\n",
+    );
+    out.push_str(
+        ".globl _ssl_security_level_key_str\n_ssl_security_level_key_str:\n    .ascii \"security_level\"\n",
+    );
+    out.push_str(
+        ".globl _ssl_disable_compression_key_str\n_ssl_disable_compression_key_str:\n    .ascii \"disable_compression\"\n",
+    );
+    out.push_str(
+        ".globl _ssl_peer_fingerprint_key_str\n_ssl_peer_fingerprint_key_str:\n    .ascii \"peer_fingerprint\"\n",
+    );
+    for (symbol, message) in [
+        (
+            "_sapi_cp_input_codepage_error",
+            crate::codegen_support::runtime::system::SAPI_CP_INPUT_CODEPAGE_ERROR,
+        ),
+        (
+            "_sapi_cp_output_codepage_error",
+            crate::codegen_support::runtime::system::SAPI_CP_OUTPUT_CODEPAGE_ERROR,
+        ),
+        (
+            "_diag_sapi_cp_set_failed_prefix",
+            crate::codegen_support::runtime::system::SAPI_CP_SET_WARNING_PREFIX,
+        ),
+    ] {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii {message:?}\n"
+        ));
+    }
+    out.push_str(&comm_directive("_tls_peer_fingerprint_scratch", 512, target));
     // Key literals + request fragments used by __rt_http_build_request.
     out.push_str(".globl _http_key_str\n_http_key_str:\n    .ascii \"http\"\n");
     out.push_str(
@@ -1168,6 +1341,10 @@ pub(crate) fn emit_runtime_data_fixed(
     // on a Str-typed array). len 0 means no bytes are ever read; the valid
     // pointer keeps any echo/strlen path that still loads the pointer safe.
     out.push_str(&comm_directive("_empty_str", 1, target));
+    out.push_str(".globl _stream_error_generic\n_stream_error_generic:\n    .ascii \"Socket operation failed\"\n");
+    out.push_str(".globl _stream_error_inuse\n_stream_error_inuse:\n    .ascii \"Address already in use\"\n");
+    out.push_str(".globl _stream_error_access\n_stream_error_access:\n    .ascii \"Permission denied\"\n");
+    out.push_str(".globl _stream_error_refused\n_stream_error_refused:\n    .ascii \"Connection refused\"\n");
     // _url_stat_matched: set to 1 by __rt_user_wrapper_url_stat when a path's
     // scheme matches a registered userspace wrapper, 0 otherwise. The path-based
     // stat builtins (file_exists/is_file/filesize) read it after the call to
@@ -1346,6 +1523,23 @@ pub(crate) fn emit_runtime_data_fixed(
     // __rt_hash_get. v1 limitation: only one active context at a time —
     // a fresh stream_context_create overwrites the slot.
     out.push_str(&comm_directive("_stream_context_options", 8, target));
+    // Per-resource stream-context registry. Context ids are synthetic PHP
+    // resource values; listeners and accepted sockets use these slots instead
+    // of consulting one process-global options pointer.
+    out.push_str(&comm_directive("_stream_context_table", 2048, target));
+    out.push_str(&comm_directive("_stream_context_next_id", 8, target));
+    out.push_str(&comm_directive("_stream_listener_context", 2048, target));
+    out.push_str(&comm_directive("_stream_listener_flags", 2048, target));
+    out.push_str(&comm_directive("_stream_listener_tls_method", 2048, target));
+    out.push_str(&comm_directive("_accepted_stream_context", 8, target));
+    out.push_str(&comm_directive("_accepted_stream_flags", 8, target));
+    out.push_str(&comm_directive("_accepted_stream_tls_method", 8, target));
+    out.push_str(&comm_directive("_stream_server_flags", 8, target));
+    out.push_str(&comm_directive("_stream_server_context", 8, target));
+    out.push_str(&comm_directive("_stream_server_tls_method", 8, target));
+    out.push_str(&comm_directive("_stream_socket_errno", 8, target));
+    out.push_str(&comm_directive("_stream_socket_error_ptr", 8, target));
+    out.push_str(&comm_directive("_stream_socket_error_len", 8, target));
     // var_dump body literals (rodata): per-element prefix/suffix bytes used by
     // the array/hash walkers. NONE of them carry a leading indent: every
     // var_dump line is padded by `__rt_vd_pad`, which writes `_vd_indent`
@@ -1553,6 +1747,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _stat_key_blocks\n_stat_key_blocks:\n    .ascii \"blocks\"\n");
     out.push_str(".globl _dirname_dot\n_dirname_dot:\n    .ascii \".\"\n");
     out.push_str(".globl _dirname_slash\n_dirname_slash:\n    .ascii \"/\"\n");
+    // PHP_WIN32_IOUTIL_DEFAULT_SLASH: dirname() on Windows normalises a rooted
+    // path to a backslash regardless of which separator the input used.
+    out.push_str(".globl _dirname_backslash\n_dirname_backslash:\n    .ascii \"\\\\\"\n");
     out.push_str(&format!(
         ".globl _dirname_levels_msg\n_dirname_levels_msg:\n    .ascii {:?}\n",
         DIRNAME_LEVELS_MSG
@@ -1590,13 +1787,25 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _meta_mode_w\n_meta_mode_w:\n    .ascii \"w\"\n");
     out.push_str(".globl _meta_mode_rw\n_meta_mode_rw:\n    .ascii \"r+\"\n");
     out.push_str(".p2align 3\n");
-    out.push_str(".globl _tmpfile_template\n_tmpfile_template:\n    .ascii \"/tmp/elephc-XXXXXX\\0\"\n    .byte 0,0,0,0,0\n");
+    // php builds its temporary path from php_get_temporary_directory rather than a
+    // fixed "/tmp": TMPDIR wins, and P_tmpdir is the fallback it returns verbatim
+    // ("/var/tmp/" on macOS, "/tmp" on Linux). __rt_php_temp_dir reads both of these.
+    out.push_str(".globl _tmpdir_env_name\n_tmpdir_env_name:\n    .asciz \"TMPDIR\"\n");
+    out.push_str(&format!(
+        ".globl _php_p_tmpdir\n_php_p_tmpdir:\n    .asciz {:?}\n",
+        match target.platform {
+            Platform::MacOS => "/var/tmp/",
+            _ => "/tmp",
+        }
+    ));
+    out.push_str(".globl _tmpfile_suffix\n_tmpfile_suffix:\n    .asciz \"/elephc-XXXXXX\"\n");
     out.push_str(".globl _locale_utf8_name\n_locale_utf8_name:\n    .asciz \"C.UTF-8\"\n");
     out.push_str(".globl _locale_env_name\n_locale_env_name:\n    .asciz \"\"\n");
     out.push_str(&system::emit_json_data());
     out.push_str(&system::emit_date_data());
     out.push_str(&system::emit_strtotime_data());
     out.push_str(&system::emit_pcntl_data());
+    out.push_str(&system::emit_sapi_windows_data());
     out.push_str(&emit_php_uname_data());
 
     out
@@ -1612,8 +1821,12 @@ pub(crate) fn emit_runtime_data_fixed(
 fn emit_builtin_callable_data(target: Target) -> String {
     let mut out = String::new();
     let strict_builtins = supported_builtin_function_names_for_profile(true);
-    let mut builtins = all_supported_builtin_function_names();
+    let mut builtins = supported_builtin_function_names_for_target(false, target);
     builtins.sort_by_key(|name| !strict_builtins.contains(name));
+    let strict_builtin_count = builtins
+        .iter()
+        .filter(|name| strict_builtins.contains(name))
+        .count();
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!(
             ".globl _callable_builtin_name_{0}\n_callable_builtin_name_{0}:\n    .ascii \"{1}\"\n",
@@ -1629,7 +1842,7 @@ fn emit_builtin_callable_data(target: Target) -> String {
     out.push_str(
         ".globl _callable_builtin_strict_count\n_callable_builtin_strict_count:\n",
     );
-    out.push_str(&format!("    .quad {}\n", strict_builtins.len()));
+    out.push_str(&format!("    .quad {}\n", strict_builtin_count));
     out.push_str(&comm_directive("_callable_strict_profile", 8, target));
     out.push_str(".globl _callable_builtin_table\n_callable_builtin_table:\n");
     for (idx, name) in builtins.iter().enumerate() {
@@ -1637,6 +1850,118 @@ fn emit_builtin_callable_data(target: Target) -> String {
         out.push_str(&format!("    .quad {}\n", name.len()));
     }
     out
+}
+
+#[cfg(test)]
+mod windows_feature_tests {
+    use super::*;
+    use crate::codegen_support::runtime::data::instanceof::escaped_bytes;
+    use crate::codegen_support::platform::Arch;
+
+    /// Verifies the random-bytes fatal labels are emitted with the messages
+    /// whose lengths the helper passes to its stderr write path.
+    #[test]
+    fn fixed_runtime_data_emits_random_bytes_fatal_messages() {
+        let data = emit_runtime_data_fixed(
+            8 * 1024 * 1024,
+            Target::new(Platform::Linux, Arch::X86_64),
+            PhpVersion::Php85,
+        );
+        assert!(data.contains("_random_bytes_length_msg:"));
+        assert!(data.contains(&escaped_bytes(RANDOM_BYTES_LENGTH_MSG.as_bytes())));
+        assert!(data.contains("_random_bytes_source_msg:"));
+        assert!(data.contains(&escaped_bytes(RANDOM_BYTES_SOURCE_MSG.as_bytes())));
+    }
+
+    /// Ensures every emitted proc_open helper can resolve its registry state on
+    /// every object format rather than only in the target that introduced it.
+    #[test]
+    fn fixed_runtime_data_declares_proc_open_registry_state_on_every_platform() {
+        let targets = [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+            Target::new(Platform::Windows, Arch::X86_64),
+        ];
+        for target in targets {
+            let data = emit_runtime_data_fixed(8 * 1024 * 1024, target, PhpVersion::Php85);
+            for symbol in [
+                "_proc_pipe_registry_head",
+                "_proc_status_registry_head",
+                "_proc_status_k_command",
+                "_proc_status_k_pid",
+                "_proc_status_k_cached",
+                "_proc_status_k_running",
+                "_proc_status_k_signaled",
+                "_proc_status_k_stopped",
+                "_proc_status_k_exitcode",
+                "_proc_status_k_termsig",
+                "_proc_status_k_stopsig",
+            ] {
+                assert!(
+                    data.contains(symbol),
+                    "missing proc_open runtime data symbol {symbol} for {target:?}"
+                );
+            }
+        }
+    }
+
+    /// Verifies the runtime callable-name table follows PHP's target-specific
+    /// registration of link ownership functions without removing them on Unix.
+    #[test]
+    fn builtin_callable_data_filters_windows_lchown_functions() {
+        let windows = emit_builtin_callable_data(Target::new(Platform::Windows, Arch::X86_64));
+        assert!(!windows.contains(".ascii \"lchown\""));
+        assert!(!windows.contains(".ascii \"lchgrp\""));
+
+        let linux = emit_builtin_callable_data(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(linux.contains(".ascii \"lchown\""));
+        assert!(linux.contains(".ascii \"lchgrp\""));
+    }
+
+    /// Verifies Windows fiber TEB state has storage without leaking platform-only
+    /// data symbols into Unix runtime objects.
+    #[test]
+    fn fixed_runtime_data_declares_windows_registry_and_fiber_state() {
+        let windows = emit_runtime_data_fixed(
+            8 * 1024 * 1024,
+            Target::new(Platform::Windows, Arch::X86_64),
+            PhpVersion::Php85,
+        );
+        for symbol in [
+            "_win_stream_slot_handles",
+            "_win_stream_slot_used",
+            "_win_stream_timed_out",
+            "_fiber_main_saved_stack_base",
+            "_fiber_main_saved_stack_limit",
+            "_fiber_main_saved_deallocation_stack",
+            "_proc_pipe_registry_head",
+            "_proc_status_registry_head",
+            "_proc_status_k_command",
+            "_elephc_tls_connect_with_options_fn",
+            "_elephc_tls_attach_fd_with_options_fn",
+            "_elephc_tls_handshake_fn",
+            "_tls_session_fds",
+            "_stream_connect_host_fds",
+        ] {
+            assert!(windows.contains(symbol), "missing runtime data symbol {symbol}");
+        }
+
+        let linux = emit_runtime_data_fixed(
+            8 * 1024 * 1024,
+            Target::new(Platform::Linux, Arch::X86_64),
+            PhpVersion::Php85,
+        );
+        for symbol in [
+            "_fiber_main_saved_stack_base",
+            "_fiber_main_saved_stack_limit",
+            "_fiber_main_saved_deallocation_stack",
+        ] {
+            assert!(
+                !linux.contains(symbol),
+                "Windows-only fiber state leaked into Linux runtime data: {symbol}"
+            );
+        }
+    }
 }
 
 /// Emit the `php_uname_mode_len_msg` and `php_uname_mode_value_msg`

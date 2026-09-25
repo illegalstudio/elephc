@@ -2,7 +2,7 @@
 title: "stream_socket_recvfrom() - internals"
 description: "Compiler internals for stream_socket_recvfrom(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 390
+  order: 394
 ---
 
 ## `stream_socket_recvfrom()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_recvfrom.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_recvfrom.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_socket_recvfrom(resource $socket, int $length, int $flags = 0, string $address = ''): mixed
+function stream_socket_recvfrom(resource $socket, int $length, int $flags = 0, string &$address = ''): mixed
 ```
 
 ## What the type checker enforces

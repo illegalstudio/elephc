@@ -2356,10 +2356,10 @@ fn emit_null_default_to_result(emitter: &mut Emitter, target_ty: Option<&PhpType
 
 /// Emits an empty indexed array of `elem_ty` into the integer result register.
 fn emit_empty_indexed_array(emitter: &mut Emitter, elem_ty: &PhpType) {
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 4);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), 4);
     abi::emit_load_int_immediate(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(emitter, 1),
         elem_ty.stack_size() as i64,
     );
     abi::emit_call_label(emitter, "__rt_array_new");
@@ -2755,8 +2755,8 @@ fn emit_loaded_assoc_variadic_array_arg(
         key: Box::new(PhpType::Mixed),
         value: Box::new(variadic_elem_ty.clone()),
     };
-    let capacity_reg = abi::int_arg_reg_name(emitter.target, 0);
-    let tag_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let capacity_reg = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let tag_reg = abi::runtime_helper_int_arg_reg(emitter, 1);
 
     abi::emit_load_int_immediate(emitter, capacity_reg, 16);
     abi::emit_load_int_immediate(

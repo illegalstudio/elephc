@@ -2,7 +2,7 @@
 title: "imagefill() - internals"
 description: "Compiler internals for imagefill(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 500
+  order: 504
 ---
 
 ## `imagefill()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2802](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2802) (`imagefill`)
+- **Lowering**: [`src/image_prelude.rs`:2873](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2873) (`imagefill`)
 - **Function symbol**: `imagefill()`
 
 

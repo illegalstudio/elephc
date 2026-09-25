@@ -77,7 +77,14 @@ fn build_shim(request: &RecipeRequest<'_>, include: &Path, library: &Path) -> Re
     let archive = library.join("libelephc_pcre2_shim.a");
     fs::write(&source, SHIM_SOURCE).map_err(|error| NativeError::io("write embedded PCRE2 shim", &source, error))?;
     let mut compile = request.toolchain.command(&request.toolchain.cc);
-    compile.args(["-fPIC", "-DPCRE2_STATIC", "-I"]).arg(include).arg("-c").arg(&source).arg("-o").arg(&object);
+    request.toolchain.append_compiler_flags(&mut compile);
+    compile
+        .args(["-DPCRE2_STATIC", "-I"])
+        .arg(include)
+        .arg("-c")
+        .arg(&source)
+        .arg("-o")
+        .arg(&object);
     run_checked(&mut compile, "compile Elephc PCRE2 shim")?;
     let mut archive_command = request.toolchain.command(&request.toolchain.ar);
     archive_command.arg("crs").arg(&archive).arg(&object);

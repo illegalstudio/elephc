@@ -8,9 +8,8 @@
 //!   typed runtime-function dispatch groups.
 //!
 //! Key details:
-//! - Each target is a thin, target-agnostic argument marshal plus one call into an
-//!   `__rt_array_ptr_*` helper; every supported target shares the same path because the
-//!   register choices come from `abi::int_arg_reg_name`.
+//! - Each target marshals the internal SysV/AAPCS helper ABI, independent of the generated
+//!   PHP function ABI (which is MS x64 on Windows).
 //! - Operand counts are enforced here rather than through a registry runtime signature:
 //!   the PHP builtins declare one argument while these calls carry the cursor (and, for
 //!   a seek, the seek mode) as extra operands, so a call that reached this code with the
@@ -32,9 +31,9 @@ pub(super) fn lower_array_ptr_seek(ctx: &mut FunctionContext<'_>, inst: &Instruc
     let container = expect_operand(inst, 0)?;
     let cursor = expect_operand(inst, 1)?;
     let mode = expect_operand(inst, 2)?;
-    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let arg2 = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let arg0 = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
+    let arg2 = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
     ctx.load_value_to_reg(container, arg0)?;
     ctx.load_value_to_reg(cursor, arg1)?;
     ctx.load_value_to_reg(mode, arg2)?;
@@ -71,8 +70,8 @@ fn lower_array_ptr_read(
     require_operand_count(inst, name, 2)?;
     let container = expect_operand(inst, 0)?;
     let cursor = expect_operand(inst, 1)?;
-    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let arg0 = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     ctx.load_value_to_reg(container, arg0)?;
     ctx.load_value_to_reg(cursor, arg1)?;
     abi::emit_call_label(ctx.emitter, symbol);

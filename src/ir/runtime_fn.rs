@@ -33,9 +33,8 @@ pub enum RuntimeFnTargetSupport {
 /// does not declare itself here compiles and runs, and silently leaks its handle at
 /// scope exit — declare it in `resource_cleanup_kind` before stamping it.
 ///
-/// Kind 0 (generic, no destructor), kind 2 (`HashContext`, stamped by the runtime helper
-/// `__rt_hash_init` rather than by a lowering) and kind 5 (the eval-owned inert handle,
-/// which must never gain an arm) are deliberately absent.
+/// Kind 0 (generic, no destructor) and kind 2 (`HashContext`, stamped by the runtime helper
+/// `__rt_hash_init` rather than by a lowering) are deliberately absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceCleanupKind {
     /// Kind 1: a native stream descriptor closed with `close()`.
@@ -44,6 +43,8 @@ pub enum ResourceCleanupKind {
     PopenPipe,
     /// Kind 4: an `opendir()` stream released through `__rt_closedir`.
     Directory,
+    /// Kind 5: a `proc_open()` process released and reaped through `__rt_proc_close`.
+    Process,
 }
 
 impl ResourceCleanupKind {
@@ -53,6 +54,7 @@ impl ResourceCleanupKind {
             Self::StreamFd => 1,
             Self::PopenPipe => 3,
             Self::Directory => 4,
+            Self::Process => 5,
         }
     }
 }
@@ -278,6 +280,10 @@ pub enum RuntimeFnId {
     Pclose,
     Pfsockopen,
     Popen,
+    ProcClose,
+    ProcGetStatus,
+    ProcOpen,
+    ProcTerminate,
     PrintR,
     Readdir,
     Readfile,
@@ -316,6 +322,20 @@ pub enum RuntimeFnId {
     StreamGetWrappers,
     StreamIsLocal,
     StreamIsatty,
+    /// Probes or changes VT100 support for a Windows console stream.
+    SapiWindowsVt100Support,
+    /// Sets the active Windows console code page.
+    SapiWindowsCpSet,
+    /// Reads the active, ANSI, or OEM Windows console code page.
+    SapiWindowsCpGet,
+    /// Converts a string between two Windows code pages.
+    SapiWindowsCpConv,
+    /// Reports whether the active Windows code page is UTF-8.
+    SapiWindowsCpIsUtf8,
+    /// Installs or removes a Windows console control handler.
+    SapiWindowsSetCtrlHandler,
+    /// Generates a Windows console control event.
+    SapiWindowsGenerateCtrlEvent,
     StreamResolveIncludePath,
     StreamSelect,
     StreamSetBlocking,
@@ -392,6 +412,7 @@ pub enum RuntimeFnId {
     Pow,
     Rad2deg,
     Rand,
+    RandomBytes,
     RandomInt,
     Round,
     Sin,
@@ -712,14 +733,16 @@ impl RuntimeFnId {
     ///
     /// The registry normally supplies these bounds by reading the declared arity of every
     /// builtin that lists the target in its runtime-function inventory. That derivation
-    /// cannot describe the internal-array-pointer family: `key`/`current`/`next`/`prev`/
-    /// `reset`/`end` all take one PHP argument, but their lowering appends the hidden
-    /// cursor (and, for a seek, the seek mode) as extra operands. Declaring the real
-    /// runtime arity here keeps EIR validation meaningful instead of switching it off.
+    /// cannot describe lowerings which append backend-neutral operands. The
+    /// internal-array-pointer family appends its hidden cursor (and, for a seek, the
+    /// seek mode), while `proc_open()` appends normalized process/pipes bookkeeping to
+    /// its six PHP-visible operands. Declaring the real runtime arity here keeps EIR
+    /// validation meaningful instead of switching it off.
     const fn lowering_owned_arity_bounds(self) -> Option<(usize, Option<usize>)> {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
+            RuntimeFnId::ProcOpen => Some((9, Some(9))),
             _ => None,
         }
     }
@@ -1721,6 +1744,7 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::Popen => Some(ResourceCleanupKind::PopenPipe),
             RuntimeFnId::Opendir => Some(ResourceCleanupKind::Directory),
+            RuntimeFnId::ProcOpen => Some(ResourceCleanupKind::Process),
             _ => None,
         }
     }
@@ -2037,6 +2061,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::DiskTotalSpace
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
+                // Every `fopen()` outcome is boxed into a new Mixed cell: success carries
+                // the new stream resource and failure carries false. Neither can borrow the
+                // filename or mode storage. Leaving the default MayAliasArguments contract
+                // suppressed the release of a pinned filename, leaking one owned path block
+                // for every open (including the two opens in the oversized fread regression).
+                | RuntimeFnId::Fopen
                 | RuntimeFnId::FileGetContents
                 // `getcwd()` takes NO arguments, so its result cannot alias one by
                 // construction; `__rt_getcwd` copies the kernel's buffer out through
@@ -2136,6 +2166,7 @@ impl RuntimeFnId {
                 // leaked the literal replacement array on every call.
                 | RuntimeFnId::ArraySplice
                 | RuntimeFnId::ZvalUnpack
+                | RuntimeFnId::SapiWindowsCpConv
         ) {
             BuiltinResultOwnership::Fresh
         } else if matches!(
@@ -2366,6 +2397,10 @@ impl RuntimeFnId {
             RuntimeFnId::Pclose => "pclose",
             RuntimeFnId::Pfsockopen => "pfsockopen",
             RuntimeFnId::Popen => "popen",
+            RuntimeFnId::ProcClose => "proc_close",
+            RuntimeFnId::ProcGetStatus => "proc_get_status",
+            RuntimeFnId::ProcOpen => "proc_open",
+            RuntimeFnId::ProcTerminate => "proc_terminate",
             RuntimeFnId::PrintR => "print_r",
             RuntimeFnId::Readdir => "readdir",
             RuntimeFnId::Readfile => "readfile",
@@ -2404,6 +2439,13 @@ impl RuntimeFnId {
             RuntimeFnId::StreamGetWrappers => "stream_get_wrappers",
             RuntimeFnId::StreamIsLocal => "stream_is_local",
             RuntimeFnId::StreamIsatty => "stream_isatty",
+            RuntimeFnId::SapiWindowsVt100Support => "sapi_windows_vt100_support",
+            RuntimeFnId::SapiWindowsCpSet => "sapi_windows_cp_set",
+            RuntimeFnId::SapiWindowsCpGet => "sapi_windows_cp_get",
+            RuntimeFnId::SapiWindowsCpConv => "sapi_windows_cp_conv",
+            RuntimeFnId::SapiWindowsCpIsUtf8 => "sapi_windows_cp_is_utf8",
+            RuntimeFnId::SapiWindowsSetCtrlHandler => "sapi_windows_set_ctrl_handler",
+            RuntimeFnId::SapiWindowsGenerateCtrlEvent => "sapi_windows_generate_ctrl_event",
             RuntimeFnId::StreamResolveIncludePath => "stream_resolve_include_path",
             RuntimeFnId::StreamSelect => "stream_select",
             RuntimeFnId::StreamSetBlocking => "stream_set_blocking",
@@ -2479,6 +2521,7 @@ impl RuntimeFnId {
             RuntimeFnId::Pow => "pow",
             RuntimeFnId::Rad2deg => "rad2deg",
             RuntimeFnId::Rand => "rand",
+            RuntimeFnId::RandomBytes => "random_bytes",
             RuntimeFnId::RandomInt => "random_int",
             RuntimeFnId::Round => "round",
             RuntimeFnId::Sin => "sin",

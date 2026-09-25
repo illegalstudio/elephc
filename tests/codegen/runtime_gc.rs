@@ -24,11 +24,14 @@ mod parse_url;
 #[path = "runtime_gc/getenv.rs"]
 mod getenv;
 #[path = "runtime_gc/pcntl.rs"]
+#[cfg(unix)]
 mod pcntl;
 #[path = "runtime_gc/putenv.rs"]
 mod putenv;
 #[path = "runtime_gc/regressions.rs"]
 mod regressions;
+#[path = "runtime_gc/oversized_read_release.rs"]
+mod oversized_read_release;
 #[path = "runtime_gc/assoc_rebind_release.rs"]
 mod assoc_rebind_release;
 #[path = "runtime_gc/by_ref_foreach_reference_cells.rs"]

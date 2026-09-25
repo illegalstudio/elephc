@@ -112,7 +112,7 @@ pub(super) fn emit_aarch64_numeric(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a PHP numeric double
     emitter.instruction("fmov d1, d0");                                         // keep the right divisor in d1
     emitter.instruction("ldr d0, [sp, #8]");                                    // reload the left dividend into d0
-    emitter.bl_c("fmod");                                                       // libc fmod keeps the dividend's sign, so -0.0 survives like PHP
+    emitter.emit_call_c("fmod");                                                       // libc fmod keeps the dividend's sign, so -0.0 survives like PHP
     emitter.instruction("fcmp d0, d0");                                         // detect NaN so PHP echo prints NAN without a sign
     emitter.instruction("b.vs __elephc_eval_value_fmod_nan");                   // normalize unordered fmod results before boxing
     emitter.instruction("fmov x1, d0");                                         // move the fmod result bits into mixed value_lo
@@ -205,7 +205,7 @@ pub(super) fn emit_aarch64_numeric(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a PHP numeric double
     emitter.instruction("fmov d1, d0");                                         // move the exponent into libc pow's second argument
     emitter.instruction("ldr d0, [sp, #8]");                                    // reload the base into libc pow's first argument
-    emitter.bl_c("pow");
+    emitter.emit_call_c("pow");
     emitter.instruction("fmov x1, d0");                                         // move the pow result bits into mixed value_lo
     emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
@@ -223,7 +223,7 @@ pub(super) fn emit_aarch64_numeric(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_cast_float");                            // cast the boxed eval value to a PHP numeric double
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the precision-presence flag after the value cast
     emitter.instruction("cbnz x2, __elephc_eval_value_round_precision");        // use the precision path when a second argument is present
-    emitter.bl_c("round");
+    emitter.emit_call_c("round");
     emitter.instruction("b __elephc_eval_value_round_box");                     // box the default-precision round result
     emitter.label("__elephc_eval_value_round_precision");
     emitter.instruction("str d0, [sp, #16]");                                   // save the original value while casting the precision
@@ -231,12 +231,12 @@ pub(super) fn emit_aarch64_numeric(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_cast_int");                              // cast the optional precision to a PHP integer
     emitter.instruction("scvtf d1, x0");                                        // convert the precision to a floating exponent for pow
     emitter.instruction("fmov d0, #10.0");                                      // materialize 10.0 as the precision multiplier base
-    emitter.bl_c("pow");
+    emitter.emit_call_c("pow");
     emitter.instruction("ldr d1, [sp, #16]");                                   // reload the original value after pow returns the multiplier
     emitter.instruction("fmul d1, d1, d0");                                     // scale the value by the precision multiplier
     emitter.instruction("str d0, [sp, #24]");                                   // save the multiplier for rescaling after round
     emitter.instruction("fmov d0, d1");                                         // move the scaled value into the round argument
-    emitter.bl_c("round");
+    emitter.emit_call_c("round");
     emitter.instruction("ldr d1, [sp, #24]");                                   // reload the precision multiplier for rescaling
     emitter.instruction("fdiv d0, d0, d1");                                     // scale the rounded value back to requested precision
     emitter.label("__elephc_eval_value_round_box");

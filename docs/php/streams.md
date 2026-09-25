@@ -94,7 +94,10 @@ after calling the `setZipPassword(string $password)` compiler extension on a
 on read and zip entries are encrypted on write (the stub is encrypted too; the
 `.phar/signature.bin` entry stays in the clear). ZipCrypto is cryptographically
 weak — it is kept for compatibility with legacy archives, not as a real
-confidentiality mechanism. `Phar` and `PharData` expose a
+confidentiality mechanism. Its per-entry encryption headers use operating-system
+entropy; on Windows the bridge obtains those bytes from `BCryptGenRandom` and
+fails the archive write if the system provider is unavailable. `Phar` and
+`PharData` expose a
 baseline OOP surface with constructors, format/compression/signature constants,
 `addFromString()`, `delete()`, `compressFiles()`, `decompressFiles()`,
 mixed metadata/string stub accessors, path helpers, and ArrayAccess read/write/isset
@@ -183,37 +186,56 @@ conservatively links `elephc-tls`, `elephc-phar`, zlib, and libbz2.
 override trust with `ssl.cafile` or `ssl.capath`, set `ssl.peer_name`, or relax
 verification with `ssl.verify_peer = "0"`, `ssl.allow_self_signed`, or
 `ssl.verify_peer_name = "0"`. Client certificates are supported when both
-`ssl.local_cert` and `ssl.local_pk` point at readable PEM files; encrypted keys
-and `ssl.passphrase` are not supported. `ssl.ciphers` and
-`ssl.security_level` are accepted as context options for source compatibility
-but are no-ops: rustls does not consume OpenSSL cipher-list strings and chooses
-its TLS 1.2/1.3 policy internally.
+`ssl.local_cert` and `ssl.local_pk` point at readable PEM files; `local_pk` may
+be omitted when the certificate file also contains the key. `ssl.passphrase`
+decrypts PKCS#8 `ENCRYPTED PRIVATE KEY` blocks and OpenSSL's legacy encrypted
+RSA/EC PEM envelopes (AES-CBC, DES-CBC, or 2/3-key 3DES-CBC), without a system
+OpenSSL dependency.
+
+The rustls backend supports a strict, fail-closed subset of OpenSSL's
+`ssl.ciphers` surface. A colon-separated list may use the exact, case-sensitive
+OpenSSL names for rustls-backed ECDHE AES-GCM or ChaCha20 TLS 1.2 suites. PHP's
+`SSL_CTX_set_cipher_list()` leaves TLS 1.3 suites at their defaults; elephc does
+the same and ignores their canonical names only when a supported TLS 1.2 suite
+also remains. OpenSSL aliases/operators such as `DEFAULT`, `HIGH`, exclusions,
+and `@SECLEVEL=` are not approximated: the TLS connection fails instead of
+silently broadening the requested policy. An explicit `ssl.security_level`
+also fails because rustls has no equivalent certificate/signature/key-size
+policy. `ssl.disable_compression` is satisfied when absent or true (rustls has
+no TLS compression); an explicit false fails rather than pretending compression
+was enabled.
 
 ## Stream contexts
 
 | Function | Signature | Description |
 |---|---|---|
-| `stream_context_create()` | `stream_context_create(array $options = [], array $params = []): resource` | Create a stream-context resource and persist `$options` in the single global context slot. A literal `['notification' => <closure>]` in `$params` is captured for HTTP notification callbacks. |
+| `stream_context_create()` | `stream_context_create(array $options = [], array $params = []): resource` | Create a distinct stream-context resource, retain its own `$options` hash, and make those options active for compiled wrapper/TLS consumers. A literal `['notification' => <closure>]` in `$params` is captured for HTTP notification callbacks. |
 | `stream_context_get_default()` | `stream_context_get_default(array $options = []): resource` | Return the default context resource. The optional arg is evaluated for side effects; v1 does not apply it. |
 | `stream_context_set_default()` | `stream_context_set_default(array $options): resource` | Return the default context resource. v1 evaluates `$options` for side effects but does not yet walk and persist the array; use `stream_context_set_option(stream_context_get_default(), ...)` when code needs options stored. |
-| `stream_context_set_option()` | `stream_context_set_option(resource $context, ...): bool` | Accepts PHP's two forms: `(ctx, options_array)` replaces the persisted options hash, while `(ctx, wrapper, option, value)` sets one nested option. In the four-arg form, values are stored as strings in v1. |
+| `stream_context_set_option()` | `stream_context_set_option(resource $context, ...): bool` | Accepts PHP's two forms: `(ctx, options_array)` replaces that resource's persisted options hash, while `(ctx, wrapper, option, value)` selects that resource, sets one nested option, and publishes any grown hash back to the same registry slot. In the four-arg form, values are stored as strings in v1. |
 | `stream_context_set_params()` | `stream_context_set_params(resource $context, array $params): bool` | Captures a literal `notification` closure or first-class callable into the global notification slot and returns `true`. |
-| `stream_context_get_options()` | `stream_context_get_options(resource $context): array` | Return the persisted options hash, or an empty hash when no context has been created. |
+| `stream_context_get_options()` | `stream_context_get_options(resource $context): array` | Return that context resource's persisted options hash, or an empty hash when it has no options. |
 | `stream_context_get_params()` | `stream_context_get_params(resource $context): array` | v1 stub: returns an empty associative array. |
 | `stream_resolve_include_path()` | `stream_resolve_include_path(string $filename): string\|false` | elephc has no runtime `include_path`, so this is equivalent to `realpath($filename)`: canonical path on success, `false` otherwise. |
 
 Active stream-context consumers:
 
 - `fopen("http://...")` reads `http.method`, `http.header`, and `http.content`.
-- `fopen("https://...")` reads the `ssl` trust and peer-name options.
+- `fopen("https://...")` reads the complete supported `ssl` policy above,
+  including client identity, fingerprints, ALPN, ticket/SNI switches, and the
+  fail-closed cipher/security/compression options.
 - `fopen("ftp://...")` reads `ftp.resume_pos`.
 - `file_get_contents()` over `https://` reads the same `ssl` options; over
   `ftp://` or `ftps://` it reads `ftp.resume_pos`.
 - `stream_socket_server()` reads `socket.backlog`.
-- `stream_socket_enable_crypto()` reads TLS peer and client-certificate options.
+- `stream_socket_enable_crypto()` reads the same TLS peer, client-certificate,
+  fingerprint, cipher, security, compression, ALPN, SNI, and ticket options.
 
-v1 has one active context slot. Creating or setting a context overwrites the
-global options used by subsequent consumers.
+Context resources keep independent option hashes. For compatibility with the
+existing compiled wrapper/TLS helpers, creating a context or using the
+four-argument setter also selects its hash as the active context used by a
+subsequent consumer that does not yet bind its explicit `$context` argument.
+Notification callbacks remain a single active global slot.
 
 ## Notification callbacks
 
@@ -303,9 +325,9 @@ type, or as `mixed`, when returning associative stat arrays with string keys.
 
 | Function | Signature | Description |
 |---|---|---|
-| `stream_get_transports()` | `stream_get_transports(): array` | Return recognized socket transports: `tcp`, `udp`, `unix`, `udg`, `tls`, `ssl`, `sslv2`, `sslv3`, `tlsv1.0`, `tlsv1.1`, `tlsv1.2`, and `tlsv1.3`. TLS-version names all use rustls default negotiation. |
-| `stream_socket_server()` | `stream_socket_server($address): resource\|false` | Bind a server socket for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. TCP and Unix-stream sockets listen; UDP and Unix-datagram sockets only bind. |
-| `stream_socket_client()` | `stream_socket_client($address): resource\|false` | Open a client stream for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. |
+| `stream_get_transports()` | `stream_get_transports(): array` | Return recognized socket transports: `tcp`, `udp`, `tls`, `ssl`, `tlsv1.0`, `tlsv1.1`, `tlsv1.2`, and `tlsv1.3`, plus `unix` and `udg` on non-Windows targets. SSLv2/SSLv3 are omitted like a modern PHP/OpenSSL build; TLS-version names use the rustls-supported policy. |
+| `stream_socket_server()` | `stream_socket_server($address): resource\|false` | Bind a server socket for `[tcp://]host:port` or `udp://host:port`, and on non-Windows targets `unix:///path` or `udg:///path`. TCP and Unix-stream sockets listen; UDP and Unix-datagram sockets only bind. PHP does not register Unix-domain transports on Windows, so those addresses return `false` there. |
+| `stream_socket_client()` | `stream_socket_client($address): resource\|false` | Open a client stream for `[tcp://]host:port` or `udp://host:port`, and on non-Windows targets `unix:///path` or `udg:///path`. PHP does not register Unix-domain transports on Windows, so those addresses return `false` there. |
 | `stream_socket_accept()` | `stream_socket_accept($socket): resource\|false` | Accept the next pending connection from a listening stream. |
 | `stream_socket_enable_crypto()` | `stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | Attach TLS to an already-connected TCP fd. `$enable=false` unwinds the session (sends `close_notify` and clears the per-fd TLS handle), leaving the fd a plain TCP socket, then reports `true`; it is a no-op when no session is attached. |
 | `fsockopen()` | `fsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): resource\|false` | Open a TCP connection to `$hostname:$port`, writing optional by-reference error outputs. The timeout arg is evaluated but the OS default connect timeout is used in v1. |
@@ -321,8 +343,10 @@ type, or as `mixed`, when returning associative stat arrays with string keys.
 | `popen()` | `popen(string $command, string $mode): resource\|false` | Open a pipe to a process in read (`"r"`) or write (`"w"`) mode. |
 | `pclose()` | `pclose($handle): int` | Close a process pipe and return its termination status. |
 
-Socket addresses use `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or
-`udg:///path`. Host names are resolved through the system resolver to IPv4.
+Socket addresses use `[tcp://]host:port` or `udp://host:port`. Non-Windows
+targets also support `unix:///path` and `udg:///path`; matching php-src,
+Windows neither reports nor accepts these Unix-domain transports. Host names
+are resolved through the system resolver to IPv4.
 
 ## Directory streams
 

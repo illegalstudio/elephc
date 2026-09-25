@@ -15,7 +15,7 @@ sidebar:
 | [`xml_get_current_line_number()`](./xml/xml_get_current_line_number.md) | `(mixed $parser): int` | `int` | ✓ | ✓ |
 | [`xml_get_error_code()`](./xml/xml_get_error_code.md) | `(mixed $parser): int` | `int` | ✓ | ✓ |
 | [`xml_parse()`](./xml/xml_parse.md) | `(mixed $parser, string $data, bool $is_final = false): int` | `int` | ✓ | ✓ |
-| [`xml_parse_into_struct()`](./xml/xml_parse_into_struct.md) | `(mixed $parser, string $data, mixed $values, mixed $index = null): int` | `int` | ✓ | ✓ |
+| [`xml_parse_into_struct()`](./xml/xml_parse_into_struct.md) | `(mixed $parser, string $data, mixed &$values, mixed &$index = null): int` | `int` | ✓ | ✓ |
 | [`xml_parser_create()`](./xml/xml_parser_create.md) | `(?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
 | [`xml_parser_create_ns()`](./xml/xml_parser_create_ns.md) | `(?string $encoding = null, string $separator = ':'): mixed` | `mixed` | ✓ | ✓ |
 | [`xml_parser_free()`](./xml/xml_parser_free.md) | `(mixed $parser): bool` | `bool` | ✓ | ✓ |

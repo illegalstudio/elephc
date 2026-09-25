@@ -2,7 +2,7 @@
 title: "cairo_set_line_cap() - internals"
 description: "Compiler internals for cairo_set_line_cap(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 435
+  order: 439
 ---
 
 ## `cairo_set_line_cap()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13440](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13440) (`cairo_set_line_cap`)
+- **Lowering**: [`src/image_prelude.rs`:13511](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13511) (`cairo_set_line_cap`)
 - **Function symbol**: `cairo_set_line_cap()`
 
 

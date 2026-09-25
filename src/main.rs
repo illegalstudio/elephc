@@ -65,6 +65,7 @@ mod runtime_cache;
 mod debug_info;
 mod source;
 mod source_map;
+mod source_path;
 mod span;
 mod strict_php;
 mod string_bytes;
@@ -79,11 +80,23 @@ mod xml_prelude;
 mod var_export_prelude;
 mod version_prelude;
 mod web_prelude;
+mod windows_toolchain;
 
-/// Entry point for the `elephc` binary.
+/// Runs the compiler entry point with the stack budget required by its nesting limit.
 ///
-/// Collects command-line arguments, parses the top-level command, and delegates
-/// to either compilation or explicit native-dependency orchestration.
+/// # Inputs
+/// - The operating-system process entry point.
+///
+/// # Outputs
+/// - Returns once the compiler succeeds.
+///
+/// # Side effects
+/// - Reserves compiler stack pages on demand before invoking the pipeline.
+fn main() {
+    compiler_stack::with_compiler_stack(run_compiler)
+}
+
+/// Parses CLI arguments and runs the compiler's ordered pipeline.
 ///
 /// # Inputs
 /// - `std::env::args()`: OS-provided arguments, where `args[0]` is the program name.
@@ -98,13 +111,7 @@ mod web_prelude;
 /// - Emits warnings/errors to stderr, including OPcache `--ini` quantity diagnostics
 ///   ([`emit_ini_override_warnings`]) for compile commands.
 /// - May create temporary files during assembly and linking.
-fn main() {
-    compiler_stack::with_compiler_stack(main_inner)
-}
-
-/// The real entry point, running on the stack established by
-/// [`compiler_stack::with_compiler_stack`].
-fn main_inner() {
+fn run_compiler() {
     let args: Vec<String> = std::env::args().collect();
     if cli::wants_mascotte(&args) {
         cli::print_mascotte();

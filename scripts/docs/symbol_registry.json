@@ -20679,11 +20679,33 @@
       },
       "extension": false,
       "internal": false,
+      "module": "standard",
+      "name": "PATH_SEPARATOR",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "str"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "core",
       "name": "PHP_EOL",
       "route": "predefined",
       "since": null,
-      "value": "\n"
+      "value": {
+        "target_dependent": "str"
+      }
     },
     {
       "aot": {

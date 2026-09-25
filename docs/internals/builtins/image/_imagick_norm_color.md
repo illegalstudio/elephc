@@ -2,7 +2,7 @@
 title: "_imagick_norm_color() - internals"
 description: "Compiler internals for _imagick_norm_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1100
+  order: 1116
 ---
 
 ## `_imagick_norm_color()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:4355](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4355) (`_imagick_norm_color`)
+- **Lowering**: [`src/image_prelude.rs`:4426](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4426) (`_imagick_norm_color`)
 - **Function symbol**: `_imagick_norm_color()`
 
 

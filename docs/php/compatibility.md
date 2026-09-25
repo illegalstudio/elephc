@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **917 / 2169** (42%), classes **142 / 329** (43%), constants **1105 / 3180** (35%).
+Overall coverage: functions **924 / 2169** (43%), classes **142 / 329** (43%), constants **1106 / 3180** (35%).
 
 ## Coverage by PHP module
 
@@ -58,7 +58,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `pgsql` | 0 / 123 · 0% | 0 / 3 · 0% | 0 / 76 · 0% |
 | `phar` | — | 3 / 4 · 75% | — |
 | [`posix`](./pcntl.md#functions) | 2 / 41 · 5% | — | 0 / 43 · 0% |
-| `random` | 3 / 9 · 33% | 0 / 11 · 0% | 0 / 2 · 0% |
+| `random` | 4 / 9 · 44% | 0 / 11 · 0% | 0 / 2 · 0% |
 | `readline` | 1 / 13 · 8% | — | 0 / 1 · 0% |
 | `reflection` | — | 16 / 26 · 62% | — |
 | [`session`](./sessions.md#functions) | 23 / 23 · 100% | 4 / 4 · 100% | 3 / 3 · 100% |
@@ -70,7 +70,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | — |
 | `sqlite3` | — | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 382 / 545 · 70% | 2 / 6 · 33% | 163 / 400 · 41% |
+| `standard` | 388 / 545 · 71% | 2 / 6 · 33% | 164 / 400 · 41% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | — |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | — |
@@ -96,8 +96,8 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
 - `session` functions: 23 / 0
-- `standard` functions: 382 / 342
-- `standard` constants: 163 / 142
+- `standard` functions: 388 / 348
+- `standard` constants: 164 / 143
 - `zend opcache` functions: 8 / 0
 
 Most of that is one gap rather than several. 203 of those functions — every one missing from `exif`, `gd`, `mysqli`, `pdo`, `session`, `zend opcache` — are implemented by a PHP prelude the compiler injects into the program it is compiling. The interpreter dispatches through the shared builtin registry, and a prelude function has no registry binding there, so it is not that these surfaces were skipped one by one: none of them has an entry point `eval()` can reach. Closing it means an `eval_builtin!` binding per surface; see **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
@@ -110,7 +110,7 @@ elephc also defines 1 constant(s) at runtime that PHP registers only in specific
 
 elephc also implements 1 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `SortDirection` (PHP 8.6).
 
-The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
+The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `imagegrabscreen()` (target-specific), `imagegrabwindow()` (target-specific), `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific), `sapi_windows_cp_conv()` (target-specific), `sapi_windows_cp_get()` (target-specific), `sapi_windows_cp_is_utf8()` (target-specific), `sapi_windows_cp_set()` (target-specific), `sapi_windows_generate_ctrl_event()` (target-specific), `sapi_windows_set_ctrl_handler()` (target-specific), `sapi_windows_vt100_support()` (target-specific).
 
 elephc also provides 91 symbols from PECL extensions php-src does not bundle, which the baseline cannot measure: `cairo` (48 functions, 26 classes), `gmagick` (6 classes), `imagick` (10 classes), `pdo_ibm` (1 classes).
 

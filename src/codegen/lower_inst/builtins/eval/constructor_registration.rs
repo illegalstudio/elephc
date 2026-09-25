@@ -13,35 +13,33 @@
 
 use super::*;
 
+/// Stages the shared leading context/class-name words of a constructor metadata export.
+fn stage_constructor_registration_prefix(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    class_name_label: &str,
+    class_name_len: usize,
+) {
+    stage_eval_native_local_word(ctx, context_offset, PhpType::Pointer(None));
+    stage_eval_native_label(ctx, class_name_label);
+    stage_eval_native_int(ctx, class_name_len as i64);
+}
+
 /// Emits one native constructor signature registration call into the eval context.
 pub(super) fn register_eval_native_constructor(
     ctx: &mut FunctionContext<'_>,
     context_offset: usize,
     registration: &EvalNativeConstructorRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let (class_name_label, class_name_len) =
         ctx.data.add_string(registration.class_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &class_name_label,
+    stage_constructor_registration_prefix(ctx, context_offset, &class_name_label, class_name_len);
+    stage_eval_native_int(ctx, registration.signature.params.len() as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_constructor",
+        &[PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int, PhpType::Int],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        registration.signature.params.len() as i64,
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_constructor");
-    abi::emit_call_label(ctx.emitter, &symbol);
     register_eval_native_constructor_bridge_support(
         ctx,
         context_offset,
@@ -168,37 +166,19 @@ fn register_eval_native_constructor_compiled_default(
     param_index: usize,
     helper_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        class_name_label,
+    stage_constructor_registration_prefix(ctx, context_offset, class_name_label, class_name_len);
+    stage_eval_native_int(ctx, param_index as i64);
+    stage_eval_native_int(ctx, NATIVE_DEFAULT_COMPILED);
+    let helper_symbol = function_symbol(helper_name);
+    stage_eval_native_label(ctx, &helper_symbol);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_constructor_param_default_scalar",
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int,
+            PhpType::Int, PhpType::Int, PhpType::Pointer(None),
+        ],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        NATIVE_DEFAULT_COMPILED,
-    );
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        &function_symbol(helper_name),
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_constructor_param_default_scalar");
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native constructor bridge-support registration call.
@@ -209,27 +189,13 @@ pub(super) fn register_eval_native_constructor_bridge_support(
     class_name_len: usize,
     bridge_supported: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        class_name_label,
+    stage_constructor_registration_prefix(ctx, context_offset, class_name_label, class_name_len);
+    stage_eval_native_int(ctx, i64::from(bridge_supported));
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_constructor_bridge_support",
+        &[PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int, PhpType::Int],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        if bridge_supported { 1 } else { 0 },
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_constructor_bridge_support");
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native class-parent metadata registration call into the eval context.
@@ -239,34 +205,19 @@ pub(super) fn register_eval_native_class_parent(
     class_name: &str,
     parent_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let (class_name_label, class_name_len) = ctx.data.add_string(class_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &class_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
     let (parent_name_label, parent_name_len) = ctx.data.add_string(parent_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &parent_name_label,
+    stage_constructor_registration_prefix(ctx, context_offset, &class_name_label, class_name_len);
+    stage_eval_native_label(ctx, &parent_name_label);
+    stage_eval_native_int(ctx, parent_name_len as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_class_parent",
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int,
+            PhpType::Pointer(None), PhpType::Int,
+        ],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        parent_name_len as i64,
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_class_parent");
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native property-type metadata registration call into the eval context.
@@ -281,32 +232,18 @@ pub(super) fn register_eval_native_property_type(
         registration.class_name, registration.property_name
     );
     let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &property_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        property_key_len as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(registration.type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &type_label,
+    stage_constructor_registration_prefix(ctx, context_offset, &property_key_label, property_key_len);
+    stage_eval_native_label(ctx, &type_label);
+    stage_eval_native_int(ctx, type_len as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_property_type",
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int,
+            PhpType::Pointer(None), PhpType::Int,
+        ],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        type_len as i64,
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_property_type");
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native interface-property metadata registration call into the eval context.
@@ -315,7 +252,6 @@ pub(super) fn register_eval_native_interface_property(
     context_offset: usize,
     registration: &EvalNativeInterfacePropertyRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let property_key = format!(
         "{}::{}::{}",
         registration.interface_name,
@@ -323,27 +259,7 @@ pub(super) fn register_eval_native_interface_property(
         registration.property_name
     );
     let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &property_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        property_key_len as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(registration.type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &type_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        type_len as i64,
-    );
     let mut flags = 0;
     if registration.requires_get {
         flags |= NATIVE_PROPERTY_REQUIRES_GET;
@@ -351,16 +267,18 @@ pub(super) fn register_eval_native_interface_property(
     if registration.requires_set {
         flags |= NATIVE_PROPERTY_REQUIRES_SET;
     }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        flags,
+    stage_constructor_registration_prefix(ctx, context_offset, &property_key_label, property_key_len);
+    stage_eval_native_label(ctx, &type_label);
+    stage_eval_native_int(ctx, type_len as i64);
+    stage_eval_native_int(ctx, flags);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_interface_property",
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int,
+            PhpType::Pointer(None), PhpType::Int, PhpType::Int,
+        ],
     );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_interface_property");
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native abstract-property metadata registration call into the eval context.
@@ -369,33 +287,12 @@ pub(super) fn register_eval_native_abstract_property(
     context_offset: usize,
     registration: &EvalNativeAbstractPropertyRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let property_key = format!(
         "{}::{}::{}",
         registration.class_name, registration.declaring_class_name, registration.property_name
     );
     let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &property_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        property_key_len as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(registration.type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &type_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        type_len as i64,
-    );
     let mut flags = 0;
     if registration.requires_get {
         flags |= NATIVE_PROPERTY_REQUIRES_GET;
@@ -403,14 +300,16 @@ pub(super) fn register_eval_native_abstract_property(
     if registration.requires_set {
         flags |= NATIVE_PROPERTY_REQUIRES_SET;
     }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        flags,
+    stage_constructor_registration_prefix(ctx, context_offset, &property_key_label, property_key_len);
+    stage_eval_native_label(ctx, &type_label);
+    stage_eval_native_int(ctx, type_len as i64);
+    stage_eval_native_int(ctx, flags);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_abstract_property",
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int,
+            PhpType::Pointer(None), PhpType::Int, PhpType::Int,
+        ],
     );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_abstract_property");
-    abi::emit_call_label(ctx.emitter, &symbol);
 }

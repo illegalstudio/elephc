@@ -61,7 +61,8 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                             Some(ResourceCleanupKind::Directory) => {
                                 features.directory_resource = true
                             }
-                            Some(ResourceCleanupKind::StreamFd) | None => {}
+                            Some(ResourceCleanupKind::StreamFd | ResourceCleanupKind::Process)
+                            | None => {}
                         }
                         features.object_clone |= target == RuntimeFnId::CloneWith;
                     }

@@ -24,14 +24,14 @@ pub fn emit_cleanup_preserve_exception(emitter: &mut Emitter) {
     emitter.label_global("__rt_cleanup_preserve_exception");
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [ENTRY, PAYLOAD].into_iter().enumerate() {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
     abi::store_at_offset(emitter, result, PENDING);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), ENTRY);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), PAYLOAD);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 2), PENDING);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), ENTRY);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), PAYLOAD);
+    abi::emit_frame_slot_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 2), PENDING);
     abi::emit_call_label(emitter, "__rt_cleanup_invoke");
     abi::store_at_offset(emitter, result, CAUGHT);
     abi::load_at_offset(emitter, result, PENDING);

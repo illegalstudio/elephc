@@ -44,18 +44,18 @@ pub(super) fn lower_boxed_array_walk(
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_reg_move(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         result,
     );
-    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 1))?;
+    ctx.load_value_to_reg(array, abi::runtime_helper_int_arg_reg(ctx.emitter, 1))?;
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         i64::from(recursive),
     );
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 3),
         ctx.lexical_class_id(),
     );
     abi::emit_call_label(ctx.emitter, "__rt_array_walk_boxed");

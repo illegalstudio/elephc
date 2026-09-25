@@ -20,8 +20,8 @@ pub(super) fn lower_boxed_array_take(
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
     let name = if shift { "array_shift" } else { "array_pop" };
     prepare_boxed_array_receiver(ctx, array, name)?;
-    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), i64::from(shift));
+    ctx.load_value_to_reg(array, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), i64::from(shift));
     abi::emit_call_label(ctx.emitter, "__rt_array_take_boxed");
     store_if_result(ctx, inst)
 }
@@ -38,7 +38,7 @@ pub(super) fn lower_assoc_array_pop(
     receiver.prepare_consuming_storeback(ctx, array)?;
     super::sort_dispatch::ensure_unique_hash_sort_source(ctx, array)?;
     receiver.store_back_after_consuming_split(ctx, array)?;
-    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    ctx.load_value_to_reg(array, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_pop_boxed");
     store_if_result(ctx, inst)
 }
@@ -52,7 +52,7 @@ pub(super) fn prepare_boxed_array_receiver(
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable(name)?;
     receiver.prepare_consuming_storeback(ctx, array)?;
-    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    ctx.load_value_to_reg(array, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_array_cell_ensure_unique");
     require_valid_array_result(ctx, name);
     ctx.store_result_value(array)?;
@@ -103,7 +103,7 @@ pub(super) fn lower_boxed_array_sort(
         ctx, &format!("{name}(): Argument #1 ($array) must be of type array"),
     )?;
     let result = abi::int_result_reg(ctx.emitter);
-    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg0 = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     // Normalization can retain an already dense Mixed array. Consume that
     // independent owner in COW before sorting, leaving value aliases intact.
     abi::emit_reg_move(ctx.emitter, arg0, result);
@@ -127,7 +127,7 @@ pub(super) fn lower_boxed_array_key_sort(
     flags: super::HashSortFlags,
 ) -> Result<()> {
     prepare_boxed_array_receiver(ctx, array, name)?;
-    let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(array, arg)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
     require_valid_array_result(ctx, name);
@@ -138,7 +138,7 @@ pub(super) fn lower_boxed_array_key_sort(
     // into their mode (issue #699); an omitted argument is `SORT_REGULAR`. The flags value
     // lives in a callee-saved register or a stack slot, so loading it cannot disturb the
     // receiver just placed in the first argument register.
-    let flags_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let flags_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     match flags {
         super::HashSortFlags::None | super::HashSortFlags::Regular => {
             abi::emit_load_int_immediate(ctx.emitter, flags_arg_reg, 0);

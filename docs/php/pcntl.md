@@ -225,8 +225,8 @@ the operating system may coalesce repeated standard non-realtime signals while
 one is already pending, before either PHP or elephc's handler runs; realtime
 signals retain the OS's queued-delivery semantics.
 As in PHP, applications should keep handlers short and move work into their
-normal event loop. PCNTL is unavailable on Windows because Windows is not in
-elephc's supported target matrix.
+normal event loop. PCNTL is intentionally absent from the experimental Windows
+target, matching php-src's Unix-only build guard.
 
 See the generated [`pcntl_fork()` reference](./builtins/misc/pcntl_fork.md) and
 the neighboring PCNTL builtin pages for individual signatures and backend
@@ -259,14 +259,14 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`pcntl_signal()`](./builtins/misc/pcntl_signal.md) | `(int $signal, mixed $handler, bool $restart_syscalls = true): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_dispatch()`](./builtins/misc/pcntl_signal_dispatch.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_get_handler()`](./builtins/misc/pcntl_signal_get_handler.md) | `(int $signal): mixed` | `mixed` | ✓ | ✓ |
-| [`pcntl_sigprocmask()`](./builtins/misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed $old_signals = []): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_sigtimedwait()`](./builtins/misc/pcntl_sigtimedwait.md) | `(mixed $signals, mixed $info = [], int $seconds = 0, int $nanoseconds = 0): mixed` | `mixed` | ✓ | ✓ |
-| [`pcntl_sigwaitinfo()`](./builtins/misc/pcntl_sigwaitinfo.md) | `(mixed $signals, mixed $info = []): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_sigprocmask()`](./builtins/misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed &$old_signals = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_sigtimedwait()`](./builtins/misc/pcntl_sigtimedwait.md) | `(mixed $signals, mixed &$info = [], int $seconds = 0, int $nanoseconds = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_sigwaitinfo()`](./builtins/misc/pcntl_sigwaitinfo.md) | `(mixed $signals, mixed &$info = []): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_strerror()`](./builtins/misc/pcntl_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
 | [`pcntl_unshare()`](./builtins/misc/pcntl_unshare.md) | `(int $flags): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_wait()`](./builtins/misc/pcntl_wait.md) | `(mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
-| [`pcntl_waitid()`](./builtins/misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4, mixed $resource_usage = []): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_waitpid()`](./builtins/misc/pcntl_waitpid.md) | `(int $process_id, mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
+| [`pcntl_wait()`](./builtins/misc/pcntl_wait.md) | `(mixed &$status, int $flags = 0, mixed &$resource_usage = []): int` | `int` | ✓ | ✓ |
+| [`pcntl_waitid()`](./builtins/misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed &$info = [], int $flags = 4, mixed &$resource_usage = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_waitpid()`](./builtins/misc/pcntl_waitpid.md) | `(int $process_id, mixed &$status, int $flags = 0, mixed &$resource_usage = []): int` | `int` | ✓ | ✓ |
 | [`pcntl_wexitstatus()`](./builtins/misc/pcntl_wexitstatus.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_wifcontinued()`](./builtins/misc/pcntl_wifcontinued.md) | `(int $status): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_wifexited()`](./builtins/misc/pcntl_wifexited.md) | `(int $status): bool` | `bool` | ✓ | ✓ |

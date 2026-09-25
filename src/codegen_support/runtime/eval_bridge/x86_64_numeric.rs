@@ -117,7 +117,7 @@ pub(super) fn emit_x86_64_numeric(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a PHP numeric double
     emitter.instruction("movapd xmm1, xmm0");                                   // move the right divisor into the second fmod argument
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 16]");                    // move the left dividend into the first fmod argument
-    emitter.bl_c("fmod");
+    emitter.emit_call_c("fmod");
     emitter.instruction("ucomisd xmm0, xmm0");                                  // detect NaN so PHP echo prints NAN without a sign
     emitter.instruction("jp __elephc_eval_value_fmod_nan_x86");                 // normalize unordered fmod results before boxing
     emitter.instruction("movq rdi, xmm0");                                      // move the fmod result bits into mixed value_lo
@@ -221,7 +221,7 @@ pub(super) fn emit_x86_64_numeric(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a PHP numeric double
     emitter.instruction("movapd xmm1, xmm0");                                   // move the exponent into libc pow's second argument
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 16]");                    // reload the base into libc pow's first argument
-    emitter.bl_c("pow");
+    emitter.emit_call_c("pow");
     emitter.instruction("movq rdi, xmm0");                                      // move the pow result bits into mixed value_lo
     emitter.instruction("xor esi, esi");                                        // double payloads do not use a high word
     emitter.instruction("mov eax, 2");                                          // runtime tag 2 = double
@@ -240,7 +240,7 @@ pub(super) fn emit_x86_64_numeric(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_cast_float");                          // cast the boxed eval value to a PHP numeric double
     emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // check whether a precision argument was supplied
     emitter.instruction("jne __elephc_eval_value_round_precision_x86");         // use the precision path when a second argument is present
-    emitter.bl_c("round");
+    emitter.emit_call_c("round");
     emitter.instruction("jmp __elephc_eval_value_round_box_x86");               // box the default-precision round result
     emitter.label("__elephc_eval_value_round_precision_x86");
     emitter.instruction("movsd QWORD PTR [rbp - 24], xmm0");                    // save the original value while casting the precision
@@ -249,12 +249,12 @@ pub(super) fn emit_x86_64_numeric(emitter: &mut Emitter) {
     emitter.instruction("cvtsi2sd xmm1, rax");                                  // convert the precision to a floating exponent for pow
     emitter.instruction("mov rax, 0x4024000000000000");                         // materialize the IEEE-754 payload for 10.0
     emitter.instruction("movq xmm0, rax");                                      // move 10.0 into the pow base argument
-    emitter.bl_c("pow");
+    emitter.emit_call_c("pow");
     emitter.instruction("movsd xmm1, QWORD PTR [rbp - 24]");                    // reload the original value after pow returns the multiplier
     emitter.instruction("mulsd xmm1, xmm0");                                    // scale the value by the precision multiplier
     emitter.instruction("movsd QWORD PTR [rbp - 32], xmm0");                    // save the multiplier for rescaling after round
     emitter.instruction("movsd xmm0, xmm1");                                    // move the scaled value into the round argument
-    emitter.bl_c("round");
+    emitter.emit_call_c("round");
     emitter.instruction("movsd xmm1, QWORD PTR [rbp - 32]");                    // reload the precision multiplier for rescaling
     emitter.instruction("divsd xmm0, xmm1");                                    // scale the rounded value back to requested precision
     emitter.label("__elephc_eval_value_round_box_x86");

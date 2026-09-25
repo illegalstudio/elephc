@@ -51,13 +51,13 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
             abi::emit_call_label(ctx.emitter, callable_argument_normalizer::CALLABLE_ARGUMENT_NORMALIZER);
         }
     }
-    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
+    abi::emit_reg_move(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0), result);
     for (index, offset) in [(1, 0), (2, 32)] {
-        abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, index), offset);
+        abi::emit_temporary_stack_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, index), offset);
     }
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 3),
         ctx.lexical_class_id(),
     );
     abi::emit_call_label(ctx.emitter, "__rt_array_reduce_boxed");

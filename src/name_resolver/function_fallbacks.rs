@@ -29,7 +29,7 @@ pub(crate) struct FunctionFallbacks {
 impl FunctionFallbacks {
     /// Collects declarations still present after target-dependent branches have been removed.
     pub(crate) fn new(program: &Program) -> Self {
-        let mut symbols = Symbols::default();
+        let mut symbols = Symbols::new(crate::codegen::platform::Platform::MacOS);
         symbols::collect_symbols(program, None, &mut symbols);
         Self { symbols }
     }

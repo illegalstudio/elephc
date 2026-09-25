@@ -54,6 +54,7 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     emit_bz2_flush_on_close_for_current_fd(ctx);
     emit_iconv_flush_on_close_for_current_fd(ctx);
     emit_tls_session_teardown_for_current_fd(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_stream_listener_clear");
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the descriptor to the user-filter teardown helper
     }
@@ -181,7 +182,7 @@ pub(crate) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     load_string_to_result(ctx, format, "fprintf format")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // pass the packed variadic operand count to the sprintf runtime
                 &format!("mov x0, #{}", inst.operands.len() - 2)
             );                                                                  // pass the number of packed fprintf operands
         }

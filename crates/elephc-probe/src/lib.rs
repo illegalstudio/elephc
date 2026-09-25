@@ -17,8 +17,16 @@
 //! - The ring holds the most recent `RING_SLOTS` samples (~1 sample/ms of CPU
 //!   time); long runs keep the tail, which is what a probe window serves.
 
+#[cfg(unix)]
+pub mod endpoint;
+#[cfg(not(unix))]
+#[path = "endpoint_windows.rs"]
 pub mod endpoint;
 pub mod handshake;
+
+#[cfg(unix)]
+pub(crate) mod sampler {
+use super::*;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
@@ -1606,7 +1614,7 @@ unsafe fn observe_shared_ask() {
 }
 
 /// Returns the embedded build key, or `None` if unpublished.
-fn build_key() -> Option<[u8; handshake::KEY_LEN]> {
+pub(crate) fn build_key() -> Option<[u8; handshake::KEY_LEN]> {
     let ptr = KEY_PTR.load(Ordering::Relaxed) as *const u8;
     if ptr.is_null() {
         return None;
@@ -4142,4 +4150,15 @@ mod tests {
 }
 
 #[cfg(test)]
+#[path = "process_tests.rs"]
 mod process_tests;
+
+}
+
+#[cfg(unix)]
+pub use sampler::*;
+
+#[cfg(not(unix))]
+mod unsupported;
+#[cfg(not(unix))]
+pub use unsupported::*;

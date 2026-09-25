@@ -173,8 +173,14 @@ pub(crate) fn assembler_command(target: Target) -> Command {
 
 /// Invokes the target assembler for one generated assembly source file.
 pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
-    let mut assembler = assembler_command(target);
-    assembler.arg("-o").arg(obj_path).arg(asm_path);
+    let mut assembler = if target.platform == Platform::Windows {
+        crate::windows_toolchain::assembler_command(asm_path, obj_path)
+            .unwrap_or_else(|message| command::fail_tool_configuration("Assembler", &message))
+    } else {
+        let mut command = assembler_command(target);
+        command.arg("-o").arg(obj_path).arg(asm_path);
+        command
+    };
     command::run_tool("Assembler", &mut assembler);
 }
 
@@ -282,7 +288,7 @@ pub(crate) fn link_with_plan(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<(), LinkError> {
-    let resolved = bridges::resolve(plan, forced_whole_archive, target.platform)?;
+    let resolved = bridges::resolve(plan, target, forced_whole_archive)?;
     let prepared = (target.platform == Platform::MacOS)
         .then(|| archive_dedup::prepare(&resolved.plan));
     let render_plan = prepared

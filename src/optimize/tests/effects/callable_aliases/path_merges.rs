@@ -47,7 +47,7 @@ fn test_effect_analysis_tracks_pure_iife_expr_calls() {
         Span::dummy(),
     );
 
-    assert!(!expr_has_side_effects(&expr));
+    assert!(!crate::optimize::effects::expr_has_side_effects(&expr));
     assert!(!expr_effect(&expr).may_throw);
     assert!(!expr_is_observable(&expr));
 }
@@ -68,7 +68,7 @@ fn test_effect_analysis_tracks_named_first_class_callable_expr_calls() {
         Span::dummy(),
     );
 
-    assert!(!expr_has_side_effects(&expr));
+    assert!(!crate::optimize::effects::expr_has_side_effects(&expr));
     assert!(!expr_effect(&expr).may_throw);
     assert!(!expr_is_observable(&expr));
 }

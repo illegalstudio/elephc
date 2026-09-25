@@ -335,9 +335,17 @@ fn target_has_exited(pid: u32) -> bool {
             matches!(tail.split_whitespace().next(), Some("Z" | "X"))
         });
     }
-    // SAFETY: signal zero only checks existence; it does not signal the target.
-    let absent = unsafe { libc::kill(pid as libc::pid_t, 0) == -1 };
-    absent && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    #[cfg(not(target_os = "windows"))]
+    {
+        // SAFETY: signal zero only checks existence; it does not signal the target.
+        let absent = unsafe { libc::kill(pid as libc::pid_t, 0) == -1 };
+        return absent && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 /// One window of samples, already named and folded, whichever way it was read.
@@ -490,6 +498,8 @@ pub(crate) fn no_profile_reason(
     binary: &Path,
     capture_activated: bool,
 ) -> String {
+    #[cfg(not(target_os = "windows"))]
+    {
     use std::os::unix::process::ExitStatusExt as _;
     if let Some(signal) = status.signal() {
         return format!(
@@ -497,6 +507,7 @@ pub(crate) fn no_profile_reason(
              and publish its profile",
             binary.display()
         );
+    }
     }
     match status.code() {
         Some(code) if code != 0 => format!(
@@ -804,6 +815,6 @@ pub(crate) fn live_frame(
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "windows")))]
 #[path = "local_tests.rs"]
 mod review_tests;

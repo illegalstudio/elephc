@@ -54,8 +54,8 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     let result = abi::int_result_reg(emitter);
     let low = low_reg(emitter);
     let high = high_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
+    let arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
     emitter.blank();
     emitter.label_global(prefix);
     abi::emit_frame_prologue(emitter, FRAME);
@@ -258,7 +258,7 @@ fn install_boundary(emitter: &mut Emitter, prefix: &str) {
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
+    abi::emit_frame_slot_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.bl_c("setjmp");                                                     // preserve the snapshot and partial number when a warning handler throws
     abi::emit_branch_if_int_result_nonzero(emitter, &format!("{prefix}_caught"));
 }

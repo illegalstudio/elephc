@@ -7,7 +7,7 @@
 //! Key details:
 //! - Preserves the dependency order among stream, output-buffering, pointer, zval, and fiber helpers.
 
-use super::super::{fibers, io, pdo, pointers, zval};
+use super::super::{fibers, io, pdo, pointers, system, zval};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
 
@@ -25,6 +25,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_http_response_code(emitter, features.web);
     io::emit_header(emitter, features.web);
     io::emit_cstr(emitter);
+    io::emit_php_temp_dir(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);
     io::emit_fgets(emitter);
@@ -67,12 +68,18 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stream_socket_pair(emitter);
     io::emit_popen(emitter);
     io::emit_pclose(emitter);
+    io::emit_proc_open(emitter);
+    io::emit_proc_open_marshalling(emitter);
+    io::emit_proc_pipe_registry(emitter);
+    io::emit_proc_status(emitter);
+    io::emit_proc_close(emitter);
     io::emit_opendir(emitter);
     io::emit_readdir(emitter);
     io::emit_closedir(emitter);
     io::emit_rewinddir(emitter);
     io::emit_stream_get_meta_data(emitter);
     io::emit_gethostname(emitter);
+    system::emit_sapi_windows(emitter);
     io::emit_gethostbyname(emitter);
     io::emit_gethostbyaddr(emitter);
     io::emit_protoent_load(emitter);
@@ -85,14 +92,19 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stream_context_set_option_4(emitter);
     io::emit_get_string_context_option(emitter);
     io::emit_get_int_context_option(emitter);
+    io::emit_get_bool_context_option(emitter);
     io::emit_apply_socket_client_opts(emitter);
     io::emit_apply_socket_server_opts(emitter);
     io::emit_socket_backlog(emitter);
     io::emit_apply_socket_bindto(emitter);
     io::emit_get_ssl_peer_name(emitter);
+    io::emit_get_ssl_peer_fingerprint(emitter);
+    io::emit_stream_context_registry(emitter);
+    io::emit_stream_socket_error_message(emitter);
     io::emit_http_build_request(emitter);
     io::emit_fread(emitter);
     io::emit_fwrite(emitter);
+    io::emit_tls_session_table(emitter);
     io::emit_wrapper_unbox_int(emitter);
     io::emit_user_wrapper_fclose(emitter);
     io::emit_user_wrapper_fread(emitter);
@@ -119,6 +131,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_user_wrapper_dir_rewinddir(emitter);
     io::emit_touch_meta_array(emitter);
     io::emit_stash_connect_host(emitter);
+    io::emit_addr_tls_crypto_method(emitter);
     io::emit_fire_notification(emitter);
     io::emit_user_wrapper_stream_cast(emitter);
     io::emit_stream_filter_register(emitter);

@@ -434,10 +434,10 @@ fn emit_float_not_representable_warning(ctx: &mut FunctionContext<'_>) {
     emit_static_int_coercion_diagnostic(ctx, " is not representable as an int, cast occurred\n", true);
 }
 
-/// Formats the saved float with `__rt_ftoa_repr` and emits it as a diagnostic fragment.
+/// Formats the saved float with `__rt_var_dump_ftoa` and emits it as a diagnostic fragment.
 fn emit_saved_float_diagnostic_value(ctx: &mut FunctionContext<'_>) {
     restore_float_result_bits(ctx);
-    abi::emit_call_label(ctx.emitter, "__rt_ftoa_repr");
+    abi::emit_call_label(ctx.emitter, "__rt_var_dump_ftoa");
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the formatted float pointer to the diagnostic helper
         ctx.emitter.instruction("mov rsi, rdx");                                // pass the formatted float length to the diagnostic helper

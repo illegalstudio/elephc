@@ -11,7 +11,9 @@
 
 use std::ffi::{c_char, CStr};
 
+#[cfg(unix)]
 use crate::handler_broker::BrokerMode;
+#[cfg(unix)]
 use crate::isolated_worker::WorkerConfig as IsolatedWorkerConfig;
 use crate::worker::WorkerConfig;
 
@@ -71,14 +73,17 @@ pub(super) struct ServerArgs {
     pub(super) listen: String,
     pub(super) workers: usize,
     /// Handler processes supervised by each isolated web worker.
+    #[cfg_attr(windows, allow(dead_code))]
     handler_concurrency: usize,
     /// Requests served by one pool child before planned replacement.
+    #[cfg_attr(windows, allow(dead_code))]
     max_handler_requests: usize,
     /// Max request body in bytes; `0` means unlimited.
     max_body: usize,
     /// Body receive deadline in seconds; `0` means unlimited.
     body_read_secs: u64,
     /// Response backpressure deadline in seconds; `0` means unlimited.
+    #[cfg_attr(windows, allow(dead_code))]
     response_write_secs: u64,
     /// Recycle a worker after this many requests; `0` means never.
     max_requests: usize,
@@ -104,6 +109,7 @@ impl ServerArgs {
     }
 
     /// Builds the broker-backed worker configuration for pool or request mode.
+    #[cfg(unix)]
     pub(super) fn isolated_worker_config(&self, mode: BrokerMode) -> IsolatedWorkerConfig {
         IsolatedWorkerConfig {
             max_body: self.max_body,

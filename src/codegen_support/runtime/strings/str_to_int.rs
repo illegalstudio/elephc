@@ -53,13 +53,13 @@ pub fn emit_str_to_int(emitter: &mut Emitter) {
     // -- integer parse: strtoll(run, &end_i, 10) gives the exact, saturating 64-bit value --
     emitter.instruction("add x1, sp, #0");                                      // pass &end_i so strtoll reports where the integer prefix ended
     emitter.instruction("mov x2, #10");                                         // parse in base 10 like PHP string-to-int
-    emitter.bl_c("strtoll");
+    emitter.emit_call_c("strtoll");
     emitter.instruction("str x0, [sp, #16]");                                   // save the integer-form value (LLONG_MAX/MIN on overflow == PHP_INT_MAX/MIN)
 
     // -- float parse: strtod(cstr, &end_d) detects a '.'/'e' float continuation --
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the clipped run pointer for strtod
     emitter.instruction("add x1, sp, #8");                                      // pass &end_d so strtod reports where the numeric value ended
-    emitter.bl_c("strtod");
+    emitter.emit_call_c("strtod");
 
     // -- a value PHP cannot represent casts to 0, whichever form the string took --
     // `strtoll` saturates a 400-digit integer to PHP_INT_MAX, but PHP classifies a string whose
@@ -124,13 +124,13 @@ fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // strtoll arg1: the clipped run pointer
     emitter.instruction("lea rsi, [rbp - 24]");                                 // strtoll arg2: &end_i
     emitter.instruction("mov edx, 10");                                         // strtoll arg3: parse in base 10 like PHP string-to-int
-    emitter.instruction("call strtoll");                                        // rax = integer-form value (LLONG_MAX/MIN on overflow == PHP_INT_MAX/MIN)
+    emitter.emit_call_c("strtoll");                                             // rax = integer-form value (LLONG_MAX/MIN on overflow == PHP_INT_MAX/MIN)
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the integer-form value
 
     // -- float parse: strtod(cstr, &end_d) detects a '.'/'e' float continuation --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the clipped run pointer for strtod
     emitter.instruction("lea rsi, [rbp - 32]");                                 // strtod arg2: &end_d
-    emitter.instruction("call strtod");                                         // xmm0 = parsed double value
+    emitter.emit_call_c("strtod");                                              // xmm0 = parsed double value
 
     // -- a value PHP cannot represent casts to 0, whichever form the string took --
     // `strtoll` saturates a 400-digit integer to PHP_INT_MAX, but PHP classifies a string whose

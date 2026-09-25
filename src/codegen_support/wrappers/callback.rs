@@ -10,7 +10,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 use crate::types::PhpType;
 
 mod descriptor;
@@ -49,7 +49,7 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
     emitter.instruction(&format!("mov x20, {}", env_reg));                      // keep the callback environment pointer across argument reshuffling
     emitter.instruction("ldr x19, [x20]");                                      // load the original captured closure entry point from env slot zero
 
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, false);
     spill_captures(
         emitter,
         wrapper.visible_arg_types.len(),
@@ -64,7 +64,10 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
         &wrapper.capture_types,
         frame_size,
     );
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(emitter.target, 0);
+    abi::emit_reserve_temporary_stack(emitter, call_pad_bytes);
     abi::emit_call_reg(emitter, "x19");
+    abi::emit_release_temporary_stack(emitter, call_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the adapted callback returns
 
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_callee_offset)); // restore wrapper callee-saved registers
@@ -107,7 +110,7 @@ fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbac
     emitter.instruction(&format!("mov r13, {}", env_reg));                      // keep the callback environment pointer across argument reshuffling
     emitter.instruction("mov r12, QWORD PTR [r13]");                            // load the original captured closure entry point from env slot zero
 
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, false);
     spill_captures(
         emitter,
         wrapper.visible_arg_types.len(),
@@ -121,7 +124,10 @@ fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbac
         &target_visible_arg_types,
         &wrapper.capture_types,
     );
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(emitter.target, 0);
+    abi::emit_reserve_temporary_stack(emitter, call_pad_bytes);
     abi::emit_call_reg(emitter, "r12");
+    abi::emit_release_temporary_stack(emitter, call_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the adapted callback returns
 
     abi::load_at_offset(emitter, "r13", saved_env_offset);
@@ -148,37 +154,147 @@ fn wrapper_target_visible_arg_types(wrapper: &DeferredCallbackWrapper) -> Vec<Ph
         .unwrap_or_else(|| wrapper.visible_arg_types.clone())
 }
 
-/// Returns the ABI register name that holds the incoming environment pointer (the closure
-/// struct passed by the external caller). The environment pointer is the last argument in
-/// the incoming type list; this function reverses the outgoing assignment logic to find
-/// which register it occupies on entry.
-fn incoming_env_reg(emitter: &Emitter, visible_arg_types: &[PhpType]) -> &'static str {
+/// Returns the register containing the incoming environment pointer (the closure struct passed
+/// by the callback runtime). The environment pointer is the last argument in the incoming type
+/// list; this function reverses the outgoing assignment logic to find its register or loads it
+/// from the caller stack when the target ABI has no register left.
+///
+/// Windows x86_64 callback calls are made by [`Emitter::emit_platform_callback_call`]. That
+/// adapter reserves the mandatory 32-byte shadow space and packs overflow integer words into
+/// consecutive eight-byte slots. Consequently a string pair consumes two positional slots,
+/// while the callback wrapper's local frame does not change the caller-argument offset from
+/// `rbp + 48` (return address + saved `rbp` + shadow space).
+fn incoming_env_reg(emitter: &mut Emitter, visible_arg_types: &[PhpType]) -> &'static str {
     let mut incoming_types: Vec<PhpType> = visible_arg_types
         .iter()
         .map(PhpType::codegen_repr)
         .collect();
     incoming_types.push(PhpType::Pointer(None));
-    let assignments =
-        abi::build_outgoing_arg_assignments_for_target(emitter.target, &incoming_types, 0);
+    // Runtime helpers enter generated wrappers through `emit_platform_callback_call`.
+    // On Windows that bridge translates its SysV staging into native MSx64 *positional*
+    // slots: an incoming string consumes two of the four rcx/rdx/r8/r9 slots, and the
+    // environment follows on the caller stack once those four slots are full. This is
+    // deliberately different from the PHP-to-PHP planner, which keeps the float and
+    // integer register streams independent.
+    let assignments = if is_windows_x86_64_callback_abi(emitter) {
+        abi::build_c_abi_outgoing_arg_assignments_for_target(emitter.target, &incoming_types)
+    } else {
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, &incoming_types, 0)
+    };
     let env_assignment = assignments
         .last()
         .expect("callback wrapper always has an environment pointer argument");
-    debug_assert!(env_assignment.in_register());
-    abi::int_arg_reg_name(emitter.target, env_assignment.start_reg)
+    if env_assignment.in_register() {
+        return abi::int_arg_reg_name(emitter.target, env_assignment.start_reg);
+    }
+
+    let stack_offset = incoming_env_stack_offset(emitter, &incoming_types);
+    let scratch = match emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r10",
+    };
+    abi::load_from_caller_stack(emitter, scratch, stack_offset);
+    scratch
+}
+
+/// Computes the caller-frame offset of a stack-passed callback environment.
+fn incoming_env_stack_offset(emitter: &Emitter, incoming_types: &[PhpType]) -> usize {
+    let base = abi::IncomingArgCursor::for_target(emitter.target, 0).caller_stack_offset;
+
+    if (emitter.target.platform, emitter.target.arch) == (Platform::Windows, Arch::X86_64) {
+        // `emit_platform_callback_call` uses the native MSx64 overflow layout: after the four
+        // register slots, every remaining integer word occupies one eight-byte stack slot.
+        let positional_words: usize = incoming_types
+            .iter()
+            .take(incoming_types.len() - 1)
+            .map(PhpType::register_count)
+            .sum();
+        return base + positional_words.saturating_sub(4) * 8;
+    }
+
+    // The generic Elephc callback ABI uses one 16-byte temporary slot per overflow argument.
+    // Keep this path target-neutral for AArch64 and the existing Unix x86_64 wrappers.
+    let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, incoming_types, 0);
+    let mut offset = base;
+    for (ty, assignment) in incoming_types.iter().zip(assignments.iter()).take(assignments.len() - 1) {
+        if !assignment.in_register() && !matches!(ty, PhpType::Void | PhpType::Never) {
+            offset += 16;
+        }
+    }
+    offset
+}
+
+/// Returns whether a wrapper receives its visible arguments through the native MSx64
+/// positional-slot callback boundary instead of the ordinary generated PHP ABI.
+fn is_windows_x86_64_callback_abi(emitter: &Emitter) -> bool {
+    (emitter.target.platform, emitter.target.arch) == (Platform::Windows, Arch::X86_64)
 }
 
 /// Spills every incoming visible argument from ABI registers to fixed stack slots in the
 /// wrapper frame. This must happen before `spill_captures` loads from the environment struct,
 /// because the environment pointer lives in a register that may clobber one of the arg regs.
-fn spill_visible_args(emitter: &mut Emitter, visible_arg_types: &[PhpType]) {
+fn spill_visible_args(
+    emitter: &mut Emitter,
+    visible_arg_types: &[PhpType],
+    native_c_abi: bool,
+) {
     let visible_types: Vec<PhpType> = visible_arg_types
         .iter()
         .map(PhpType::codegen_repr)
         .collect();
-    let assignments =
-        abi::build_outgoing_arg_assignments_for_target(emitter.target, &visible_types, 0);
+    let assignments = if native_c_abi || is_windows_x86_64_callback_abi(emitter) {
+        abi::build_c_abi_outgoing_arg_assignments_for_target(emitter.target, &visible_types)
+    } else {
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, &visible_types, 0)
+    };
+    let windows_positional_callback_abi = is_windows_x86_64_callback_abi(emitter);
+    let mut stack_offset = if windows_positional_callback_abi {
+        48
+    } else {
+        abi::IncomingArgCursor::for_target(emitter.target, 0).caller_stack_offset
+    };
     for (idx, (ty, assignment)) in visible_types.iter().zip(assignments.iter()).enumerate() {
-        debug_assert!(assignment.in_register());
+        if !assignment.in_register() {
+            let scalar_scratch = match emitter.target.arch {
+                Arch::AArch64 => "x9",
+                Arch::X86_64 => "r10",
+            };
+            let float_scratch = match emitter.target.arch {
+                Arch::AArch64 => "d15",
+                Arch::X86_64 => "xmm15",
+            };
+            match ty {
+                PhpType::Float => {
+                    abi::load_from_caller_stack(emitter, float_scratch, stack_offset);
+                    abi::store_at_offset(emitter, float_scratch, frame_arg_slot_offset(idx));
+                }
+                PhpType::Str => {
+                    let high_scratch = match emitter.target.arch {
+                        Arch::AArch64 => "x10",
+                        Arch::X86_64 => "r11",
+                    };
+                    abi::load_from_caller_stack(emitter, scalar_scratch, stack_offset);
+                    abi::load_from_caller_stack(emitter, high_scratch, stack_offset + 8);
+                    abi::store_at_offset(emitter, scalar_scratch, frame_arg_slot_offset(idx));
+                    abi::store_at_offset(
+                        emitter,
+                        high_scratch,
+                        frame_arg_slot_offset(idx) - 8,
+                    );
+                }
+                PhpType::Void | PhpType::Never => {}
+                _ => {
+                    abi::load_from_caller_stack(emitter, scalar_scratch, stack_offset);
+                    abi::store_at_offset(emitter, scalar_scratch, frame_arg_slot_offset(idx));
+                }
+            }
+            stack_offset += if windows_positional_callback_abi {
+                ty.register_count() * 8
+            } else {
+                16
+            };
+            continue;
+        }
         match (emitter.target.arch, ty) {
             (Arch::AArch64, PhpType::Float) => {
                 let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
@@ -187,7 +303,7 @@ fn spill_visible_args(emitter: &mut Emitter, visible_arg_types: &[PhpType]) {
             (Arch::AArch64, PhpType::Str) => {
                 let ptr_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
                 let len_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1);
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // spill the incoming string callback argument before loading captures
                     "stp {}, {}, [sp, #{}]",
                     ptr_reg,
                     len_reg,
@@ -244,18 +360,18 @@ fn spill_captures(
                 emitter.instruction(&format!("str x9, [sp, #{}]", arg_idx * 16)); // spill the captured scalar/pointer for the final closure call
             }
             (Arch::X86_64, PhpType::Float) => {
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // load a captured float from the callback environment
                     "movsd xmm0, QWORD PTR [{} + {}]",
                     env_reg, env_offset
                 )); // load a captured float from the callback environment
                 abi::store_at_offset(emitter, "xmm0", frame_arg_slot_offset(arg_idx));
             }
             (Arch::X86_64, PhpType::Str) => {
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // load the captured string pointer from the callback environment
                     "mov r10, QWORD PTR [{} + {}]",
                     env_reg, env_offset
                 )); // load the captured string pointer from the callback environment
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // load the captured string length from the callback environment
                     "mov r11, QWORD PTR [{} + {}]",
                     env_reg,
                     env_offset + 8
@@ -265,7 +381,7 @@ fn spill_captures(
             }
             (Arch::X86_64, PhpType::Void | PhpType::Never) => {}
             (Arch::X86_64, _) => {
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // load a captured scalar or pointer from the callback environment
                     "mov r10, QWORD PTR [{} + {}]",
                     env_reg, env_offset
                 )); // load a captured scalar/pointer from the callback environment
@@ -511,4 +627,72 @@ fn frame_arg_slot_offset(idx: usize) -> usize {
 /// Rounds `n` up to the nearest 16-byte boundary for stack alignment purposes.
 fn align16(n: usize) -> usize {
     (n + 15) & !15
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies a Windows callback environment after two string arguments is loaded from the
+    /// first MSx64 overflow slot, including the mandatory shadow-space offset.
+    #[test]
+    fn windows_callback_environment_after_string_pair_is_loaded_from_shadow_space() {
+        let target = crate::codegen_support::platform::Target::new(Platform::Windows, Arch::X86_64);
+        let mut emitter = Emitter::new(target);
+
+        let env_reg = incoming_env_reg(&mut emitter, &[PhpType::Str, PhpType::Str]);
+        let output = emitter.output();
+
+        assert_eq!(env_reg, "r10");
+        assert!(
+            output.contains("mov r10, QWORD PTR [rbp + 48]"),
+            "{}",
+            output
+        );
+    }
+
+    /// Verifies that an additional scalar overflow word advances the MSx64 environment slot by
+    /// eight bytes rather than by the generic 16-byte Elephc temporary-slot width.
+    #[test]
+    fn windows_callback_environment_stack_offset_counts_multiword_visible_arguments() {
+        let target = crate::codegen_support::platform::Target::new(Platform::Windows, Arch::X86_64);
+        let mut emitter = Emitter::new(target);
+
+        let env_reg = incoming_env_reg(&mut emitter, &[PhpType::Str, PhpType::Str, PhpType::Int]);
+        let output = emitter.output();
+
+        assert_eq!(env_reg, "r10");
+        assert!(
+            output.contains("mov r10, QWORD PTR [rbp + 56]"),
+            "{}",
+            output
+        );
+    }
+
+    /// Verifies that an environment still in the fourth Windows integer register does not emit
+    /// an unnecessary caller-stack load.
+    #[test]
+    fn windows_callback_environment_uses_fourth_integer_register_when_available() {
+        let target = crate::codegen_support::platform::Target::new(Platform::Windows, Arch::X86_64);
+        let mut emitter = Emitter::new(target);
+
+        assert_eq!(incoming_env_reg(&mut emitter, &[PhpType::Int, PhpType::Int, PhpType::Int]), "r9");
+    }
+
+    /// Verifies a runtime callback wrapper reads two string descriptors from all
+    /// four native MSx64 positional registers instead of treating the second
+    /// descriptor as a fifth generated-PHP register argument.
+    #[test]
+    fn windows_callback_spills_two_string_descriptors_from_four_positional_slots() {
+        let target = crate::codegen_support::platform::Target::new(Platform::Windows, Arch::X86_64);
+        let mut emitter = Emitter::new(target);
+
+        spill_visible_args(&mut emitter, &[PhpType::Str, PhpType::Str], false);
+        let output = emitter.output();
+
+        assert!(output.contains("mov QWORD PTR [rbp - 16], rcx"), "{output}");
+        assert!(output.contains("mov QWORD PTR [rbp - 8], rdx"), "{output}");
+        assert!(output.contains("mov QWORD PTR [rbp - 32], r8"), "{output}");
+        assert!(output.contains("mov QWORD PTR [rbp - 24], r9"), "{output}");
+    }
 }

@@ -249,8 +249,10 @@ def build_inventory() -> dict[str, Any]:
         required_target_support = {
             "all": SUPPORTED_TARGETS,
             "host_only": HOST_ONLY_TARGETS,
+            "unix_host_only": HOST_ONLY_TARGETS,
             "linux": ["linux-aarch64", "linux-x86_64"],
             "macos": ["macos-aarch64"],
+            "windows": ["windows-x86_64"],
         }.get(target_support_kind, [])
         strategy = semantics.get("target_strategy")
         category = {

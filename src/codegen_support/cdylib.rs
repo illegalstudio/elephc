@@ -14,7 +14,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::data_section::DataSection;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::{Arch, Target};
+use crate::codegen_support::platform::{Arch, Platform, Target};
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
 };
@@ -82,6 +82,63 @@ pub(crate) fn emit_cdylib_exports(
         }
     }
     emit_lifecycle_exports(emitter, target, heap_debug);
+    if target.platform == Platform::Windows {
+        emit_windows_cdylib_entry_stub(emitter);
+        emit_windows_export_directives(emitter, target, exports);
+    }
+}
+
+/// Returns whether this public boundary must follow the MS x64 preservation rules.
+pub(super) fn is_windows_x86_64(target: Target) -> bool {
+    (target.platform, target.arch) == (Platform::Windows, Arch::X86_64)
+}
+
+/// Rounds a boundary frame size up to the native sixteen-byte stack alignment.
+pub(super) fn align_16(value: usize) -> usize {
+    (value + 15) & !15
+}
+
+/// Returns the first local offset used to preserve MS x64 nonvolatile registers.
+pub(super) fn windows_callee_saved_base(target: Target, minimum_frame_size: usize) -> Option<usize> {
+    is_windows_x86_64(target).then(|| align_16(minimum_frame_size))
+}
+
+/// Returns a frame size large enough for the MS x64 nonvolatile register save area.
+pub(super) fn windows_callee_saved_frame_size(
+    target: Target,
+    minimum_frame_size: usize,
+) -> usize {
+    let Some(base) = windows_callee_saved_base(target, minimum_frame_size) else {
+        return align_16(minimum_frame_size);
+    };
+    // rdi/rsi (16 bytes) + xmm6..xmm15 (10 * 16 bytes).
+    align_16(base + 176)
+}
+
+/// Preserves every MS x64 nonvolatile register that the internal ABI may clobber.
+pub(super) fn emit_save_windows_callee_saved(emitter: &mut Emitter, base: Option<usize>) {
+    let Some(base) = base else {
+        return;
+    };
+    abi::store_at_offset(emitter, "rdi", base); // preserve the host's nonvolatile first SysV register
+    abi::store_at_offset(emitter, "rsi", base + 8); // preserve the host's nonvolatile second SysV register
+    for xmm_index in 6..=15 {
+        let offset = base + 16 + (xmm_index - 6) * 16;
+        emitter.instruction(&format!("movdqu XMMWORD PTR [rbp - {offset}], xmm{xmm_index}")); // preserve one MS x64 nonvolatile vector register
+    }
+}
+
+/// Restores the MS x64 nonvolatile register save area before returning to the host.
+pub(super) fn emit_restore_windows_callee_saved(emitter: &mut Emitter, base: Option<usize>) {
+    let Some(base) = base else {
+        return;
+    };
+    for xmm_index in (6..=15).rev() {
+        let offset = base + 16 + (xmm_index - 6) * 16;
+        emitter.instruction(&format!("movdqu xmm{xmm_index}, XMMWORD PTR [rbp - {offset}]")); // restore one MS x64 nonvolatile vector register
+    }
+    abi::load_at_offset(emitter, "rsi", base + 8); // restore the host's nonvolatile second SysV register
+    abi::load_at_offset(emitter, "rdi", base); // restore the host's nonvolatile first SysV register
 }
 
 /// Builds a deterministic local-label suffix from a public PHP export name.
@@ -244,6 +301,24 @@ fn emit_set_static_error_x86_64(emitter: &mut Emitter, error: (&str, usize)) {
     emitter.instruction("call __rt_cdylib_set_error");                          // copy the current diagnostic into stable boundary storage
 }
 
+/// Opens a private save frame around a public Windows lifecycle entry when needed.
+fn emit_windows_lifecycle_prologue(emitter: &mut Emitter, target: Target) -> Option<usize> {
+    let base = windows_callee_saved_base(target, 16);
+    if base.is_some() {
+        abi::emit_frame_prologue(emitter, windows_callee_saved_frame_size(target, 16));
+        emit_save_windows_callee_saved(emitter, base);
+    }
+    base
+}
+
+/// Restores a private Windows lifecycle frame without disturbing the scalar return register.
+fn emit_windows_lifecycle_epilogue(emitter: &mut Emitter, target: Target, base: Option<usize>) {
+    if base.is_some() {
+        emit_restore_windows_callee_saved(emitter, base);
+        abi::emit_frame_restore(emitter, windows_callee_saved_frame_size(target, 16));
+    }
+}
+
 /// Emits ABI version, lifecycle, last-status, last-error, and owned-buffer release exports.
 fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: bool) {
     emitter.blank();
@@ -259,6 +334,7 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
         emitter.blank();
         emitter.comment(&format!("cdylib lifecycle: {lifecycle}"));
         emitter.label_global(&target.extern_symbol(lifecycle));
+        let windows_frame = emit_windows_lifecycle_prologue(emitter, target);
         if lifecycle == "elephc_init" && matches!(target.arch, Arch::AArch64) {
             abi::emit_frame_prologue(emitter, 16);
         }
@@ -282,6 +358,7 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
         if lifecycle == "elephc_init" && matches!(target.arch, Arch::AArch64) {
             abi::emit_frame_restore(emitter, 16);
         }
+        emit_windows_lifecycle_epilogue(emitter, target, windows_frame);
         emitter.instruction("ret");                                             // return to the current C-ABI caller
     }
 
@@ -322,13 +399,60 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
     emitter.blank();
     emitter.comment("cdylib release of caller-owned export storage");
     emitter.label_global(&target.extern_symbol("elephc_free"));
+    let windows_frame = emit_windows_lifecycle_prologue(emitter, target);
     match target.arch {
         Arch::AArch64 => emitter.instruction("b __rt_heap_free_safe"),          // release non-borrowed runtime storage when present
         Arch::X86_64 => {
-            emitter.instruction("mov rax, rdi");                                // adapt the SysV pointer register to the runtime free ABI
-            emitter.instruction("jmp __rt_heap_free_safe");                     // release non-borrowed runtime storage when present
+            let source = if is_windows_x86_64(target) { "rcx" } else { "rdi" };
+            emitter.instruction(&format!("mov rax, {source}"));                 // adapt the public pointer register to the runtime free ABI
+            if windows_frame.is_some() {
+                emitter.instruction("call __rt_heap_free_safe");                // release caller-owned storage before restoring MS x64 registers
+                emit_windows_lifecycle_epilogue(emitter, target, windows_frame);
+                emitter.instruction("ret");                                     // return after restoring the Windows public ABI frame
+            } else {
+                emitter.instruction("jmp __rt_heap_free_safe");                 // tail-release storage through the matching SysV ABI
+            }
         }
     }
+}
+
+/// Emits PE linker directives for exactly the public cdylib ABI symbols.
+fn emit_windows_export_directives(
+    emitter: &mut Emitter,
+    target: Target,
+    exports: &[&ExportedFunction],
+) {
+    emitter.blank();
+    emitter.comment("PE export directives for the public cdylib ABI");
+    emitter.raw(".section .drectve");
+    for export in exports {
+        emitter.raw(&format!(
+            ".ascii \" -export:{}\"",
+            target.extern_symbol(&export.c_name)
+        ));
+    }
+    for name in [
+        "elephc_abi_version",
+        "elephc_init",
+        "elephc_shutdown",
+        "elephc_last_status",
+        "elephc_last_error",
+        "elephc_free",
+    ] {
+        emitter.raw(&format!(
+            ".ascii \" -export:{}\"",
+            target.extern_symbol(name)
+        ));
+    }
+}
+
+/// Provides the private no-op program body expected by the Windows runtime shim in a DLL.
+fn emit_windows_cdylib_entry_stub(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("private Windows cdylib entry stub for the runtime shim");
+    emitter.label_global(emitter.entry_symbol());
+    emitter.instruction("xor eax, eax");                                        // report an empty top-level body to the Windows runtime shim
+    emitter.instruction("ret");                                                 // return from the private DLL-only entry stub
 }
 
 #[cfg(test)]

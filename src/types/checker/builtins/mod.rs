@@ -23,7 +23,8 @@ use crate::types::{PhpType, TypeEnv};
 use super::Checker;
 
 pub(crate) use catalog::{
-    all_supported_builtin_function_names, canonical_builtin_function_name,
+    canonical_builtin_function_name, canonical_builtin_function_name_for_target,
+    canonical_builtin_function_name_on_platform, builtin_available_on_platform,
     is_php_visible_builtin_function_for_profile, is_php_visible_builtin_function_for_target,
     is_supported_builtin_function, strict_php_hidden_builtin,
     supported_builtin_function_names_for_profile, supported_builtin_function_names_for_target,
@@ -60,6 +61,15 @@ impl Checker {
         }
     }
 
+    /// Records a Windows-only link library when the selected target is Windows.
+    pub(crate) fn require_windows_builtin_library(&mut self, library: &str) {
+        if self.target.platform == crate::codegen::platform::Platform::Windows
+            && !self.required_libraries.iter().any(|lib| lib == library)
+        {
+            self.required_libraries.push(library.to_string());
+        }
+    }
+
     /// Records the link requirements of a builtin reached through first-class callable syntax.
     ///
     /// A direct call records them while checking its arguments, but `iconv_strlen(...)`
@@ -87,6 +97,9 @@ impl Checker {
                 }
                 crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
                     self.require_macos_builtin_library(library);
+                }
+                crate::builtins::semantics::BuiltinRequirement::WindowsLibrary(library) => {
+                    self.require_windows_builtin_library(library);
                 }
                 crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
             }
@@ -276,6 +289,9 @@ impl Checker {
                     }
                     crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
                         self.require_macos_builtin_library(library);
+                    }
+                    crate::builtins::semantics::BuiltinRequirement::WindowsLibrary(library) => {
+                        self.require_windows_builtin_library(library);
                     }
                     crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
                 }

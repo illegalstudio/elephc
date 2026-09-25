@@ -49,7 +49,7 @@ fn emit_instr_throw_hook(emitter: &mut Emitter) {
         emitter.instruction(&format!("jz {skip}"));                             // no capability: skip the hook entirely
         abi::emit_load_symbol_to_reg(emitter, "rdi", "_gc_allocs", 0);          // arg 0: allocations so far, sampled at the throw
         abi::emit_load_symbol_to_reg(emitter, "rsi", "_gc_frees", 0);           // arg 1: frees so far, sampled at the throw
-        emitter.instruction("call rax");                                        // record that an unwind started, and where the counters stood
+        emitter.emit_native_bridge_call("rax", 2);                                   // call the Rust monitoring hook through the target native ABI
     } else {
         abi::emit_load_symbol_to_reg(emitter, "x9", &slot, 0);
         emitter.instruction(&format!("cbz x9, {skip}"));                        // no capability: skip the hook entirely
@@ -135,8 +135,8 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
 fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_dispatch_uncaught_exception");
     abi::emit_load_symbol_to_reg(emitter, "x19", "_php_exception_handler_callable", 0);
-    emitter.instruction("cbnz x19, 1f");                                       // dispatch through the PHP handler when one is active
-    emitter.instruction("b __rt_report_uncaught_exception");                   // preserve the ordinary fatal report through a linkable branch
+    emitter.instruction("cbnz x19, 1f");                                        // dispatch through the PHP handler when one is active
+    emitter.instruction("b __rt_report_uncaught_exception");                    // preserve the ordinary fatal report through a linkable branch
     emitter.label("1");
     abi::emit_store_zero_to_symbol(emitter, "_php_exception_handler_callable", 0);
     abi::emit_load_symbol_to_reg(emitter, "x22", "_php_exception_handler_value", 0);
@@ -165,8 +165,8 @@ fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // the boxed container now owns the array
 
     emitter.instruction(&format!("ldr x9, [x19, #{CALLABLE_DESC_INVOKER_OFFSET}]")); // load the handler's uniform invoker entry
-    emitter.instruction("cbnz x9, 2f");                                        // continue only with a valid uniform invoker
-    emitter.instruction("b __rt_report_uncaught_exception");                   // fall back to the safe fatal report through a linkable branch
+    emitter.instruction("cbnz x9, 2f");                                         // continue only with a valid uniform invoker
+    emitter.instruction("b __rt_report_uncaught_exception");                    // fall back to the safe fatal report through a linkable branch
     emitter.label("2");
     emitter.instruction("mov x0, x19");                                         // invoker argument 0 is the callable descriptor
     emitter.instruction("mov x1, x20");                                         // invoker argument 1 is the boxed argument array
@@ -224,7 +224,7 @@ fn emit_uncaught_exception_handler_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_report_uncaught_exception");                   // fall back to the safe fatal report
     emitter.instruction("mov rdi, r12");                                        // invoker argument 0 is the callable descriptor
     emitter.instruction("mov rsi, r14");                                        // invoker argument 1 is the boxed argument array
-    emitter.instruction("call r10");                                            // execute the user exception handler exactly once
+    emitter.emit_platform_callback_call("r10", 2);                              // execute the user exception handler through the generated PHP ABI
     emitter.instruction("call __rt_decref_mixed");                              // release the handler's boxed return value
     emitter.instruction("mov rax, r14");                                        // release the boxed argument container
     emitter.instruction("call __rt_decref_mixed");                              // deep-release its retained Throwable argument
@@ -338,5 +338,33 @@ mod tests {
         let saves = asm.find("stp x19, x20").expect("aarch64 saves x19/x20");
         let hook = asm.find("blr x10").expect("aarch64 calls the hook");
         assert!(hook > saves, "the hook runs before the registers are saved:\n{asm}");
+    }
+
+    /// The terminal exception-handler invoker is generated PHP code, not a native bridge.
+    /// Its Windows entry therefore needs the runtime-to-MSx64 callback transition.
+    #[test]
+    fn windows_exception_handler_invoker_reserves_shadow_space_and_remaps_arguments() {
+        let asm = emitted(Platform::Windows, Arch::X86_64);
+        let start = asm
+            .find("__rt_dispatch_uncaught_exception:\n")
+            .expect("uncaught dispatcher is emitted");
+        let dispatcher = &asm[start..];
+        let shadow = dispatcher
+            .find("sub rsp, 32")
+            .expect("generated handler invoker reserves MSx64 shadow space");
+        let second_arg = dispatcher
+            .find("mov rdx, rsi")
+            .expect("boxed argument array is remapped to the second MSx64 register");
+        let first_arg = dispatcher
+            .find("mov rcx, rdi")
+            .expect("callable descriptor is remapped to the first MSx64 register");
+        let call = dispatcher
+            .find("call r11")
+            .expect("handler invoker target is relocated before the indirect call");
+        assert!(
+            shadow < second_arg && second_arg < first_arg && first_arg < call,
+            "Windows exception-handler ABI order:\n{dispatcher}"
+        );
+        assert!(dispatcher[call..].contains("add rsp, 32"));
     }
 }

@@ -128,6 +128,11 @@ pub struct Module {
     pub packed_layouts: PackedLayoutTable,
     pub extern_globals: HashMap<String, PhpType>,
     pub required_runtime_features: RuntimeFeatures,
+    /// True when the checker selected `elephc_tz` for a PHP-visible timezone
+    /// operation. Synthetic DateTime bodies are lowered eagerly, so their
+    /// validator publication must consult this final-link capability rather
+    /// than introducing an external relocation for every program.
+    pub requires_tz_validation_bridge: bool,
     /// True when this module is being lowered for a `--web` compile. Threaded
     /// down from the CLI flag (`CliConfig.web`, mirroring what
     /// `codegen_ir::block_emit::emit_module` receives) so lowering can gate
@@ -186,6 +191,7 @@ impl Module {
             packed_layouts: PackedLayoutTable::default(),
             extern_globals: HashMap::new(),
             required_runtime_features: RuntimeFeatures::none(),
+            requires_tz_validation_bridge: false,
             web: false,
             clone_override_applicators: Vec::new(),
         }

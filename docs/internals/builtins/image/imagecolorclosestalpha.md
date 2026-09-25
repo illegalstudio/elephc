@@ -2,7 +2,7 @@
 title: "imagecolorclosestalpha() - internals"
 description: "Compiler internals for imagecolorclosestalpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 468
+  order: 472
 ---
 
 ## `imagecolorclosestalpha()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2418](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2418) (`imagecolorclosestalpha`)
+- **Lowering**: [`src/image_prelude.rs`:2489](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2489) (`imagecolorclosestalpha`)
 - **Function symbol**: `imagecolorclosestalpha()`
 
 

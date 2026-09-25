@@ -11,7 +11,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 
 use super::SPL_FIXED_STORAGE_OFFSET;
 
@@ -1405,7 +1405,7 @@ fn emit_boxed_null_call_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits the aarch64 exception-throw sequence for SplFixedArray runtime errors.
-/// Allocates a 32-byte Throwable payload, stamps it as heap kind 6 (object), stores the
+/// Allocates a 56-byte Throwable payload, stamps it as heap kind 6 (object), stores the
 /// class id from `class_id_symbol`, the static message pointer, the message length,
 /// zero exception code, publishes the exception to `_exc_value`, and branches to `__rt_throw_current`.
 /// Clobbers: x0, x1, x2, x9.
@@ -1435,7 +1435,7 @@ fn emit_throw_exception_aarch64(
 }
 
 /// Emits the x86_64 exception-throw sequence for SplFixedArray runtime errors.
-/// Allocates a 32-byte Throwable payload, stamps it with the x86_64 heap-kind word (HEAP_MAGIC_LO
+/// Allocates a 56-byte Throwable payload, stamps it with the x86_64 heap-kind word (HEAP_MAGIC_LO
 /// + kind 6), stores the class id via RIP-relative Lea, the static message pointer,
 /// the message length, zero exception code, publishes the exception to `_exc_value`,
 /// and jumps to `__rt_throw_current`. Preserves rbp, keeps stack 16-byte aligned.
@@ -1445,6 +1445,13 @@ fn emit_throw_exception_x86_64(
     message_symbol: &str,
     message_len: usize,
 ) {
+    if emitter.platform == Platform::Windows {
+        abi::emit_load_symbol_to_reg(emitter, "rdi", class_id_symbol, 0);       // pass the runtime exception class id
+        abi::emit_symbol_address(emitter, "rsi", message_symbol);               // pass the static exception message pointer
+        emitter.instruction(&format!("mov rdx, {}", message_len));              // pass the static exception message length
+        emitter.instruction("jmp __rt_throw_static_exception");                 // allocate and publish through an independent unwind frame
+        return;
+    }
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
     emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
     emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned

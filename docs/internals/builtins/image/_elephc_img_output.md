@@ -2,7 +2,7 @@
 title: "_elephc_img_output() - internals"
 description: "Compiler internals for _elephc_img_output(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1091
+  order: 1107
 ---
 
 ## `_elephc_img_output()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3544](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3544) (`_elephc_img_output`)
+- **Lowering**: [`src/image_prelude.rs`:3615](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3615) (`_elephc_img_output`)
 - **Function symbol**: `_elephc_img_output()`
 
 

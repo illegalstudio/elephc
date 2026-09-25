@@ -152,10 +152,16 @@ pub extern "C" fn elephc_img_stage_ptr(len: i64) -> *mut u8 {
         if len <= 0 {
             return std::ptr::null_mut();
         }
+        let Ok(len) = usize::try_from(len) else {
+            return std::ptr::null_mut();
+        };
         stage_cell().with(|slot| {
             let mut slot = slot.borrow_mut();
             slot.clear();
-            slot.resize(len as usize, 0);
+            if slot.try_reserve_exact(len).is_err() {
+                return std::ptr::null_mut();
+            }
+            slot.resize(len, 0);
             slot.as_mut_ptr()
         })
     })
@@ -503,5 +509,13 @@ mod tests {
         for handle in handles {
             handle.join().expect("encode worker must not panic");
         }
+    }
+
+    /// An ABI-sized staging request that cannot be represented or reserved must
+    /// return the null failure sentinel instead of panicking or aborting the
+    /// process while attempting the allocation.
+    #[test]
+    fn oversized_staging_buffer_fails_cleanly() {
+        assert!(elephc_img_stage_ptr(i64::MAX).is_null());
     }
 }

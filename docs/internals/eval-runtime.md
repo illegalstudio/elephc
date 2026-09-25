@@ -205,7 +205,7 @@ boxed-cell operations it dispatches a typed `RuntimeBuiltinId` through
 `__elephc_runtime_builtin_call_v1`; arguments are borrowed and a successful result
 transfers one fresh cell through `result_out`. Unknown IDs and unsupported arities
 fail closed. The compiler emits target-aware wrappers for macOS ARM64, Linux ARM64,
-and Linux x86_64. By-reference/lvalue, callable, reflection, resource,
+Linux x86_64, and the experimental Windows x86_64 PE target. By-reference/lvalue, callable, reflection, resource,
 eval-declaration, and partial-signature behavior remains on an explicit Magician
 adapter with a catalog-audited reason.
 

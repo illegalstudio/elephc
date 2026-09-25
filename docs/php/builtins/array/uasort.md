@@ -8,7 +8,7 @@ sidebar:
 ## uasort()
 
 ```php
-function uasort(array $array, callable $callback): bool
+function uasort(array &$array, callable $callback): bool
 ```
 
 Sorts an array with a user-defined comparison function and maintains index association.

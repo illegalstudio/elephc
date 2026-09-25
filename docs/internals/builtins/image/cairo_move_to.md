@@ -2,7 +2,7 @@
 title: "cairo_move_to() - internals"
 description: "Compiler internals for cairo_move_to(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 419
+  order: 423
 ---
 
 ## `cairo_move_to()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13476](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13476) (`cairo_move_to`)
+- **Lowering**: [`src/image_prelude.rs`:13547](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13547) (`cairo_move_to`)
 - **Function symbol**: `cairo_move_to()`
 
 

@@ -29,12 +29,12 @@ pub(super) fn lower_const_f64(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     abi::emit_symbol_address(ctx.emitter, scratch, &label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the 64-bit float literal through the symbol scratch register
                 &format!("ldr {}, [{}]", abi::float_result_reg(ctx.emitter), scratch)
             );                                                                  // load the 64-bit float literal through the symbol scratch register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the 64-bit float literal through the symbol scratch register
                 &format!("movsd {}, QWORD PTR [{}]", abi::float_result_reg(ctx.emitter), scratch)
             );                                                                  // load the 64-bit float literal through the symbol scratch register
         }
@@ -57,7 +57,7 @@ pub(super) fn lower_float_compare(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("fcmp d1, d0");                             // compare float operands for the EIR predicate
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // materialize the ordered float predicate result as 0 or 1
                 &format!("cset x0, {}", aarch64_float_condition(predicate)?)
             );                                                                  // materialize the ordered float predicate result as 0 or 1
         }
@@ -93,7 +93,7 @@ fn emit_x86_64_float_predicate_result(
             ctx.emitter.instruction("or al, r10b");                             // merge ordered inequality with unordered inequality
         }
         predicate => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // materialize the ordered float predicate in the low byte
                 &format!("set{} al", x86_64_float_condition(predicate)?)
             );                                                                  // materialize the ordered float predicate in the low byte
             ctx.emitter.instruction("setnp r10b");                              // materialize whether the comparison was ordered
@@ -119,12 +119,12 @@ pub(super) fn lower_float_binop(
     require_float(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // compute the floating-point arithmetic result
                 &format!("{} {}, {}, {}", aarch64_mnemonic, rhs_reg, lhs_reg, rhs_reg)
             );                                                                  // compute the floating-point arithmetic result
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // update the left float scratch with the arithmetic result
                 &format!("{} {}, {}", x86_64_mnemonic, lhs_reg, rhs_reg)
             );                                                                  // update the left float scratch with the arithmetic result
             ctx.emitter.instruction(&format!("movsd {}, {}", rhs_reg, lhs_reg));// move the float arithmetic result back to the result register
@@ -141,12 +141,12 @@ pub(super) fn lower_float_pow(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::AArch64 => {
             require_float(ctx.load_value_to_reg(lhs, "d0")?, inst)?;
             require_float(ctx.load_value_to_reg(rhs, "d1")?, inst)?;
-            ctx.emitter.bl_c("pow");
+            ctx.emitter.emit_call_c("pow");
         }
         Arch::X86_64 => {
             require_float(ctx.load_value_to_reg(lhs, "xmm0")?, inst)?;
             require_float(ctx.load_value_to_reg(rhs, "xmm1")?, inst)?;
-            ctx.emitter.instruction("call pow");                                // compute floating-point exponentiation through libc pow()
+            ctx.emitter.emit_call_c("pow");                                     // compute floating-point exponentiation through libc pow() (Windows-safe: shadow space via __rt_sys_pow)
         }
     }
     store_if_result(ctx, inst)

@@ -18,6 +18,32 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
+/// Reclaims a stream slurp after its independent persisted copy has been created.
+///
+/// The slurp helper returns a borrowed concat-arena slice for small responses and an owned
+/// heap block for oversized ones. `__rt_str_persist` always copies, making that source dead;
+/// `__rt_heap_free_safe` releases the owned case while leaving arena slices untouched.
+fn emit_release_slurped_source(emitter: &mut Emitter, source_slot: u32) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x0, [sp, #{}]", source_slot));    // reload the pre-persist slurp pointer
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the persisted copy across the release
+            emitter.instruction("bl __rt_heap_free_safe");                      // release owned storage and ignore concat-arena slices
+            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the persisted copy as the result
+        }
+        Arch::X86_64 => {
+            emitter.instruction("sub rsp, 16");                                 // reserve one temporary slot for the persisted copy
+            emitter.instruction("mov QWORD PTR [rsp], rax");                    // preserve the persisted copy pointer
+            emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                // preserve the persisted copy length
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", source_slot)); // reload the pre-persist slurp pointer
+            emitter.instruction("call __rt_heap_free_safe");                    // release owned storage and ignore concat-arena slices
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // restore the persisted copy pointer
+            emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                // restore the persisted copy length
+            emitter.instruction("add rsp, 16");                                 // release the temporary result slot
+        }
+    }
+}
+
 /// Emits `__rt_file_get_contents_maybe_url`.
 ///
 /// Inputs use elephc's string ABI (`x1`/`x2` on AArch64, `rax`/`rdx` on
@@ -173,6 +199,7 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.syscall(6);                                                         // close the temporary response stream
     emitter.instruction("ldp x1, x2, [sp, #64]");                               // restore response ptr/len
     emitter.instruction("bl __rt_str_persist");                                 // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 64);
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release helper frame
     emitter.instruction("ret");                                                 // return owned response string
@@ -325,6 +352,7 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.syscall(6);                                                         // close the temporary response stream
     emitter.instruction("ldp x1, x2, [sp, #80]");                               // restore response ptr/len
     emitter.instruction("bl __rt_str_persist");                                 // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 80);
     emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #112");                                    // release helper frame
     emitter.instruction("ret");                                                 // return owned HTTPS response string
@@ -517,20 +545,17 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_get_contents");                         // slurp the FTP data fd into concat buffer
     emitter.instruction("stp x1, x2, [sp, #64]");                               // preserve response ptr/len across close
     emitter.instruction("ldr x0, [sp, #56]");                                   // reload FTP data fd
-    abi::emit_symbol_address(emitter, "x9", "_tls_sessions");
-    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // TLS session attached to this data fd?
-    emitter.instruction("cbz x10, __rt_fgc_url_ftp_close_plain");               // plain FTP data fd: close directly
-    emitter.instruction("mov x0, x10");                                         // TLS handle as close helper argument
+    emitter.instruction("bl __rt_tls_session_clear");                           // remove and return any TLS session associated with the full-width fd
+    emitter.instruction("cbz x0, __rt_fgc_url_ftp_close_plain");                // plain FTP data fd: close directly
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_close_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load elephc_tls_close entry pointer
-    emitter.instruction("blr x9");                                              // send close_notify and drop the TLS session
-    emitter.instruction("ldr x0, [sp, #56]");                                   // reload FTP data fd after TLS close
-    abi::emit_symbol_address(emitter, "x9", "_tls_sessions");
-    emitter.instruction("str xzr, [x9, x0, lsl #3]");                           // clear the TLS session slot for descriptor reuse
+    emitter.emit_published_bridge_call("x9");                                  // send close_notify through the published TLS ABI entry
     emitter.label("__rt_fgc_url_ftp_close_plain");
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the FTP data descriptor for the OS close
     emitter.syscall(6);                                                         // close the data connection
     emitter.instruction("ldp x1, x2, [sp, #64]");                               // restore response ptr/len
     emitter.instruction("bl __rt_str_persist");                                 // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 64);
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release helper frame
     emitter.instruction("ret");                                                 // return owned FTP response string
@@ -683,6 +708,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore response ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // restore response length
     emitter.instruction("call __rt_str_persist");                               // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 72);
     emitter.instruction("add rsp, 112");                                        // release helper locals
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return owned response string
@@ -827,6 +853,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // restore response ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                       // restore response length
     emitter.instruction("call __rt_str_persist");                               // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 88);
     emitter.instruction("add rsp, 112");                                        // release helper locals
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return owned HTTPS response string
@@ -995,21 +1022,19 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save response ptr across close
     emitter.instruction("mov QWORD PTR [rbp - 80], rdx");                       // save response length across close
     emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // reload FTP data fd
-    abi::emit_symbol_address(emitter, "r9", "_tls_sessions");                   // TLS session handle table
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // TLS session attached to this data fd?
-    emitter.instruction("test r10, r10");                                       // is the data fd plain?
+    emitter.instruction("call __rt_tls_session_clear");                         // remove and return any TLS session associated with the full-width fd
+    emitter.instruction("test rax, rax");                                       // is the data fd plain?
     emitter.instruction("je __rt_fgc_url_ftp_close_plain_x86");                 // plain FTP data fd: close directly
-    emitter.instruction("mov rdi, r10");                                        // TLS handle as close helper argument
+    emitter.instruction("mov rdi, rax");                                        // TLS handle as close helper argument
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_close_fn", 0);     // elephc_tls_close entry pointer
-    emitter.instruction("call r9");                                             // send close_notify and drop the TLS session
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // reload FTP data fd after TLS close
-    abi::emit_symbol_address(emitter, "r9", "_tls_sessions");                   // TLS session handle table
-    emitter.instruction("mov QWORD PTR [r9 + rdi * 8], 0");                     // clear the TLS session slot for descriptor reuse
+    emitter.emit_published_bridge_call("r9");                                  // send close_notify through the published TLS ABI entry
     emitter.label("__rt_fgc_url_ftp_close_plain_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // reload the FTP data descriptor for the OS close
     emitter.instruction("call close");                                          // close the data connection
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore response ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // restore response length
     emitter.instruction("call __rt_str_persist");                               // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 72);
     emitter.instruction("add rsp, 112");                                        // release helper locals
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return owned FTP response string
@@ -1021,6 +1046,6 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 112");                                        // release helper locals
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return failure
-    emitter.label("__rt_fgc_url_plain_x86");
+    emitter.label_global("__rt_fgc_url_plain_x86");
     emitter.instruction("jmp __rt_file_get_contents_maybe_phar");               // fallback to phar:// runtime reader or filesystem path
 }

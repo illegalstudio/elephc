@@ -209,7 +209,7 @@ default-profile CLI binary that is identical to the compiled surface.
 | Mode | Result |
 |---|---|
 | `"a"` | Full system line: system name, node name, release, version, machine |
-| `"s"` | System name, matching `PHP_OS` (`"Darwin"` on macOS targets, `"Linux"` on Linux targets) |
+| `"s"` | System name (`"Darwin"` on macOS targets, `"Linux"` on Linux targets, `"Windows NT"` on Windows) |
 | `"n"` | Network node name |
 | `"r"` | Release |
 | `"v"` | Version |

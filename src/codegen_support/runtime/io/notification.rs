@@ -304,14 +304,14 @@ fn emit_fire_notification_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the per-callable invoker function pointer
     emitter.instruction("test r10, r10");                                       // no invoker (shouldn't happen)?
     emitter.instruction("jz __rt_hfn_free_x86");                                // just release the args when absent
-    emitter.instruction("call r10");                                            // invoke notification($code, …) → boxed Mixed result in rax
-    abi::emit_call_label(emitter, "__rt_decref_mixed");                        // release the ignored boxed return value (pointer already in rax)
+    emitter.emit_platform_callback_call("r10", 2);
+    abi::emit_call_label(emitter, "__rt_decref_mixed");                         // release the ignored boxed return value (pointer already in rax)
 
     emitter.label("__rt_hfn_free_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // boxed Mixed argument cell
-    abi::emit_call_label(emitter, "__rt_decref_mixed");                        // release the cell (drops the array ref taken by boxing)
+    abi::emit_call_label(emitter, "__rt_decref_mixed");                         // release the cell (drops the array ref taken by boxing)
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // raw args array pointer
-    abi::emit_call_label(emitter, "__rt_decref_any");                          // release the args array and its boxed elements
+    abi::emit_call_label(emitter, "__rt_decref_any");                           // release the args array and its boxed elements
 
     emitter.label("__rt_hfn_done_x86");
     emitter.instruction("add rsp, 80");                                         // release the shim frame

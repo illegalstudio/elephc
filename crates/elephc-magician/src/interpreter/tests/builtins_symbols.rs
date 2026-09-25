@@ -311,9 +311,9 @@ echo call_user_func_array("defined", ["constant_name" => "\\DynEvalConst"]) ? "Y
 #[test]
 fn execute_program_reads_predefined_runtime_constants() {
     let program = parse_fragment(
-        br#"echo PHP_EOL === "\n" ? "eol" : "bad"; echo ":";
-echo (PHP_OS === "Darwin" || PHP_OS === "Linux") ? "os" : "bad"; echo ":";
-echo (PHP_OS_FAMILY === "Darwin" || PHP_OS_FAMILY === "Linux") ? "family" : "bad"; echo ":";
+        br#"echo PHP_EOL === (PHP_OS === "WINNT" ? "\r\n" : "\n") ? "eol" : "bad"; echo ":";
+echo (PHP_OS === "Darwin" || PHP_OS === "Linux" || PHP_OS === "WINNT") ? "os" : "bad"; echo ":";
+echo (PHP_OS_FAMILY === "Darwin" || PHP_OS_FAMILY === "Linux" || PHP_OS_FAMILY === "Windows") ? "family" : "bad"; echo ":";
 echo DIRECTORY_SEPARATOR; echo ":";
 echo PHP_INT_MAX > 9000000000000000000 ? "int" : "bad"; echo ":";
 echo defined("PHP_OS") ? "defined" : "bad"; echo ":";
@@ -329,9 +329,12 @@ return PHP_INT_MAX;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
+    let directory_separator = if cfg!(target_os = "windows") { "\\" } else { "/" };
     assert_eq!(
         values.output,
-        "eol:os:family:/:int:defined:family-defined:root:case:locked:"
+        format!(
+            "eol:os:family:{directory_separator}:int:defined:family-defined:root:case:locked:"
+        )
     );
     assert_eq!(values.get(result), FakeValue::Int(i64::MAX));
     assert_eq!(

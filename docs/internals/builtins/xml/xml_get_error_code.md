@@ -2,7 +2,7 @@
 title: "xml_get_error_code() - internals"
 description: "Compiler internals for xml_get_error_code(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 944
+  order: 960
 ---
 
 ## `xml_get_error_code()` - internals

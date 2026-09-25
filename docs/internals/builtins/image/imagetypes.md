@@ -2,7 +2,7 @@
 title: "imagetypes() - internals"
 description: "Compiler internals for imagetypes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 536
+  order: 542
 ---
 
 ## `imagetypes()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3646](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3646) (`imagetypes`)
+- **Lowering**: [`src/image_prelude.rs`:3717](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3717) (`imagetypes`)
 - **Function symbol**: `imagetypes()`
 
 

@@ -18,8 +18,8 @@ pub(super) fn lower_aggregate(ctx: &mut FunctionContext<'_>, inst: &Instruction,
     let source = expect_operand(inst, 0)?;
     abi::emit_reserve_temporary_stack(ctx.emitter, 32);
     super::boxed_membership::store_borrowed_cell(ctx, source, 0)?;
-    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1),
+    abi::emit_temporary_stack_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0), 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
         i64::from(crate::codegen::compile_php_version().version_id() >= 80300));
     abi::emit_call_label(ctx.emitter, if product { "__rt_array_product_boxed" } else { "__rt_array_sum_boxed" });
     abi::emit_release_temporary_stack(ctx.emitter, 32);

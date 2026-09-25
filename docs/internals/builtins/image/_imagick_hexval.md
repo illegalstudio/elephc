@@ -2,7 +2,7 @@
 title: "_imagick_hexval() - internals"
 description: "Compiler internals for _imagick_hexval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1099
+  order: 1115
 ---
 
 ## `_imagick_hexval()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:4139](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4139) (`_imagick_hexval`)
+- **Lowering**: [`src/image_prelude.rs`:4210](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4210) (`_imagick_hexval`)
 - **Function symbol**: `_imagick_hexval()`
 
 

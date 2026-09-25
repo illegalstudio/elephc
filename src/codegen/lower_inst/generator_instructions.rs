@@ -24,9 +24,8 @@ use super::*;
 /// call targets `__rt_gen_suspend_delegated`, which skips PHP's auto-key
 /// bookkeeping exactly like `__rt_gen_delegate` does for inner generators.
 pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let target = ctx.emitter.target;
-    let key_arg = abi::int_arg_reg_name(target, 0);
-    let value_arg = abi::int_arg_reg_name(target, 1);
+    let key_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let value_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     let result_reg = abi::int_result_reg(ctx.emitter);
 
     let n = inst.operands.len();
@@ -82,8 +81,7 @@ pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instru
 /// reaching the backend, so the operand here is always a Generator/Traversable.
 pub(super) fn lower_generator_yield_from(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let operand = expect_operand(inst, 0)?;
-    let target = ctx.emitter.target;
-    let arg0 = abi::int_arg_reg_name(target, 0);
+    let arg0 = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_result(operand)?; // inner generator pointer (borrowed)
     if arg0 != result_reg {
@@ -195,4 +193,3 @@ pub(super) fn generator_intrinsic_return_type(intrinsic: IntrinsicCall) -> PhpTy
         _ => PhpType::Mixed,
     }
 }
-

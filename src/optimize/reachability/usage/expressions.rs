@@ -533,7 +533,8 @@ impl Scanner<'_> {
             match requirement {
                 crate::builtins::semantics::BuiltinRequirement::Bridge(library)
                 | crate::builtins::semantics::BuiltinRequirement::SystemLibrary(library)
-                | crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
+                | crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library)
+                | crate::builtins::semantics::BuiltinRequirement::WindowsLibrary(library) => {
                     self.usage.required_libraries.insert(library.to_string());
                 }
                 crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
@@ -1165,6 +1166,7 @@ mod tests {
         "ob_start",
         "pcntl_signal",
         "preg_replace_callback",
+        "sapi_windows_set_ctrl_handler",
         "set_error_handler",
         "set_exception_handler",
         "spl_autoload_register",

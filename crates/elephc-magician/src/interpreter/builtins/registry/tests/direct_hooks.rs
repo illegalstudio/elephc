@@ -43,6 +43,7 @@ fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_h
                 "next",
                 "pfsockopen",
                 "prev",
+                "proc_open",
                 "reset",
                 "rsort",
                 "settype",

@@ -21,6 +21,7 @@ pub(in crate::interpreter) fn execute_statements(
 ) -> Result<EvalControl, EvalStatus> {
     for stmt in statements {
         eval_pcntl_maybe_dispatch(context, values)?;
+        eval_sapi_windows_maybe_dispatch(context, values)?;
         match execute_stmt(stmt, context, scope, values)? {
             EvalControl::None => {}
             control => return Ok(control),

@@ -2,7 +2,7 @@
 title: "get_included_files() - internals"
 description: "Compiler internals for get_included_files(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 627
+  order: 634
 ---
 
 ## `get_included_files()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/get_included_files.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/get_included_files.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

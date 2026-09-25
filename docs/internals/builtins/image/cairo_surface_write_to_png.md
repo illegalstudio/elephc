@@ -2,7 +2,7 @@
 title: "cairo_surface_write_to_png() - internals"
 description: "Compiler internals for cairo_surface_write_to_png(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 444
+  order: 448
 ---
 
 ## `cairo_surface_write_to_png()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13342](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13342) (`cairo_surface_write_to_png`)
+- **Lowering**: [`src/image_prelude.rs`:13413](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13413) (`cairo_surface_write_to_png`)
 - **Function symbol**: `cairo_surface_write_to_png()`
 
 

@@ -344,7 +344,7 @@ fn emit_pcntl_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_pcntl_invoke_cleanup_x86");                    // tolerate an absent invoker defensively
     emitter.instruction("mov rdi, r10");                                        // invocation arg0 = callable descriptor
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // invocation arg1 = boxed arguments
-    emitter.instruction("call r11");                                            // invoke the PHP signal handler
+    emitter.emit_platform_callback_call("r11", 2);                                // call generated PHP signal handler with the target ABI
     emitter.instruction("test rax, rax");                                       // did the handler return an owned value?
     emitter.instruction("jz __rt_pcntl_invoke_cleanup_x86");                    // a void/null result needs no release
     emitter.instruction("call __rt_decref_any");                                // release the ignored callback result
@@ -442,7 +442,7 @@ fn emit_pcntl_dispatch_pending_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the bridge mask-begin callback
     emitter.instruction("test r9, r9");                                         // is the PCNTL bridge initialized?
     emitter.instruction("jz __rt_pcntl_dispatch_failed_x86");                   // an uninitialized bridge cannot dispatch safely
-    emitter.instruction("call r9");                                             // block signals and save the prior mask
+    emitter.emit_native_bridge_call("r9", 1);                                    // call the Rust PCNTL bridge with the target native ABI
     emitter.instruction("test eax, eax");                                       // did the bridge save the mask?
     emitter.instruction("jz __rt_pcntl_dispatch_failed_x86");                   // propagate bridge mask failures as false
     emitter.label("__rt_pcntl_dispatch_loop_x86");
@@ -452,7 +452,7 @@ fn emit_pcntl_dispatch_pending_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the bridge queue-pop callback
     emitter.instruction("test r9, r9");                                         // reject an uninitialized bridge slot
     emitter.instruction("jz __rt_pcntl_dispatch_failed_masked_x86");            // missing callback is a dispatch failure
-    emitter.instruction("call r9");                                             // pop one record while delivery remains blocked
+    emitter.emit_native_bridge_call("r9", 2);                                    // call the Rust PCNTL bridge with the target native ABI
     emitter.instruction("test rax, rax");                                       // zero means the snapshot is exhausted
     emitter.instruction("jz __rt_pcntl_dispatch_finish_x86");                   // finish after consuming the masked snapshot
     emitter.instruction("js __rt_pcntl_dispatch_failed_masked_x86");            // a bridge read error returns false
@@ -475,7 +475,7 @@ fn emit_pcntl_dispatch_pending_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the bridge mask-restore callback
     emitter.instruction("test r9, r9");                                         // preserve failure when the callback is absent
     emitter.instruction("jz __rt_pcntl_dispatch_clear_x86");                    // preserve failure when the callback is absent
-    emitter.instruction("call r9");                                             // restore the pre-dispatch signal mask
+    emitter.emit_native_bridge_call("r9", 1);                                    // call the Rust PCNTL bridge with the target native ABI
     emitter.instruction("test eax, eax");                                       // did restoration succeed?
     emitter.instruction("jnz __rt_pcntl_dispatch_clear_x86");                   // a successful restore keeps the prior result
     emitter.instruction("mov QWORD PTR [rsp + 96], 0");                         // mask restoration failure makes dispatch false
@@ -549,7 +549,7 @@ fn emit_pcntl_abort_dispatch_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the bridge queue-pop callback
     emitter.instruction("test r9, r9");                                         // tolerate an unavailable bridge defensively
     emitter.instruction("jz __rt_pcntl_abort_dispatch_restore_x86");            // restore state if no queue callback is available
-    emitter.instruction("call r9");                                             // discard one remaining snapshot record
+    emitter.emit_native_bridge_call("r9", 2);                                    // call the Rust PCNTL bridge with the target native ABI
     emitter.instruction("cmp rax, 1");                                          // did the pipe provide another complete record?
     emitter.instruction("je __rt_pcntl_abort_dispatch_drain_x86");              // keep discarding the original masked snapshot
     emitter.label("__rt_pcntl_abort_dispatch_restore_x86");
@@ -558,7 +558,7 @@ fn emit_pcntl_abort_dispatch_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the bridge mask-restore callback
     emitter.instruction("test r9, r9");                                         // skip restoration when no bridge was initialized
     emitter.instruction("jz __rt_pcntl_abort_dispatch_clear_x86");              // clear state if no restore callback is available
-    emitter.instruction("call r9");                                             // restore delivery before propagating the Throwable
+    emitter.emit_native_bridge_call("r9", 1);                                    // call the Rust PCNTL bridge with the target native ABI
     emitter.label("__rt_pcntl_abort_dispatch_clear_x86");
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatching");
     emitter.instruction("mov QWORD PTR [r9], 0");                               // guarantee future dispatch calls can run
@@ -661,6 +661,8 @@ fn emit_pcntl_async_dispatch_preserving_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pushfq");                                              // preserve caller flags around the direct state comparison
     emitter.instruction("cmp QWORD PTR [rip + __rt_pcntl_async_enabled], 0");   // test async state before spilling registers and vectors
     emitter.instruction("jne __rt_pcntl_async_slow_x86");                       // enter the expensive path only while async dispatch is enabled
+    emitter.instruction("cmp QWORD PTR [rip + __rt_sapi_windows_ctrl_pending], 0"); // test the Windows callback queue before skipping the spill
+    emitter.instruction("jne __rt_pcntl_async_slow_x86");                       // enter the preserving path while a CTRL event is pending
     emitter.instruction("popfq");                                               // restore flags on the disabled fast path
     emitter.instruction("ret");                                                 // return without the complete spill when async mode is off
     emitter.label("__rt_pcntl_async_slow_x86");
@@ -677,8 +679,12 @@ fn emit_pcntl_async_dispatch_preserving_x86_64(emitter: &mut Emitter) {
     emitter.instruction("fnstcw WORD PTR [rsp + 260]");                         // preserve x87 control state
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_async_enabled");
     emitter.instruction("cmp QWORD PTR [r9], 0");                               // recheck asynchronous dispatch after the complete spill
-    emitter.instruction("je __rt_pcntl_async_restore_x86");                     // skip work if the mode changed while entering
+    emitter.instruction("je __rt_sapi_windows_ctrl_check_x86");                 // skip PCNTL work when only the Windows callback queue is active
     emitter.instruction("call __rt_pcntl_dispatch_pending");                    // run pending handlers with all caller state protected
+    emitter.label("__rt_sapi_windows_ctrl_check_x86");
+    emitter.instruction("cmp QWORD PTR [rip + __rt_sapi_windows_ctrl_pending], 0"); // independently test the Windows callback queue
+    emitter.instruction("je __rt_pcntl_async_restore_x86");                     // restore state when no CTRL callback is queued
+    emitter.instruction("call __rt_sapi_windows_ctrl_dispatch");                // run queued Windows CTRL handlers at this safe point
     emitter.label("__rt_pcntl_async_restore_x86");
     emitter.instruction("ldmxcsr DWORD PTR [rsp + 256]");                       // restore SSE control and status state
     emitter.instruction("fldcw WORD PTR [rsp + 260]");                          // restore x87 control state
@@ -791,7 +797,7 @@ fn emit_pcntl_release_handlers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the bridge signal-registration callback
     emitter.instruction("test r10, r10");                                       // tolerate an unavailable bridge during teardown
     emitter.instruction("jz __rt_pcntl_release_handlers_zero_x86");             // clear metadata if no bridge is available
-    emitter.instruction("call r10");                                            // restore the OS default disposition
+    emitter.emit_native_bridge_call("r10", 4);                                   // call the Rust PCNTL bridge with the target native ABI
     emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the table index after the bridge call
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_kind");
     emitter.instruction("cmp QWORD PTR [r10 + r9*8], 2");                       // detect an owned callable descriptor
@@ -829,10 +835,31 @@ fn emit_pcntl_release_handlers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the queued-signal reader callback
     emitter.instruction("test r9, r9");                                         // tolerate a queue that was never initialized
     emitter.instruction("jz __rt_pcntl_release_handlers_done_x86");             // finish when no reader is available
-    emitter.instruction("call r9");                                             // discard one queued signal record
+    emitter.emit_native_bridge_call("r9", 2);                                    // call the Rust PCNTL bridge with the target native ABI
     emitter.instruction("cmp rax, 1");                                          // test whether a complete record was consumed
     emitter.instruction("je __rt_pcntl_release_handlers_drain_x86");            // drain every remaining queued record
     emitter.label("__rt_pcntl_release_handlers_done_x86");
     emitter.instruction("leave");                                               // release teardown storage and restore rbp
     emitter.instruction("ret");                                                 // return after all handler ownership is released
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    /// Verifies that the preserving safe point dispatches PCNTL and Windows CTRL queues
+    /// independently after the complete register spill.
+    #[test]
+    fn windows_ctrl_dispatch_is_independent_of_pcntl_async_state() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_pcntl_signal_dispatch(&mut emitter);
+        let asm = emitter.output();
+        let pcntl = asm.find("call __rt_pcntl_dispatch_pending").expect("pcntl dispatch");
+        let ctrl = asm
+            .find("call __rt_sapi_windows_ctrl_dispatch")
+            .expect("Windows CTRL dispatch");
+        assert!(pcntl < ctrl, "CTRL dispatch must follow the independent PCNTL branch");
+        assert!(asm.contains("__rt_sapi_windows_ctrl_pending"));
+    }
 }

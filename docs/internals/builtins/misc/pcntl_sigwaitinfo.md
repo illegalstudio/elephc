@@ -2,7 +2,7 @@
 title: "pcntl_sigwaitinfo() - internals"
 description: "Compiler internals for pcntl_sigwaitinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 664
+  order: 671
 ---
 
 ## `pcntl_sigwaitinfo()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_sigwaitinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_sigwaitinfo.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function pcntl_sigwaitinfo(mixed $signals, mixed $info = []): mixed
+function pcntl_sigwaitinfo(mixed $signals, mixed &$info = []): mixed
 ```
 
 ## What the type checker enforces

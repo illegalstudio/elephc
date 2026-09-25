@@ -170,7 +170,7 @@ fn emit_usort_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // comparator arg b: keylen
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // pass the capture environment after the compared string pair
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the comparator address
-    emitter.instruction("call r11");                                            // rax = comparator(data[j], key)
+    emitter.emit_platform_callback_call("r11", 5);                                // call generated PHP comparator with the target ABI
     emitter.instruction("cmp rax, 0");                                          // is data[j] already ordered at or before the key?
     emitter.instruction("jle __rt_usort_str_insert_linux_x86_64");              // ordered: insert here, which keeps equal elements stable
     emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload j for the shift

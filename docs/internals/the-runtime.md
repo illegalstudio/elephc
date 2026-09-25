@@ -5,7 +5,7 @@ sidebar:
   order: 8
 ---
 
-**Source:** `src/codegen_support/runtime/` — `mod.rs`, `emitters.rs`, `diagnostics.rs`, `data/`, `strings/`, `arrays/`, `buffers/`, `callables/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `spl/`, `system/`, `pointers/`, `zval/`, `fibers/`, `generators/`, plus the eval hooks `eval_bridge.rs` / `eval_scope.rs`
+**Source:** `src/codegen_support/runtime/` — `mod.rs`, `emitters.rs`, `diagnostics.rs`, `data/`, `strings/`, `arrays/`, `buffers/`, `callables/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `spl/`, `system/`, `pointers/`, `zval/`, `fibers/`, `generators/`, `win32/`, plus the eval hooks `eval_bridge.rs` / `eval_scope.rs`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -287,6 +287,9 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_str_ends_with` | Check suffix match | `x1`/`x2` + `x3`/`x4` | `x0` (0 or 1) |
 | `__rt_chr` | ASCII code → char | `x0` | `x1`/`x2` |
 | `__rt_addslashes` | Escape quotes/backslashes | `x1`/`x2` | `x1`/`x2` |
+| `__rt_escapeshellarg` | Quote one shell argument with PHP's POSIX or Windows `cmd.exe` rules; NUL and Windows length violations throw `ValueError` | `x1`/`x2` | `x1`/`x2` |
+| `__rt_escapeshellcmd` | Escape PHP's platform-specific shell metacharacter set; NUL and Windows length violations throw `ValueError` | `x1`/`x2` | `x1`/`x2` |
+| `__rt_shell_utf8_sequence_len` | Validate the next bounded UTF-8 sequence so multibyte continuation bytes are copied atomically instead of interpreted as shell syntax | source pointer + remaining length | sequence width, or 0 for an invalid leading byte |
 | `__rt_nl2br` | Insert `<br />` before newlines | `x1`/`x2` | `x1`/`x2` |
 | `__rt_bin2hex` | Binary → hex string | `x1`/`x2` | `x1`/`x2` |
 | `__rt_hex2bin` | Hex → binary | `x1`/`x2` | `x1`/`x2` |
@@ -627,6 +630,7 @@ elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp
 | `__rt_class_implements_interface` | Test class metadata against an interface id for dynamic class-string checks without an object instance | `x0` = class id, `x1` = interface id | `x0` = 1 if implemented, 0 otherwise |
 | `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
 | `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
+| `__rt_throw_static_exception` | x86_64 helper that allocates a built-in Throwable from a static class id/message tuple in its own unwindable frame | class id + message pointer/length | does not return normally |
 
 The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`, which reads the published `_exc_value` and writes `Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stderr before exiting with status 255. The class name comes from `_class_name_entries`, the message from payload offsets 8/16, the line from the payload's creation-line slot (`THROWABLE_CREATION_LINE_OFFSET`, formatted through `__rt_itoa`), and the file from `_script_source_file`. An empty message drops the `": "` separator, and a zero line drops the whole ` in <file>:<line>` suffix, both matching reference PHP.
 
@@ -784,6 +788,18 @@ The first table covers the file/filesystem core; the subsections after it cover 
 | `__rt_umask` / `__rt_ftruncate` | Process umask and file truncation helpers |
 | `__rt_fsync` / `__rt_fflush` / `__rt_fdatasync` | File descriptor flush helpers; `fflush()` maps to `fsync()` because elephc has no userspace stdio buffer |
 | `__rt_touch` | Create missing files and update access/modification timestamps |
+
+### Process routines
+
+| Routine | What it does |
+|---|---|
+| `__rt_proc_open` | Create a child process and materialize PHP descriptor specifications. Windows supports `pipe`, private loopback `socket`, `file`, `redirect`, supplied stream resources, and `null` descriptors through inheritable Win32 handles. |
+| `__rt_proc_pipe_registry_register` / `__rt_proc_pipe_registry_close` | Retain the exact published `$pipes` container and close its still-live process pipes before `proc_close()` waits, preventing an unread full pipe from deadlocking the parent. |
+| `__rt_proc_status_register` / `__rt_proc_status_register_cstr` / `__rt_proc_status_unregister` | Retain the command string and process metadata needed by `proc_get_status()` until `proc_close()` consumes the process resource. |
+| `__rt_proc_status_cached_exit` | Return a normal Unix exit status already harvested by a non-blocking status query, so `proc_close()` does not wait for the same child twice. |
+| `__rt_proc_get_status` | Build PHP's nine-field process-status hash. Unix uses non-blocking `wait4`; Windows uses `GetExitCodeProcess` and does not consume the process handle. |
+| `__rt_proc_terminate` | Send the requested Unix signal, or call `TerminateProcess(handle, 255)` on Windows as php-src does. |
+| `__rt_proc_close` | Close registered pipes, consume cached status if present, then wait/reap the child and release process metadata/handles. |
 
 ### Stream and socket routines
 
@@ -1034,6 +1050,13 @@ Generators are stamped as object heap blocks (heap kind `4`) because `Generator`
 
 These helpers implement PHP 8.1-style cooperative coroutines. They are emitted by the shared runtime on every supported target.
 
+The context switch follows the active target ABI: AArch64 and System V x86_64
+preserve their callee-saved register sets, while Windows x86_64 additionally
+preserves `rsi`, `rdi`, and `xmm6`–`xmm15`. The Windows path also keeps the
+thread environment block's `StackBase`, `StackLimit`, and `DeallocationStack`
+fields synchronized with the active fiber stack so Win32 stack probing and
+unwinding continue to see valid bounds.
+
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_fiber_alloc_stack` | Allocate a per-fiber native stack with a protected guard page | requested usable stack size | stack base, initial top, mapped size |
@@ -1140,6 +1163,11 @@ The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` 
 .comm _fiber_main_saved_sp, 8 ; saved main-stack pointer while running a fiber
 .comm _fiber_main_saved_exc, 8 ; saved main exception-handler chain while running a fiber
 .comm _fiber_main_saved_call_frame, 8 ; saved main cleanup-frame chain while running a fiber
+.comm _fiber_main_saved_stack_base, 8 ; Windows: saved main TEB StackBase
+.comm _fiber_main_saved_stack_limit, 8 ; Windows: saved main TEB StackLimit
+.comm _fiber_main_saved_deallocation_stack, 8 ; Windows: saved main TEB DeallocationStack
+.comm _proc_pipe_registry_head, 8 ; retained proc_open() pipe-container registry
+.comm _proc_status_registry_head, 8 ; proc_get_status()/proc_close() metadata registry
 .comm _rt_diag_suppression, 8 ; nested runtime warning-suppression depth for @
 .comm _heap_buf, 8388608     ; 8MB heap by default (--heap-size overrides)
 .comm _heap_off, 8           ; current heap offset

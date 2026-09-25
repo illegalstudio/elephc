@@ -329,6 +329,18 @@ impl Checker {
                         }
                     }
                 }
+                if builtin_name.eq_ignore_ascii_case("proc_open") {
+                    if let Some(arg) = expanded_args.iter().find(|arg| {
+                        matches!(&arg.kind, ExprKind::NamedArg { name, .. } if name == "pipes")
+                    }).or_else(|| expanded_args.get(2)) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(
+                                name.clone(),
+                                PhpType::Array(Box::new(PhpType::stream_resource())),
+                            );
+                        }
+                    }
+                }
                 for (idx, arg) in expanded_args.iter().enumerate() {
                     if let Some(output_ty) = pcntl_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {

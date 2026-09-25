@@ -193,7 +193,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_nbn_generic_alloc_x86");
     emitter.instruction("mov rax, rdx");                                        // allocation size
     emitter.instruction("call __rt_heap_alloc");                                // rax = object pointer
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // materialize the object heap-kind marker
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
     )); // object heap-kind word with the x86_64 marker
@@ -221,7 +221,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_nbn_no_propinit_x86");                         // class has no property defaults: skip
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the object across the thunk (obj_size slot is free now)
     emitter.instruction("mov rdi, rax");                                        // this = object (first SysV argument)
-    emitter.instruction("call r10");                                            // _class_propinit_<id>(this)
+    emitter.emit_platform_callback_call("r10", 1);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the object pointer (the thunk may clobber rax)
     emitter.label("__rt_nbn_no_propinit_x86");
     emitter.label("__rt_nbn_return_allocated_x86");

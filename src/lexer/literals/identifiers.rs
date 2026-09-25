@@ -125,6 +125,7 @@ pub(in crate::lexer) fn scan_keyword(cursor: &mut Cursor) -> Result<Token, Compi
         "PHP_EOL" => return Ok(Token::PhpEol),
         "PHP_OS" => return Ok(Token::PhpOs),
         "DIRECTORY_SEPARATOR" => return Ok(Token::DirectorySeparator),
+        "PATH_SEPARATOR" => return Ok(Token::PathSeparator),
         _ => {}
     }
 

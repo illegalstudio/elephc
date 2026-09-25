@@ -2,7 +2,7 @@
 title: "_cairo_color() - internals"
 description: "Compiler internals for _cairo_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1088
+  order: 1104
 ---
 
 ## `_cairo_color()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:12471](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L12471) (`_cairo_color`)
+- **Lowering**: [`src/image_prelude.rs`:12542](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L12542) (`_cairo_color`)
 - **Function symbol**: `_cairo_color()`
 
 

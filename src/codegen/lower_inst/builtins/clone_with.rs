@@ -34,6 +34,10 @@
 //!   still REPORTS rather than dropping the write.
 
 use crate::codegen::abi;
+use crate::codegen::lower_inst::builtins::eval::native_calls::{
+    emit_eval_native_c_abi_call_reg_from_stack, stage_eval_native_stack_address,
+    stage_eval_native_stack_word_as,
+};
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
 use crate::codegen::{emit_box_current_value_as_mixed, CodegenIrError, Result};
@@ -213,39 +217,25 @@ fn emit_eval_clone_bridge(
     let owns_properties_box = emit_eval_clone_properties_operand(ctx, properties)?;
     emit_eval_clone_invocation_scope(ctx, invocation_scope)?;
 
-    let target = ctx.emitter.target;
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
-        EVAL_CLONE_OBJECT_OFFSET,
+    stage_eval_native_stack_word_as(ctx, EVAL_CLONE_OBJECT_OFFSET, PhpType::Pointer(None));
+    stage_eval_native_stack_word_as(ctx, EVAL_CLONE_PROPERTIES_OFFSET, PhpType::Pointer(None));
+    stage_eval_native_stack_word_as(ctx, EVAL_CLONE_SCOPE_PTR_OFFSET, PhpType::Pointer(None));
+    stage_eval_native_stack_word_as(ctx, EVAL_CLONE_SCOPE_LEN_OFFSET, PhpType::Int);
+    stage_eval_native_stack_address(ctx, EVAL_CLONE_OUT_OFFSET);
+    stage_eval_native_stack_address(ctx, EVAL_CLONE_THROWABLE_OFFSET);
+    emit_eval_native_c_abi_call_reg_from_stack(
+        ctx,
+        &scratch,
+        EVAL_CLONE_CALLBACK_OFFSET,
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+        ],
     );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 1),
-        EVAL_CLONE_PROPERTIES_OFFSET,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
-        EVAL_CLONE_SCOPE_PTR_OFFSET,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 3),
-        EVAL_CLONE_SCOPE_LEN_OFFSET,
-    );
-    abi::emit_temporary_stack_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 4),
-        EVAL_CLONE_OUT_OFFSET,
-    );
-    abi::emit_temporary_stack_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 5),
-        EVAL_CLONE_THROWABLE_OFFSET,
-    );
-    abi::emit_load_temporary_stack_slot(ctx.emitter, &scratch, EVAL_CLONE_CALLBACK_OFFSET);
-    abi::emit_call_reg(ctx.emitter, &scratch);
 
     abi::emit_store_to_sp(ctx.emitter, &result_reg, EVAL_CLONE_STATUS_OFFSET);
     if owns_properties_box {
@@ -560,7 +550,7 @@ fn emit_mixed_object_type_guard(
 
 /// Calls the shared boxed shallow-clone adapter through its first argument register.
 fn emit_clone_adapter_call(ctx: &mut FunctionContext<'_>) {
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_reg_move(ctx.emitter, arg_reg, &result_reg);
     abi::emit_call_label(ctx.emitter, "__rt_object_clone_shallow_boxed");
@@ -742,10 +732,10 @@ fn emit_clone_hook_class_dispatch(
     for (candidate, label) in candidates.iter().zip(labels.iter()) {
         abi::emit_load_int_immediate(ctx.emitter, compare_reg, candidate.class_id as i64);
         ctx.emitter
-            .instruction(&format!("cmp {class_id_reg}, {compare_reg}"));
+            .instruction(&format!("cmp {class_id_reg}, {compare_reg}"));       // compare the receiver class against one clone-hook candidate
         match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),
-            Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),
+            Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")), // branch when the AArch64 class id matches
+            Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),    // branch when the x86 class id matches
         }
     }
     abi::emit_jump(ctx.emitter, no_hook);
@@ -868,10 +858,10 @@ pub(super) fn emit_branch_if_reg_equals_immediate(
 ) {
     let scratch = abi::secondary_scratch_reg(ctx.emitter).to_string();
     abi::emit_load_int_immediate(ctx.emitter, &scratch, value);
-    ctx.emitter.instruction(&format!("cmp {reg}, {scratch}"));
+    ctx.emitter.instruction(&format!("cmp {reg}, {scratch}"));                  // compare the transported class id with the immediate candidate
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),     // branch on an AArch64 equality match
+        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),        // branch on an x86 equality match
     }
 }
 
@@ -936,10 +926,10 @@ pub(super) fn value_is_empty_array_literal(ctx: &FunctionContext<'_>, value: Val
 /// Branches to `label` when the register holds zero.
 fn emit_branch_if_zero(ctx: &mut FunctionContext<'_>, reg: &str, label: &str) {
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {reg}, {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {reg}, {label}")), // branch directly when the AArch64 register is zero
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {reg}, {reg}"));
-            ctx.emitter.instruction(&format!("jz {label}"));
+            ctx.emitter.instruction(&format!("test {reg}, {reg}"));             // test the x86 register against itself for zero
+            ctx.emitter.instruction(&format!("jz {label}"));                    // branch when the x86 zero flag is set
         }
     }
 }
@@ -947,20 +937,20 @@ fn emit_branch_if_zero(ctx: &mut FunctionContext<'_>, reg: &str, label: &str) {
 /// Branches to `label` when the register holds a non-zero value.
 fn emit_branch_if_nonzero(ctx: &mut FunctionContext<'_>, reg: &str, label: &str) {
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {reg}, {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {reg}, {label}")), // branch directly when the AArch64 register is nonzero
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {reg}, {reg}"));
-            ctx.emitter.instruction(&format!("jnz {label}"));
+            ctx.emitter.instruction(&format!("test {reg}, {reg}"));             // test the x86 register against itself for nonzero
+            ctx.emitter.instruction(&format!("jnz {label}"));                   // branch when the x86 zero flag is clear
         }
     }
 }
 
 /// Branches to `label` when an unboxed runtime tag register holds the object tag.
 fn emit_branch_if_tag_is_object(ctx: &mut FunctionContext<'_>, tag_reg: &str, label: &str) {
-    ctx.emitter.instruction(&format!("cmp {tag_reg}, 6"));
+    ctx.emitter.instruction(&format!("cmp {tag_reg}, 6"));                      // compare the unboxed value tag with the object tag
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),     // branch when the AArch64 tag is object
+        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),        // branch when the x86 tag is object
     }
 }
 

@@ -2,13 +2,13 @@
 title: "exif_thumbnail()"
 description: "Returns the embedded thumbnail of an image, with its size and type."
 sidebar:
-  order: 450
+  order: 454
 ---
 
 ## exif_thumbnail()
 
 ```php
-function exif_thumbnail(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed
+function exif_thumbnail(string $filename, mixed &$width = 0, mixed &$height = 0, mixed &$image_type = 0): mixed
 ```
 
 Returns the embedded thumbnail of an image, with its size and type.

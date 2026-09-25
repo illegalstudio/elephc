@@ -2,7 +2,7 @@
 title: "__elephc_curl_mime_post() - internals"
 description: "Compiler internals for __elephc_curl_mime_post(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1030
+  order: 1046
 ---
 
 ## `__elephc_curl_mime_post()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_mime_post.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_mime_post.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

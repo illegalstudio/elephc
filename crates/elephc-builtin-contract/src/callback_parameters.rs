@@ -41,6 +41,7 @@ const CALLBACK_PARAMETERS: &[CallbackParameters] = &[
     callback_parameters("ob_start", CALLBACK),
     callback_parameters("pcntl_signal", HANDLER),
     callback_parameters("preg_replace_callback", CALLBACK),
+    callback_parameters("sapi_windows_set_ctrl_handler", HANDLER),
     callback_parameters("set_error_handler", CALLBACK),
     callback_parameters("set_exception_handler", CALLBACK),
     callback_parameters("spl_autoload_register", CALLBACK),
@@ -93,6 +94,10 @@ mod tests {
         );
         assert_eq!(
             names(BuiltinId::from_canonical_name("pcntl_signal")),
+            &["handler"]
+        );
+        assert_eq!(
+            names(BuiltinId::from_canonical_name("sapi_windows_set_ctrl_handler")),
             &["handler"]
         );
         assert!(names(BuiltinId::from_canonical_name("strlen")).is_empty());

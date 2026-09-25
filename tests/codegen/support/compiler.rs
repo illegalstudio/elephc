@@ -329,8 +329,12 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::tz_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::list_id_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved, &mut prelude_inventory);
-    let resolved =
-        elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::image_prelude::inject_if_used(
+        resolved,
+        false,
+        target(),
+        &mut prelude_inventory,
+    );
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
@@ -527,11 +531,12 @@ fn main_exit_needle(target: Target) -> &'static str {
         (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
         (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #94\n    svc #0",
         (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 231\n    syscall",
+        (Platform::Windows, Arch::X86_64) => "    call __rt_sys_exit",
         (_, Arch::AArch64) => panic!(
             "main exit harness is not implemented yet for target {}",
             target
         ),
-        (_, Arch::X86_64) => panic!(
+        (Platform::MacOS, Arch::X86_64) => panic!(
             "main exit harness is not implemented yet for target {}",
             target
         ),
@@ -543,13 +548,32 @@ fn main_exit_needle(target: Target) -> &'static str {
 /// Transforms macOS-dialect harness assembly for Linux and panics when codegen no
 /// longer emits the expected target-specific epilogue.
 pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
-    let needle = main_exit_needle(target());
-    // Harness strings are written in macOS assembly dialect; transform for Linux if needed
     let harness = target().transform_assembly(harness);
+    if target().platform == Platform::Windows {
+        return inject_windows_main_exit_harness(asm, &harness);
+    }
+    let needle = main_exit_needle(target());
     let replacement = format!("{harness}\n{needle}");
     let patched = asm.replacen(needle, &replacement, 1);
     assert_ne!(patched, asm, "failed to inject main exit harness");
     patched
+}
+
+/// Inserts a fixture harness before the final Windows runtime-exit call while restoring
+/// the already-staged SysV exit-code register that arbitrary harness calls may clobber.
+fn inject_windows_main_exit_harness(asm: &str, harness: &str) -> String {
+    const WINDOWS_MAIN_EXIT_HOOK: &str = "    call __rt_sys_exit";
+
+    let hook = asm
+        .rfind(WINDOWS_MAIN_EXIT_HOOK)
+        .expect("failed to locate Windows main exit hook");
+    let harness = harness.trim_end_matches('\n');
+    format!(
+        "{}{}\n    mov rdi, rbx\n{}",
+        &asm[..hook],
+        harness,
+        &asm[hook..]
+    )
 }
 
 // Compiles a PHP source snippet and runs it with an injected harness, expecting a failure.

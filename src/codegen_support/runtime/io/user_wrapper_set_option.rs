@@ -102,7 +102,7 @@ fn emit_user_wrapper_set_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uwsetopt_false_x86");                          // missing method → false
 
     // -- call stream_set_option($this, $option, $arg1, $arg2) → bool in rax --
-    emitter.instruction("call r11");                                            // invoke stream_set_option on the wrapper object
+    emitter.emit_platform_callback_call("r11", 4);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result
 

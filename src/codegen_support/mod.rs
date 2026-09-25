@@ -38,6 +38,7 @@ pub(crate) mod source_method_adapters;
 pub(crate) mod stream_filters;
 pub(crate) mod tls;
 pub(crate) mod try_handlers;
+pub(crate) mod tz_bridge;
 mod value_boxing;
 pub(crate) mod visibility;
 mod wrappers;

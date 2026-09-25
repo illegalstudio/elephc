@@ -2,7 +2,7 @@
 title: "pcntl_setpriority()"
 description: "Changes a process, process-group, or user scheduling priority."
 sidebar:
-  order: 657
+  order: 664
 ---
 
 ## pcntl_setpriority()
@@ -22,7 +22,7 @@ Changes a process, process-group, or user scheduling priority.
 
 ## Availability
 
-- **Compiled (AOT)**: supported on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
+- **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_setpriority.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_setpriority.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

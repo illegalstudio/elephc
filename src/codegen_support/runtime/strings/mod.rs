@@ -20,6 +20,7 @@ mod numeric_value;
 mod str_to_int;
 mod str_to_int_base;
 mod number_format;
+mod php_round;
 mod atoi;
 mod grapheme_strrev;
 mod strcopy;
@@ -80,6 +81,7 @@ mod html_entity_decode;
 mod urlencode;
 mod urldecode;
 mod rawurlencode;
+mod shell_escape;
 mod base64_encode;
 mod base64_decode;
 mod sprintf;
@@ -130,6 +132,8 @@ pub use str_to_int_base::emit_str_to_int_base;
 /// Emit PHP string-to-integer cast helper.
 pub use number_format::emit_number_format;
 /// Emit number formatting helper.
+pub use php_round::emit_php_round;
+/// Emit the PHP-parity `_php_math_round` (HALF_UP) helper shared by `round()` and `number_format()`.
 pub use atoi::emit_atoi;
 /// Emit ASCII-to-integer conversion.
 pub use strcopy::emit_strcopy;
@@ -249,6 +253,8 @@ pub use urldecode::emit_urldecode;
 /// Emit URL decoding helper.
 pub use rawurlencode::emit_rawurlencode;
 /// Emit raw URL encoding helper.
+pub use shell_escape::emit_shell_escapes;
+/// Emit PHP shell argument and command escaping helpers.
 pub use base64_encode::emit_base64_encode;
 /// Emit Base64 encoding helper.
 pub use base64_decode::emit_base64_decode;

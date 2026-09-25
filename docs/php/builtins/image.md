@@ -60,7 +60,7 @@ sidebar:
 | [`exif_imagetype()`](./image/exif_imagetype.md) | `(string $filename): mixed` | `mixed` | ✓ | — |
 | [`exif_read_data()`](./image/exif_read_data.md) | `(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed` | `mixed` | ✓ | — |
 | [`exif_tagname()`](./image/exif_tagname.md) | `(int $index): mixed` | `mixed` | ✓ | — |
-| [`exif_thumbnail()`](./image/exif_thumbnail.md) | `(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed` | `mixed` | ✓ | — |
+| [`exif_thumbnail()`](./image/exif_thumbnail.md) | `(string $filename, mixed &$width = 0, mixed &$height = 0, mixed &$image_type = 0): mixed` | `mixed` | ✓ | — |
 | [`gd_info()`](./image/gd_info.md) | `(): array` | `array` | ✓ | — |
 | [`getimagesize()`](./image/getimagesize.md) | `(string $filename): mixed` | `mixed` | ✓ | — |
 | [`getimagesizefromstring()`](./image/getimagesizefromstring.md) | `(string $data): mixed` | `mixed` | ✓ | — |
@@ -123,6 +123,8 @@ sidebar:
 | [`imagegammacorrect()`](./image/imagegammacorrect.md) | `(mixed $image, float $input_gamma, float $output_gamma): bool` | `bool` | ✓ | — |
 | [`imagegetinterpolation()`](./image/imagegetinterpolation.md) | `(mixed $image): int` | `int` | ✓ | — |
 | [`imagegif()`](./image/imagegif.md) | `(mixed $image, ?string $file = null): bool` | `bool` | ✓ | — |
+| [`imagegrabscreen()`](./image/imagegrabscreen.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`imagegrabwindow()`](./image/imagegrabwindow.md) | `(int $handle, bool $client_area = false): mixed` | `mixed` | ✓ | — |
 | [`imageinterlace()`](./image/imageinterlace.md) | `(mixed $image, ?bool $enable = null): int` | `int` | ✓ | — |
 | [`imageistruecolor()`](./image/imageistruecolor.md) | `(mixed $image): bool` | `bool` | ✓ | — |
 | [`imagejpeg()`](./image/imagejpeg.md) | `(mixed $image, ?string $file = null, int $quality = -1): bool` | `bool` | ✓ | — |

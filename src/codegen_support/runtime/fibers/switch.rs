@@ -18,10 +18,16 @@
 //!   * General-purpose: rbx, rbp, r12–r15
 //!   * Resume address:  normal call return address, left above the saved GPRs
 //! Total = 6 GPRs + 1 return address = 56 bytes for a fresh stack frame.
+//!
+//! Windows x86_64 state preserved across switches:
+//!   * General-purpose: rbx, rbp, rsi, rdi, r12–r15
+//!   * Floating-point:  xmm6–xmm15
+//!   * Resume address:  normal call return address above the aligned save area
+//! Total = 8 GPRs + 168-byte aligned XMM area + 1 return address = 240 bytes.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform, Target};
 use crate::codegen_support::runtime::system::{
     STACK_GUARD_RESERVE_BYTES, STACK_LIMIT_MAIN_SYMBOL, STACK_LIMIT_SYMBOL,
 };
@@ -44,13 +50,33 @@ const FIBER_STACK_FLOOR_OFFSET: i64 = FIBER_GUARD_PAGE_SIZE as i64 + STACK_GUARD
 const AARCH64_SWITCH_SAVE_BYTES: i32 = 160;
 
 /// Total bytes pushed by a Linux x86_64 context switch, excluding the call return address.
-const X86_64_SWITCH_SAVE_BYTES: i32 = 48;
+const LINUX_X86_64_SWITCH_SAVE_BYTES: i32 = 48;
 
 /// Total bytes present in a fresh Linux x86_64 fiber frame, including the resume address.
-const X86_64_INITIAL_FRAME_BYTES: i32 = X86_64_SWITCH_SAVE_BYTES + 8;
+const LINUX_X86_64_INITIAL_FRAME_BYTES: i32 = LINUX_X86_64_SWITCH_SAVE_BYTES + 8;
 
 /// Offset within the Linux x86_64 initial frame where the resume address lives.
-const X86_64_INITIAL_FRAME_RIP_OFFSET: i32 = X86_64_SWITCH_SAVE_BYTES;
+const LINUX_X86_64_INITIAL_FRAME_RIP_OFFSET: i32 = LINUX_X86_64_SWITCH_SAVE_BYTES;
+
+/// Total bytes pushed for the eight MS x64 callee-saved general-purpose registers.
+const WINDOWS_X86_64_GPR_SAVE_BYTES: i32 = 64;
+
+/// Total bytes occupied by the ten MS x64 callee-saved XMM registers.
+const WINDOWS_X86_64_XMM_SAVE_BYTES: i32 = 160;
+
+/// Stack reservation for the Windows XMM save area, including the alignment pad.
+const WINDOWS_X86_64_XMM_STACK_RESERVE_BYTES: i32 = WINDOWS_X86_64_XMM_SAVE_BYTES + 8;
+
+/// Total bytes present in a fresh Windows x64 fiber frame, including the resume address.
+const WINDOWS_X86_64_INITIAL_FRAME_BYTES: i32 =
+    WINDOWS_X86_64_GPR_SAVE_BYTES + WINDOWS_X86_64_XMM_STACK_RESERVE_BYTES + 8;
+
+/// Offset within the Windows x64 initial frame where the resume address lives.
+const WINDOWS_X86_64_INITIAL_FRAME_RIP_OFFSET: i32 =
+    WINDOWS_X86_64_GPR_SAVE_BYTES + WINDOWS_X86_64_XMM_STACK_RESERVE_BYTES;
+
+/// Windows x64 TEB offset of the allocation base for the active stack.
+const WINDOWS_X64_TEB_DEALLOCATION_STACK_OFFSET: i32 = 0x1478;
 
 /// Emits `__rt_fiber_switch`: a cooperative context switch between Fiber execution contexts.
 ///
@@ -75,6 +101,11 @@ const X86_64_INITIAL_FRAME_RIP_OFFSET: i32 = X86_64_SWITCH_SAVE_BYTES;
 /// - ARM64: saves x19–x28, x29, x30, d8–d15 (160 bytes, 16-aligned) to the source stack, then restores the
 ///   same register set from the target's stack before returning.
 /// - x86_64: uses the matched helper `emit_x86_64` which saves/restores rbx, rbp, r12–r15 per the SysV ABI.
+///   On the Windows x86_64 target, `emit_x86_64` additionally resyncs the TEB stack metadata
+///   (`StackBase`, `StackLimit`, and `DeallocationStack`) to whichever stack is about to run,
+///   snapshotting/restoring the main thread's values through `_fiber_main_saved_*`; other targets
+///   are unaffected. `NT_TIB::FiberData` deliberately remains owned by Windows because elephc's
+///   manual stacks are not Win32 `CreateFiber` objects.
 ///
 /// Called from `emit_fiber_switch` on ARM64 targets.
 pub fn emit_fiber_switch(emitter: &mut Emitter) {
@@ -215,19 +246,32 @@ fn emit_adopt_fiber_stack_limit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add rax, {}", FIBER_STACK_FLOOR_OFFSET));     // skip the guard page and the shared reserve to get the usable floor
     emitter.label("__rt_fiber_switch_limit_ready");
     abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);       // publish the coroutine floor for every prologue that runs on this stack
+    if emitter.target.platform == Platform::Windows {
+        // Keep Windows' stack metadata synchronized with the manually adopted stack.
+        // FiberData remains untouched because this is not a Win32 CreateFiber switch.
+        emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", super::FIBER_STACK_TOP_OFFSET)); // load the fiber stack ceiling for TEB.StackBase
+        emitter.instruction("mov QWORD PTR gs:[8], r11");                       // publish TEB.StackBase for the adopted fiber
+        emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", FIBER_STACK_BASE_OFFSET)); // load the reserved mapping floor
+        emitter.instruction(&format!("add r11, {FIBER_GUARD_PAGE_SIZE}"));      // skip the guard page to reach TEB.StackLimit
+        emitter.instruction("mov QWORD PTR gs:[16], r11");                      // publish TEB.StackLimit for stack probing
+        emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", FIBER_STACK_BASE_OFFSET)); // reload the allocation base
+        emitter.instruction(&format!("mov QWORD PTR gs:[{}], r11", WINDOWS_X64_TEB_DEALLOCATION_STACK_OFFSET)); // publish the allocation base used at stack teardown
+    }
 }
 
 /// Returns the total bytes reserved on a freshly-created fiber stack for the entry frame.
 ///
 /// ARM64: equal to `AARCH64_SWITCH_SAVE_BYTES` (160 bytes, 16-aligned).
-/// x86_64: equal to `X86_64_INITIAL_FRAME_BYTES` (56 bytes, including the resume address slot).
+/// Linux x86_64: 56 bytes (six SysV callee-saved GPRs plus the resume address).
+/// Windows x86_64: 240 bytes (eight MS x64 GPRs, ten 16-byte XMM values, alignment, and RIP).
 ///
 /// Used during fiber creation to allocate the initial stack area so the first switch into the fiber
 /// can restore registers without reading uninitialized memory.
-pub(crate) fn fiber_initial_stack_frame_bytes(arch: Arch) -> i32 {
-    match arch {
-        Arch::AArch64 => AARCH64_SWITCH_SAVE_BYTES,
-        Arch::X86_64 => X86_64_INITIAL_FRAME_BYTES,
+pub(crate) fn fiber_initial_stack_frame_bytes(target: Target) -> i32 {
+    match (target.platform, target.arch) {
+        (_, Arch::AArch64) => AARCH64_SWITCH_SAVE_BYTES,
+        (Platform::Windows, Arch::X86_64) => WINDOWS_X86_64_INITIAL_FRAME_BYTES,
+        (_, Arch::X86_64) => LINUX_X86_64_INITIAL_FRAME_BYTES,
     }
 }
 
@@ -235,15 +279,16 @@ pub(crate) fn fiber_initial_stack_frame_bytes(arch: Arch) -> i32 {
 ///
 /// ARM64: offset 88 — the entry trampoline lives 88 bytes below the frame base (within the 160-byte save area,
 /// at the slot previously used by the saved x30/LR, which is the resume address for a new fiber).
-/// x86_64: `X86_64_INITIAL_FRAME_RIP_OFFSET` — the resume address occupies the 8-byte slot immediately
-/// after the saved GPRs, at offset 48 in a 56-byte initial frame.
+/// Linux x86_64: the resume address follows six saved GPRs at offset 48.
+/// Windows x86_64: it follows eight saved GPRs and the aligned XMM6–XMM15 area at offset 232.
 ///
 /// Used when creating a fiber to write the entry-point address into the correct slot so the first switch
 /// to that fiber jumps to the fiber's trampoline.
-pub(crate) fn fiber_initial_entry_offset(arch: Arch) -> i32 {
-    match arch {
-        Arch::AArch64 => 88,
-        Arch::X86_64 => X86_64_INITIAL_FRAME_RIP_OFFSET,
+pub(crate) fn fiber_initial_entry_offset(target: Target) -> i32 {
+    match (target.platform, target.arch) {
+        (_, Arch::AArch64) => 88,
+        (Platform::Windows, Arch::X86_64) => WINDOWS_X86_64_INITIAL_FRAME_RIP_OFFSET,
+        (_, Arch::X86_64) => LINUX_X86_64_INITIAL_FRAME_RIP_OFFSET,
     }
 }
 
@@ -254,10 +299,21 @@ pub(crate) fn fiber_initial_entry_offset(arch: Arch) -> i32 {
 /// then restores the target context's state and returns into it.
 ///
 /// # Differences from ARM64
-/// - Saves 6 GPRs (48 bytes) + 1 resume address (8 bytes) = 56-byte frame, excluding the call-return address
-///   that sits above the frame (handled by `ret`).
+/// - Linux saves 6 SysV GPRs (48 bytes) + 1 resume address (8 bytes) = a 56-byte frame.
+/// - Windows additionally saves rsi/rdi and xmm6–xmm15 in a 16-byte-aligned area: 240 bytes total.
 /// - Uses a `push`/`pop` sequence rather than a contiguous store; the return address is implicit in the `ret`.
-/// - Entry trampoline address is stored at `X86_64_INITIAL_FRAME_RIP_OFFSET` (48) in the initial frame.
+/// - The entry trampoline offset is target-aware so the fresh frame matches the restore order.
+///
+/// # Windows (PE32+) TEB resync
+/// - On the Windows x86_64 target only, the switch additionally resyncs `NT_TIB::StackBase`
+///   (`gs:[0x08]`), `NT_TIB::StackLimit` (`gs:[0x10]`), and `TEB::DeallocationStack`
+///   (`gs:[0x1478]`) to whichever stack is about to run. The main thread's values are snapshotted
+///   into `_fiber_main_saved_*` globals when leaving it and restored when switching back.
+/// - `NT_TIB::FiberData` (`gs:[0x20]`) is intentionally not changed. elephc switches private
+///   runtime stacks manually and does not construct the opaque object expected by the Win32 Fiber
+///   and FLS APIs. Keeping the OS value untouched preserves an enclosing Win32 fiber identity and
+///   avoids falsely advertising an elephc `Fiber*` as a Win32 fiber control block.
+/// - Non-Windows targets are unaffected.
 ///
 /// Called from `emit_fiber_switch` when `emitter.target.arch == Arch::X86_64`.
 fn emit_x86_64(emitter: &mut Emitter) {
@@ -284,6 +340,22 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r14");                                            // preserve the third source context callee-saved scratch register
     emitter.instruction("push r15");                                            // preserve the fourth source context callee-saved scratch register
 
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("push rsi");                                        // preserve MS x64's fifth callee-saved general-purpose register
+        emitter.instruction("push rdi");                                        // preserve MS x64's sixth callee-saved general-purpose register
+        emitter.instruction("sub rsp, 168");                                    // reserve aligned XMM6–XMM15 state plus the 8-byte alignment pad
+        emitter.instruction("movaps XMMWORD PTR [rsp], xmm6");                  // preserve MS x64 callee-saved XMM6 in its aligned context slot
+        emitter.instruction("movaps XMMWORD PTR [rsp + 16], xmm7");             // preserve MS x64 callee-saved XMM7 in its aligned context slot
+        emitter.instruction("movaps XMMWORD PTR [rsp + 32], xmm8");             // preserve MS x64 callee-saved XMM8 in its aligned context slot
+        emitter.instruction("movaps XMMWORD PTR [rsp + 48], xmm9");             // preserve MS x64 callee-saved XMM9 in its aligned context slot
+        emitter.instruction("movaps XMMWORD PTR [rsp + 64], xmm10");            // preserve MS x64 callee-saved XMM10 in its aligned context slot
+        emitter.instruction("movaps XMMWORD PTR [rsp + 80], xmm11");            // preserve MS x64 callee-saved XMM11 in its aligned context slot
+        emitter.instruction("movaps XMMWORD PTR [rsp + 96], xmm12");            // preserve MS x64 callee-saved XMM12 in its aligned context slot
+        emitter.instruction("movaps XMMWORD PTR [rsp + 112], xmm13");           // preserve MS x64 callee-saved XMM13 in its aligned context slot
+        emitter.instruction("movaps XMMWORD PTR [rsp + 128], xmm14");           // preserve MS x64 callee-saved XMM14 in its aligned context slot
+        emitter.instruction("movaps XMMWORD PTR [rsp + 144], xmm15");           // preserve MS x64 callee-saved XMM15 in its aligned context slot
+    }
+
     // -- determine the source context (current fiber, or main if NULL) --
     abi::emit_load_symbol_to_reg(emitter, "r10", "_fiber_current", 0);          // r10 = source fiber* (NULL means we're suspending the main thread)
     emitter.instruction("mov r11, rsp");                                        // r11 = SP to remember as the source context's resume point
@@ -309,6 +381,26 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_call_frame", 0); // _fiber_main_saved_call_frame = main thread cleanup chain head
     abi::emit_load_symbol_to_reg(emitter, "r11", "_magic_set_guard_head", 0);   // r11 = main thread's current magic-set guard chain head
     abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_magic_set_guard", 0); // retain only main-stack guard nodes in the main context
+
+    // -- Windows: snapshot the main thread's TEB stack metadata so a later switch
+    //    back to main can restore it. FiberData stays untouched because this is a
+    //    manual stack switch, not a Win32 CreateFiber/SwitchToFiber transition. --
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov r11, QWORD PTR gs:[8]");                       // r11 = TEB StackBase (main stack high address)
+        abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_stack_base", 0); // remember main's StackBase across the fiber run
+        emitter.instruction("mov r11, QWORD PTR gs:[16]");                      // r11 = TEB StackLimit (main stack low address)
+        abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_stack_limit", 0); // remember main's StackLimit across the fiber run
+        emitter.instruction(&format!(                                           // load the main stack reservation base from the TEB
+            "mov r11, QWORD PTR gs:[{}]",
+            WINDOWS_X64_TEB_DEALLOCATION_STACK_OFFSET
+        ));
+        abi::emit_store_reg_to_symbol(
+            emitter,
+            "r11",
+            "_fiber_main_saved_deallocation_stack",
+            0,
+        );                                                                      // remember main's stack allocation base across the fiber run
+    }
 
     // -- swap _fiber_current to the target and load its context --
     emitter.label("__rt_fiber_switch_load_target");
@@ -337,10 +429,33 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_magic_set_guard_head", 0);  // detach any suspended fiber's stack-backed guard chain
     abi::emit_load_symbol_to_reg(emitter, "rax", STACK_LIMIT_MAIN_SYMBOL, 0);   // rax = the OS-thread call-stack floor measured at process start
     abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
+    if emitter.target.platform == Platform::Windows {
+        abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_stack_base", 0); // reload the original TEB.StackBase
+        emitter.instruction("mov QWORD PTR gs:[8], r11");                       // restore the main thread's TEB.StackBase
+        abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_stack_limit", 0); // reload the original TEB.StackLimit
+        emitter.instruction("mov QWORD PTR gs:[16], r11");                      // restore the main thread's TEB.StackLimit
+        abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_deallocation_stack", 0); // reload the original allocation base
+        emitter.instruction(&format!("mov QWORD PTR gs:[{}], r11", WINDOWS_X64_TEB_DEALLOCATION_STACK_OFFSET)); // restore the main thread's DeallocationStack
+    }
     abi::emit_load_symbol_to_reg(emitter, "rsp", "_fiber_main_saved_sp", 0);    // adopt the main thread's saved stack pointer
 
     // -- restore callee-saved state from the target stack and return into it --
     emitter.label("__rt_fiber_switch_restore");
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("movaps xmm6, XMMWORD PTR [rsp]");                  // restore MS x64 callee-saved XMM6 from the aligned context slot
+        emitter.instruction("movaps xmm7, XMMWORD PTR [rsp + 16]");             // restore MS x64 callee-saved XMM7 from the aligned context slot
+        emitter.instruction("movaps xmm8, XMMWORD PTR [rsp + 32]");             // restore MS x64 callee-saved XMM8 from the aligned context slot
+        emitter.instruction("movaps xmm9, XMMWORD PTR [rsp + 48]");             // restore MS x64 callee-saved XMM9 from the aligned context slot
+        emitter.instruction("movaps xmm10, XMMWORD PTR [rsp + 64]");            // restore MS x64 callee-saved XMM10 from the aligned context slot
+        emitter.instruction("movaps xmm11, XMMWORD PTR [rsp + 80]");            // restore MS x64 callee-saved XMM11 from the aligned context slot
+        emitter.instruction("movaps xmm12, XMMWORD PTR [rsp + 96]");            // restore MS x64 callee-saved XMM12 from the aligned context slot
+        emitter.instruction("movaps xmm13, XMMWORD PTR [rsp + 112]");           // restore MS x64 callee-saved XMM13 from the aligned context slot
+        emitter.instruction("movaps xmm14, XMMWORD PTR [rsp + 128]");           // restore MS x64 callee-saved XMM14 from the aligned context slot
+        emitter.instruction("movaps xmm15, XMMWORD PTR [rsp + 144]");           // restore MS x64 callee-saved XMM15 from the aligned context slot
+        emitter.instruction("add rsp, 168");                                    // release the aligned XMM save area and alignment pad
+        emitter.instruction("pop rdi");                                         // restore MS x64 callee-saved rdi
+        emitter.instruction("pop rsi");                                         // restore MS x64 callee-saved rsi
+    }
     emitter.instruction("pop r15");                                             // restore the fourth target callee-saved scratch register
     emitter.instruction("pop r14");                                             // restore the third target callee-saved scratch register
     emitter.instruction("pop r13");                                             // restore the second target callee-saved scratch register

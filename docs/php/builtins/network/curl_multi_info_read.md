@@ -2,13 +2,13 @@
 title: "curl_multi_info_read()"
 description: "Gets information about the current transfers."
 sidebar:
-  order: 708
+  order: 722
 ---
 
 ## curl_multi_info_read()
 
 ```php
-function curl_multi_info_read(CurlMultiHandle $multi_handle, ?int $queued_messages = null): mixed
+function curl_multi_info_read(CurlMultiHandle $multi_handle, ?int &$queued_messages = null): mixed
 ```
 
 Gets information about the current transfers.

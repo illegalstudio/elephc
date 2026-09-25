@@ -11,6 +11,7 @@
 //!   when no declared slot matches.
 
 use super::*;
+use crate::codegen::platform::Platform;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
@@ -986,23 +987,22 @@ fn emit_branch_if_stacked_runtime_hash_contains(
     name_offset: usize,
     found_label: &str,
 ) {
-    let target = ctx.emitter.target;
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, receiver_offset);
     abi::emit_load_from_address(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         object_reg,
         hash_offset,
     );
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 1),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
         name_offset,
     );
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         name_offset + 8,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
@@ -1016,25 +1016,24 @@ fn emit_magic_set_guard_push(
     name_offset: usize,
     node_offset: usize,
 ) {
-    let target = ctx.emitter.target;
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         receiver_offset,
     );
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 1),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
         name_offset,
     );
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         name_offset + 8,
     );
     abi::emit_temporary_stack_address(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 3),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 3),
         node_offset,
     );
     abi::emit_call_label(ctx.emitter, "__rt_magic_set_guard_push");
@@ -1044,7 +1043,7 @@ fn emit_magic_set_guard_push(
 fn emit_magic_set_guard_pop(ctx: &mut FunctionContext<'_>, node_offset: usize) {
     abi::emit_temporary_stack_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         node_offset,
     );
     abi::emit_call_label(ctx.emitter, "__rt_magic_set_guard_pop");
@@ -1068,7 +1067,7 @@ fn emit_magic_set_exception_handler(ctx: &mut FunctionContext<'_>, caught_label:
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
     abi::emit_temporary_stack_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_JMP_BUF_OFFSET,
     );
     ctx.emitter.bl_c("setjmp");
@@ -1443,26 +1442,79 @@ fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
     // Frame from here: [sp] Throwable out slot, [sp+16] value cell, then the caller's block.
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     let target = ctx.emitter.target;
-    let (arg0, arg1, arg2, arg3, arg4, arg5) = (
-        abi::int_arg_reg_name(target, 0),
-        abi::int_arg_reg_name(target, 1),
-        abi::int_arg_reg_name(target, 2),
-        abi::int_arg_reg_name(target, 3),
-        abi::int_arg_reg_name(target, 4),
-        abi::int_arg_reg_name(target, 5),
-    );
     // php decides visibility from the WRITING function's lexical class; a free function has none.
     let scope = ctx.function.lexical_class.clone().unwrap_or_default();
     let (scope_label, scope_len) = ctx.data.add_string(scope.as_bytes());
-    abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, object_stack_offset + 32);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, name_stack_offset + 32);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, arg2, name_stack_offset + 40);
-    // One block carries both: word 0 is the Throwable slot, word 2 the value cell pushed above.
-    abi::emit_temporary_stack_address(ctx.emitter, arg3, 0);
-    abi::emit_symbol_address(ctx.emitter, arg4, &scope_label);
-    abi::emit_load_int_immediate(ctx.emitter, arg5, scope_len as i64);
+    let external_overflow_bytes = if (target.platform, target.arch)
+        == (Platform::Windows, Arch::X86_64)
+    {
+        // Magician exports a Rust `extern "C"` function, so its PE call follows the native
+        // MSx64 ABI: four positional register slots followed by stack words.  This is unlike
+        // `__rt_hash_set`, which is hand-written SysV assembly even on PE targets.
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let original_frame_bytes = 32;
+        let staged_arg_bytes = 16;
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            result_reg,
+            object_stack_offset + original_frame_bytes,
+        );
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Pointer(None));
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            result_reg,
+            name_stack_offset + original_frame_bytes + staged_arg_bytes,
+        );
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Pointer(None));
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            result_reg,
+            name_stack_offset + original_frame_bytes + staged_arg_bytes * 2,
+        );
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
+        // The throwable/value block began at the pre-staging stack pointer, three slots above us.
+        abi::emit_temporary_stack_address(ctx.emitter, result_reg, staged_arg_bytes * 3);
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Pointer(None));
+        abi::emit_symbol_address(ctx.emitter, result_reg, &scope_label);
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Pointer(None));
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, scope_len as i64);
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
+        let assignments = abi::build_c_abi_outgoing_arg_assignments_for_target(
+            target,
+            &[
+                PhpType::Pointer(None),
+                PhpType::Pointer(None),
+                PhpType::Int,
+                PhpType::Pointer(None),
+                PhpType::Pointer(None),
+                PhpType::Int,
+            ],
+        );
+        abi::materialize_outgoing_c_abi_args(ctx.emitter, &assignments)
+    } else {
+        let (arg0, arg1, arg2, arg3, arg4, arg5) = (
+            abi::int_arg_reg_name(target, 0),
+            abi::int_arg_reg_name(target, 1),
+            abi::int_arg_reg_name(target, 2),
+            abi::int_arg_reg_name(target, 3),
+            abi::int_arg_reg_name(target, 4),
+            abi::int_arg_reg_name(target, 5),
+        );
+        abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, object_stack_offset + 32);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, name_stack_offset + 32);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, arg2, name_stack_offset + 40);
+        // One block carries both: word 0 is the Throwable slot, word 2 the value cell pushed above.
+        abi::emit_temporary_stack_address(ctx.emitter, arg3, 0);
+        abi::emit_symbol_address(ctx.emitter, arg4, &scope_label);
+        abi::emit_load_int_immediate(ctx.emitter, arg5, scope_len as i64);
+        0
+    };
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(target, external_overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, call_pad_bytes);
     let symbol = target.extern_symbol("__elephc_eval_dynamic_object_property_set");
     abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, call_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, external_overflow_bytes);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &plain);
     let result_reg = abi::int_result_reg(ctx.emitter);
     match target.arch {
@@ -1844,12 +1896,11 @@ fn lower_runtime_stacked_prop_unset(
     name_offset: usize,
     frame_bytes: usize,
 ) -> Result<()> {
-    let target = ctx.emitter.target;
     let object_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
     abi::emit_load_temporary_stack_slot(ctx.emitter, &object_reg, receiver_offset);
     abi::emit_load_from_address(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         &object_reg,
         hash_offset,
     );
@@ -1864,13 +1915,13 @@ fn lower_runtime_stacked_prop_unset(
     );
     abi::emit_reg_move(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         abi::int_result_reg(ctx.emitter),
     );
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), name_offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), name_offset);
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         name_offset + 8,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_unset");

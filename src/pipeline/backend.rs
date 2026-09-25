@@ -51,9 +51,21 @@ pub(super) struct BackendInputs<'a> {
 /// credential. Anyone on the host could read the key out of the deployed binary
 /// too, which is by design, but a sidecar sitting at 0644 next to it makes that
 /// a `cat` rather than a hex dump.
+#[cfg(unix)]
 fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
+/// Windows access control is ACL-based, not a portable Unix mode bit. Private
+/// sidecars are rejected by `artifact_io` before this is reached; retain a
+/// fail-closed fallback so a future writer cannot silently weaken that boundary.
+#[cfg(not(unix))]
+fn restrict_to_owner(_path: &std::path::Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "restricting a file to its owner requires an explicit ACL on this platform",
+    ))
 }
 
 /// Runs the backend half of a build: emit the assembly, assemble it, and link
@@ -220,6 +232,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     } else {
         generated_user_asm.asm
     };
+    // Target rewriting is part of the emitted artifact, not merely an assembler-side
+    // implementation detail. On Windows it replaces raw syscall sequences and adds PE unwind
+    // metadata, so the retained `.s`, source maps, and the object assembled below must all see
+    // the same final stream.
+    let user_asm = target.transform_assembly(&user_asm);
     timings.record_since("codegen", phase_started);
 
     crate::progress::phase("write-asm");

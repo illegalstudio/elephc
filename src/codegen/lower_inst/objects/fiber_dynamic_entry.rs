@@ -17,7 +17,7 @@ pub(super) fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         .get("Fiber")
         .map(|class| class.class_id)
         .unwrap_or(0);
-    let callable_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let callable_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     if let Some(callable) = inst.operands.first().copied() {
         let callable_ty = ctx.value_php_type(callable)?.codegen_repr();
         if callable_ty == PhpType::Str {
@@ -58,10 +58,10 @@ pub(super) fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     }
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
         class_id as i64,
     );
-    let wrapper_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let wrapper_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
     if let Some(wrapper) = fibers::wrapper_for_fiber_new(ctx.module, ctx.function, inst) {
         abi::emit_symbol_address(ctx.emitter, wrapper_arg, &wrapper.label);
     } else {

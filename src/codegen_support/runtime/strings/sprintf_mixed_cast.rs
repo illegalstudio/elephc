@@ -478,7 +478,7 @@ fn emit_sprintf_mixed_to_string_linux_x86_64(emitter: &mut Emitter, eval_bridge:
     emitter.instruction("mov r10, QWORD PTR [r10 + r8 * 8]");                   // resolve the concrete or inherited __toString symbol
     emitter.instruction("test r10, r10");                                       // did the class publish a conversion method?
     emitter.instruction("jz __rt_sprintf_mixed_string_eval_x64");               // a missing native hook may still be eval-backed
-    emitter.instruction("call r10");                                            // call __toString with the borrowed receiver in rdi
+    emitter.emit_platform_callback_call("r10", 1);                                // call generated __toString with the target ABI
     emitter.instruction("jmp __rt_sprintf_mixed_string_own_x64");               // stabilize and own the method result
 
     emitter.label("__rt_sprintf_mixed_string_eval_x64");

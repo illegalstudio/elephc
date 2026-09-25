@@ -2,7 +2,7 @@
 title: "curl_multi_exec() - internals"
 description: "Compiler internals for curl_multi_exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 705
+  order: 719
 ---
 
 ## `curl_multi_exec()` - internals
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function curl_multi_exec(CurlMultiHandle $multi_handle, int $still_running): int
+function curl_multi_exec(CurlMultiHandle $multi_handle, int &$still_running): int
 ```
 
 ## What the type checker enforces

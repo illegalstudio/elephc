@@ -103,7 +103,7 @@ pub fn emit_int_pow_checked(emitter: &mut Emitter) {
     emitter.instruction("scvtf d0, x5");                                        // pow base = (double) factor
     emitter.instruction("ldr x3, [sp, #16]");                                   // remaining exponent after the decrement
     emitter.instruction("scvtf d1, x3");                                        // pow exponent = (double) remaining
-    emitter.bl_c("pow");                                                        // pow(l2, i)
+    emitter.emit_call_c("pow");                                                 // pow(l2, i) through the target C ABI shim
     emitter.instruction("ldr d1, [sp, #24]");                                   // reload dval
     emitter.instruction("fmul d0, d0, d1");                                     // dval * pow(l2, i)
     emitter.instruction("b __rt_int_pow_checked_box_double");                   // box the promoted double
@@ -114,7 +114,7 @@ pub fn emit_int_pow_checked(emitter: &mut Emitter) {
     emitter.instruction("fmul d0, d0, d0");                                     // php-src's ZEND_SIGNED_MULTIPLY_LONG dval
     emitter.instruction("ldr x3, [sp, #16]");                                   // remaining exponent after the halving
     emitter.instruction("scvtf d1, x3");                                        // pow exponent = (double) remaining
-    emitter.bl_c("pow");                                                        // pow(dval, i)
+    emitter.emit_call_c("pow");                                                 // pow(dval, i) through the target C ABI shim
     emitter.instruction("ldr x4, [sp, #0]");                                    // reload the exact accumulator
     emitter.instruction("scvtf d1, x4");                                        // (double) accumulator
     emitter.instruction("fmul d0, d0, d1");                                     // l1 * pow(dval, i)
@@ -124,7 +124,7 @@ pub fn emit_int_pow_checked(emitter: &mut Emitter) {
     emitter.label("__rt_int_pow_checked_neg");
     emitter.instruction("scvtf d0, x0");                                        // (double) base
     emitter.instruction("scvtf d1, x1");                                        // (double) exponent
-    emitter.bl_c("pow");                                                        // pow(base, exp)
+    emitter.emit_call_c("pow");                                                 // pow(base, exp) through the target C ABI shim
     emitter.instruction("b __rt_int_pow_checked_box_double");                   // box the double result
 
     emitter.label("__rt_int_pow_checked_one");
@@ -218,7 +218,7 @@ fn emit_int_pow_checked_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movsd QWORD PTR [rbp - 32], xmm0");                    // save dval across the libc pow call
     emitter.instruction("cvtsi2sd xmm0, QWORD PTR [rbp - 16]");                 // pow base = (double) factor
     emitter.instruction("cvtsi2sd xmm1, QWORD PTR [rbp - 24]");                 // pow exponent = (double) remaining
-    emitter.bl_c("pow");                                                        // pow(l2, i)
+    emitter.emit_call_c("pow");                                                 // pow(l2, i) through the target C ABI shim
     emitter.instruction("mulsd xmm0, QWORD PTR [rbp - 32]");                    // dval * pow(l2, i)
     emitter.instruction("jmp __rt_int_pow_checked_box_double_x");               // box the promoted double
 
@@ -226,7 +226,7 @@ fn emit_int_pow_checked_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cvtsi2sd xmm0, QWORD PTR [rbp - 16]");                 // (double) factor before the overflowing square
     emitter.instruction("mulsd xmm0, xmm0");                                    // php-src's ZEND_SIGNED_MULTIPLY_LONG dval
     emitter.instruction("cvtsi2sd xmm1, QWORD PTR [rbp - 24]");                 // pow exponent = (double) remaining
-    emitter.bl_c("pow");                                                        // pow(dval, i)
+    emitter.emit_call_c("pow");                                                 // pow(dval, i) through the target C ABI shim
     emitter.instruction("cvtsi2sd xmm1, QWORD PTR [rbp - 8]");                  // (double) exact accumulator
     emitter.instruction("mulsd xmm0, xmm1");                                    // l1 * pow(dval, i)
     emitter.instruction("jmp __rt_int_pow_checked_box_double_x");               // box the promoted double
@@ -234,7 +234,7 @@ fn emit_int_pow_checked_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_int_pow_checked_neg_x");
     emitter.instruction("cvtsi2sd xmm0, rdi");                                  // (double) base
     emitter.instruction("cvtsi2sd xmm1, rsi");                                  // (double) exponent
-    emitter.bl_c("pow");                                                        // pow(base, exp)
+    emitter.emit_call_c("pow");                                                 // pow(base, exp) through the target C ABI shim
     emitter.instruction("jmp __rt_int_pow_checked_box_double_x");               // box the double result
 
     emitter.label("__rt_int_pow_checked_one_x");

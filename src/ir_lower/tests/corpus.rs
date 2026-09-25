@@ -124,6 +124,13 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         "web-session",
         "web-session-trans-sid",
         "web-session-upload",
+        // This fixture intentionally exercises PHP_WIN32-only GD capture
+        // functions. The host corpus is compiled for the detected host;
+        // Windows PE has a dedicated target test for this example.
+        "windows-image-capture",
+        // This fixture exercises PHP_WIN32-only SAPI helpers. It is compiled
+        // by the dedicated Windows PE example gate instead of the host corpus.
+        "windows-sapi",
         // OPcache introspection functions are provided by the pay-for-use OPcache
         // prelude, which the plain CLI-mode corpus lowering does not inject.
         "opcache_get_configuration",

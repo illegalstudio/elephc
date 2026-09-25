@@ -2,7 +2,7 @@
 title: "imagecreatefrombmp() - internals"
 description: "Compiler internals for imagecreatefrombmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 487
+  order: 491
 ---
 
 ## `imagecreatefrombmp()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3445](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3445) (`imagecreatefrombmp`)
+- **Lowering**: [`src/image_prelude.rs`:3516](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3516) (`imagecreatefrombmp`)
 - **Function symbol**: `imagecreatefrombmp()`
 
 

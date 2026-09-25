@@ -2,7 +2,7 @@
 title: "imagesetthickness() - internals"
 description: "Compiler internals for imagesetthickness(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 530
+  order: 536
 ---
 
 ## `imagesetthickness()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2635](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2635) (`imagesetthickness`)
+- **Lowering**: [`src/image_prelude.rs`:2706](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2706) (`imagesetthickness`)
 - **Function symbol**: `imagesetthickness()`
 
 

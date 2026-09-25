@@ -11,7 +11,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 
 use super::{SPL_DLL_ITER_INDEX_OFFSET, SPL_DLL_ITER_MODE_OFFSET, SPL_DLL_STORAGE_OFFSET};
 
@@ -2523,6 +2523,13 @@ fn emit_throw_exception_x86_64(
     message_symbol: &str,
     message_len: usize,
 ) {
+    if emitter.platform == Platform::Windows {
+        abi::emit_load_symbol_to_reg(emitter, "rdi", class_id_symbol, 0);       // pass the runtime exception class id
+        abi::emit_symbol_address(emitter, "rsi", message_symbol);               // pass the static exception message pointer
+        emitter.instruction(&format!("mov rdx, {}", message_len));              // pass the static exception message length
+        emitter.instruction("jmp __rt_throw_static_exception");                 // allocate and publish through an independent unwind frame
+        return;
+    }
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
     emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
     emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned

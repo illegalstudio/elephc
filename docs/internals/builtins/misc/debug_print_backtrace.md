@@ -2,7 +2,7 @@
 title: "debug_print_backtrace() - internals"
 description: "Compiler internals for debug_print_backtrace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 606
+  order: 613
 ---
 
 ## `debug_print_backtrace()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/debug_print_backtrace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/debug_print_backtrace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

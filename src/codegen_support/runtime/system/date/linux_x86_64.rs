@@ -68,7 +68,7 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, -1");                                         // check whether the builtin requested "current time" instead of an explicit timestamp
     emitter.instruction("jne __rt_date_have_time_linux_x86_64");                // skip the libc time() query when the caller already supplied an explicit Unix timestamp
     emitter.instruction("xor edi, edi");                                        // pass NULL to libc time() so it only returns the current Unix timestamp value
-    emitter.instruction("call time");                                           // query libc for the current Unix timestamp when PHP date() was called without an explicit timestamp
+    emitter.emit_call_c("time");                                                // query libc for the current Unix timestamp when PHP date() was called without an explicit timestamp
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // store the current Unix timestamp so the rest of the formatter can treat both code paths uniformly
 
     emitter.label("__rt_date_have_time_linux_x86_64");
@@ -77,10 +77,10 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the UTC-vs-local decomposition flag
     emitter.instruction("cmp rax, 0");                                          // check whether UTC decomposition was requested
     emitter.instruction("jne __rt_date_use_gmtime_linux_x86_64");               // nonzero flag → decompose as UTC
-    emitter.instruction("call localtime");                                      // decompose the Unix timestamp into libc's struct tm fields in the current local timezone
+    emitter.emit_call_c("localtime");                                           // decompose the Unix timestamp into libc's struct tm fields in the current local timezone
     emitter.instruction("jmp __rt_date_decomposed_linux_x86_64");               // skip the UTC decomposition path
     emitter.label("__rt_date_use_gmtime_linux_x86_64");
-    emitter.instruction("call gmtime");                                         // decompose the Unix timestamp into libc's struct tm fields in UTC
+    emitter.emit_call_c("gmtime");                                              // decompose the Unix timestamp into libc's struct tm fields in UTC
     emitter.label("__rt_date_decomposed_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the returned struct tm pointer so each format-token branch can reload the decomposed calendar fields
 

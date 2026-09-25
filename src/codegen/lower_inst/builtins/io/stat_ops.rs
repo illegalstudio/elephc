@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::codegen::platform::Platform;
 
 use super::wrapper_dispatch::{URL_STAT_FLAGS_LINK, URL_STAT_FLAGS_NOCACHE};
 
@@ -18,16 +19,17 @@ pub(crate) fn lower_getcwd(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
-/// Lowers `sys_get_temp_dir()` as the project's hardcoded `/tmp` string.
+/// Lowers `sys_get_temp_dir()` through the PHP-compatible target runtime helper.
 pub(crate) fn lower_sys_get_temp_dir(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "sys_get_temp_dir", 0)?;
-    let (label, len) = ctx.data.add_string(b"/tmp");
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
-    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    if ctx.emitter.target.platform == Platform::Windows {
+        abi::emit_call_label(ctx.emitter, "__rt_sys_get_temp_dir");             // resolve the live Win32 temporary directory through GetTempPathW
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_php_temp_dir");                 // resolve live TMPDIR, then the platform P_tmpdir fallback
+    }
     store_if_result(ctx, inst)
 }
 
@@ -278,4 +280,3 @@ pub(crate) fn lower_is_link(
 ) -> Result<()> {
     lower_unary_path_predicate(ctx, inst, "is_link", "__rt_is_link")
 }
-

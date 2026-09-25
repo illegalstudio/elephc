@@ -614,6 +614,8 @@ fn emit_static_method_call_x86_64(
 ) {
     let fail_label = "__elephc_eval_value_static_method_call_fail_x";
     let done_label = "__elephc_eval_value_static_method_call_done_x";
+    let scope_len_offset = abi::c_callback_stack_arg_offset(emitter.target, 6);
+    let context_offset = abi::c_callback_stack_arg_offset(emitter.target, 7);
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction(                                                        // reserve aligned slots plus a boundary exception handler
@@ -625,9 +627,9 @@ fn emit_static_method_call_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 32], r8");                        // save the boxed eval argument array
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the requested method-name length
     emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // save the active eval class-scope pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load the active eval class-scope length stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", scope_len_offset)); // load the active eval class-scope length stack argument
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the active eval class-scope length
-    emitter.instruction("mov rax, QWORD PTR [rbp + 24]");                       // load the active eval context stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", context_offset)); // load the active eval context stack argument
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the active eval context for callable descriptors
     emit_x86_64_static_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported static method matched the request
@@ -710,6 +712,7 @@ fn emit_method_call_x86_64(
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail_x";
     let done_label = "__elephc_eval_value_method_call_done_x";
+    let context_offset = abi::c_callback_stack_arg_offset(emitter.target, 6);
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction(&format!("sub rsp, {}", METHOD_HELPER_FRAME_SIZE));     // reserve aligned slots plus a boundary exception handler
@@ -718,7 +721,7 @@ fn emit_method_call_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed eval argument array
     emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // save the active eval class-scope length
-    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load the active eval context stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", context_offset)); // load the active eval context stack argument
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the active eval context for callable descriptors
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", fail_label));                         // null Mixed receiver cannot dispatch a method
@@ -1350,7 +1353,8 @@ fn emit_aarch64_validate_builtin_throwable_method_arg_count(
     fail_label: &str,
 ) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for Throwable method arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    let array_len_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     emitter.instruction("cmp x0, #0");                                          // compact Throwable methods accept no eval arguments
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject unsupported Throwable method arguments from eval
@@ -1363,7 +1367,8 @@ fn emit_x86_64_validate_builtin_throwable_method_arg_count(
     fail_label: &str,
 ) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the eval argument array for Throwable method arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    let array_len_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     emitter.instruction("test rax, rax");                                       // compact Throwable methods accept no eval arguments
     emitter.instruction(&format!("jne {}", fail_label));                        // reject unsupported Throwable method arguments from eval
@@ -1464,6 +1469,9 @@ fn emit_x86_64_method_bodies(
         let receiver_ty = PhpType::Object(slot.class_name.clone());
         let overflow_bytes =
             materialize_method_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
+        if slot.runtime_helper.is_some() {
+            abi::emit_windows_c_abi_registers_for_runtime_helper(emitter);
+        }
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -1625,7 +1633,8 @@ fn emit_aarch64_validate_method_arg_count(
     fail_label: &str,
 ) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    let array_len_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the method signature
@@ -1640,7 +1649,8 @@ fn emit_x86_64_validate_method_arg_count(
     fail_label: &str,
 ) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the eval argument array for arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    let array_len_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     abi::emit_load_int_immediate(emitter, "r10", slot.params.len() as i64);
     emitter.instruction("cmp rax, r10");                                        // compare supplied eval argument count with the method signature
@@ -1655,7 +1665,8 @@ fn emit_aarch64_validate_static_method_arg_count(
     fail_label: &str,
 ) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for static arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    let array_len_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the static method signature
@@ -1670,7 +1681,8 @@ fn emit_x86_64_validate_static_method_arg_count(
     fail_label: &str,
 ) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the eval argument array for static arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    let array_len_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     abi::emit_load_int_immediate(emitter, "r10", slot.params.len() as i64);
     emitter.instruction("cmp rax, r10");                                        // compare supplied eval argument count with the static method signature
@@ -2115,7 +2127,7 @@ fn emit_aarch64_cast_eval_object_arg(
     fail_label: &str,
 ) {
     let (label, len) = data.add_string(class_name.as_bytes());
-    let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+    let is_a_symbol = abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_is_a");
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object type validation
     abi::emit_symbol_address(emitter, "x1", &label);
     abi::emit_load_int_immediate(emitter, "x2", len as i64);
@@ -2285,7 +2297,7 @@ fn emit_x86_64_cast_eval_object_arg(
     fail_label: &str,
 ) {
     let (label, len) = data.add_string(class_name.as_bytes());
-    let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+    let is_a_symbol = abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_is_a");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for object type validation
     abi::emit_symbol_address(emitter, "rsi", &label);
     abi::emit_load_int_immediate(emitter, "rdx", len as i64);
@@ -2515,8 +2527,8 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
-    let symbol = module.target.extern_symbol(name);
-    emitter.label_global(&symbol);
+    debug_assert_eq!(module.target, emitter.target);
+    abi::emit_c_callback_entry(emitter, name);
 }
 
 #[cfg(test)]

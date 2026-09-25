@@ -2,7 +2,7 @@
 title: "imagecolorresolve()"
 description: "Returns the palette index of a color, allocating or approximating it."
 sidebar:
-  order: 474
+  order: 478
 ---
 
 ## imagecolorresolve()

@@ -2,7 +2,7 @@
 title: "_cairo_clamp8() - internals"
 description: "Compiler internals for _cairo_clamp8(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1087
+  order: 1103
 ---
 
 ## `_cairo_clamp8()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:12444](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L12444) (`_cairo_clamp8`)
+- **Lowering**: [`src/image_prelude.rs`:12515](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L12515) (`_cairo_clamp8`)
 - **Function symbol**: `_cairo_clamp8()`
 
 

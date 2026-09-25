@@ -11,109 +11,88 @@ use super::*;
 
 /// Calls `__elephc_eval_scope_set` for a boxed value identified by a static name.
 pub(super) fn emit_eval_scope_set_name(ctx: &mut FunctionContext<'_>, name: &str, flags: i64) {
-    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
-    load_eval_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
+    stage_eval_native_scope(ctx);
+    stage_eval_native_string(ctx, name);
+    stage_eval_native_stack_word(ctx, EVAL_TEMP_CELL_OFFSET);
+    stage_eval_native_int(ctx, flags);
+    stage_eval_native_stack_address(ctx, EVAL_RESULT_ERROR_OFFSET);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_scope_set",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+        ],
     );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        EVAL_TEMP_CELL_OFFSET,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        flags,
-    );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
 }
 
 /// Calls `__elephc_eval_scope_set` for one boxed global value.
 pub(super) fn emit_eval_global_scope_set(ctx: &mut FunctionContext<'_>, global: &EvalSyncGlobal, flags: i64) {
-    let (name_label, name_len) = ctx.data.add_string(global.name.as_bytes());
-    load_eval_global_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
+    stage_eval_native_global_scope(ctx);
+    stage_eval_native_string(ctx, &global.name);
+    stage_eval_native_stack_word(ctx, EVAL_TEMP_CELL_OFFSET);
+    stage_eval_native_int(ctx, flags);
+    stage_eval_native_stack_address(ctx, EVAL_RESULT_ERROR_OFFSET);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_scope_set",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+        ],
     );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        EVAL_TEMP_CELL_OFFSET,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        flags,
-    );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
 }
 
 /// Marks caller-scope global aliases in the materialized eval scope.
 pub(super) fn mark_eval_scope_global_aliases(ctx: &mut FunctionContext<'_>, aliases: &[EvalGlobalAlias]) {
     for alias in aliases {
-        let (name_label, name_len) = ctx.data.add_string(alias.name.as_bytes());
-        let (global_name_label, global_name_len) =
-            ctx.data.add_string(alias.global_name.as_bytes());
-        load_eval_scope_to_arg(ctx, 0);
-        let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-        abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 2),
-            name_len as i64,
+        stage_eval_native_scope(ctx);
+        stage_eval_native_string(ctx, &alias.name);
+        stage_eval_native_string(ctx, &alias.global_name);
+        emit_eval_native_c_abi_call(
+            ctx,
+            "__elephc_eval_scope_mark_global_alias",
+            &[
+                PhpType::Pointer(None),
+                PhpType::Pointer(None),
+                PhpType::Int,
+                PhpType::Pointer(None),
+                PhpType::Int,
+            ],
         );
-        let global_name_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-        abi::emit_symbol_address(ctx.emitter, global_name_arg, &global_name_label);
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 4),
-            global_name_len as i64,
-        );
-        let symbol = ctx
-            .emitter
-            .target
-            .extern_symbol("__elephc_eval_scope_mark_global_alias");
-        abi::emit_call_label(ctx.emitter, &symbol);
         emit_eval_status_check(ctx);
     }
 }
 
 /// Calls `__elephc_eval_scope_set` for one boxed local value.
 pub(super) fn emit_eval_scope_set(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal, flags: i64) {
-    let (name_label, name_len) = ctx.data.add_string(local.name.as_bytes());
-    load_eval_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
+    stage_eval_native_scope(ctx);
+    stage_eval_native_string(ctx, &local.name);
+    stage_eval_native_stack_word(ctx, EVAL_TEMP_CELL_OFFSET);
+    stage_eval_native_int(ctx, flags);
+    stage_eval_native_stack_address(ctx, EVAL_RESULT_ERROR_OFFSET);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_scope_set",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+        ],
     );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        EVAL_TEMP_CELL_OFFSET,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        flags,
-    );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
 }
 
@@ -189,61 +168,61 @@ pub(super) fn emit_eval_scope_get_name(
     out_cell_offset: usize,
     out_flags_offset: usize,
 ) {
-    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
-    load_eval_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
+    stage_eval_native_scope(ctx);
+    stage_eval_native_string(ctx, name);
+    stage_eval_native_stack_address(ctx, out_cell_offset);
+    stage_eval_native_stack_address(ctx, out_flags_offset);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_scope_get",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+        ],
     );
-    let out_cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_temporary_stack_address(ctx.emitter, out_cell_arg, out_cell_offset);
-    let out_flags_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_flags_arg, out_flags_offset);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_get");
-    abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
 }
 
 /// Calls `__elephc_eval_scope_get` and stores out cell/flags at the start of eval scratch.
 pub(super) fn emit_eval_scope_get(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) {
-    let (name_label, name_len) = ctx.data.add_string(local.name.as_bytes());
-    load_eval_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
+    stage_eval_native_scope(ctx);
+    stage_eval_native_string(ctx, &local.name);
+    stage_eval_native_stack_address(ctx, 0);
+    stage_eval_native_stack_address(ctx, 8);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_scope_get",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+        ],
     );
-    let out_cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_temporary_stack_address(ctx.emitter, out_cell_arg, 0);
-    let out_flags_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_flags_arg, 8);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_get");
-    abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
 }
 
 /// Calls `__elephc_eval_scope_get` for one program global.
 pub(super) fn emit_eval_global_scope_get(ctx: &mut FunctionContext<'_>, global: &EvalSyncGlobal) {
-    let (name_label, name_len) = ctx.data.add_string(global.name.as_bytes());
-    load_eval_global_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
+    stage_eval_native_global_scope(ctx);
+    stage_eval_native_string(ctx, &global.name);
+    stage_eval_native_stack_address(ctx, 0);
+    stage_eval_native_stack_address(ctx, 8);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_scope_get",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+        ],
     );
-    let out_cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_temporary_stack_address(ctx.emitter, out_cell_arg, 0);
-    let out_flags_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_flags_arg, 8);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_get");
-    abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
 }
 

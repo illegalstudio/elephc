@@ -2,7 +2,7 @@
 title: "imageline() - internals"
 description: "Compiler internals for imageline(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 517
+  order: 523
 ---
 
 ## `imageline()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2648](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2648) (`imageline`)
+- **Lowering**: [`src/image_prelude.rs`:2719](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2719) (`imageline`)
 - **Function symbol**: `imageline()`
 
 

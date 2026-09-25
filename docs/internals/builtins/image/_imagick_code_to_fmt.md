@@ -2,7 +2,7 @@
 title: "_imagick_code_to_fmt() - internals"
 description: "Compiler internals for _imagick_code_to_fmt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1095
+  order: 1111
 ---
 
 ## `_imagick_code_to_fmt()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:4434](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4434) (`_imagick_code_to_fmt`)
+- **Lowering**: [`src/image_prelude.rs`:4505](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4505) (`_imagick_code_to_fmt`)
 - **Function symbol**: `_imagick_code_to_fmt()`
 
 

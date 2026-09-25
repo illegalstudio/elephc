@@ -2,7 +2,7 @@
 title: "ini_restore() - internals"
 description: "Compiler internals for ini_restore(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 634
+  order: 641
 ---
 
 ## `ini_restore()` - internals

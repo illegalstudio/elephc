@@ -91,6 +91,11 @@ fn test_eval_function_exists_covers_static_builtin_catalog() {
         ) {
             continue;
         }
+        if target.platform == elephc::codegen::platform::Platform::Windows
+            && matches!(name, "lchgrp" | "lchown")
+        {
+            continue;
+        }
         writeln!(
             &mut fragment,
             "if (!function_exists(\"{name}\")) {{ echo \"{name},\"; }}"

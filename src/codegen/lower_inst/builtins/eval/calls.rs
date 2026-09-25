@@ -43,13 +43,22 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     mark_eval_scope_global_aliases(ctx, &global_aliases);
     set_eval_context_global_scope(ctx);
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;
-    load_eval_context_to_arg(ctx, 0);
-    load_eval_scope_to_arg(ctx, 1);
-    move_saved_eval_code_to_eval_args(ctx);
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_execute");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    stage_eval_native_context(ctx);
+    stage_eval_native_scope(ctx);
+    stage_eval_native_stack_word(ctx, EVAL_CODE_PTR_OFFSET);
+    stage_eval_native_stack_word_as(ctx, EVAL_CODE_LEN_OFFSET, PhpType::Int);
+    stage_eval_native_stack_address(ctx, 0);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_execute",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+        ],
+    );
     pop_eval_context_class_scope(ctx, pushed_class_scope);
     prepare_eval_scope_reload(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);

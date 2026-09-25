@@ -202,7 +202,9 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         "PHP_EXTRA_VERSION" => EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION),
         "PHP_SAPI" => EvalPredefinedConstant::String(EVAL_PHP_SAPI),
         "E_ALL" => EvalPredefinedConstant::Int(crate::eval_php_profile::eval_all_error_mask()),
-        "DIRECTORY_SEPARATOR" => EvalPredefinedConstant::String("/"),
+        "DIRECTORY_SEPARATOR" => EvalPredefinedConstant::String(eval_directory_separator()),
+        "PATH_SEPARATOR" => EvalPredefinedConstant::String(eval_path_separator()),
+        "PHP_EOL" => EvalPredefinedConstant::String(eval_php_eol()),
         // Platform `fnmatch(3)` flag values; the fnmatch/glob builtins interpret the same bits.
         "FNM_NOESCAPE" => EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE),
         "FNM_PATHNAME" => EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME),
@@ -211,7 +213,9 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
 }
 
 fn eval_php_os_name() -> &'static str {
-    if cfg!(target_os = "macos") {
+    if cfg!(target_os = "windows") {
+        "WINNT"
+    } else if cfg!(target_os = "macos") {
         "Darwin"
     } else {
         "Linux"
@@ -220,10 +224,39 @@ fn eval_php_os_name() -> &'static str {
 
 /// Returns the PHP OS-family constant for the host platform running the eval bridge.
 fn eval_php_os_family_name() -> &'static str {
-    if cfg!(target_os = "macos") {
+    if cfg!(target_os = "windows") {
+        "Windows"
+    } else if cfg!(target_os = "macos") {
         "Darwin"
     } else {
         "Linux"
+    }
+}
+
+/// Returns the eval bridge host's PHP-compatible directory separator.
+fn eval_directory_separator() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "\\"
+    } else {
+        "/"
+    }
+}
+
+/// Returns the eval bridge host's PHP-compatible path-list separator.
+fn eval_path_separator() -> &'static str {
+    if cfg!(target_os = "windows") {
+        ";"
+    } else {
+        ":"
+    }
+}
+
+/// Returns the eval bridge host's PHP-compatible end-of-line sequence.
+fn eval_php_eol() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "\r\n"
+    } else {
+        "\n"
     }
 }
 
@@ -322,5 +355,31 @@ mod curl_constant_fallback_tests {
             eval_predefined_constant_value("PHP_INT_MAX"),
             Some(EvalPredefinedConstant::Int(i64::MAX))
         ));
+    }
+
+    /// Target-dependent catalog constants must use the platform that hosts Magician.
+    #[test]
+    fn target_dependent_path_constants_follow_the_eval_host() {
+        let (directory, path, eol, family) = if cfg!(target_os = "windows") {
+            ("\\", ";", "\r\n", "Windows")
+        } else if cfg!(target_os = "macos") {
+            ("/", ":", "\n", "Darwin")
+        } else {
+            ("/", ":", "\n", "Linux")
+        };
+        for (name, expected) in [
+            ("DIRECTORY_SEPARATOR", directory),
+            ("PATH_SEPARATOR", path),
+            ("PHP_EOL", eol),
+            ("PHP_OS_FAMILY", family),
+        ] {
+            assert!(
+                matches!(
+                    eval_predefined_constant_value(name),
+                    Some(EvalPredefinedConstant::String(value)) if value == expected
+                ),
+                "{name} must resolve for the eval host"
+            );
+        }
     }
 }

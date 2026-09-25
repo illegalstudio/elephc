@@ -307,6 +307,7 @@ src/
 ├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
 ├── codegen/                   Active EIR to target assembly backend
 ├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
+├── windows_toolchain.rs       MinGW versus LLVM/LLD discovery, sysroot probing, and target command selection
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── runtime_cache/             Cache identity, lease/publication protocol, and pruning internals
 ├── synthetic_class.rs         Rust builders for compiler-injected synthetic PHP declarations
@@ -445,12 +446,13 @@ src/
 │   │   ├── registers.rs       Register names per architecture
 │   │   ├── symbols.rs         Symbol / literal address loading
 │   │   ├── tests.rs           ABI unit-test module root
-│   │   ├── tests/             ABI unit tests (`basics.rs`, `arguments.rs`, `symbols.rs`, `linux_x86_64.rs`)
+│   │   ├── tests/             ABI unit tests (`basics.rs`, `arguments.rs`, `callbacks.rs`, `symbols.rs`, `linux_x86_64.rs`)
 │   │   └── values.rs          Push/pop/load/store by PhpType
-│   ├── platform/              Target selection and Linux transforms
+│   ├── platform/              Target selection plus Linux and Windows assembly transforms
 │   │   ├── mod.rs             Platform module root, re-exports Platform / Arch / Target
 │   │   ├── target.rs          Platform / Arch / Target definitions and derived codegen properties
 │   │   ├── linux_transform.rs Linux post-emit transforms, syscall mapping, C-symbol remapping
+│   │   ├── windows_transform.rs PE/COFF syscall, import, and conservative SEH-unwind transformation
 │   │   └── toolchain.rs       Assembler / linker invocation
 │   ├── cdylib.rs              Owned-string boundary orchestration + lifecycle/status/error/memory symbols
 │   ├── cdylib/boundary.rs     Recoverable scalar wrappers + nested boundary/concat state
@@ -490,6 +492,7 @@ src/
 │       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (15 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
+│       ├── win32/             PE imports plus filesystem, network, encoding, error, time, compression, PCRE, and C-symbol shims (12 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
 │
 │

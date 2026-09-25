@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_translate() - internals"
 description: "Compiler internals for cairo_matrix_init_translate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 416
+  order: 420
 ---
 
 ## `cairo_matrix_init_translate()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13836](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13836) (`cairo_matrix_init_translate`)
+- **Lowering**: [`src/image_prelude.rs`:13907](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13907) (`cairo_matrix_init_translate`)
 - **Function symbol**: `cairo_matrix_init_translate()`
 
 

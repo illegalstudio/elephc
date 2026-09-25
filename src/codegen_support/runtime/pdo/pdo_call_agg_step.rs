@@ -429,7 +429,7 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg0 = descriptor pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // arg1 = boxed Mixed argument cell
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the uniform invoker pointer
-    emitter.instruction("call r10");                                            // invoke step(...) → OWNED boxed Mixed new accumulator in rax
+    emitter.emit_platform_callback_call("r10", 2);                                // call generated PDO aggregate callback with the target ABI
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the new accumulator
 
     // pop the firewall handler before any further runtime calls

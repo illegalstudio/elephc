@@ -9,7 +9,7 @@
 //! - Register choices must match the platform entry convention before normal PHP frame setup begins.
 //! - Process exits first escape an active cdylib boundary so embedding hosts survive fatal paths.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 
 use super::{
     emit_load_int_immediate, emit_store_reg_to_symbol, process_argc_reg, process_argv_reg,
@@ -24,6 +24,10 @@ use super::{
 /// the program has since changed. `getenv()` reads the live `environ` instead —
 /// see `runtime::system::getenv_all`.
 pub fn emit_store_process_args_to_globals(emitter: &mut Emitter) {
+    if (emitter.target.platform, emitter.target.arch) == (Platform::Windows, Arch::X86_64) {
+        emitter.instruction("call __rt_sys_init_argv");                         // populate globals from native Unicode Windows argv
+        return;
+    }
     emit_store_reg_to_symbol(emitter, process_argc_reg(emitter.target), "_global_argc", 0);
     emit_store_reg_to_symbol(emitter, process_argv_reg(emitter.target), "_global_argv", 0);
 }
@@ -74,24 +78,30 @@ pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
 pub fn emit_exit(emitter: &mut Emitter, code: u32) {
     emit_cdylib_exit_escape(emitter);
     match (emitter.target.platform, emitter.target.arch) {
-        (super::super::platform::Platform::MacOS, Arch::AArch64)
-        | (super::super::platform::Platform::Linux, Arch::AArch64) => {
+        (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
             emitter.instruction("bl __rt_ob_flush_all");                        // drain still-active output buffers to stdout before terminating
             emitter.instruction(&format!("mov x0, #{}", code));                 // load the requested process exit code into the ABI return register
             emitter.syscall(1);
         }
-        (super::super::platform::Platform::Linux, Arch::X86_64) => {
+        (Platform::Linux, Arch::X86_64) => {
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
             emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
             emitter.instruction(&format!("mov edi, {}", code));                 // load the requested process exit code into the SysV first-argument register
             emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
             emitter.instruction("syscall");                                     // terminate the process through the Linux x86_64 syscall ABI
         }
-        (super::super::platform::Platform::MacOS, Arch::X86_64) => {
+        (Platform::MacOS, Arch::X86_64) => {
             panic!("process exit emission is not implemented yet for target macos-x86_64");
         }
-        (super::super::platform::Platform::Windows, _) => {
-            panic!("Windows target is not yet supported (see issue #379)");
+        (Platform::Windows, Arch::X86_64) => {
+            emitter.instruction(&format!("mov ebx, {}", code));                 // preserve the requested exit code across the output-buffer flush
+            emitter.instruction("and rsp, -16");                                // realign the stack for runtime calls on this terminal path
+            emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers before terminating
+            emitter.instruction("mov rdi, rbx");                                // load the runtime shim's SysV-style integer argument register
+            emitter.instruction("call __rt_sys_exit");                          // terminate via the Win32 ExitProcess shim, which reads rdi (never returns)
+        }
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)");
         }
     }
 }
@@ -159,14 +169,13 @@ pub fn emit_cdylib_exit_escape(emitter: &mut Emitter) {
 /// This routine never returns to the calling code.
 pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
     match (emitter.target.platform, emitter.target.arch) {
-        (super::super::platform::Platform::MacOS, Arch::AArch64)
-        | (super::super::platform::Platform::Linux, Arch::AArch64) => {
+        (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
             emitter.instruction("mov x19, x0");                                 // stash the exit code in a callee-saved register (this path never returns)
             emitter.instruction("bl __rt_ob_flush_all");                        // drain still-active output buffers to stdout before terminating
             emitter.instruction("mov x0, x19");                                 // restore the exit code into the syscall argument register
             emitter.syscall(1);
         }
-        (super::super::platform::Platform::Linux, Arch::X86_64) => {
+        (Platform::Linux, Arch::X86_64) => {
             emitter.instruction("mov rbx, rax");                                // stash the exit code in a callee-saved register (this path never returns)
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
             emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
@@ -174,11 +183,18 @@ pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
             emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
             emitter.instruction("syscall");                                     // terminate the process with the bridge return code
         }
-        (super::super::platform::Platform::MacOS, Arch::X86_64) => {
+        (Platform::MacOS, Arch::X86_64) => {
             panic!("process exit emission is not implemented yet for target macos-x86_64");
         }
-        (super::super::platform::Platform::Windows, _) => {
-            panic!("Windows target is not yet supported (see issue #379)");
+        (Platform::Windows, Arch::X86_64) => {
+            emitter.instruction("mov rbx, rax");                                // preserve the bridge return value across the output-buffer flush
+            emitter.instruction("and rsp, -16");                                // realign the stack for runtime calls on this terminal path
+            emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers before terminating
+            emitter.instruction("mov rdi, rbx");                                // load the runtime shim's SysV-style integer argument register
+            emitter.instruction("call __rt_sys_exit");                          // terminate via the Win32 ExitProcess shim, which reads rdi (never returns)
+        }
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)");
         }
     }
 }

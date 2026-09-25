@@ -257,7 +257,7 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
         abi::emit_push_reg(ctx.emitter, pointer_reg);
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             crate::codegen_support::runtime::reference_cells::payload_tag(&PhpType::Mixed),
         );
         abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
@@ -853,7 +853,7 @@ pub(super) fn coerce_ref_cell_store_value(
                 // Save the Mixed pointer on the stack, narrow to int, then
                 // release the Mixed box to avoid leaking the checked-arithmetic temporary.
                 move_int_result_to_first_arg(ctx);
-                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
                 let result_reg = abi::int_result_reg(ctx.emitter);
                 // Stack layout after pushes: [result_placeholder | saved_mixed_ptr]
                 abi::emit_push_reg(ctx.emitter, result_reg); // placeholder for int result
@@ -879,7 +879,7 @@ pub(super) fn coerce_ref_cell_store_value(
             }
             PhpType::Bool => {
                 move_int_result_to_first_arg(ctx);
-                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
                 let result_reg = abi::int_result_reg(ctx.emitter);
                 abi::emit_push_reg(ctx.emitter, result_reg);
                 abi::emit_push_reg(ctx.emitter, arg_reg);
@@ -901,7 +901,7 @@ pub(super) fn coerce_ref_cell_store_value(
             }
             PhpType::Float => {
                 move_int_result_to_first_arg(ctx);
-                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
                 let int_reg = abi::int_result_reg(ctx.emitter);
                 abi::emit_push_reg(ctx.emitter, int_reg); // placeholder for float result
                 abi::emit_push_reg(ctx.emitter, arg_reg); // save Mixed pointer

@@ -55,9 +55,9 @@ fn emit_release(emitter: &mut Emitter, kind: &str) {
     let done = format!("__rt_core_{kind}_handler_release_done");
     abi::emit_load_from_address(emitter, result, stack, 24);
     abi::emit_branch_if_int_result_zero(emitter, &done);
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
-    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(emitter.target, 1), stack, 16);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 2), PENDING);
+    abi::emit_reg_move(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), result);
+    abi::emit_load_from_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), stack, 16);
+    abi::emit_frame_slot_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 2), PENDING);
     abi::emit_call_label(emitter, "__rt_cleanup_invoke");
     emitter.label(&done);
     emit_finish_cleanup(emitter, &format!("__rt_core_{kind}_handler_release_return"), 64);

@@ -460,7 +460,9 @@ return get_extension_funcs("missing");"#,
 
     assert_eq!(
         values.output,
-        "7:7:7:9:8:float:catalog:function:flag:62:1:2:3:files"
+        // Eval intentionally groups every supported catalog constant under its
+        // coarse `Core` category, including the Standard `PATH_SEPARATOR` entry.
+        "7:7:7:9:8:float:extra:function:flag:62:1:2:3:files"
     );
     assert_eq!(values.get(result), FakeValue::Bool(false));
 }

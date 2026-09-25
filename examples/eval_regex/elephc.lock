@@ -42,3 +42,9 @@ name = "linux-x86_64"
 archives = ["lib/libelephc_pcre2_shim.a", "lib/libpcre2-posix.a", "lib/libpcre2-8.a"]
 system_libraries = []
 frameworks = []
+
+[[package.target]]
+name = "windows-x86_64"
+archives = ["lib/libelephc_pcre2_shim.a", "lib/libpcre2-posix.a", "lib/libpcre2-8.a"]
+system_libraries = []
+frameworks = []

@@ -514,7 +514,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // reload class id, clobbered across the boxing call
     emitter.instruction("lea r12, [rip + _class_offsetset_ptrs]");              // dense ArrayAccess::offsetSet table
     emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // re-resolve offsetSet for the same class
-    emitter.instruction("call r12");                                            // write through PHP's ArrayAccess::offsetSet
+    emitter.emit_platform_callback_call("r12", 3);                                // call generated ArrayAccess::offsetSet with the target ABI
     // A PHP method BORROWS both arguments, where the SPL helpers CONSUME the value. This frame
     // therefore releases the offset it boxed and the value its own contract says it consumed.
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed offset

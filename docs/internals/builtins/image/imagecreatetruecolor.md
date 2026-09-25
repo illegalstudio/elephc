@@ -2,7 +2,7 @@
 title: "imagecreatetruecolor() - internals"
 description: "Compiler internals for imagecreatetruecolor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 494
+  order: 498
 ---
 
 ## `imagecreatetruecolor()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2197](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2197) (`imagecreatetruecolor`)
+- **Lowering**: [`src/image_prelude.rs`:2223](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2223) (`imagecreatetruecolor`)
 - **Function symbol**: `imagecreatetruecolor()`
 
 

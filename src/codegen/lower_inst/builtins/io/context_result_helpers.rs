@@ -26,9 +26,24 @@ pub(super) fn lower_stream_context_set_option_4(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    let context = expect_operand(inst, 0)?;
     let wrapper = expect_operand(inst, 1)?;
     let option = expect_operand(inst, 2)?;
     let value = expect_operand(inst, 3)?;
+    ctx.load_value_to_result(context)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_stream_context_lookup");
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
+            ctx.emitter.instruction("str x0, [x9]");                            // select this resource's options as the active mutation target
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the context id to the registry lookup
+            abi::emit_call_label(ctx.emitter, "__rt_stream_context_lookup");
+            abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_stream_context_options", 0);
+        }
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_to_result(ctx, wrapper, "stream_context_set_option wrapper")?;
@@ -54,6 +69,18 @@ pub(super) fn lower_stream_context_set_option_4(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_context_set_option_4");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
+            ctx.emitter.instruction("ldr x1, [x9]");                            // publish the possibly-grown options hash back to this resource
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rsi", "_stream_context_options", 0);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_context_update");
     Ok(())
 }
 
@@ -275,4 +302,3 @@ pub(super) fn php_fd_stream(path: &str) -> Option<i64> {
 pub(super) fn is_php_memory_stream(path: &str) -> bool {
     path == "php://memory" || path == "php://temp" || path.starts_with("php://temp/")
 }
-

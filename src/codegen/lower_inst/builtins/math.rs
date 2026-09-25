@@ -29,7 +29,7 @@ pub(crate) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
 pub(crate) use libm::{
     lower_atan2, lower_deg2rad, lower_hypot, lower_log, lower_rad2deg, lower_unary_libm,
 };
-pub(crate) use random::{lower_rand, lower_random_int};
+pub(crate) use random::{lower_rand, lower_random_bytes, lower_random_int};
 
 const CLAMP_MIN_NAN_MESSAGE: &str = "clamp(): Argument #2 ($min) must not be NAN";
 const CLAMP_MAX_NAN_MESSAGE: &str = "clamp(): Argument #3 ($max) must not be NAN";
@@ -262,10 +262,10 @@ pub(crate) fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.adrp("x9", &label);                                     // load the page address that contains the M_PI floating constant
-            ctx.emitter.ldr_lo12("d0", "x9", &label);                          // load the M_PI floating constant into the floating result register
+            ctx.emitter.ldr_lo12("d0", "x9", &label);                           // load the M_PI floating constant into the floating result register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the M_PI floating constant into the floating result register
                 &format!("movsd xmm0, QWORD PTR [rip + {}]", label)
             );                                                                  // load the M_PI floating constant into the floating result register
         }
@@ -676,18 +676,18 @@ fn emit_throw_value_error_x86_64(
     ctx.emitter.instruction("sub rsp, 16");                                     // keep the nested heap allocation call 16-byte aligned
     ctx.emitter.instruction("mov rax, 56");                                     // request Throwable payload storage for the clamp ValueError
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the ValueError object payload
-    ctx.emitter.instruction(
+    ctx.emitter.instruction(                                                    // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
         &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
     );                                                                          // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the allocation header as a runtime object
     ctx.emitter.instruction("call __rt_object_handle_acquire");                 // bind the new object to its PHP object handle
-    ctx.emitter.instruction(
+    ctx.emitter.instruction(                                                    // load ValueError's runtime class id for this program
         "mov r10, QWORD PTR [rip + _spl_value_error_class_id]"
     );                                                                          // load ValueError's runtime class id for this program
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store the ValueError class id in the Throwable header
     ctx.emitter.instruction(&format!("lea r10, [rip + {}]", message_symbol));   // materialize the static ValueError message pointer
     ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // store the static ValueError message pointer
-    ctx.emitter.instruction(
+    ctx.emitter.instruction(                                                    // store the exception message length
         &format!("mov QWORD PTR [rax + 16], {}", message_len)
     );                                                                          // store the exception message length
     ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // store the default zero exception code
@@ -709,7 +709,7 @@ fn load_float_literal_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, value: f6
             ctx.emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));    // load the floating-point comparison constant through the symbol scratch register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the floating-point comparison constant through the symbol scratch register
                 &format!("movsd {}, QWORD PTR [{}]", reg, scratch)
             );                                                                  // load the floating-point comparison constant through the symbol scratch register
         }
@@ -732,7 +732,7 @@ fn lower_float_rounding_builtin(
             ctx.emitter.instruction(&format!("{} d0, d0", aarch64_op));         // round the floating-point argument with the builtin's direction
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // round the floating-point argument with the builtin's direction
                 &format!("roundsd xmm0, xmm0, {}", x86_round_mode)
             );                                                                  // round the floating-point argument with the builtin's direction
         }
@@ -740,57 +740,54 @@ fn lower_float_rounding_builtin(
     store_if_result(ctx, inst)
 }
 
-/// Rounds the loaded float to the nearest integer using PHP's ties-away behavior.
+/// Rounds the loaded float to PHP's `round($x)` (implicit `precision = 0`) by
+/// delegating to the shared `__rt_php_round` port of php-src's
+/// `_php_math_round` (`PHP_ROUND_HALF_UP` mode) — see
+/// `crate::codegen_support::runtime::strings::php_round` for why the naive
+/// hardware ties-away rounding this used to emit (`frinta`/libc `round()`)
+/// diverges from PHP on inputs like `1.005` whose binary representation
+/// already carries error before any rounding happens.
 fn emit_round_loaded_float(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("frinta d0, d0");                           // round to nearest with ties away from zero
+            ctx.emitter.instruction("mov x1, #0");                              // places = 0 (round($x) has no precision argument)
         }
         Arch::X86_64 => {
-            ctx.emitter.bl_c("round");
+            ctx.emitter.instruction("xor edi, edi");                            // places = 0 (round($x) has no precision argument)
         }
     }
+    abi::emit_call_label(ctx.emitter, "__rt_php_round");
 }
 
-/// Rounds the loaded float after applying the optional decimal precision.
+/// Rounds the loaded float at the requested decimal precision via the shared
+/// `__rt_php_round` port of php-src's `_php_math_round` (`PHP_ROUND_HALF_UP`
+/// mode), replacing the naive "multiply by 10**places, round, divide back"
+/// scaling this used to emit — that scaling has no defense against the
+/// binary-representation error the `10**places` multiplication introduces
+/// (e.g. `round(1.005, 2)` scaled naively rounds `100.49999999999999` to
+/// `100`, giving `1.0` instead of PHP's `1.01`); `__rt_php_round` carries
+/// php-src's pre-correction step that detects and fixes exactly this case.
 fn emit_round_loaded_float_with_precision(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str d0, [sp, #-16]!");                     // preserve the round() value while computing the precision multiplier
+            ctx.emitter.instruction("str d0, [sp, #-16]!");                     // preserve the value while evaluating the precision operand
             let precision = expect_operand(inst, 1)?;
             load_precision_as_int(ctx, precision, "round")?;
-            ctx.emitter.instruction("scvtf d1, x0");                            // convert the precision to a floating exponent for pow()
-            ctx.emitter.instruction("str d1, [sp, #-16]!");                     // preserve the exponent while materializing the pow() base
-            ctx.emitter.instruction("fmov d0, #10.0");                          // materialize 10.0 as the precision multiplier base
-            ctx.emitter.instruction("ldr d1, [sp], #16");                       // restore the exponent into the second pow() argument
-            ctx.emitter.bl_c("pow");
-            ctx.emitter.instruction("ldr d1, [sp], #16");                       // restore the original value after pow() returns the multiplier
-            ctx.emitter.instruction("fmul d1, d1, d0");                         // scale the original value by the precision multiplier
-            ctx.emitter.instruction("str d0, [sp, #-16]!");                     // preserve the multiplier for the final division
-            ctx.emitter.instruction("frinta d0, d1");                           // round the scaled value with ties away from zero
-            ctx.emitter.instruction("ldr d1, [sp], #16");                       // restore the precision multiplier for rescaling
-            ctx.emitter.instruction("fdiv d0, d0, d1");                         // scale the rounded value back to the requested precision
+            ctx.emitter.instruction("mov x1, x0");                              // places = the requested precision
+            ctx.emitter.instruction("ldr d0, [sp], #16");                       // restore the original value
         }
         Arch::X86_64 => {
             abi::emit_push_float_reg(ctx.emitter, "xmm0");
             let precision = expect_operand(inst, 1)?;
             load_precision_as_int(ctx, precision, "round")?;
-            ctx.emitter.instruction("cvtsi2sd xmm1, rax");                      // convert the precision to a floating exponent for pow()
-            ctx.emitter.instruction("mov rax, 0x4024000000000000");             // materialize the IEEE-754 payload for 10.0
-            ctx.emitter.instruction("movq xmm0, rax");                          // move 10.0 into the first pow() argument
-            ctx.emitter.bl_c("pow");
-            abi::emit_pop_float_reg(ctx.emitter, "xmm1");
-            ctx.emitter.instruction("mulsd xmm1, xmm0");                        // scale the original value by the precision multiplier
-            abi::emit_push_float_reg(ctx.emitter, "xmm0");
-            ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the scaled value into the round() argument register
-            ctx.emitter.bl_c("round");
-            abi::emit_pop_float_reg(ctx.emitter, "xmm1");
-            ctx.emitter.instruction("divsd xmm0, xmm1");                        // scale the rounded value back to the requested precision
+            ctx.emitter.instruction("mov rdi, rax");                            // places = the requested precision
+            abi::emit_pop_float_reg(ctx.emitter, "xmm0");
         }
     }
+    abi::emit_call_label(ctx.emitter, "__rt_php_round");
     Ok(())
 }
 
@@ -834,12 +831,12 @@ fn emit_int_abs_for_result(
     let done_label = ctx.next_label("abs_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // negative inputs need the overflow-checked negation
                 &format!("tbnz {}, #63, {}", result_reg, negative_label)
             );                                                                  // negative inputs need the overflow-checked negation
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // inspect the sign of the integer operand
                 &format!("test {}, {}", result_reg, result_reg)
             );                                                                  // inspect the sign of the integer operand
             ctx.emitter.instruction(&format!("js {}", negative_label));         // negative inputs need the overflow-checked negation

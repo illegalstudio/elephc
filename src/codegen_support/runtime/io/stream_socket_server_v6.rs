@@ -16,7 +16,7 @@
 //!   `TIME_WAIT`.
 //! - Returns the listening descriptor, or -1 on any failure.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
 /// stream_socket_server_v6: open a bound IPv6 socket on
 /// `[scheme://]?[ipv6_literal]:port`. The socket type is passed in by the
@@ -167,7 +167,7 @@ pub fn emit_stream_socket_server_v6(emitter: &mut Emitter) {
         let (sol_socket, so_reuseaddr): (i64, i64) = match plat {
             Platform::MacOS => (0xffff, 4),
             Platform::Linux => (1, 2),
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => (1, 15),
         };
         emitter.instruction("mov w11, #1");                                     // SO_REUSEADDR option value = 1
         emitter.instruction("str w11, [sp, #84]");                              // stash the option value in stack scratch
@@ -206,6 +206,15 @@ pub fn emit_stream_socket_server_v6(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sssv6_fail_close");                             // listen() failed
 
     emitter.label("__rt_sssv6_listen_ok");
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload listener state after the socket helper call
+    emitter.instruction("str x9, [sp, #120]");                                  // preserve listener inputs across socket helper calls
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_stream_server_context", 0);
+    abi::emit_call_label(emitter, "__rt_stream_context_lookup");
+    emitter.instruction("mov x1, x0");                                          // prepare listener syscall arguments
+    emitter.instruction("ldr x0, [sp, #120]");                                  // reload listener state after the socket helper call
+    abi::emit_load_symbol_to_reg(emitter, "x2", "_stream_server_flags", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x3", "_stream_server_tls_method", 0);
+    abi::emit_call_label(emitter, "__rt_stream_listener_register");
     emitter.instruction("ldr x0, [sp, #32]");                                   // return the listening descriptor
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // release the frame
@@ -387,6 +396,15 @@ fn emit_stream_socket_server_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("js __rt_sssv6_fail_close_x86");                        // listen() failed
 
     emitter.label("__rt_sssv6_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload listener state after the socket helper call
+    emitter.instruction("mov QWORD PTR [rbp - 128], rax");                      // prepare listener syscall arguments
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_server_context", 0);
+    emitter.instruction("call __rt_stream_context_lookup");                     // look up the stream context for this descriptor
+    emitter.instruction("mov rsi, rax");                                        // prepare listener syscall arguments
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 128]");                      // prepare listener syscall arguments
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_stream_server_flags", 0);
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_stream_server_tls_method", 0);
+    emitter.instruction("call __rt_stream_listener_register");                  // register the bound listener with its stream context
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the bound descriptor
     emitter.instruction("add rsp, 128");                                        // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

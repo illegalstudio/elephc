@@ -71,7 +71,7 @@ pub fn emit_mixed_numeric_pow(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_cast_float");                            // coerce the exponent to a double
     emitter.instruction("fmov d1, d0");                                         // place the exponent in the second libc pow argument
     emitter.instruction("ldr d0, [sp, #24]");                                   // place the base in the first libc pow argument
-    emitter.bl_c("pow");                                                        // pow(base, exponent)
+    emitter.emit_call_c("pow");                                                 // pow(base, exponent) through the target C ABI shim
     emitter.instruction("fmov x1, d0");                                         // move the double bits into the Mixed helper payload register
     emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
@@ -124,7 +124,7 @@ fn emit_mixed_numeric_pow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_cast_float");                          // coerce the exponent to a double
     emitter.instruction("movapd xmm1, xmm0");                                   // place the exponent in the second libc pow argument
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 32]");                    // place the base in the first libc pow argument
-    emitter.bl_c("pow");                                                        // pow(base, exponent)
+    emitter.emit_call_c("pow");                                                 // pow(base, exponent) through the target C ABI shim
     emitter.instruction("movq rdi, xmm0");                                      // move the double bits into the Mixed helper payload register
     emitter.instruction("xor rsi, rsi");                                        // double payloads do not use a high word
     emitter.instruction("mov rax, 2");                                          // runtime tag 2 = double

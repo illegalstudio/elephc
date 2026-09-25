@@ -98,6 +98,9 @@ fn requirement_json(requirement: BuiltinRequirement) -> Value {
         BuiltinRequirement::MacOsLibrary(name) => {
             json!({"kind": "macos_library", "name": name})
         }
+        BuiltinRequirement::WindowsLibrary(name) => {
+            json!({"kind": "windows_library", "name": name})
+        }
         BuiltinRequirement::RuntimeFeature(name) => {
             json!({"kind": "runtime_feature", "name": name})
         }
@@ -171,11 +174,18 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
                 vec!["macos-aarch64", "linux-aarch64", "linux-x86_64"],
             )
         }
+        crate::builtins::semantics::BuiltinTargetSupport::UnixHostOnly => (
+            "unix_host_only",
+            vec!["macos-aarch64", "linux-aarch64", "linux-x86_64"],
+        ),
         crate::builtins::semantics::BuiltinTargetSupport::Linux => {
             ("linux", vec!["linux-aarch64", "linux-x86_64"])
         }
         crate::builtins::semantics::BuiltinTargetSupport::MacOs => {
             ("macos", vec!["macos-aarch64"])
+        }
+        crate::builtins::semantics::BuiltinTargetSupport::WindowsOnly => {
+            ("windows", vec!["windows-x86_64"])
         }
     };
     let runtime_functions = match semantics.runtime_functions {
@@ -188,6 +198,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",
         BuiltinArgumentLowering::JsonDecode => "json_decode",
+        BuiltinArgumentLowering::ProcOpen => "proc_open",
         BuiltinArgumentLowering::Getenv => "getenv",
         BuiltinArgumentLowering::PcntlPreserveOmitted => "pcntl_preserve_omitted",
         BuiltinArgumentLowering::PregReplaceCallback => "preg_replace_callback",
@@ -392,7 +403,7 @@ mod tests {
                 .as_str()
                 .expect("PCNTL target support kind");
             let expected = match support_kind {
-                "host_only" => {
+                "host_only" | "unix_host_only" => {
                     serde_json::json!(["macos-aarch64", "linux-aarch64", "linux-x86_64"])
                 }
                 "linux" => serde_json::json!(["linux-aarch64", "linux-x86_64"]),

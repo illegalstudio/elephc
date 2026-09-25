@@ -282,7 +282,7 @@ fn emit_destructors_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_gc_destructors_return");                       // allow sweeping after the final root analysis
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // count one pointer slot per unpinned candidate
     emitter.instruction("lea rdi, [rdi * 8 + 16]");                             // include the chunk link and node count
-    emitter.bl_c("malloc");                                                     // allocate outside the managed PHP heap
+    emitter.emit_call_c("malloc");                                              // allocate outside the managed PHP heap through the Windows ABI shim
     emitter.instruction("test rax, rax");                                       // verify destructor data can be protected
     emitter.instruction("jz __rt_heap_allocation_failed");                      // use the shared allocation-failure entry across emitter scopes
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the chunk across callbacks
@@ -362,7 +362,7 @@ fn emit_unpin_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_gc_drop_pins_done");                           // finish with empty collector pin state
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // retain the next chunk before freeing this allocation
     emitter.instruction("mov QWORD PTR [r10], r11");                            // detach the chunk from collector state
-    emitter.bl_c("free");                                                       // release the independent snapshot allocation
+    emitter.emit_call_c("free");                                                // release the independent snapshot allocation through the Windows ABI shim
     emitter.instruction("jmp __rt_gc_drop_pin_chunk");                          // dispose all chunks without dereferencing reclaimed PHP pointers
     emitter.label("__rt_gc_drop_pins_done");
     emitter.instruction("pop rbp");                                             // restore the collector's frame
@@ -409,5 +409,40 @@ mod tests {
             assert!(assembly.find("__rt_gc_drop_pins").unwrap()
                 < assembly.find("__rt_gc_rethrow_pending").unwrap(), "{name}");
         }
+    }
+
+    /// Windows snapshot allocation and disposal enter msvcrt through SysV-to-MSx64 shims.
+    #[test]
+    fn windows_gc_destructor_snapshot_allocators_use_c_abi_shims() {
+        let target = Target::parse("windows-x86_64").unwrap();
+        let mut emitter = Emitter::new(target);
+        emit_gc_destructors(&mut emitter);
+        let assembly = emitter.output();
+
+        let destructors = assembly
+            .split("__rt_gc_destructors:\n")
+            .nth(1)
+            .unwrap()
+            .split("__rt_gc_unpin_reachable:\n")
+            .next()
+            .unwrap();
+        assert!(
+            destructors.contains("call __rt_sys_malloc"),
+            "Windows GC destructor snapshots must allocate through the C ABI shim",
+        );
+        assert!(
+            !destructors.contains("call malloc"),
+            "Windows GC destructor snapshots must not call msvcrt malloc with SysV arguments",
+        );
+
+        let drop_pins = assembly.split("__rt_gc_drop_pins:\n").nth(1).unwrap();
+        assert!(
+            drop_pins.contains("call __rt_sys_free"),
+            "Windows GC destructor snapshots must free through the C ABI shim",
+        );
+        assert!(
+            !drop_pins.contains("call free"),
+            "Windows GC destructor snapshots must not call msvcrt free with SysV arguments",
+        );
     }
 }

@@ -100,7 +100,7 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.instruction("lsr x10, x9, #60");                                    // reject slot counts whose 16-byte size would overflow
     emitter.instruction("cbnz x10, __rt_preg_split_malloc_fail");               // free the handle instead of allocating a wrapped size
     emitter.instruction("lsl x0, x9, #4");                                      // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
+    emitter.emit_call_c("malloc");                                                     // allocate the fixed offset-pair vector
     emitter.instruction("cbz x0, __rt_preg_split_malloc_fail");                 // allocation failure frees the handle and returns an empty array
     emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
 
@@ -220,7 +220,7 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
+    emitter.emit_call_c("free");                                                       // release the reusable offset-pair vector
     emitter.instruction(&format!("ldr x0, [sp, #{}]", array_ptr_off));          // reload result array pointer
     emitter.instruction("b __rt_preg_split_ret");                               // return through common epilogue
 
@@ -531,7 +531,7 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r10, 60");                                         // detect a wrapped 16-byte pair-vector size
     emitter.instruction("jnz __rt_preg_split_malloc_fail_linux_x86_64");        // free the handle instead of allocating a wrapped size
     emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
+    emitter.emit_call_c("malloc");                                                     // allocate the fixed offset-pair vector
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
     emitter.instruction("jz __rt_preg_split_malloc_fail_linux_x86_64");         // allocation failure frees the opaque handle and returns an empty array
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
@@ -643,7 +643,7 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
+    emitter.emit_call_c("free");                                                       // release the reusable offset-pair vector
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); // return final result array pointer
     emitter.instruction("jmp __rt_preg_split_ret_linux_x86_64");                // share common epilogue
 

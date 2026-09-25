@@ -8,7 +8,7 @@ sidebar:
 ## ksort()
 
 ```php
-function ksort(array $array, int $flags = 0): bool
+function ksort(array &$array, int $flags = 0): bool
 ```
 
 Sorts an array by key in ascending order, comparing keys under $flags.

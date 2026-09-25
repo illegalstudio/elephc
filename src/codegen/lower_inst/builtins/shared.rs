@@ -27,9 +27,10 @@ pub(in crate::codegen::lower_inst) fn callable_name_exists(
     ctx.function_variant_group_name(name).is_some()
         || ctx.function_by_name(name).is_some()
         || ctx.has_extern_function(name)
-        || is_php_visible_builtin_function_for_profile(
+        || is_php_visible_builtin_function_for_target(
             name.trim_start_matches('\\'),
             strict_php,
+            ctx.emitter.target,
         )
 }
 

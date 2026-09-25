@@ -45,12 +45,12 @@ fn lower_predicate(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &str
         _ => "array_all(): Argument #2 ($callback) must be a valid callback",
     };
     acquire_callback_descriptor(ctx, inst, callback, name, callback_error)?;
-    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
-    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), mode);
+    abi::emit_reg_move(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0), result);
+    abi::emit_temporary_stack_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2), mode);
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 3),
         ctx.lexical_class_id(),
     );
     abi::emit_call_label(ctx.emitter, "__rt_array_predicate_boxed");

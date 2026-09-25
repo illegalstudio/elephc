@@ -2,7 +2,7 @@
 title: "inet_pton()"
 description: "Packs a textual IPv4 or IPv6 address into its 4- or 16-byte network-order form, or false when the string is not a valid address."
 sidebar:
-  order: 822
+  order: 838
 ---
 
 ## inet_pton()

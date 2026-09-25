@@ -11,6 +11,10 @@
 //! - SQLite is statically bundled (`libsqlite3-sys`'s `bundled` feature), so a
 //!   compiled PHP binary that links this staticlib has no system SQLite runtime
 //!   dependency.
+//! - Paths stay UTF-8 at the bridge boundary. SQLite's Windows VFS converts its
+//!   UTF-8 filename API to native UTF-16, preserving non-ASCII DSN paths.
+//! - Connections use FULLMUTEX and a bounded busy timeout so concurrent Windows
+//!   file locks report a real SQLite error instead of a false success or spin.
 //! - Column type codes match SQLite's: 1=INTEGER, 2=FLOAT, 3=TEXT, 4=BLOB,
 //!   5=NULL — the same codes the PDO prelude's `columnValue()` reads.
 //! - Handle ownership: `SqliteConn` owns its `sqlite3*` and `SqliteStmt` owns its

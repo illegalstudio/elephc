@@ -35,6 +35,7 @@ mod passthru;
 mod php_uname;
 mod phpversion;
 mod putenv;
+mod sapi_windows;
 mod shell_exec;
 mod system;
 
@@ -61,6 +62,7 @@ pub(in crate::interpreter) use passthru::*;
 pub(in crate::interpreter) use php_uname::*;
 pub(in crate::interpreter) use phpversion::*;
 pub(in crate::interpreter) use putenv::*;
+pub(in crate::interpreter) use sapi_windows::*;
 pub(in crate::interpreter) use shell_exec::*;
 pub(in crate::interpreter) use system::*;
 
@@ -96,6 +98,9 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
+        name if name.starts_with("sapi_windows_") => {
+            eval_builtin_sapi_windows_call(name, args, context, scope, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -130,6 +135,9 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_gethostname_result(values)
+        }
+        name if name.starts_with("sapi_windows_") => {
+            eval_sapi_windows_values_result(name, evaluated_args, context, values)
         }
         "getprotobyname" => {
             let [protocol] = evaluated_args else {

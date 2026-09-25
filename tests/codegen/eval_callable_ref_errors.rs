@@ -69,10 +69,9 @@ try {
     );
 }
 
-/// Verifies AOT function argument-prep fatals restore the eval bridge frame.
-#[test]
-fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack() {
-    let cases = [
+/// Returns the AOT function callable variants that must fail during argument preparation.
+fn eval_aot_function_by_ref_arg_prep_fatal_cases() -> [(&'static str, &'static str); 4] {
+    [
         (
             "string callable",
             r#"<?php
@@ -133,27 +132,56 @@ call_user_func_array($callback, [&$value, 123]);
 echo "bad";');
 "#,
         ),
-    ];
+    ]
+}
 
-    for (label, source) in cases {
-        let out = compile_and_run_capture(source);
-        assert!(
-            !out.success,
-            "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
-            out.stdout, out.stderr
-        );
-        assert_eq!(out.stdout, "", "{label}: unexpected stdout");
-        assert!(
-            out.stderr.contains("Fatal error: eval() runtime failed"),
-            "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
-            out.stderr
-        );
-        assert!(
-            !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-            "{label}: stderr leaked a Rust panic: {}",
-            out.stderr
-        );
-    }
+/// Verifies string-callable AOT argument-prep fatals restore the eval bridge frame.
+#[test]
+fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack() {
+    let (label, source) = eval_aot_function_by_ref_arg_prep_fatal_cases()[0];
+    assert_eval_aot_function_by_ref_arg_prep_fatal(label, source);
+}
+
+/// Verifies first-class AOT argument-prep fatals restore the eval bridge frame.
+#[test]
+fn test_eval_aot_first_class_function_by_ref_arg_prep_fatal_cleans_up_stack() {
+    let (label, source) = eval_aot_function_by_ref_arg_prep_fatal_cases()[1];
+    assert_eval_aot_function_by_ref_arg_prep_fatal(label, source);
+}
+
+/// Verifies Closure::fromCallable AOT argument-prep fatals restore the eval bridge frame.
+#[test]
+fn test_eval_aot_closure_function_by_ref_arg_prep_fatal_cleans_up_stack() {
+    let (label, source) = eval_aot_function_by_ref_arg_prep_fatal_cases()[2];
+    assert_eval_aot_function_by_ref_arg_prep_fatal(label, source);
+}
+
+/// Verifies call_user_func_array AOT argument-prep fatals restore the eval bridge frame.
+#[test]
+fn test_eval_aot_array_function_by_ref_arg_prep_fatal_cleans_up_stack() {
+    let (label, source) = eval_aot_function_by_ref_arg_prep_fatal_cases()[3];
+    assert_eval_aot_function_by_ref_arg_prep_fatal(label, source);
+}
+
+/// Runs one AOT argument-preparation failure and checks fatal cleanup behavior.
+fn assert_eval_aot_function_by_ref_arg_prep_fatal(label: &str, source: &str) {
+    let out = compile_and_run_capture(source);
+    assert!(
+        !out.success,
+        "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "", "{label}: unexpected stdout");
+    assert!(
+        out.stderr.contains("Fatal error: eval() runtime failed"),
+        "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
+        "{label}: stderr leaked a Rust panic: {}",
+        out.stderr
+    );
 }
 
 /// Verifies AOT method callable by-reference args write back before catchable throws.

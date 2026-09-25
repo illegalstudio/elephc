@@ -17,6 +17,210 @@ use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+use super::strings::load_string_arg_to_regs;
+use super::io::load_stream_fd_to_result;
+
+/// Lowers the scalar Windows SAPI helpers through their Win32 runtime shims.
+pub(crate) fn lower_sapi_windows_scalar(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    min_arity: usize,
+    max_arity: usize,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, name, min_arity, max_arity)?;
+    if let Some(value) = inst.operands.first().copied() {
+        load_value_to_first_int_arg(ctx, value)?;
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // marshal Windows SAPI arguments through the target ABI
+        }
+    }
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `sapi_windows_cp_set()` with php-src's unsigned-DWORD range guard.
+pub(crate) fn lower_sapi_windows_cp_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "sapi_windows_cp_set", 1)?;
+    load_value_to_first_int_arg(ctx, expect_operand(inst, 0)?)?;
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast("rax", 0),
+        "sapi_windows_cp_set(): Argument #1 ($codepage) must be between 0 and 4294967295",
+    );
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtMost("rax", u32::MAX as i64),
+        "sapi_windows_cp_set(): Argument #1 ($codepage) must be between 0 and 4294967295",
+    );
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the validated DWORD code-page identifier
+    abi::emit_call_label(ctx.emitter, "__rt_sapi_windows_cp_set");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `sapi_windows_vt100_support`, preserving PHP's null query sentinel and stream fd.
+pub(crate) fn lower_sapi_windows_vt100_support(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "sapi_windows_vt100_support", 1, 2)?;
+    load_stream_fd_to_result(ctx, expect_operand(inst, 0)?, "sapi_windows_vt100_support")?;
+    abi::emit_push_reg(ctx.emitter, "rax");
+    if let Some(enable) = inst.operands.get(1).copied() {
+        if ctx.value_php_type(enable)?.codegen_repr() == PhpType::Void {
+            ctx.emitter.instruction("mov esi, -1");                             // preserve PHP null as a query operation
+        } else {
+            load_value_to_first_int_arg(ctx, enable)?;
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the requested enable/disable flag
+        }
+    } else {
+        ctx.emitter.instruction("mov esi, -1");                                 // omitted enable defaults to a query
+    }
+    abi::emit_pop_reg(ctx.emitter, "rdi");
+    abi::emit_call_label(ctx.emitter, "__rt_sapi_windows_vt100_support");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the Windows SAPI code-page conversion entry point. The runtime helper owns conversion
+/// validation and returns the PHP string pair; dynamic mixed selectors are rejected fail-closed.
+pub(crate) fn lower_sapi_windows_cp_conv(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "sapi_windows_cp_conv", 3)?;
+    let input = expect_operand(inst, 0)?;
+    let output = expect_operand(inst, 1)?;
+    let input_literal = super::maybe_const_string_operand(ctx, input)?;
+    let output_literal = super::maybe_const_string_operand(ctx, output)?;
+    let input_codepage = input_literal
+        .as_deref()
+        .and_then(sapi_windows_named_codepage);
+    let output_codepage = output_literal
+        .as_deref()
+        .and_then(sapi_windows_named_codepage);
+    if input_literal.is_some() && input_codepage.is_none() {
+        super::super::exceptions::emit_value_error(
+            ctx,
+            "sapi_windows_cp_conv(): Argument #1 ($in_codepage) must be a valid charset",
+        );
+        return Ok(());
+    }
+    if output_literal.is_some() && output_codepage.is_none() {
+        super::super::exceptions::emit_value_error(
+            ctx,
+            "sapi_windows_cp_conv(): Argument #2 ($out_codepage) must be a valid charset",
+        );
+        return Ok(());
+    }
+    if input_codepage.is_none()
+        && !matches!(ctx.value_php_type(input)?.codegen_repr(), PhpType::Int)
+    {
+        return Err(CodegenIrError::unsupported(
+            "sapi_windows_cp_conv input code page must be an integer or literal charset",
+        ));
+    }
+    if output_codepage.is_none()
+        && !matches!(ctx.value_php_type(output)?.codegen_repr(), PhpType::Int)
+    {
+        return Err(CodegenIrError::unsupported(
+            "sapi_windows_cp_conv output code page must be an integer or literal charset",
+        ));
+    }
+    ctx.emitter.instruction("sub rsp, 16");                                     // preserve both code-page selectors across string materialization
+    if let Some(codepage) = input_codepage {
+        ctx.emitter.instruction(&format!("mov DWORD PTR [rsp], {}", codepage)); // stage the literal input code page
+    } else {
+        load_value_to_first_int_arg(ctx, input)?;
+        ctx.emitter.instruction("mov DWORD PTR [rsp], eax");                    // stage the dynamic input code page
+    }
+    if let Some(codepage) = output_codepage {
+        ctx.emitter.instruction(&format!("mov DWORD PTR [rsp + 8], {}", codepage)); // stage the literal output code page
+    } else {
+        load_value_to_first_int_arg(ctx, output)?;
+        ctx.emitter.instruction("mov DWORD PTR [rsp + 8], eax");                // stage the dynamic output code page
+    }
+    load_string_arg_to_regs(ctx, inst, 2, "sapi_windows_cp_conv", "rax", "rdx")?;
+    ctx.emitter.instruction("mov r8, rax");                                     // pass the subject byte pointer after conversion/coercion
+    ctx.emitter.instruction("mov r9, rdx");                                     // pass the complete subject byte length
+    ctx.emitter.instruction("mov edi, DWORD PTR [rsp]");                        // restore the input code page after string materialization
+    ctx.emitter.instruction("mov esi, DWORD PTR [rsp + 8]");                    // restore the output code page after string materialization
+    ctx.emitter.instruction("add rsp, 16");                                     // release selector staging before the runtime call
+    abi::emit_call_label(ctx.emitter, "__rt_sapi_windows_cp_conv");
+    // The runtime returns a raw owned `{pointer,length}` pair, while the nullable PHP contract
+    // is represented as Mixed in EIR.  Box the pair (or the null failure) before storing it.
+    super::io::box_owned_string_or_null_result(ctx, "sapi_windows_cp_conv");
+    store_if_result(ctx, inst)
+}
+
+/// Returns the Windows code-page ID for the named selectors supported by php-src's table.
+fn sapi_windows_named_codepage(name: &str) -> Option<u32> {
+    elephc_builtin_contract::windows_codepages::windows_codepage_by_name(name)
+        .map(|entry| entry.id)
+}
+
+/// Lowers `sapi_windows_cp_get`, preserving PHP's `ansi`/`oem` selector semantics.
+pub(crate) fn lower_sapi_windows_cp_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "sapi_windows_cp_get", 0, 1)?;
+    let kind = if let Some(value) = inst.operands.first().copied() {
+        let kind = super::const_string_operand(ctx, value)?;
+        match kind.to_ascii_lowercase().as_str() {
+            "ansi" => 1,
+            "oem" => 2,
+            _ => 0,
+        }
+    } else {
+        0
+    };
+    ctx.emitter.instruction(&format!("mov edi, {}", kind));                     // marshal Windows SAPI arguments through the target ABI
+    abi::emit_call_label(ctx.emitter, "__rt_sapi_windows_cp_get");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `sapi_windows_set_ctrl_handler`, retaining the null-handler Win32 operation while
+/// refusing to claim that an asynchronous PHP callable was installed.
+pub(crate) fn lower_sapi_windows_set_ctrl_handler(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "sapi_windows_set_ctrl_handler", 1, 2)?;
+    load_value_to_first_int_arg(ctx, expect_operand(inst, 0)?)?;
+    abi::emit_push_reg(ctx.emitter, "rax");                                    // preserve the nullable callable descriptor across flag coercion
+    if let Some(add) = inst.operands.get(1).copied() {
+        load_value_to_first_int_arg(ctx, add)?;
+        ctx.emitter.instruction("mov rsi, rax");                                // pass the add/remove flag to SetConsoleCtrlHandler
+    } else {
+        ctx.emitter.instruction("mov esi, 1");                                  // PHP defaults $add to true
+    }
+    abi::emit_pop_reg(ctx.emitter, "rdi");                                     // restore the handler descriptor for the runtime shim
+    abi::emit_call_label(ctx.emitter, "__rt_sapi_windows_set_ctrl_handler");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `sapi_windows_generate_ctrl_event` with its optional process-group identifier.
+pub(crate) fn lower_sapi_windows_generate_ctrl_event(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "sapi_windows_generate_ctrl_event", 1, 2)?;
+    load_value_to_first_int_arg(ctx, expect_operand(inst, 0)?)?;
+    abi::emit_push_reg(ctx.emitter, "rax");                                    // preserve the event kind across optional pid coercion
+    if let Some(pid) = inst.operands.get(1).copied() {
+        load_value_to_first_int_arg(ctx, pid)?;
+        ctx.emitter.instruction("mov rsi, rax");                                // pass the process-group id
+    } else {
+        ctx.emitter.instruction("xor esi, esi");                                // PHP defaults $pid to zero
+    }
+    abi::emit_pop_reg(ctx.emitter, "rdi");                                     // restore the requested CTRL event kind
+    abi::emit_call_label(ctx.emitter, "__rt_sapi_windows_generate_ctrl_event");
+    store_if_result(ctx, inst)
+}
 
 /// Lowers `date(format, timestamp?)` through the shared formatter runtime helper.
 pub(crate) fn lower_date(
@@ -59,8 +263,40 @@ fn lower_date_like(
     stage_date_string_regs(ctx);
     load_date_timestamp(ctx, timestamp)?;
     unstage_date_string_regs(ctx);
+    publish_windows_tz_offset_bridge(ctx);
     abi::emit_call_label(ctx.emitter, runtime_symbol);
     store_if_result(ctx, inst)
+}
+
+/// Publishes the windows-only elephc-tz offset bridge fn pointer immediately
+/// before a runtime call that may resolve local time on windows
+/// (`__rt_date`/`__rt_mktime`/`__rt_gmmktime`/`__rt_strtotime`, transitively
+/// `__rt_sys_localtime`/`__rt_sys_mktime`). No-op off windows-x86_64. Shared by
+/// `lower_date_like`, `lower_mktime_like`, and `emit_strtotime_marshal` so the
+/// windows-only `__rt_sys_localtime`/`__rt_sys_mktime` shims
+/// (`codegen_support/runtime/win32/shims_time.rs`) can resolve the active
+/// default timezone's IANA offset instead of falling back to msvcrt's
+/// TZ-only/no-zoneinfo `localtime`/`mktime`. Harmless to publish before the
+/// UTC-only counterparts (`gmdate`/`gmmktime` share this call site / never read
+/// the slot) — publishing costs a few extra instructions, not correctness.
+fn publish_windows_tz_offset_bridge(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.platform == Platform::Windows {
+        crate::codegen_support::tz_bridge::publish_elephc_tz_offset_function_pointer(ctx.emitter);
+    }
+}
+
+/// Publishes the bridge validator immediately before a direct timezone-setter
+/// call. This keeps the always-emitted runtime helper free of an unconditional
+/// `elephc_tz` relocation while making validation available to user PHP and
+/// synthetic DateTime methods alike. Synthetic methods are lowered eagerly,
+/// so only publish when checker requirement resolution selected the bridge for
+/// the final link.
+fn publish_timezone_validation_bridge(ctx: &mut FunctionContext<'_>) {
+    if ctx.module.requires_tz_validation_bridge {
+        crate::codegen_support::tz_bridge::publish_elephc_tz_validation_function_pointer(
+            ctx.emitter,
+        );
+    }
 }
 
 /// Lowers `date_default_timezone_get()` through the shared runtime helper.
@@ -95,6 +331,12 @@ pub(crate) fn lower_date_default_timezone_set(
         Arch::AArch64 => ctx.load_string_value_to_regs(identifier, "x1", "x2")?,
         Arch::X86_64 => ctx.load_string_value_to_regs(identifier, "rax", "rdx")?,
     }
+    // Publish the Windows IANA offset bridge together with the validator.  Synthetic
+    // DateTime construction/formatting can reach __rt_sys_localtime without passing
+    // through the direct date() lowering that normally publishes this slot; PHP's
+    // process-wide default timezone must therefore make the bridge available itself.
+    publish_windows_tz_offset_bridge(ctx);
+    publish_timezone_validation_bridge(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_date_default_timezone_set");
     store_if_result(ctx, inst)
 }
@@ -254,7 +496,7 @@ pub(crate) fn lower_localtime(
     }
     emit_store_result_to_scratch(ctx, 8);
     emit_load_scratch_to_reg(ctx, abi::int_result_reg(ctx.emitter), 0);
-    emit_load_scratch_to_reg(ctx, abi::int_arg_reg_name(ctx.emitter.target, 1), 8);
+    emit_load_scratch_to_reg(ctx, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 8);
     emit_scratch_release(ctx, 16);
     abi::emit_call_label(ctx.emitter, "__rt_localtime");
     emit_box_hash_pointer_as_assoc_mixed(ctx);
@@ -295,7 +537,7 @@ pub(crate) fn lower_http_response_code(
         }
         None => abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             0,
         ),
     }
@@ -361,6 +603,11 @@ fn lower_mktime_like(
     runtime_symbol: &str,
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 6)?;
+    // Publish BEFORE marshaling the integer args, not after: the publish call's
+    // r9 scratch use (see `publish_windows_tz_offset_bridge`) would otherwise
+    // clobber r9d, which is `__rt_mktime`'s/`__rt_gmmktime`'s 6th ABI argument
+    // (year) once `marshal_integer_args` has loaded it.
+    publish_windows_tz_offset_bridge(ctx);
     marshal_integer_args(ctx, inst, &MKTIME_ARG_LABELS)?;
     abi::emit_call_label(ctx.emitter, runtime_symbol);
     store_if_result(ctx, inst)
@@ -477,7 +724,7 @@ fn emit_store_result_to_scratch(ctx: &mut FunctionContext<'_>, offset: usize) {
 
 /// Loads the staged integer at scratch `offset` into the `index`-th integer argument register.
 fn emit_load_scratch_to_arg_reg(ctx: &mut FunctionContext<'_>, index: usize, offset: usize) {
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, index);
     emit_load_scratch_to_reg(ctx, arg_reg, offset);
 }
 
@@ -485,7 +732,7 @@ fn emit_load_scratch_to_arg_reg(ctx: &mut FunctionContext<'_>, index: usize, off
 fn emit_load_scratch_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, offset: usize) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));// load the staged integer into the target register
+            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset)); // load the staged integer into the target register
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -655,6 +902,8 @@ fn emit_strtotime_marshal(
             }
         }
     }
+    publish_windows_tz_offset_bridge(ctx);
+    publish_timezone_validation_bridge(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_strtotime");
     Ok(())
 }
@@ -894,7 +1143,7 @@ fn lower_direct_system_call(
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the null-terminated shell command to libc system()
     }
-    ctx.emitter.bl_c("system");
+    ctx.emitter.emit_call_c("system");
     if returns_empty_string {
         emit_empty_string_result(ctx);
     }
@@ -931,8 +1180,15 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
         (Platform::MacOS, Arch::X86_64) => {
             panic!("exit() is not implemented yet for target macos-x86_64");
         }
-        (Platform::Windows, _) => {
-            panic!("Windows target is not yet supported (see issue #379)");
+        (Platform::Windows, Arch::X86_64) => {
+            ctx.emitter.instruction("mov rbx, rax");                            // preserve the computed exit code across output-buffer shutdown
+            ctx.emitter.instruction("and rsp, -16");                            // realign the terminal path before calling runtime helpers
+            ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers before terminating
+            ctx.emitter.instruction("mov rdi, rbx");                            // restore the exit code into the shim's SysV-style argument register
+            ctx.emitter.instruction("call __rt_sys_exit");                      // call Win32 ExitProcess shim after the shutdown drain
+        }
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)");
         }
     }
 }
@@ -975,7 +1231,10 @@ fn lower_putenv_unset(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_str_to_cstr");
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_reg_move(ctx.emitter, argument_reg, result_reg);
-    ctx.emitter.bl_c("unsetenv");
+    // `unsetenv` is a POSIX libc symbol. Windows MinGW does not provide it;
+    // route through the target-aware shim, which uses `_putenv_s(name, "")`
+    // to remove the variable while preserving the internal SysV ABI.
+    ctx.emitter.emit_call_c("unsetenv");
 
     // -- release the temporary copy on both success and failure --
     abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
@@ -1075,7 +1334,7 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&copy_done);
     ctx.emitter.instruction("mov BYTE PTR [r9 + r10], 0");                      // append the C null terminator required by putenv()
     ctx.emitter.instruction("mov rdi, r9");                                     // pass the persistent environment buffer to putenv()
-    ctx.emitter.bl_c("putenv");
+    ctx.emitter.emit_call_c("putenv");
     ctx.emitter.instruction("cmp rax, 0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("sete al");                                         // return true when putenv() accepted the assignment
     ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register

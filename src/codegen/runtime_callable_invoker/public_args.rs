@@ -149,9 +149,17 @@ pub(super) fn insert_assoc_count_prefix(
     count_reg: &str,
     elem_ty: &PhpType,
 ) {
-    let value_lo = abi::int_arg_reg_name(emitter.target, 3);
-    let value_hi = abi::int_arg_reg_name(emitter.target, 4);
-    let value_tag = abi::int_arg_reg_name(emitter.target, 5);
+    // `__rt_hash_set` is a hand-written runtime helper and always consumes the
+    // internal SysV-shaped six-word ABI.  Generated Windows functions use
+    // MSx64 only for calls to other generated functions; selecting their
+    // fourth/fifth argument positions here would both misplace the first words
+    // and try to address nonexistent fifth/sixth MSx64 registers.
+    let hash = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let key_lo = abi::runtime_helper_int_arg_reg(emitter, 1);
+    let key_hi = abi::runtime_helper_int_arg_reg(emitter, 2);
+    let value_lo = abi::runtime_helper_int_arg_reg(emitter, 3);
+    let value_hi = abi::runtime_helper_int_arg_reg(emitter, 4);
+    let value_tag = abi::runtime_helper_int_arg_reg(emitter, 5);
     if matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_reg_move(emitter, abi::int_result_reg(emitter), count_reg);
         crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Int);
@@ -171,9 +179,9 @@ pub(super) fn insert_assoc_count_prefix(
             crate::codegen::runtime_value_tag(&PhpType::Int) as i64,
         );
     }
-    abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), 0);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 2), -1);
+    abi::emit_load_temporary_stack_slot(emitter, hash, 0);
+    abi::emit_load_int_immediate(emitter, key_lo, 0);
+    abi::emit_load_int_immediate(emitter, key_hi, -1);
     abi::emit_call_label(emitter, "__rt_hash_set");
     match emitter.target.arch {
         Arch::AArch64 => abi::emit_store_to_address(emitter, "x0", "sp", 0),
@@ -246,12 +254,12 @@ fn emit_add_numeric_surplus_count(
     emitter.label(&loop_label);
     abi::emit_load_temporary_stack_slot(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(emitter, 0),
         SOURCE_HASH_OFF,
     );
     abi::emit_load_temporary_stack_slot(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(emitter, 1),
         CURSOR_OFF,
     );
     abi::emit_call_label(emitter, "__rt_hash_iter_next_value");
@@ -375,6 +383,39 @@ mod tests {
         assert_eq!(shape.visible_regular, 2);
         assert!(!shape.needs_actual_count());
         assert_eq!(shape.collector_prefix(), 0);
+    }
+
+    /// Pins the six-word internal hash-set ABI for eval/native descriptor invokers on Windows.
+    ///
+    /// The public argument collector is emitted inside a generated MSx64 function, but its
+    /// `__rt_hash_set` callee remains a hand-written SysV helper. All six words must therefore
+    /// use `rdi`/`rsi`/`rdx`/`rcx`/`r8`/`r9`, including the count value and its tag.
+    #[test]
+    fn windows_assoc_collector_count_prefix_uses_internal_six_word_hash_set_abi() {
+        let mut emitter = Emitter::new(crate::codegen_support::platform::Target::new(
+            crate::codegen_support::platform::Platform::Windows,
+            Arch::X86_64,
+        ));
+        insert_assoc_count_prefix(&mut emitter, "r10", &PhpType::Mixed);
+        let asm = emitter.output();
+        let before_call = asm
+            .split_once("call __rt_hash_set")
+            .expect("associative collector hash-set call")
+            .0;
+
+        for expected in [
+            "mov rcx, rax",
+            "mov r8, 0",
+            "mov r9, 7",
+            "mov rdi, QWORD PTR [rsp]",
+            "mov rsi, 0",
+            "mov rdx, -1",
+        ] {
+            assert!(
+                before_call.contains(expected),
+                "missing internal hash-set ABI move: {expected}\\n{before_call}"
+            );
+        }
     }
 
 }

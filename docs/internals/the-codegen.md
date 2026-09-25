@@ -117,9 +117,9 @@ Literal `eval()` calls reach EIR as `EvalLiteralCall`. The shared planner in
 
 The lowerer preserves PHP source evaluation order before ABI materialization,
 boxes values into the shared `Mixed` cell representation, and uses the normal
-target-aware call helpers on the three executable hosts: macOS ARM64, Linux
-ARM64, and Linux x86_64. See [Eval Runtime Architecture](eval-runtime.md) for the
-complete boundary.
+target-aware call helpers on the three release hosts (macOS ARM64, Linux ARM64,
+and Linux x86_64) plus the experimental Windows x86_64 PE target. See
+[Eval Runtime Architecture](eval-runtime.md) for the complete boundary.
 
 ## Emit Modes
 

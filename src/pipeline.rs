@@ -338,6 +338,7 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = crate::image_prelude::inject_if_used(
         ast,
         with_crates.contains("image"),
+        target,
         &mut prelude_inventory,
     );
     timings.record_since("image-prelude", phase_started);
@@ -419,7 +420,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("name-resolve");
     let phase_started = Instant::now();
-    let ast = match name_resolver::resolve(ast) {
+    let ast = match name_resolver::resolve_for_platform(ast, target.platform) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
@@ -436,11 +437,12 @@ pub(crate) fn compile(config: CliConfig) {
     // include targets: group 3 of the OPcache script manifest, and the last one to become
     // knowable.
     let (ast, opcache_autoloaded_files) =
-        match autoload::run_collecting_included_with_defines(
+        match autoload::run_collecting_included_with_defines_for_platform(
             ast,
             parent,
             &autoload_registry,
             &defines,
+            target.platform,
         ) {
             Ok(resolved) => resolved,
             Err(e) => {

@@ -24,11 +24,7 @@ pub(super) fn reserve_eval_subclass_property_storage(module: &mut Module) {
 
 /// Converts a PHP source path into the canonical display string stored in EIR metadata.
 pub(super) fn canonical_source_path(source_path: &Path) -> String {
-    source_path
-        .canonicalize()
-        .unwrap_or_else(|_| source_path.to_path_buf())
-        .display()
-        .to_string()
+    crate::source_path::canonical_source_path(source_path)
 }
 
 /// Copies declaration metadata into the EIR module placeholder tables.
@@ -100,6 +96,16 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         .collect();
     module.required_runtime_features =
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
+    module
+        .required_runtime_features
+        .include_required_libraries(&check_result.required_libraries);
+    // Builtin class methods are lowered eagerly even when no user expression
+    // can reach them. Keep their optional tz validator relocation aligned with
+    // the exact linker input selected by checker requirement resolution.
+    module.requires_tz_validation_bridge = check_result
+        .required_libraries
+        .iter()
+        .any(|library| library == "elephc_tz");
 }
 
 /// Normalizes class method metadata to the ABI contracts emitted in EIR.

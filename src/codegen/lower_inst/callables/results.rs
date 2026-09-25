@@ -46,7 +46,7 @@ pub(super) fn emit_unbox_owned_descriptor_result(
     };
     let result = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, result);
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
+    abi::emit_reg_move(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), result);
     abi::emit_call_label(emitter, cast);
     if *ty == PhpType::TaggedScalar {
         emit_tagged_scalar_result(emitter);

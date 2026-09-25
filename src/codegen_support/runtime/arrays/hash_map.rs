@@ -250,7 +250,7 @@ fn emit_hash_map_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_map_call_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // load the callback address into a caller-saved scratch register
-    emitter.instruction("call r10");                                            // invoke the user callback on this entry's value
+    emitter.emit_platform_callback_call("r10", 3);                                // call generated PHP callback with the target ABI
 
     // -- read the callback result from wherever this result kind leaves it --
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // r10 = HashMapResultKind selector

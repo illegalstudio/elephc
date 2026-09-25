@@ -94,6 +94,17 @@ const TARGETS: &[&str] = &[
     "linux-aarch64",
     "linux-x86_64",
 ];
+/// PCRE2 is also available through the MinGW toolchain used by the Windows PE backend.
+/// Keep this separate from the Unix-only catalog set until the other native recipes have
+/// equivalent Windows build and link contracts.
+const PCRE2_TARGETS: &[&str] = &[
+    "macos-aarch64",
+    "ios-arm64",
+    "ios-sim-arm64",
+    "linux-aarch64",
+    "linux-x86_64",
+    "windows-x86_64",
+];
 const PCRE2_ARCHIVES: &[&str] = &[
     "lib/libelephc_pcre2_shim.a",
     "lib/libpcre2-posix.a",
@@ -205,7 +216,7 @@ const PCRE2_VERSIONS: &[PackageVersion] = &[PackageVersion {
     },
     recipe_revision: 2,
     dependencies: &[],
-    supported_targets: TARGETS,
+    supported_targets: PCRE2_TARGETS,
     ordered_link_outputs: PCRE2_ARCHIVES,
     retained_headers: PCRE2_HEADERS,
     provides: &["pcre2"],
@@ -421,7 +432,13 @@ mod tests {
         assert_eq!(version.source.exact_size, 2_792_969);
         assert_eq!(version.source.sha256, "c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16");
         assert_eq!(version.ordered_link_outputs, PCRE2_ARCHIVES);
-        assert_eq!(version.supported_targets, TARGETS);
+        assert_eq!(version.supported_targets, PCRE2_TARGETS);
+        assert!(ensure_target(
+            version,
+            Target::new(crate::codegen_support::platform::Platform::Windows,
+                crate::codegen_support::platform::Arch::X86_64),
+        )
+        .is_ok());
     }
 
     /// Verifies the official zlib source identity and static archive contract.

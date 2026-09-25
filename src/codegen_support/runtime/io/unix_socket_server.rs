@@ -19,7 +19,7 @@
 //!   returns immediately because datagrams don't go through `accept()`.
 //! - Returns the bound descriptor, or -1 on failure.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
 /// unix_socket_server: open a bound Unix-domain socket.
 /// Input:  AArch64 x0 = path pointer, x1 = path length, x2 = sock_type
@@ -93,6 +93,15 @@ pub fn emit_unix_socket_server(emitter: &mut Emitter) {
     emitter.instruction("b __rt_unix_socket_server_fail_close");                // listen() failed
 
     emitter.label("__rt_unix_socket_server_ok");
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload listener state after the socket helper call
+    emitter.instruction("str x9, [sp, #144]");                                  // preserve listener inputs across socket helper calls
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_stream_server_context", 0);
+    abi::emit_call_label(emitter, "__rt_stream_context_lookup");
+    emitter.instruction("mov x1, x0");                                          // prepare listener syscall arguments
+    emitter.instruction("ldr x0, [sp, #144]");                                  // reload listener state after the socket helper call
+    abi::emit_load_symbol_to_reg(emitter, "x2", "_stream_server_flags", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x3", "_stream_server_tls_method", 0);
+    abi::emit_call_label(emitter, "__rt_stream_listener_register");
     emitter.instruction("ldr x0, [sp, #0]");                                    // return the listening descriptor
     emitter.instruction("add sp, sp, #160");                                    // release the frame
     emitter.instruction("ret");                                                 // return the listening socket
@@ -198,6 +207,15 @@ fn emit_unix_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("js __rt_unix_socket_server_fail_close_x86");           // listen() failed
 
     emitter.label("__rt_unix_socket_server_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rsp + 0]");                        // reload listener state after the socket helper call
+    emitter.instruction("mov QWORD PTR [rsp + 160], rax");                      // prepare listener syscall arguments
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_server_context", 0);
+    emitter.instruction("call __rt_stream_context_lookup");                     // look up the stream context for this descriptor
+    emitter.instruction("mov rsi, rax");                                        // prepare listener syscall arguments
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 160]");                      // reload listener state after the socket helper call
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_stream_server_flags", 0);
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_stream_server_tls_method", 0);
+    emitter.instruction("call __rt_stream_listener_register");                  // register the bound listener with its stream context
     emitter.instruction("mov rax, QWORD PTR [rsp + 0]");                        // return the bound descriptor
     emitter.instruction("add rsp, 168");                                        // release the frame
     emitter.instruction("ret");                                                 // return the bound socket

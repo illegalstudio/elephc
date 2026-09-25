@@ -82,8 +82,8 @@ pub(super) fn emit_sleep_result(emitter: &mut Emitter) {
     abi::emit_store_zero_to_local_slot(emitter, CURSOR);
 
     emitter.label("__rt_sleep_name_loop");
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), NAMES);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), CURSOR);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), NAMES);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), CURSOR);
     abi::emit_call_label(emitter, "__rt_array_iter_next");
     branch_eq(emitter, -1, "__rt_sleep_names_done");
     abi::store_at_offset(emitter, result, CURSOR);
@@ -113,9 +113,9 @@ pub(super) fn emit_sleep_result(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, length, VALUE_HI);
     abi::load_at_offset(emitter, result, CONCAT);
     abi::emit_store_reg_to_symbol(emitter, result, "_concat_off", 0);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), OBJECT);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), VALUE_LO);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), VALUE_HI);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), OBJECT);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), VALUE_LO);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 2), VALUE_HI);
     abi::emit_call_label(emitter, "__rt_serialize_named_prop");
     abi::load_at_offset(emitter, scratch, CONTEXT);
     abi::emit_load_from_address(emitter, result, scratch, 8);

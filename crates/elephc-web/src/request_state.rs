@@ -21,8 +21,10 @@
 //!   the workspace's zero-warnings gate).
 
 use std::ffi::{c_char, CString};
+#[cfg(unix)]
 use std::os::fd::RawFd;
 
+#[cfg(not(test))]
 extern "C" {
     /// Per-request output-capture flag defined in the compiled program's runtime
     /// `.comm` storage (`elephc_web_capture`). Non-zero routes the runtime's
@@ -33,16 +35,25 @@ extern "C" {
     static mut elephc_web_capture: u8;
 }
 
+/// Test-only stand-in for the compiler runtime's capture flag. Unit tests link
+/// the rlib directly, so they do not have the generated program storage.
+#[cfg(test)]
+#[allow(non_upper_case_globals)]
+static mut elephc_web_capture: u8 = 0;
+
 /// Process-static fallback body. Normal responses stream directly; trans-SID
 /// responses use this buffer because rewriting requires the complete plaintext.
 static mut RESPONSE_BODY: Vec<u8> = Vec::new();
-/// Dedicated handler-channel descriptor, or `-1` outside an isolated handler child.
+/// Dedicated Unix handler-channel descriptor, or `-1` outside an isolated handler child.
+#[cfg(unix)]
 static mut RESPONSE_STREAM_FD: RawFd = -1;
 /// Whether status and headers were frozen by the first output operation.
 static mut RESPONSE_COMMITTED: bool = false;
 /// Whether trans-SID requires the plaintext body to remain buffered until exit.
+#[cfg(unix)]
 static mut RESPONSE_TRANS_SID_BUFFERED: bool = false;
 /// Records a response-channel write failure so the child exits unsuccessfully.
+#[cfg(unix)]
 static mut RESPONSE_STREAM_FAILED: bool = false;
 /// Whether the web wrapper caught an exception after response output committed.
 static mut RESPONSE_HANDLER_FAILED: bool = false;
@@ -52,6 +63,7 @@ static mut LATE_HEADER_WARNED: bool = false;
 static mut LATE_STATUS_WARNED: bool = false;
 
 /// Emits one PHP-style late-header diagnostic without allocating or panicking.
+#[cfg(unix)]
 unsafe fn warn_headers_already_sent_once(warned: *mut bool, message: &'static [u8]) {
     if *warned {
         return;
@@ -60,7 +72,19 @@ unsafe fn warn_headers_already_sent_once(warned: *mut bool, message: &'static [u
     let _ = libc::write(2, message.as_ptr().cast(), message.len());
 }
 
+/// Windows has no Unix response channel. It buffers worker output until the
+/// handler returns, so this path only publishes the matching diagnostic.
+#[cfg(windows)]
+unsafe fn warn_headers_already_sent_once(warned: *mut bool, message: &'static [u8]) {
+    if *warned {
+        return;
+    }
+    core::ptr::write(warned, true);
+    eprintln!("{}", String::from_utf8_lossy(message).trim_end());
+}
+
 /// Terminates an isolated handler child whose worker-side response channel closed.
+#[cfg(unix)]
 unsafe fn abort_failed_response_stream() -> ! {
     core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STREAM_FAILED), true);
     libc::_exit(1);
@@ -101,6 +125,13 @@ pub unsafe extern "C" fn elephc_web_write(ptr: *const u8, len: usize) {
         return;
     }
     let bytes = core::slice::from_raw_parts(ptr, len);
+    #[cfg(windows)]
+    {
+        (*core::ptr::addr_of_mut!(RESPONSE_BODY)).extend_from_slice(bytes);
+        return;
+    }
+    #[cfg(unix)]
+    {
     let fd = *core::ptr::addr_of!(RESPONSE_STREAM_FD);
     if fd < 0 {
         (*core::ptr::addr_of_mut!(RESPONSE_BODY)).extend_from_slice(bytes);
@@ -129,9 +160,11 @@ pub unsafe extern "C" fn elephc_web_write(ptr: *const u8, len: usize) {
     } else if !crate::handler_ipc::write_response_chunks(fd, bytes) {
         abort_failed_response_stream();
     }
+    }
 }
 
 /// Initializes response streaming for one pool or request handler child.
+#[cfg(unix)]
 pub(crate) fn begin_response_stream(fd: RawFd) {
     clear_body();
     reset_response();
@@ -145,6 +178,7 @@ pub(crate) fn begin_response_stream(fd: RawFd) {
 }
 
 /// Commits any delayed response, emits its final frame, and reports IPC success.
+#[cfg(unix)]
 pub(crate) fn finish_response_stream() -> bool {
     unsafe {
         let fd = *core::ptr::addr_of!(RESPONSE_STREAM_FD);
@@ -339,6 +373,7 @@ pub fn take_headers() -> Vec<(String, String)> {
 }
 
 /// Returns an owned request-header value using an ASCII-insensitive name match.
+#[cfg(unix)]
 fn request_header_owned(name: &str) -> Option<String> {
     unsafe {
         (&*core::ptr::addr_of!(REQ_HEADERS))

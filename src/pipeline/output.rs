@@ -36,19 +36,21 @@ pub(super) fn dynamic_eval_capability_warning(
 /// Computes output paths for .s (assembly), .o (object), binary, and .map (source map) files
 /// derived from the input filename.
 ///
-/// Executable mode produces `<stem>` (no extension). Cdylib mode produces
-/// `lib<stem>.so` (Linux) or `lib<stem>.dylib` (macOS), matching the conventional
-/// shared-library naming that `dlopen(3)` and linker `-l` flags expect.
+/// Executable mode produces `<stem>` on Unix and `<stem>.exe` on Windows.
+/// Cdylib mode follows each target's conventional shared-library spelling.
 pub(super) fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
     let path = Path::new(filename);
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     let parent = path.parent().unwrap_or(Path::new("."));
     let bin_name = match emit {
-        Emit::Executable => stem.to_string(),
+        Emit::Executable => match target.platform {
+            Platform::Windows => format!("{stem}.exe"),
+            Platform::MacOS | Platform::Linux => stem.to_string(),
+        },
         Emit::Cdylib => match target.platform {
             Platform::MacOS => format!("lib{}.dylib", stem),
             Platform::Linux => format!("lib{}.so", stem),
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => format!("{stem}.dll"),
         },
         Emit::Staticlib => format!("lib{}.a", stem),
     };
@@ -58,5 +60,31 @@ pub(super) fn output_paths(filename: &str, target: Target, emit: Emit) -> Output
         bin: parent.join(bin_name),
         source_map: parent.join(format!("{}.map", stem)),
         header: emit.is_library().then(|| parent.join(format!("lib{}.h", stem))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Arch;
+
+    /// Verifies Windows executables use the suffix expected by native process launchers.
+    #[test]
+    fn windows_executable_uses_exe_suffix() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        assert_eq!(
+            output_paths("demo.php", target, Emit::Executable).bin,
+            Path::new("demo.exe")
+        );
+    }
+
+    /// Verifies Windows dynamic libraries use PE's conventional DLL spelling.
+    #[test]
+    fn windows_cdylib_uses_dll_suffix() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        assert_eq!(
+            output_paths("demo.php", target, Emit::Cdylib).bin,
+            Path::new("demo.dll")
+        );
     }
 }

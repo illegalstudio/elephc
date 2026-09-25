@@ -99,7 +99,7 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_method_lookup(emitter, "__rt_uwfclose_clear_x86", VTABLE_SLOT_CLOSE); // resolve stream_close method pointer into r11
 
     // -- call stream_close($this) --
-    emitter.instruction("call r11");                                            // invoke stream_close on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
 
     emitter.label("__rt_uwfclose_clear_x86");
     // -- free the handle slot so the synthetic fd cannot be reused stale --
@@ -188,13 +188,13 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
     emitter.instruction(&format!("bt r8, {}", VTABLE_SLOT_READ));               // does this class return a boxed `string|false`?
     emitter.instruction("jc __rt_uwfread_boxed_x86");                           // convert the boxed result instead of reading the pair
-    emitter.instruction("call r11");                                            // invoke stream_read on the wrapper object
+    emitter.emit_platform_callback_call("r11", 2);                                // call generated stream_read with the target ABI
     emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 
     emitter.label("__rt_uwfread_boxed_x86");
-    emitter.instruction("call r11");                                            // invoke stream_read; rax = owned Mixed cell
+    emitter.emit_platform_callback_call("r11", 2);                                // call generated stream_read with the target ABI
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the boxed result across the conversion
     emitter.instruction("mov rdi, rax");                                        // pass the boxed cell to the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = owned string; false unboxes to the empty-string result
@@ -809,7 +809,7 @@ fn emit_user_wrapper_fstat_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_method_lookup(emitter, "__rt_uwfstat_false_x86", VTABLE_SLOT_STAT); // resolve stream_stat method pointer into r11
 
     // -- call stream_stat($this) → rax = raw return, normalized to a Mixed --
-    emitter.instruction("call r11");                                            // invoke stream_stat on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
     emitter.instruction("call __rt_box_wrapper_stat_result");                   // normalize the type-erased return into a boxed Mixed
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed Mixed stat array
@@ -869,10 +869,10 @@ fn emit_x86_scalar_slot_call(emitter: &mut Emitter, vtable_slot: usize, tag: &st
     let done = format!("__rt_uw{tag}_scalar_done_x86");
     emitter.instruction(&format!("bt r8, {}", vtable_slot));                    // an undeclared return type arrives boxed instead
     emitter.instruction(&format!("jc {}", boxed));                              // the mask bit selects the boxed path
-    emitter.instruction("call r11");                                            // invoke the wrapper method for its raw scalar
+    emitter.emit_platform_callback_call("r11", 1);                                // call generated wrapper method with the target ABI
     emitter.instruction(&format!("jmp {}", done));                              // the declared shape needs no conversion
     emitter.label(&boxed);
-    emitter.instruction("call r11");                                            // invoke the wrapper method; rax = owned Mixed cell
+    emitter.emit_platform_callback_call("r11", 1);                                // call generated wrapper method with the target ABI
     emitter.instruction("call __rt_wrapper_unbox_int");                         // rax = the scalar, box released
     emitter.label(&done);
 }

@@ -101,8 +101,19 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             let else_label = ctx.block_label_for_id(*else_target)?;
             let then_edge = edge_label(ctx, then_args, &then_label, "cond_then_args");
             let else_edge = edge_label(ctx, else_args, &else_label, "cond_else_args");
-            abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge);
-            abi::emit_jump(ctx.emitter, &else_edge);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    let else_landing = ctx.next_label("cond_else_landing");
+                    abi::emit_branch_if_int_result_zero(ctx.emitter, &else_landing);
+                    abi::emit_jump(ctx.emitter, &then_edge);
+                    ctx.emitter.label(&else_landing);
+                    abi::emit_jump(ctx.emitter, &else_edge);
+                }
+                Arch::X86_64 => {
+                    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge);
+                    abi::emit_jump(ctx.emitter, &else_edge);
+                }
+            }
             emit_edge_args(ctx, &then_edge, *then_target, then_args, "cond_br then")?;
             emit_edge_args(ctx, &else_edge, *else_target, else_args, "cond_br else")?;
             Ok(())

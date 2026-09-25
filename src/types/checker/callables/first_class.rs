@@ -102,6 +102,18 @@ impl Checker {
                     });
                 }
                 if crate::name_resolver::is_builtin_function(function_name) {
+                    if !crate::types::checker::builtins::catalog::builtin_available_on_platform(
+                        &function_key,
+                        self.target.platform,
+                    ) {
+                        return Err(CompileError::new(
+                            span,
+                            &format!(
+                                "Undefined function for first-class callable: {}",
+                                function_name
+                            ),
+                        ));
+                    }
                     self.require_first_class_callable_builtin_libraries(&function_key);
                     if let Some(message) =
                         crate::builtins::registry::first_class_callable_rejection(&function_key)
@@ -305,7 +317,11 @@ impl Checker {
         }
         match target {
             CallableTarget::Function(name) => {
-                if crate::name_resolver::is_builtin_function(name.as_str()) {
+                if crate::types::checker::builtins::canonical_builtin_function_name_for_target(
+                    name.as_str(),
+                    self.target,
+                )
+                .is_some() {
                     return Ok(base_sig);
                 }
                 let function_name = self

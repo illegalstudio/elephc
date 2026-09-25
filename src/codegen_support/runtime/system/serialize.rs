@@ -1435,9 +1435,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // capture the write offset after the O:...:\"name\": prefix
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save it so method scratch can be rewound away
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // $this receiver for the method call
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stage $this in the runtime's SysV-shaped callback register
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the __serialize target
-    emitter.instruction("call r10");                                            // transfer the raw or boxed array result from __serialize($this)
+    emitter.emit_platform_callback_call("r10", 1);                              // transfer the raw or boxed array result through the generated-method ABI
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the returned array pointer
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
@@ -1479,7 +1479,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save it for the scratch rewind
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // $this receiver
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the __sleep target
-    emitter.instruction("call r10");                                            // __sleep($this) -> rax = names array (indexed)
+    emitter.emit_platform_callback_call("r10", 1);
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the names array pointer
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
@@ -1750,4 +1750,37 @@ fn emit_serialize_copy_run_x86_64(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction(&format!("jmp {}", loop_label));                        // continue copying digit bytes
     emitter.label(&done_label);
     emitter.instruction("add r11, r8");                                         // advance the write pointer past the digits
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Windows serializes magic-method calls through the generated PHP ABI.
+    #[test]
+    fn windows_serialize_magic_method_reserves_shadow_space_and_remaps_this() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_serialize(&mut emitter);
+        let asm = emitter.output();
+        let start = asm
+            .find("__rt_serialize_object:\n")
+            .expect("serialize object helper is emitted");
+        let end = asm[start..]
+            .find("__rt_serialize_object_incomplete_x:\n")
+            .map(|offset| start + offset)
+            .expect("serialize object helper has its incomplete-object branch");
+        let object = &asm[start..end];
+        let shadow = object
+            .find("sub rsp, 32")
+            .expect("generated magic method call reserves MSx64 shadow space");
+        let remap = object
+            .find("mov rcx, rdi")
+            .expect("generated magic method receives $this in rcx on Windows");
+        let call = object
+            .find("call r11")
+            .expect("magic method target is relocated before the indirect call");
+        assert!(shadow < remap && remap < call, "Windows magic-method ABI order:\n{object}");
+        assert!(object[call..].contains("add rsp, 32"));
+    }
 }

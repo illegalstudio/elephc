@@ -2,7 +2,7 @@
 title: "pcntl_errno()"
 description: "Returns the errno recorded by the most recent failing PCNTL operation."
 sidebar:
-  order: 647
+  order: 654
 ---
 
 ## pcntl_errno()
@@ -19,7 +19,7 @@ Returns the errno recorded by the most recent failing PCNTL operation.
 
 ## Availability
 
-- **Compiled (AOT)**: supported on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
+- **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_errno.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_errno.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

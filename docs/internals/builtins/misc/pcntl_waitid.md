@@ -2,7 +2,7 @@
 title: "pcntl_waitid() - internals"
 description: "Compiler internals for pcntl_waitid(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 668
+  order: 675
 ---
 
 ## `pcntl_waitid()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_waitid.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_waitid.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function pcntl_waitid(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4, mixed $resource_usage = []): bool
+function pcntl_waitid(int $idtype = 0, int $id = null, mixed &$info = [], int $flags = 4, mixed &$resource_usage = []): bool
 ```
 
 ## What the type checker enforces

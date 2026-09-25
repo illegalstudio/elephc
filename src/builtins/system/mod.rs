@@ -132,6 +132,7 @@ pub mod preg_split;
 pub mod putenv;
 pub mod restore_error_handler;
 pub mod restore_exception_handler;
+pub mod sapi_windows;
 pub mod serialize;
 pub mod set_error_handler;
 pub mod set_exception_handler;

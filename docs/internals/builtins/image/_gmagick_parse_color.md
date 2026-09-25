@@ -2,7 +2,7 @@
 title: "_gmagick_parse_color() - internals"
 description: "Compiler internals for _gmagick_parse_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1093
+  order: 1109
 ---
 
 ## `_gmagick_parse_color()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:10149](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L10149) (`_gmagick_parse_color`)
+- **Lowering**: [`src/image_prelude.rs`:10220](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L10220) (`_gmagick_parse_color`)
 - **Function symbol**: `_gmagick_parse_color()`
 
 

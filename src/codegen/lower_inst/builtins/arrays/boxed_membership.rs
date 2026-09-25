@@ -34,11 +34,11 @@ pub(super) fn lower_dynamic_membership(
     store_borrowed_cell(ctx, array, 32)?;
     for (index, offset) in [(0, 0), (1, 32)] {
         abi::emit_temporary_stack_address(
-            ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, index), offset,
+            ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, index), offset,
         );
     }
     abi::emit_load_int_immediate(
-        ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2),
+        ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         i64::from(matches!(mode, InArrayMode::Strict)),
     );
     abi::emit_call_label(ctx.emitter, "__rt_in_array_boxed");

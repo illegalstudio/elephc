@@ -187,6 +187,17 @@ impl std::ops::Deref for TestLinkRequirements {
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
 fn assemble_from_stdin(asm: &str, obj_path: &Path) {
+    ensure_windows_runnable_or_skip();
+    // Rewrite the shared x86_64 backend's raw Linux syscalls into windows shim
+    // calls before assembling; a no-op on native targets, so their bytes are
+    // unchanged (the borrowed `asm` is fed straight through).
+    let windows_asm;
+    let asm = if target().platform == Platform::Windows {
+        windows_asm = finalize_asm_for_target(asm);
+        windows_asm.as_str()
+    } else {
+        asm
+    };
     let mut cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
         cmd.args(["-arch", target().darwin_arch_name()]);
@@ -228,6 +239,9 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
 /// runtimes and custom heap sizes get distinct objects while repeated tests can
 /// still share the assembled output.
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
+    ensure_windows_runnable_or_skip();
+    // Key the cache on the untransformed runtime assembly: the windows rewrite is
+    // deterministic, so identical raw assembly still shares one assembled object.
     let hash = runtime_asm_hash(runtime_asm);
     let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let mut cache = cache.lock().expect("runtime asm cache poisoned");
@@ -239,6 +253,15 @@ pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
     fs::create_dir_all(&dir).unwrap();
     let asm_path = dir.join(format!("runtime_{hash:016x}.s"));
     let obj_path = dir.join(format!("runtime_{hash:016x}.o"));
+    // Apply the windows syscall→shim rewrite before writing/assembling; a no-op on
+    // native targets, so the runtime bytes are unchanged there.
+    let windows_asm;
+    let runtime_asm = if target().platform == Platform::Windows {
+        windows_asm = finalize_asm_for_target(runtime_asm);
+        windows_asm.as_str()
+    } else {
+        runtime_asm
+    };
     fs::write(&asm_path, runtime_asm).unwrap();
 
     let mut cmd = Command::new(assembler_cmd());
@@ -382,6 +405,12 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
 
         let mut command = Command::new("cargo");
         command.args(["build", "-p", bridge.package]);
+        if let Some(cargo_target) = bridge_staticlib_cargo_target(target().platform) {
+            command.args(["--target", cargo_target]);
+        }
+        for (name, value) in bridge_staticlib_cross_env(target().platform) {
+            command.env(name, value);
+        }
         if bridge.lib_name == "elephc_pdo" {
             let mut features = Vec::new();
             if std::env::var_os("ELEPHC_PDO_LIBPQ").is_some() {
@@ -531,12 +560,20 @@ fn ensure_magician_curl_staticlib(bridge_staticlib_dir: &Path) {
             "--target-dir",
         ])
         .arg(&curl_target_dir)
+        .args(
+            bridge_staticlib_cargo_target(target().platform)
+                .map(|triple| vec!["--target", triple])
+                .unwrap_or_default(),
+        )
+        .envs(bridge_staticlib_cross_env(target().platform))
         .current_dir(manifest_dir)
         .status()
         .unwrap_or_else(|err| panic!("failed to run cargo build for elephc-magician --features curl: {err}"));
     assert!(status.success(), "failed to build curl-aware elephc-magician staticlib");
 
-    let built = curl_target_dir.join("debug/libelephc_magician.a");
+    let built = curl_target_dir
+        .join(bridge_staticlib_subdir(target().platform))
+        .join("libelephc_magician.a");
     std::fs::create_dir_all(bridge_staticlib_dir).unwrap_or_else(|err| {
         panic!(
             "failed to create bridge staticlib directory {}: {err}",
@@ -613,16 +650,49 @@ fn prebuilt_bridge_staticlibs_are_trusted() -> bool {
     })
 }
 
+/// Returns Cargo's cross target for bridge staticlibs on the Windows PE target.
+fn bridge_staticlib_cargo_target(platform: Platform) -> Option<&'static str> {
+    (platform == Platform::Windows).then_some("x86_64-pc-windows-gnu")
+}
+
+/// Returns cc-rs cross-tool variables required by bridge crates with native C code.
+fn bridge_staticlib_cross_env(platform: Platform) -> Vec<(&'static str, &'static str)> {
+    if platform != Platform::Windows {
+        return Vec::new();
+    }
+    vec![
+        ("CC_x86_64_pc_windows_gnu", "x86_64-w64-mingw32-gcc"),
+        ("AR_x86_64_pc_windows_gnu", "x86_64-w64-mingw32-ar"),
+        ("RANLIB_x86_64_pc_windows_gnu", "x86_64-w64-mingw32-ranlib"),
+    ]
+}
+
+/// Returns the Cargo profile subdirectory holding bridge archives for a target.
+fn bridge_staticlib_subdir(platform: Platform) -> &'static str {
+    if platform == Platform::Windows {
+        "x86_64-pc-windows-gnu/debug"
+    } else {
+        "debug"
+    }
+}
+
 /// Resolves the debug directory containing bridge archives for the current test process.
 fn bridge_staticlib_dir() -> std::path::PathBuf {
     let cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR");
     let current_exe = std::env::current_exe().ok();
-    bridge_staticlib_dir_for(
+    let mut directory = bridge_staticlib_dir_for(
         cargo_target_dir.as_deref(),
         current_exe.as_deref(),
         Path::new(env!("CARGO_MANIFEST_DIR")),
         prebuilt_bridge_staticlibs_are_trusted(),
-    )
+    );
+    if target().platform == Platform::Windows
+        && !directory.ends_with(bridge_staticlib_subdir(Platform::Windows))
+    {
+        directory.pop();
+        directory.push(bridge_staticlib_subdir(Platform::Windows));
+    }
+    directory
 }
 
 /// Selects a bridge archive directory from an explicit target, archive executable, or workspace.
@@ -1041,7 +1111,13 @@ pub(crate) fn link_binary(
     // shards derive it from their extracted executable, and local tests fall
     // back to the workspace target directory.
     let needs_bridge_staticlib = !requested_bridge_staticlibs(&actual_link_libs).is_empty();
-    let bridge_staticlib_dir = bridge_staticlib_dir();
+    let mut bridge_staticlib_dir = bridge_staticlib_dir();
+    if target().platform == Platform::Windows
+        && !bridge_staticlib_dir.ends_with(bridge_staticlib_subdir(Platform::Windows))
+    {
+        bridge_staticlib_dir.pop();
+        bridge_staticlib_dir.push(bridge_staticlib_subdir(Platform::Windows));
+    }
     if needs_bridge_staticlib {
         ensure_bridge_staticlibs(&actual_link_libs, &bridge_staticlib_dir);
     }
@@ -1160,7 +1236,54 @@ pub(crate) fn link_binary(
             );
         }
         Platform::Windows => {
-            panic!("Windows target is not yet supported (see issue #379)");
+            // MinGW GCC (`x86_64-w64-mingw32-gcc`) links the user + runtime objects
+            // into a PE32+ `.exe`, mirroring the production windows arm in
+            // `src/linker.rs`. The `.exe` suffix matches what MinGW emits and what
+            // the Wine runner then executes.
+            let mut ld_cmd = Command::new(gcc_cmd());
+            ld_cmd.arg("-o").arg(target_binary_path(bin_path));
+            ld_cmd.arg(obj_path);
+            ld_cmd.arg(runtime_obj);
+            // Surface the CI MinGW sysroot (cross-built PCRE2/bzip2/zlib/iconv)
+            // before any `-l` args so MinGW resolves those C symbols. Mirrors the
+            // production arm in `src/linker.rs`; gated on the env var so local
+            // non-CI runs are unaffected.
+            for path in mingw_sysroot_link_paths() {
+                ld_cmd.arg(format!("-L{}", path));
+            }
+            if needs_bridge_staticlib {
+                ld_cmd.arg(format!("-L{}", bridge_staticlib_dir.display()));
+            }
+            append_test_search_paths(&mut ld_cmd, &plan);
+            append_test_link_inputs(&mut ld_cmd, &plan, Platform::Windows);
+            // Windows system import libraries the runtime shims resolve against
+            // (WriteFile/ReadFile/HeapAlloc/BCryptGenRandom/...); same set as the
+            // production linker. secur32/userenv/ntdll cover the std-windows deps
+            // pulled in by pdo's postgres/mysql crates and by image's std usage
+            // (GetUserNameExW, GetUserProfileDirectoryW, Nt*File/RtlNtStatusToDosError).
+            // advapi32 resolves the ACL family behind the php-parity
+            // `is_readable()`/`is_writable()` check (`emit_win_acl_helpers`).
+            ld_cmd.args([
+                "-lkernel32",
+                "-lmsvcrt",
+                "-lwinmm",
+                "-lws2_32",
+                "-ladvapi32",
+                "-lbcrypt",
+                "-lshlwapi",
+                "-lshell32",
+                "-lsecur32",
+                "-luserenv",
+                "-lntdll",
+                "-luser32",
+                "-lgdi32",
+            ]);
+            let ld_out = ld_cmd.output().expect("failed to run linker");
+            assert!(
+                ld_out.status.success(),
+                "linker failed:\n{}",
+                String::from_utf8_lossy(&ld_out.stderr)
+            );
         }
     }
 }
@@ -1194,6 +1317,9 @@ fn test_link_plan(
             name: library.clone(),
             origin,
         });
+        if library == "elephc_magician" {
+            append_windows_magician_dependencies(&mut plan, &mut named);
+        }
     }
     for requirement in &requirements.runtime_requirements {
         match requirement {
@@ -1230,6 +1356,9 @@ fn test_link_plan(
                             name: (*bridge).to_string(),
                         },
                     });
+                }
+                if *bridge == "elephc_magician" {
+                    append_windows_magician_dependencies(&mut plan, &mut named);
                 }
             }
             elephc::codegen::LinkRequirement::SystemLibrary(library) => {
@@ -1354,6 +1483,26 @@ fn push_xml_native_archives(
     }
 }
 
+/// Adds MinGW libraries that the eval bridge introduces outside Cargo metadata.
+///
+/// The hand-built codegen linker does not receive a staticlib's Cargo-native
+/// link directives. Windows therefore records the bridge's PCRE2 and iconv
+/// dependencies in the same typed plan as every other library, preserving
+/// ordering and deduplication for both direct and runtime-selected eval use.
+fn append_windows_magician_dependencies(
+    plan: &mut elephc::link_plan::LinkPlan,
+    named: &mut std::collections::HashSet<String>,
+) {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    for library in ["pcre2-posix", "pcre2-8", "iconv"] {
+        if named.insert(library.to_string()) {
+            plan.push(elephc::link_plan::LinkItem::named_runtime(library));
+        }
+    }
+}
+
 /// Appends every typed search path before archive and named-library inputs.
 fn append_test_search_paths(command: &mut Command, plan: &elephc::link_plan::LinkPlan) {
     for item in plan.items() {
@@ -1395,11 +1544,11 @@ fn append_test_link_inputs(
                 (Platform::Linux, true) => {
                     command.arg("-Wl,--whole-archive").arg(path).arg("-Wl,--no-whole-archive");
                 }
+                (Platform::Windows, true) => {
+                    command.arg("-Wl,--whole-archive").arg(path).arg("-Wl,--no-whole-archive");
+                }
                 (_, false) => {
                     command.arg(path);
-                }
-                (Platform::Windows, _) => {
-                    panic!("Windows target is not yet supported (see issue #379)")
                 }
             },
             LinkItem::NamedLibrary { name, .. } => {
@@ -1419,37 +1568,89 @@ fn append_test_frameworks(command: &mut Command, plan: &elephc::link_plan::LinkP
     }
 }
 
-/// Runs a compiled binary directly, using qemu on Linux x86_64 to emulate ARM64.
-/// On other platform/arch combinations, execs the binary natively.
-/// Used for post-link execution of already-assembled test binaries.
+/// Runs a compiled binary through the current target's native or emulated runner.
 pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
     run_binary_with_env(bin_path, dir, &[])
 }
 
-/// Runs a compiled binary with isolated environment overrides, using qemu for
-/// cross-architecture Linux AArch64 fixtures when required.
+/// Runs a compiled binary with isolated environment overrides through the target runner.
 pub(crate) fn run_binary_with_env(
     bin_path: &Path,
     dir: &Path,
     env: &[(&str, &std::ffi::OsStr)],
 ) -> Output {
-    let mut output = if target().platform == Platform::Linux
-        && target().arch == Arch::AArch64
-        && cfg!(target_arch = "x86_64")
-    {
-        let mut cmd = Command::new("qemu-aarch64-static");
-        if let Some(sysroot) = qemu_sysroot() {
-            cmd.args(["-L", sysroot]);
-        }
-        cmd.arg(bin_path).current_dir(dir).envs(env.iter().copied());
-        run_command_with_timeout(cmd)
-    } else {
-        let mut cmd = Command::new(bin_path);
-        cmd.current_dir(dir).envs(env.iter().copied());
-        run_command_with_timeout(cmd)
-    };
+    ensure_windows_runnable_or_skip();
+    let mut cmd = build_run_command(bin_path);
+    cmd.current_dir(dir).envs(env.iter().copied());
+    let mut output = run_command_with_timeout(cmd);
     append_macos_signal_diagnostics(&mut output, bin_path, dir, env);
     output
+}
+
+/// Returns `-L` paths from the optional cross-built MinGW dependency sysroot.
+fn mingw_sysroot_link_paths() -> Vec<String> {
+    let Some(dir) = std::env::var_os("ELEPHC_MINGW_SYSROOT") else {
+        return Vec::new();
+    };
+    let base = std::path::PathBuf::from(dir);
+    if !base.is_dir() {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    let lib = base.join("lib");
+    if lib.is_dir() {
+        paths.push(lib.to_string_lossy().into_owned());
+    }
+    let lib64 = base.join("lib64");
+    if lib64.is_dir() {
+        paths.push(lib64.to_string_lossy().into_owned());
+    }
+    paths
+}
+
+/// Returns the on-disk path of the compiled binary for the current target. For
+/// windows-x86_64 this is `<bin>.exe` (MinGW emits a `.exe` and Wine runs it);
+/// every other target uses the bare binary path unchanged.
+pub(crate) fn target_binary_path(bin_path: &Path) -> std::path::PathBuf {
+    if target().platform == Platform::Windows {
+        bin_path.with_extension("exe")
+    } else {
+        bin_path.to_path_buf()
+    }
+}
+
+/// Applies host-side Wine diagnostics controls without altering the compiled
+/// program's stdout or stderr streams.
+fn configure_wine_command(cmd: &mut Command) {
+    cmd.env("WINEDEBUG", "-all");
+    cmd.env("MVK_CONFIG_LOG_LEVEL", "0");
+}
+
+/// Builds the base `Command` that executes a compiled codegen fixture for the
+/// current target: a direct exec on the host, `qemu-aarch64-static` when running
+/// ARM64 binaries on an x86_64 host, or Wine running the `.exe` for the
+/// windows-x86_64 target. Native Windows executes the PE directly; other hosts
+/// use Wine. The caller sets the working directory and wires args/stdin/stdout
+/// as needed. Centralizing dispatch keeps every runner path target-correct.
+pub(crate) fn build_run_command(bin_path: &Path) -> Command {
+    match target().platform {
+        Platform::Windows if cfg!(windows) => Command::new(target_binary_path(bin_path)),
+        Platform::Windows => {
+            let mut cmd = Command::new(wine_binary());
+            cmd.arg(target_binary_path(bin_path));
+            configure_wine_command(&mut cmd);
+            cmd
+        }
+        Platform::Linux if target().arch == Arch::AArch64 && cfg!(target_arch = "x86_64") => {
+            let mut cmd = Command::new("qemu-aarch64-static");
+            if let Some(sysroot) = qemu_sysroot() {
+                cmd.args(["-L", sysroot]);
+            }
+            cmd.arg(bin_path);
+            cmd
+        }
+        _ => Command::new(bin_path),
+    }
 }
 
 /// Replays a signalled native macOS fixture under LLDB and appends its crash context.
@@ -1733,4 +1934,111 @@ pub(crate) fn assemble_and_run_expect_failure(
     let mut combined = String::from_utf8(output.stdout).unwrap();
     combined.push_str(&String::from_utf8(output.stderr).unwrap());
     combined
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies Wine and MoltenVK host diagnostics are disabled at process
+    /// launch without filtering the compiled program's captured stderr.
+    #[test]
+    fn wine_command_disables_host_diagnostic_chatter() {
+        let mut cmd = Command::new("wine64");
+        configure_wine_command(&mut cmd);
+        let env = cmd
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert_eq!(env.get("WINEDEBUG"), Some(&Some("-all".to_string())));
+        assert_eq!(
+            env.get("MVK_CONFIG_LOG_LEVEL"),
+            Some(&Some("0".to_string()))
+        );
+    }
+
+    /// Verifies the windows-x86_64 target cross-compiles bridge staticlibs for
+    /// `x86_64-pc-windows-gnu` so MinGW can link the PE/COFF archives, while
+    /// macOS/Linux build for the host (no `--target`) and stay on the pre-Tier-2
+    /// path.
+    #[test]
+    fn bridge_staticlib_cargo_target_gated_on_windows() {
+        assert_eq!(
+            bridge_staticlib_cargo_target(Platform::Windows),
+            Some("x86_64-pc-windows-gnu")
+        );
+        assert_eq!(bridge_staticlib_cargo_target(Platform::MacOS), None);
+        assert_eq!(bridge_staticlib_cargo_target(Platform::Linux), None);
+    }
+
+    /// Verifies the cc-rs `CC`/`AR`/`RANLIB` env vars are surfaced only for the
+    /// windows-x86_64 cross target, so PDO's bundled `libsqlite3-sys` amalgamation
+    /// is compiled by `x86_64-w64-mingw32-gcc` and not the host cc. Non-Windows
+    /// targets get an empty slice so the host `cargo build` command is unchanged.
+    #[test]
+    fn bridge_staticlib_cross_env_only_on_windows() {
+        let env = bridge_staticlib_cross_env(Platform::Windows);
+        assert_eq!(env.len(), 3);
+        assert!(env.iter().any(|(k, v)| *k == "CC_x86_64_pc_windows_gnu"
+            && *v == "x86_64-w64-mingw32-gcc"));
+        assert!(env.iter().any(|(k, v)| *k == "AR_x86_64_pc_windows_gnu"
+            && *v == "x86_64-w64-mingw32-ar"));
+        assert!(env.iter().any(|(k, v)| *k == "RANLIB_x86_64_pc_windows_gnu"
+            && *v == "x86_64-w64-mingw32-ranlib"));
+        assert!(bridge_staticlib_cross_env(Platform::MacOS).is_empty());
+        assert!(bridge_staticlib_cross_env(Platform::Linux).is_empty());
+    }
+
+    /// Verifies bridge staticlibs are looked up under
+    /// `x86_64-pc-windows-gnu/debug` for the windows-x86_64 cross target (where
+    /// `cargo build --target x86_64-pc-windows-gnu` emits archives) and under
+    /// `debug` for every other target, preserving the pre-Tier-2 host layout on
+    /// macOS/Linux.
+    #[test]
+    fn bridge_staticlib_subdir_gated_on_windows() {
+        assert_eq!(
+            bridge_staticlib_subdir(Platform::Windows),
+            "x86_64-pc-windows-gnu/debug"
+        );
+        assert_eq!(bridge_staticlib_subdir(Platform::MacOS), "debug");
+        assert_eq!(bridge_staticlib_subdir(Platform::Linux), "debug");
+    }
+
+    /// Verifies MinGW accepts both ordinary and whole-archive typed link inputs.
+    #[test]
+    fn windows_link_inputs_preserve_archive_semantics() {
+        let mut plan = elephc::link_plan::LinkPlan::new();
+        plan.push(elephc::link_plan::LinkItem::managed_archive(
+            "/tmp/libordinary.a",
+            "ordinary",
+        ));
+        plan.push(elephc::link_plan::LinkItem::bridge_archive(
+            "/tmp/libretained.a",
+            "retained",
+            true,
+        ));
+
+        let mut command = Command::new("x86_64-w64-mingw32-gcc");
+        append_test_link_inputs(&mut command, &plan, Platform::Windows);
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            vec![
+                "/tmp/libordinary.a",
+                "-Wl,--whole-archive",
+                "/tmp/libretained.a",
+                "-Wl,--no-whole-archive",
+            ]
+        );
+    }
 }

@@ -83,7 +83,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("lsr x10, x9, #60");                                    // reject slot counts whose 16-byte size would overflow
     emitter.instruction("cbnz x10, __rt_preg_replace_callback_malloc_fail");    // free the handle instead of allocating a wrapped size
     emitter.instruction("lsl x0, x9, #4");                                      // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
+    emitter.emit_call_c("malloc");                                                     // allocate the fixed offset-pair vector
     emitter.instruction("cbz x0, __rt_preg_replace_callback_malloc_fail");      // allocation failure frees the handle and returns the original subject
     emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
 
@@ -267,7 +267,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
+    emitter.emit_call_c("free");                                                       // release the reusable offset-pair vector
     emitter.instruction(&format!("ldr x1, [sp, #{}]", output_start_off));       // return output start pointer
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // reload output end pointer
     emitter.instruction("sub x2, x11, x1");                                     // compute output byte length
@@ -377,7 +377,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r10, 60");                                         // detect a wrapped 16-byte pair-vector size
     emitter.instruction("jnz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); // free the handle instead of allocating a wrapped size
     emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
+    emitter.emit_call_c("malloc");                                                     // allocate the fixed offset-pair vector
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
     emitter.instruction("jz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); // allocation failure frees the opaque handle and returns the subject
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
@@ -486,7 +486,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", callback_env_off)); // pass capture environment after visible callback args
     emitter.label("__rt_preg_replace_callback_direct_linux_x86_64");
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", callback_ptr_off)); // reload callback entry point
-    emitter.instruction("call r10");                                            // call callback and receive replacement string in rax/rdx
+    emitter.emit_platform_callback_call("r10", 2);                             // call callback through the target PHP ABI and receive its replacement string
     emitter.instruction("call __rt_str_persist");                               // copy callback result away from volatile concat-buffer scratch space
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", callback_result_ptr_off)); // save persisted callback result pointer across prefix copying
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", callback_result_len_off)); // save persisted callback result length across prefix copying
@@ -567,7 +567,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
+    emitter.emit_call_c("free");                                                       // release the reusable offset-pair vector
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_start_off)); // return output start pointer
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", output_write_off)); // reload output end pointer
     emitter.instruction("sub rdx, rax");                                        // compute output byte length
@@ -601,4 +601,38 @@ fn publish_concat_offset_x86_64(emitter: &mut Emitter, output_write_off: usize) 
     emitter.instruction("sub r10, r9");                                         // compute current absolute concat-buffer offset
     abi::emit_symbol_address(emitter, "r9", "_concat_off");
     emitter.instruction("mov QWORD PTR [r9], r10");                             // publish concat offset before a nested callback writes strings
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies Windows regex callbacks reserve shadow space and remap both PHP callback arguments.
+    #[test]
+    fn windows_x86_64_remaps_preg_replace_callback_arguments() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_preg_replace_callback(&mut emitter);
+        let asm = emitter.output();
+
+        let shadow = asm.find("sub rsp, 32").expect("Windows callback shadow space");
+        let remap = asm.find("mov rcx, rdi").expect("matches array remap");
+        let call = asm.find("call r11").expect("relocated callback call");
+        assert!(shadow < remap && remap < call);
+        assert!(asm[call..].contains("add rsp, 32"));
+    }
+
+    /// Verifies Linux keeps the original SysV indirect callback sequence unchanged.
+    #[test]
+    fn linux_x86_64_keeps_preg_replace_callback_sysv_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_preg_replace_callback(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("call r10"));
+        assert!(!asm.contains("mov rcx, rdi"));
+        assert!(!asm.contains("sub rsp, 32"));
+    }
 }

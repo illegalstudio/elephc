@@ -2,7 +2,7 @@
 //! Reduces packed and associative PHP arrays using independently owned Mixed carries.
 //!
 //! Called from:
-//! - The typed ArrayReduce backend through the C argument ABI.
+//! - The typed ArrayReduce backend through the internal runtime-helper ABI.
 //!
 //! Key details:
 //! - Consumes a callable descriptor and borrows validated source and initial-value cells.
@@ -40,11 +40,11 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_reduce_boxed");
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [CALLBACK, BORROWED_SOURCE, BORROWED_INITIAL].into_iter().enumerate() {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     abi::store_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 3),
+        abi::runtime_helper_int_arg_reg(emitter, 3),
         INVOCATION_SCOPE,
     );
     for offset in [SOURCE, CARRY, INPUT, ARGUMENTS, NEXT, CURSOR, PENDING] {
@@ -65,7 +65,7 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
     // -- the logical iterator handles packed widths, hash holes and insertion order --
     emitter.label("__rt_array_reduce_boxed_loop");
     for (index, offset) in [PAYLOAD, CURSOR].into_iter().enumerate() {
-        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     abi::emit_call_label(emitter, "__rt_array_iter_next");
     ins(emitter, "cmn x0, #1", "cmp rax, -1");
@@ -79,11 +79,11 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
     acquire_borrowed_cell(emitter);
     abi::store_at_offset(emitter, result, INPUT);
     prepare_callback_arguments(emitter);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CALLBACK);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENTS);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), CALLBACK);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), ARGUMENTS);
     abi::load_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 2),
+        abi::runtime_helper_int_arg_reg(emitter, 2),
         INVOCATION_SCOPE,
     );
     clear_slot(emitter, ARGUMENTS);
@@ -151,8 +151,8 @@ fn box_unboxed_value(emitter: &mut Emitter) {
 /// Builds an owned two-cell argument array, borrowing the carry and transferring the input owner.
 fn prepare_callback_arguments(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
+    let arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
     abi::emit_load_int_immediate(emitter, arg0, 2);
     abi::emit_load_int_immediate(emitter, arg1, 8);
     abi::emit_call_label(emitter, "__rt_array_new");
@@ -188,7 +188,7 @@ fn install_boundary(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
+    abi::emit_frame_slot_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.bl_c("setjmp");                                                     // keep intermediate owners reachable when a callback or destructor throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_reduce_boxed_caught");
 }

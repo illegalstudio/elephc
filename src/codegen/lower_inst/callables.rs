@@ -884,9 +884,17 @@ fn runtime_builtin_descriptor_cases(
     strict_php: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let mut cases = Vec::new();
+    let platform = ctx.emitter.target.platform;
     for name in crate::types::checker::builtins::supported_builtin_function_names_for_profile(
         strict_php,
-    ) {
+    )
+    .into_iter()
+    .filter(|name| {
+        crate::types::checker::builtins::builtin_available_on_platform(
+            &name.to_ascii_lowercase(),
+            platform,
+        )
+    }) {
         if !runtime_callable_name_is_reachable(name, candidate_names)
             || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)
             || ctx
@@ -2994,7 +3002,13 @@ fn emit_new_invoker_arg_array(ctx: &mut FunctionContext<'_>, arg_count: usize) {
 
 /// Boxes or retains a visible descriptor-invoker argument as an owned Mixed cell.
 fn emit_box_invoker_arg(ctx: &mut FunctionContext<'_>, arg: ValueId) -> Result<()> {
-    let arg_ty = ctx.value_php_type(arg)?.codegen_repr();
+    // Keep the PHP surface type here. `Resource(_)` lowers to the scalar `Int`
+    // representation for ordinary calls, but descriptor invokers carry every
+    // visible argument through a Mixed cell first. Collapsing the resource to
+    // `Int` at this boundary stamps tag 0 instead of tag 9; a stream passed to
+    // a callable then stops being a valid File-Handle resource when the callback
+    // calls `curl_setopt()`/`fread()` on it.
+    let arg_ty = ctx.value_php_type(arg)?.clone();
     ctx.load_value_to_result(arg)?;
     if matches!(arg_ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_incref_if_refcounted(ctx.emitter, &arg_ty);

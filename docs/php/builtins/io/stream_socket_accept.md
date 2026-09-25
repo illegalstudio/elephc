@@ -2,13 +2,13 @@
 title: "stream_socket_accept()"
 description: "Accept a connection on a socket created by stream_socket_server()."
 sidebar:
-  order: 385
+  order: 389
 ---
 
 ## stream_socket_accept()
 
 ```php
-function stream_socket_accept(resource $socket, float $timeout = null, string $peer_name = null): mixed
+function stream_socket_accept(resource $socket, float $timeout = null, string &$peer_name = null): mixed
 ```
 
 Accept a connection on a socket created by stream_socket_server().

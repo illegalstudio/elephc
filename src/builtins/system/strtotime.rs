@@ -18,6 +18,7 @@ builtin! {
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Strtotime,
     ),
+    requirements: crate::builtins::semantics::timezone_validation_requirements,
 }
 
 /// Returns `Union(Int, Bool)` to reflect that `strtotime` can return a timestamp or `false`.

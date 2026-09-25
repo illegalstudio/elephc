@@ -207,7 +207,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("add x0, x10, x11");                                    // pointer to the type byte
     emitter.instruction("add x0, x0, #2");                                      // strtod source = first byte after "d:"
     emitter.instruction("add x1, sp, #64");                                     // strtod endptr = &scratch
-    emitter.bl_c("strtod"); // parse the float (stops at ';') -> d0, scratch=endptr
+    emitter.emit_call_c("strtod"); // parse the float (stops at ';') -> d0, scratch=endptr
     emitter.instruction("ldr x10, [sp, #64]");                                  // bounded conversion end pointer
     emitter.instruction("ldr x11, [sp, #0]");                                   // source base
     emitter.instruction("ldr x12, [sp, #8]");                                   // original value position

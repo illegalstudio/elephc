@@ -55,13 +55,14 @@ pub(crate) fn collect_constants(
     let (fnm_noescape, fnm_pathname) = match target_platform {
         Platform::MacOS => (1, 2),
         Platform::Linux => (2, 1),
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        Platform::Windows => (2, 1),
     };
     let str_const = |value: String| (ExprKind::StringLiteral(value), PhpType::Str);
     let int_const = |value: i64| (ExprKind::IntLiteral(value), PhpType::Int);
     let computed = [
         ("PHP_OS", str_const(target_platform.php_os_name().to_string())),
         ("PHP_OS_FAMILY", str_const(target_platform.php_os_family_name().to_string())),
+        ("PHP_EOL", str_const(target_platform.php_eol().to_string())),
         ("PHP_VERSION", str_const(php_version.version_string().to_string())),
         ("PHP_VERSION_ID", int_const(i64::from(php_version.version_id()))),
         ("PHP_MAJOR_VERSION", int_const(i64::from(php_version.major()))),
@@ -76,7 +77,14 @@ pub(crate) fn collect_constants(
                     .to_string(),
             ),
         ),
-        ("DIRECTORY_SEPARATOR", str_const(std::path::MAIN_SEPARATOR.to_string())),
+        (
+            "DIRECTORY_SEPARATOR",
+            str_const(target_platform.directory_separator().to_string()),
+        ),
+        (
+            "PATH_SEPARATOR",
+            str_const(target_platform.path_separator().to_string()),
+        ),
         ("FNM_NOESCAPE", int_const(fnm_noescape)),
         ("FNM_PATHNAME", int_const(fnm_pathname)),
         ("ICONV_IMPL", str_const(iconv_impl(target_platform == Platform::MacOS).to_string())),
@@ -153,7 +161,6 @@ fn constant_expr_type(kind: &ExprKind) -> PhpType {
         _ => PhpType::Int,
     }
 }
-
 
 #[cfg(test)]
 mod tests {

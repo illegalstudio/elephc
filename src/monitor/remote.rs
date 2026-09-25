@@ -123,7 +123,6 @@ impl<T: std::io::Read + std::io::Write> ReadWrite for T {}
 /// mutual HMAC handshake, receives the folded profile, and renders the same
 /// table (plus optional Speedscope/pprof). Needs no macOS sampler.
 pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
-    use std::os::unix::net::UnixStream;
     let key = match resolve_probe_key(cmd, socket) {
         Ok(key) => key,
         Err(error) => {
@@ -143,23 +142,38 @@ pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
                 return 1;
             }
         },
-        None => match UnixStream::connect(socket) {
-            Ok(stream) => {
-                // The same deadline the TCP path uses. Left unset, a local socket
-                // waited forever where a remote one gave up, so the same command
-                // against the same server had a different contract depending on
-                // the transport — and a wedged peer hung the command with no way
-                // to tell that from a quiet service.
-                let timeout = read_timeout(cmd.exact);
-                let _ = stream.set_read_timeout(Some(timeout));
-                let _ = stream.set_write_timeout(Some(timeout));
-                Box::new(stream)
+        None => {
+            #[cfg(not(target_os = "windows"))]
+            {
+                use std::os::unix::net::UnixStream;
+
+                match UnixStream::connect(socket) {
+                    Ok(stream) => {
+                        // The same deadline the TCP path uses. Left unset, a local socket
+                        // waited forever where a remote one gave up, so the same command
+                        // against the same server had a different contract depending on
+                        // the transport — and a wedged peer hung the command with no way
+                        // to tell that from a quiet service.
+                        let timeout = read_timeout(cmd.exact);
+                        let _ = stream.set_read_timeout(Some(timeout));
+                        let _ = stream.set_write_timeout(Some(timeout));
+                        Box::new(stream)
+                    }
+                    Err(error) => {
+                        eprintln!("elephc monitor: cannot connect to probe at {socket}: {error}");
+                        return 1;
+                    }
+                }
             }
-            Err(error) => {
-                eprintln!("elephc monitor: cannot connect to probe at {socket}: {error}");
-                return 1;
+            #[cfg(target_os = "windows")]
+            {
+                eprintln!(
+                    "elephc monitor: local Unix-socket probe endpoints are unavailable on Windows; \
+                     use host:port or an http(s) URL"
+                );
+                return 2;
             }
-        },
+        }
     };
     let nonce_c = probe_nonce();
     let want = if cmd.exact {

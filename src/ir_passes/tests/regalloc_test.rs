@@ -175,6 +175,11 @@ fn x86_64() -> Target {
     Target::new(Platform::Linux, Arch::X86_64)
 }
 
+/// The Windows x86_64 target used to verify MSx64 volatility constraints.
+fn windows_x86_64() -> Target {
+    Target::new(Platform::Windows, Arch::X86_64)
+}
+
 /// Emits a void-result call that no other value consumes, acting purely as a
 /// clobber point between its surrounding instructions.
 fn emit_clobber_call(builder: &mut Builder<'_>) {
@@ -217,6 +222,68 @@ fn value_live_across_call_uses_callee_saved() {
         allocation.used_callee_saved().contains(&reg),
         "the callee-saved register holding a cross-call value must be recorded"
     );
+}
+
+/// Verifies an integer live across a Windows call uses the explicitly saved
+/// rbx pool rather than MSx64-nonvolatile rsi/rdi as unsaved scratch storage.
+#[test]
+fn windows_value_live_across_call_uses_saved_rbx() {
+    let mut function = Function::new("win_across".to_string(), IrType::I64, PhpType::Int);
+    let live = {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let value = builder.emit_const_i64(7);
+        emit_clobber_call(&mut builder);
+        let result = builder.emit_iadd(value, value);
+        builder.terminate(Terminator::Return {
+            value: Some(result),
+        });
+        value
+    };
+
+    let allocation = allocate_registers(&function, windows_x86_64());
+    assert_eq!(allocation.register_of(live), Some("rbx"));
+    assert_eq!(allocation.used_callee_saved(), &["rbx"]);
+}
+
+/// Verifies call-free Windows integer allocations never use rsi/rdi, which are
+/// nonvolatile under MSx64 and are not saved by generated frames.
+#[test]
+fn windows_call_free_integer_pool_excludes_rsi_and_rdi() {
+    let mut function = Function::new("win_ints".to_string(), IrType::I64, PhpType::Int);
+    let values = {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let values = (0..6)
+            .map(|value| builder.emit_const_i64(value))
+            .collect::<Vec<_>>();
+        let result = values
+            .iter()
+            .copied()
+            .reduce(|left, right| builder.emit_iadd(left, right))
+            .expect("integer fixture has values");
+        builder.terminate(Terminator::Return {
+            value: Some(result),
+        });
+        values
+    };
+
+    let allocation = allocate_registers(&function, windows_x86_64());
+    for value in values {
+        if let Some(register) = allocation.register_of(value) {
+            assert!(
+                matches!(register, "r8" | "r9" | "rbx"),
+                "Windows call-free allocation used unsupported register {register}"
+            );
+            if register == "rbx" {
+                assert!(allocation.used_callee_saved().contains(&"rbx"));
+            }
+        }
+    }
 }
 
 /// Regression: a call's *result* must never use a caller-saved register, even
@@ -298,6 +365,52 @@ fn call_free_float_uses_caller_saved_xmm_on_x86_64() {
         allocation.used_callee_saved().is_empty(),
         "caller-saved XMM registers need no save/restore"
     );
+}
+
+/// Verifies Windows call-free float allocation excludes xmm6-xmm15, whose full
+/// 128-bit nonvolatile state generated frames do not currently preserve.
+#[test]
+fn windows_call_free_float_pool_stays_below_xmm6() {
+    let mut function = Function::new("win_floats".to_string(), IrType::F64, PhpType::Float);
+    let values = {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let values = (0..8)
+            .map(|value| emit_const_f64(&mut builder, value as f64 + 0.5))
+            .collect::<Vec<_>>();
+        let result = values
+            .iter()
+            .copied()
+            .reduce(|left, right| {
+                builder
+                    .emit(
+                        Op::FAdd,
+                        vec![left, right],
+                        None,
+                        IrType::F64,
+                        PhpType::Float,
+                        Ownership::NonHeap,
+                    )
+                    .expect("fadd produces a value")
+            })
+            .expect("float fixture has values");
+        builder.terminate(Terminator::Return {
+            value: Some(result),
+        });
+        values
+    };
+
+    let allocation = allocate_registers(&function, windows_x86_64());
+    for value in values {
+        if let Some(register) = allocation.register_of(value) {
+            assert!(
+                matches!(register, "xmm2" | "xmm3" | "xmm4" | "xmm5"),
+                "Windows float allocation used nonvolatile {register}"
+            );
+        }
+    }
 }
 
 /// A float value that lives across a call on x86_64 cannot be register-allocated

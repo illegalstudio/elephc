@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_rgb() - internals"
 description: "Compiler internals for cairo_pattern_create_rgb(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 427
+  order: 431
 ---
 
 ## `cairo_pattern_create_rgb()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13752](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13752) (`cairo_pattern_create_rgb`)
+- **Lowering**: [`src/image_prelude.rs`:13823](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13823) (`cairo_pattern_create_rgb`)
 - **Function symbol**: `cairo_pattern_create_rgb()`
 
 

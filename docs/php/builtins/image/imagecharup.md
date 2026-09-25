@@ -2,7 +2,7 @@
 title: "imagecharup()"
 description: "Draws one character vertically with a built-in font."
 sidebar:
-  order: 463
+  order: 467
 ---
 
 ## imagecharup()

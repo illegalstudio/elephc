@@ -2,7 +2,7 @@
 title: "ptr_read32()"
 description: "Reads one unsigned 32-bit word through a raw pointer and returns it as an integer."
 sidebar:
-  order: 735
+  order: 749
 ---
 
 ## ptr_read32()

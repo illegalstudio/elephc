@@ -114,8 +114,8 @@ pub fn emit_decref_preserving_exception(emitter: &mut Emitter, ty: &PhpType) {
 
 /// Calls unary cleanup, accumulating its exception and returning whether this call caught one.
 pub fn emit_unary_cleanup_preserving_exception(emitter: &mut Emitter, entry: &str, payload: &str) {
-    let arg0 = super::int_arg_reg_name(emitter.target, 0);
-    let arg1 = super::int_arg_reg_name(emitter.target, 1);
+    let arg0 = super::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = super::runtime_helper_int_arg_reg(emitter, 1);
     super::emit_reg_move(emitter, arg1, payload);
     super::emit_symbol_address(emitter, arg0, entry);
     emit_call_label(emitter, "__rt_cleanup_preserve_exception");
@@ -157,10 +157,10 @@ fn emit_local_ref_cell_cleanup(emitter: &mut Emitter, cell_reg: &str, value_ty: 
         PhpType::Str => Some("__rt_heap_free_safe"),
         ty => refcount_release_helper(&ty),
     };
-    let arg0 = super::int_arg_reg_name(emitter.target, 0);
-    let arg1 = super::int_arg_reg_name(emitter.target, 1);
+    let arg0 = super::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = super::runtime_helper_int_arg_reg(emitter, 1);
     super::emit_reg_move(emitter, arg1, cell_reg);
-    emit_load_int_immediate(emitter, super::int_arg_reg_name(emitter.target, 2), i64::from(defer_throw));
+    emit_load_int_immediate(emitter, super::runtime_helper_int_arg_reg(emitter, 2), i64::from(defer_throw));
     if let Some(entry) = entry {
         super::emit_symbol_address(emitter, arg0, entry);
     } else {

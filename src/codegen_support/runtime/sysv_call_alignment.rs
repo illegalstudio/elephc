@@ -43,9 +43,9 @@ use crate::codegen_support::runtime_features::RuntimeFeatures;
 ///
 /// NOTHING HERE REACHES THE `elephc_curl` BRIDGE — that was checked, not assumed: none of
 /// these helpers calls a decref/release helper, so none of them can reach
-/// `__rt_mixed_free_deep`'s resource ladder. The two entries that DO reach code outside
-/// the hand-written runtime (`__rt_usort`, `__rt_fiber_entry`)
-/// are called out individually below and are the ones worth fixing first.
+/// `__rt_mixed_free_deep`'s resource ladder. The one entry that still reaches code outside
+/// the hand-written runtime (`__rt_fiber_entry`) is called out individually below and remains
+/// the first candidate for a frame-layout repair.
 const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     // -- No frame at all: the helper calls without adjusting rsp, so the callee is entered
     //    8 bytes off. Every callee here is hand-written assembly that touches only integer
@@ -54,7 +54,6 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     ("__rt_strtolower", "frameless: calls __rt_strcopy, integer-only assembly"),
     ("__rt_hash_key_hash", "frameless: calls __rt_hash_fnv1a, integer-only assembly"),
     ("__rt_hash_key_eq", "frameless: calls __rt_str_eq, integer-only assembly"),
-    ("__rt_array_rand", "frameless: calls __rt_random_uniform, integer-only assembly"),
     ("__rt_mixed_is_empty", "frameless: calls __rt_mixed_unbox, integer-only assembly"),
     // The two uncaught-exception helpers deliberately have NO entry here: they live in
     // NOT_STATICALLY_ANALYZABLE because their `and rsp, -16` instructions realign every
@@ -104,13 +103,7 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
         "multi-push frame off by 8: calls __rt_concat_reserve / __rt_wordwrap_cpy_x86_64, \
          integer-only assembly",
     ),
-    // -- The two that reach code this runtime did not write. FIX THESE FIRST.
-    (
-        "__rt_usort",
-        "REACHES NON-RUNTIME CODE: `call r12` is the user's comparator, i.e. COMPILED PHP. \
-         It has survived because codegen spills floats with `movsd`/`movq` (alignment-\
-         tolerant) rather than `movaps`, which is luck, not design",
-    ),
+    // -- The one that reaches code this runtime did not write. FIX THIS FIRST.
     (
         "__rt_fiber_entry",
         "REACHES LIBC: `call setjmp` on a misaligned stack, plus `call r13` into the fiber's \
@@ -159,10 +152,6 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
     ),
     (
         "__rt_gc_mark_reachable",
-        "shares a tail between the framed body and a frameless early-out",
-    ),
-    (
-        "__rt_mb_strlen",
         "shares a tail between the framed body and a frameless early-out",
     ),
 ];
@@ -408,6 +397,23 @@ fn is_register(operand: &str) -> bool {
         && operand.starts_with(['r', 'e'])
 }
 
+/// Returns whether a label is the target of a conditional or unconditional branch.
+///
+/// The emitted runtime keeps private callable subroutines behind an exported section. Those
+/// labels must be walked as independent entries, while ordinary basic-block labels are already
+/// reached from the exported entry. Filtering branch targets here prevents the second pass from
+/// treating a block after a frame setup as a frameless function and reporting a false alignment
+/// violation.
+fn has_incoming_branch(body: &[(usize, String)], label: &str) -> bool {
+    body.iter().any(|(_, text)| {
+        let (mnemonic, operands) = match text.split_once(' ') {
+            Some((head, rest)) => (head, rest.trim()),
+            None => (text.as_str(), ""),
+        };
+        is_branch(mnemonic) && operands == label
+    })
+}
+
 /// Audits every helper emitted in one `.section .text.<name>` block.
 ///
 /// MULTI-ENTRY ON PURPOSE, AND EACH ENTRY WALKS IN ISOLATION. A section is not one function:
@@ -455,7 +461,11 @@ fn analyze(function: &Function) -> Analysis {
             .body
             .iter()
             .enumerate()
-            .find(|(index, (_, text))| label_of(text).is_some() && !visited.contains_key(index))
+            .find(|(index, (_, text))| {
+                label_of(text).is_some()
+                    && !visited.contains_key(index)
+                    && !has_incoming_branch(&function.body, text.trim_end_matches(':'))
+            })
             .map(|(index, _)| index);
     }
 

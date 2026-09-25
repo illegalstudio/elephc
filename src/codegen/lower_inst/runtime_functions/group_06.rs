@@ -52,6 +52,29 @@ pub(super) fn lower(
         RuntimeFnId::StreamIsatty => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_isatty(ctx, inst)
         }),
+        RuntimeFnId::SapiWindowsVt100Support => Some({
+            crate::codegen::lower_inst::builtins::system::lower_sapi_windows_vt100_support(ctx, inst)
+        }),
+        RuntimeFnId::SapiWindowsCpSet => Some({
+            crate::codegen::lower_inst::builtins::system::lower_sapi_windows_cp_set(ctx, inst)
+        }),
+        RuntimeFnId::SapiWindowsCpGet => Some({
+            crate::codegen::lower_inst::builtins::system::lower_sapi_windows_cp_get(ctx, inst)
+        }),
+        RuntimeFnId::SapiWindowsCpConv => Some({
+            crate::codegen::lower_inst::builtins::system::lower_sapi_windows_cp_conv(ctx, inst)
+        }),
+        RuntimeFnId::SapiWindowsCpIsUtf8 => Some({
+            crate::codegen::lower_inst::builtins::system::lower_sapi_windows_scalar(
+                ctx, inst, "sapi_windows_cp_is_utf8", "__rt_sapi_windows_cp_is_utf8", 0, 0,
+            )
+        }),
+        RuntimeFnId::SapiWindowsSetCtrlHandler => Some({
+            crate::codegen::lower_inst::builtins::system::lower_sapi_windows_set_ctrl_handler(ctx, inst)
+        }),
+        RuntimeFnId::SapiWindowsGenerateCtrlEvent => Some({
+            crate::codegen::lower_inst::builtins::system::lower_sapi_windows_generate_ctrl_event(ctx, inst)
+        }),
         RuntimeFnId::StreamResolveIncludePath => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_resolve_include_path(ctx, inst)
         }),

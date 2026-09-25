@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 pub use registry::Registry;
 
+use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
 use crate::parser::ast::Program;
 use crate::parser::ast::Stmt;
@@ -46,7 +47,24 @@ pub fn run(
     base_dir: &Path,
     registry: &Registry,
 ) -> Result<Program, CompileError> {
-    run_collecting_included(program, base_dir, registry).map(|(program, _)| program)
+    run_for_platform(program, base_dir, registry, Platform::detect_host())
+}
+
+/// Runs autoload resolution against the selected target platform's builtin surface.
+pub fn run_for_platform(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+    platform: Platform,
+) -> Result<Program, CompileError> {
+    run_collecting_included_with_defines_for_platform(
+        program,
+        base_dir,
+        registry,
+        &HashSet::new(),
+        platform,
+    )
+    .map(|(program, _)| program)
 }
 
 /// Same as [`run`], but also returns the CANONICAL path of every source file this pass
@@ -69,20 +87,51 @@ pub fn run(
 /// makes this function's autoload behavior byte-identical to [`run`]'s.
 ///
 /// The vector is SORTED so a build is byte-reproducible.
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn run_collecting_included(
     program: Program,
     base_dir: &Path,
     registry: &Registry,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
-    run_collecting_included_with_defines(program, base_dir, registry, &HashSet::new())
+    run_collecting_included_with_defines_for_platform(
+        program,
+        base_dir,
+        registry,
+        &HashSet::new(),
+        Platform::detect_host(),
+    )
 }
 
 /// Runs autoload expansion while applying conditional symbols to every physical file loaded.
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn run_collecting_included_with_defines(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    run_collecting_included_with_defines_for_platform(
+        program,
+        base_dir,
+        registry,
+        defines,
+        Platform::detect_host(),
+    )
+}
+
+/// Runs autoload expansion with conditional symbols and a selected target platform.
+///
+/// This is the pipeline-facing form: the platform is threaded into name resolution for every
+/// Composer/SPL file, so target-gated builtins are resolved with the same surface as the entry
+/// program while the OPcache manifest still receives every physical source file loaded.
+pub fn run_collecting_included_with_defines_for_platform(
     mut program: Program,
     base_dir: &Path,
     registry: &Registry,
     defines: &HashSet<String>,
+    platform: Platform,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     if registry.is_empty() {
         return Ok((program, Vec::new()));
@@ -100,7 +149,7 @@ pub fn run_collecting_included_with_defines(
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
             let (loaded, loaded_includes) =
-                load_autoloaded_file(&canonical, base_dir, defines)?;
+                load_autoloaded_file(&canonical, base_dir, defines, platform)?;
             nested_includes.extend(loaded_includes);
             prefix.extend(loaded);
         }
@@ -123,7 +172,7 @@ pub fn run_collecting_included_with_defines(
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
                     let (loaded, loaded_includes) =
-                        load_autoloaded_file(&canonical, base_dir, defines)?;
+                        load_autoloaded_file(&canonical, base_dir, defines, platform)?;
                     nested_includes.extend(loaded_includes);
                     insertions.push((stmt_idx, loaded));
                 }
@@ -187,6 +236,7 @@ fn load_autoloaded_file(
     path: &Path,
     base_dir: &Path,
     defines: &HashSet<String>,
+    platform: Platform,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
@@ -208,7 +258,8 @@ fn load_autoloaded_file(
         defines,
     )?;
     let resolved = alias::collect_aliases(resolved);
-    let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
+    let canonicalized: Vec<Stmt> =
+        crate::name_resolver::resolve_for_platform(resolved, platform)?;
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level
     // program.

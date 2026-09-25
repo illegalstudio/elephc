@@ -11,23 +11,33 @@
 //! - PHP values, callable descriptors, signal dispatch, and output arrays remain runtime-owned.
 
 mod constants;
+#[cfg(unix)]
 mod exec;
+#[cfg(unix)]
 mod process;
+#[cfg(unix)]
 mod signals;
+#[cfg(not(unix))]
+mod unsupported;
 
 pub use constants::{
     host_pcntl_int_constant, is_pcntl_int_constant, LINUX_PCNTL_INT_CONSTANTS,
     MACOS_PCNTL_INT_CONSTANTS,
 };
+#[cfg(unix)]
 pub use exec::*;
+#[cfg(unix)]
 pub use process::*;
+#[cfg(unix)]
 pub use signals::*;
+#[cfg(not(unix))]
+pub use unsupported::*;
 
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicI32, Ordering};
 #[cfg(target_os = "linux")]
 use std::sync::atomic::AtomicI64;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::sync::Mutex;
 
 static LAST_ERROR: AtomicI32 = AtomicI32::new(0);
@@ -35,7 +45,7 @@ static LAST_ERROR: AtomicI32 = AtomicI32::new(0);
 static LAST_CPU_AFFINITY_ID: AtomicI64 = AtomicI64::new(0);
 #[cfg(target_os = "linux")]
 static LAST_CPU_AFFINITY_LIMIT: AtomicI64 = AtomicI64::new(0);
-#[cfg(test)]
+#[cfg(all(test, unix))]
 static PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Selects PHP's `pcntl_fork()` failure warning in the stable formatting ABI.
@@ -56,11 +66,13 @@ pub const PCNTL_WARNING_GETPRIORITY: libc::c_int = 6;
 pub const PCNTL_WARNING_SETPRIORITY: libc::c_int = 7;
 
 /// Reads the current thread's OS errno without mutating PCNTL state.
+#[cfg(unix)]
 fn current_errno() -> libc::c_int {
     unsafe { *errno_location() }
 }
 
 /// Records the current thread's OS errno as the last PCNTL error.
+#[cfg(unix)]
 fn record_errno() {
     LAST_ERROR.store(current_errno(), Ordering::Relaxed);
 }
@@ -141,6 +153,7 @@ unsafe fn set_priority(
 ///
 /// # Safety
 /// `priority` must point to writable `libc::c_int` storage.
+#[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pcntl_getpriority(
     process_id: i64,
@@ -164,6 +177,7 @@ pub unsafe extern "C" fn elephc_pcntl_getpriority(
 /// Changes the scheduling priority selected by `mode` and `process_id`.
 ///
 /// Returns one on success, or zero after recording errno on failure.
+#[cfg(unix)]
 #[no_mangle]
 pub extern "C" fn elephc_pcntl_setpriority(
     priority: libc::c_int,
@@ -219,6 +233,7 @@ pub fn pcntl_last_error_warning(kind: libc::c_int) -> String {
             format!("Warning: pcntl_setns(): Error {error}: {detail}\n")
         }
         PCNTL_WARNING_UNSHARE => {
+            #[cfg(unix)]
             let detail = match error {
                 libc::ENOMEM => "Insufficient memory for unshare",
                 libc::EPERM => "No privilege to use these flags",
@@ -232,6 +247,8 @@ pub fn pcntl_last_error_warning(kind: libc::c_int) -> String {
                     )
                 }
             };
+            #[cfg(not(unix))]
+            let detail = "Operation is unavailable on this target";
             format!("Warning: pcntl_unshare(): Error {error}: {detail}\n")
         }
         PCNTL_WARNING_CPU_AFFINITY => {
@@ -652,5 +669,5 @@ pub extern "C" fn elephc_pcntl_unshare(flags: libc::c_int) -> libc::c_int {
     1
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
