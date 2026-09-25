@@ -318,21 +318,34 @@ fn insert_builtin_reflection_class(
 /// `ReflectionClass` in for every program that merely builds a `ReflectionParameter` cascades
 /// through its whole surface, and multiplied such a program's assembly by 3.6.
 ///
-/// What this cannot see: a getter name that never appears as a literal — assembled at run time,
-/// or read back from metadata such as `get_class_methods()` — and any route that reaches a slot's
-/// object without calling its getter at all. The slots are filled eagerly when the holder is
-/// built, so `(array) $holder`, which today exposes them (#1251), reaches an unlowered companion.
-/// That route is a divergence of its own — PHP never shows these slots — and closing it there is
-/// what keeps this rule sufficient.
+/// A getter name that never appears as a literal — assembled at run time, or read back from
+/// metadata such as `get_class_methods()` — can only reach the getter through a call resolved at
+/// run time: `$holder->$name()`, `call_user_func([$holder, $name])` and `[$holder, $name]()` all
+/// lower to a `CallableDescriptorInvoke`. A program holding one counts every getter as named, so
+/// its companions are lowered whatever the name turns out to be. `ExprCall` is not counted: it
+/// carries receiver-bound first-class callables, whose method name is known at compile time and
+/// already in the data pool. The size cost falls only on programs that build a holder AND make a
+/// descriptor call; a literal `call_user_func("strlen", …)` or a closure call does not change the
+/// emitted size.
+///
+/// The slots are filled eagerly when the holder is built, so a route that reaches one without its
+/// getter would escape this rule too. `(array) $holder` was that route until #1278 stopped the
+/// cast exposing the internal `__*` slots (#1251).
 fn collect_named_materialized_companions(module: &Module, classes: &mut BTreeSet<String>) {
     // A first-class callable keeps its target as `object::<method>`, and a callable string may
     // be `Class::method`, so the name is also matched after a `::` qualifier.
-    let named = |getter: &str| {
+    let literally_named = |getter: &str| {
         module.data.strings.iter().any(|string| {
             let method = string.rsplit_once("::").map_or(string.as_str(), |(_, method)| method);
             php_method_key(method) == getter
         })
     };
+    let calls_by_runtime_name = all_lowered_functions(module).any(|function| {
+        function.instructions.iter().any(|inst| {
+            inst.op == Op::CallableDescriptorInvoke
+        })
+    });
+    let named = |getter: &str| calls_by_runtime_name || literally_named(getter);
     // A companion can itself hold a slot of an earlier row, so repeat until nothing is added
     // rather than rely on the table's row order.
     loop {

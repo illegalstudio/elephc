@@ -117,8 +117,11 @@ materialized class when the holder is reachable and the getter name is present i
 string data. It repeats this companion scan to a fixed point because a returned Reflection object
 can itself hold another materialized Reflection object. This keeps getter-returned objects' method
 and `__toString` tables available without pulling the entire Reflection hierarchy into programs
-that never call those getters. Getter names assembled only at runtime are outside this static
-reachability signal.
+that never call those getters. A getter name assembled at runtime never reaches the string data,
+but it can only be called through a runtime-resolved callable — `$holder->$name()`,
+`call_user_func([$holder, $name])` and `[$holder, $name]()` all lower to a
+`CallableDescriptorInvoke` — so a module containing one treats every getter as named. That cost
+falls only on programs that build a holder and make such a call.
 
 ## Eval Lowering Boundary
 

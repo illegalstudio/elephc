@@ -109,3 +109,51 @@ foreach ($type->getTypes() as $member) { echo $member->getName(), ","; }
     );
     assert_eq!(out, "ReflectionUnionType:int,string,");
 }
+
+/// A getter name assembled at run time reaches the companion through `$holder->$name()`.
+///
+/// Nothing in the data pool spells the getter: the pieces are `"get"`, `"Declaring"` and a
+/// ternary the optimizer cannot fold. The call lowers to a callable descriptor invoke, which is
+/// what makes every getter count as named. The result is stringified WITHOUT a method call on it,
+/// because a method call would lower the class through the mixed-receiver scan and hide the defect.
+#[test]
+fn runtime_assembled_getter_name_through_a_dynamic_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$m = "get" . "Declaring" . ($argc > 5 ? "Class" : "Function");
+$f = $p->$m();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+    assert_eq!(out, "ReflectionFunction|string");
+}
+
+/// The same runtime-assembled name through `call_user_func([$holder, $name])`.
+#[test]
+fn runtime_assembled_getter_name_through_call_user_func() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$m = "get" . "Declaring" . ($argc > 5 ? "Class" : "Function");
+$f = call_user_func([$p, $m]);
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+    assert_eq!(out, "ReflectionFunction|string");
+}
+
+/// The same runtime-assembled name through an array callable invoked directly.
+#[test]
+fn runtime_assembled_getter_name_through_an_array_callable() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$m = "get" . "Declaring" . ($argc > 5 ? "Class" : "Function");
+$callable = [$p, $m];
+$f = $callable();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+    assert_eq!(out, "ReflectionFunction|string");
+}
