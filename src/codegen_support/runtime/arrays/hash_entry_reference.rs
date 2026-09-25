@@ -302,7 +302,7 @@ fn emit_iter_next_value(emitter: &mut Emitter) {
 /// that removed entry and continue in insertion order.
 ///
 /// Rehashing permutes slot indices, so the resumed cursor is derived from where the anchor
-/// actually landed in the live table: `(entry - table - header) / entry_size + 1`, which is the
+/// actually landed in the live entry storage: `(entry - entries) / entry_size + 1`, which is the
 /// same "slot index plus one" encoding `__rt_hash_iter_next` returns.
 ///
 /// Input: argument 0 = live table pointer, argument 1 = successor key low word,
@@ -333,8 +333,8 @@ fn emit_iter_resync(emitter: &mut Emitter) {
             emitter.instruction("cbz x0, __rt_hash_iter_resync_missing");       // neither owned anchor survived in the live table
             emitter.label("__rt_hash_iter_resync_found");
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the live table base
-            emitter.instruction("sub x0, x4, x9");                              // byte offset of the anchor entry inside the table
-            emitter.instruction("sub x0, x0, #40");                             // discount the fixed 40-byte hash header
+            emitter.instruction("ldr x9, [x9, #40]");                           // locate the separately allocated entry storage
+            emitter.instruction("sub x0, x4, x9");                              // byte offset of the anchor inside entry storage
             emitter.instruction("lsr x0, x0, #6");                              // 64 bytes per entry gives the slot index
             emitter.instruction("add x0, x0, #1");                              // encode the resumed cursor as slot index plus one
             emitter.instruction("ldp x29, x30, [sp], #48");                     // restore frame pointer and release anchor spills
@@ -369,9 +369,9 @@ fn emit_iter_resync(emitter: &mut Emitter) {
             emitter.instruction("jz __rt_hash_iter_resync_missing");            // neither owned anchor survived in the live table
             emitter.label("__rt_hash_iter_resync_found");
             emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                // reload the live table base
+            emitter.instruction("mov rcx, QWORD PTR [rcx + 40]");               // locate the separately allocated entry storage
             emitter.instruction("mov rax, r8");                                 // the probe returned the matching entry address
-            emitter.instruction("sub rax, rcx");                                // byte offset of the anchor entry inside the table
-            emitter.instruction("sub rax, 40");                                 // discount the fixed 40-byte hash header
+            emitter.instruction("sub rax, rcx");                                // byte offset of the anchor inside entry storage
             emitter.instruction("shr rax, 6");                                  // 64 bytes per entry gives the slot index
             emitter.instruction("add rax, 1");                                  // encode the resumed cursor as slot index plus one
             emitter.instruction("add rsp, 32");                                 // release table and fallback-key spills

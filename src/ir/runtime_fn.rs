@@ -591,6 +591,8 @@ pub enum RuntimeFnId {
     MbEreg,
     /// Parses multibyte query input into a live output reference using Core INI settings.
     MbParseStr,
+    /// Encodes and sends a message using shared mbstring language settings.
+    MbSendMail,
     /// Searches a multibyte pattern without case sensitivity and preserves capture identity.
     MbEregi,
     /// Shared `mb_ereg_search_init` request operation.
@@ -1467,6 +1469,17 @@ impl RuntimeFnId {
                     | crate::ir::Effects::MAY_WARN.bits()
                     | crate::ir::Effects::MAY_THROW.bits(),
             ),
+            RuntimeFnId::MbSendMail => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::OUTPUT.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::BLOCKING_IO.bits()
+                    | crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
@@ -1521,6 +1534,11 @@ impl RuntimeFnId {
             IoKind, MonitoringPolicy, TraceContextPolicy, WaitPolicy,
         };
         match self {
+            RuntimeFnId::MbSendMail => MonitoringPolicy::Io {
+                kind: IoKind::Network,
+                wait: WaitPolicy::Measured,
+                trace_context: TraceContextPolicy::NotApplicable,
+            },
             RuntimeFnId::CurlEasyPerform => MonitoringPolicy::Io {
                 kind: IoKind::Network,
                 wait: WaitPolicy::Measured,
@@ -1859,6 +1877,7 @@ impl RuntimeFnId {
             | RuntimeFnId::MbGetInfo
             | RuntimeFnId::SharedIni
             | RuntimeFnId::MbParseStr
+            | RuntimeFnId::MbSendMail
             | RuntimeFnId::MbHttpInput
             | RuntimeFnId::MbRegexEncoding
             | RuntimeFnId::MbRegexSetOptions
@@ -1923,6 +1942,7 @@ impl RuntimeFnId {
             Self::MbGetInfo => Some(RuntimeBuiltinId::MbGetInfo),
             Self::SharedIni => Some(RuntimeBuiltinId::SharedIni),
             Self::MbParseStr => Some(RuntimeBuiltinId::MbParseStr),
+            Self::MbSendMail => Some(RuntimeBuiltinId::MbSendMail),
             Self::MbHttpInput => Some(RuntimeBuiltinId::MbHttpInput),
             Self::MbRegexEncoding => Some(RuntimeBuiltinId::MbRegexEncoding),
             Self::MbRegexSetOptions => Some(RuntimeBuiltinId::MbRegexSetOptions),
@@ -2127,7 +2147,7 @@ impl RuntimeFnId {
         use crate::builtins::semantics::BuiltinResultOwnership;
         if self.uses_mbstring_runtime() {
             return if matches!(self, Self::MbStrlen | Self::MbStrwidth | Self::MbSubstrCount | Self::MbCheckEncoding
-                | Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::MbEregSearchInit | Self::MbEregSearch | Self::MbEregSearchGetpos | Self::MbEregSearchSetpos) {
+                | Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::MbSendMail | Self::MbEregSearchInit | Self::MbEregSearch | Self::MbEregSearchGetpos | Self::MbEregSearchSetpos) {
                 BuiltinResultOwnership::NonHeap
             } else { BuiltinResultOwnership::Fresh };
         }
@@ -2365,6 +2385,7 @@ impl RuntimeFnId {
                 // answer, `hrtime` boxes either a scalar or a new hash, and grapheme reversal
                 // boxes both its string and false paths. None can alias an argument.
                 | RuntimeFnId::Getdate
+                | RuntimeFnId::Hrtime
                 // `getcwd()` takes NO arguments, so its result cannot alias one by
                 // construction; `__rt_getcwd` copies the kernel's buffer out through
                 // `__rt_str_persist`. The default `MayAliasArguments` bucket made
@@ -2424,11 +2445,6 @@ impl RuntimeFnId {
                 | RuntimeFnId::PrintR
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
-                // `str_repeat()` allocates the repeated bytes independently of its subject.
-                // Marking it as possibly aliasing made closure return analysis conservative,
-                // so callers failed to publish the fresh result before argument cleanup that
-                // can run a throwing destructor.
-                | RuntimeFnId::StrRepeat
                 | RuntimeFnId::StrSplit
                 | RuntimeFnId::Strtotime
                 // Every `str_word_count()` shape allocates its own result: format 0 is a plain
@@ -2494,6 +2510,8 @@ impl RuntimeFnId {
                 // but scratch-backed results still need ordinary string persistence.
                 | RuntimeFnId::StrReplace
                 | RuntimeFnId::StrIreplace
+                // Repetition uses separate concat storage and cannot alias its subject.
+                | RuntimeFnId::StrRepeat
         ) {
             BuiltinResultOwnership::Independent
         } else {
@@ -3014,6 +3032,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbGetInfo => "mb_get_info",
             RuntimeFnId::SharedIni => "__elephc_shared_ini",
             RuntimeFnId::MbParseStr => "mb_parse_str",
+            RuntimeFnId::MbSendMail => "mb_send_mail",
             RuntimeFnId::MbHttpInput => "mb_http_input",
             RuntimeFnId::MbRegexEncoding => "mb_regex_encoding",
             RuntimeFnId::MbRegexSetOptions => "mb_regex_set_options",

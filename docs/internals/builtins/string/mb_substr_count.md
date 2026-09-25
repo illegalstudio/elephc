@@ -2,7 +2,7 @@
 title: "mb_substr_count() - internals"
 description: "Compiler internals for mb_substr_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 887
+  order: 888
 ---
 
 ## `mb_substr_count()` - internals

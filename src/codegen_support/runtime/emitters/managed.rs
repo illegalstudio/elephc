@@ -24,7 +24,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_heap_debug_validate_free_list(emitter);
     arrays::emit_heap_debug_report(emitter);
     arrays::emit_heap_kind(emitter);
-    arrays::emit_heap_free(emitter, features.eval_bridge);
+    arrays::emit_heap_free(emitter, features.eval_bridge, features.mbstring || features.eval_bridge);
     arrays::emit_array_free_deep(emitter);
     arrays::emit_array_clone_shallow(emitter);
     arrays::emit_array_ensure_unique(emitter);

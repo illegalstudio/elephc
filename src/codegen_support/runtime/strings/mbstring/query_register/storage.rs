@@ -38,7 +38,9 @@ fn root(emitter: &mut Emitter) {
         emitter.instruction("test rsi, rsi");                                   // require a borrowed writer handle
         emitter.instruction("jz __rt_mbstring_query_root_invalid");             // reject a missing persistent reference
         emitter.instruction("mov rax, rsi");                                    // resolve either persistent reference representation
+        emitter.instruction("sub rsp, 8");                                      // align the borrowed reference helper call
         emitter.instruction("call __rt_mbstring_reference_child_slot");         // return the writable child slot
+        emitter.instruction("add rsp, 8");                                      // restore the callback entry stack
         emitter.instruction("test rax, rax");                                   // reject ordinary boxed values without mutation
         emitter.instruction("jz __rt_mbstring_query_root_invalid");
         emitter.instruction("mov rax, QWORD PTR [rax]");                        // borrow the current boxed PHP value

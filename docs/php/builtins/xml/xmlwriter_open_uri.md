@@ -2,7 +2,7 @@
 title: "xmlwriter_open_uri()"
 description: "Creates a writer that outputs to a URI or file path; throws ValueError when it cannot be opened."
 sidebar:
-  order: 1036
+  order: 1037
 ---
 
 ## xmlwriter_open_uri()

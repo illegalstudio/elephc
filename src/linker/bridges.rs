@@ -123,7 +123,11 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_libraries: &[],
         needs_libdl: true,
         php_extensions: &["mbstring"],
-        monitoring: MonitoringPolicy::GenericTiming,
+        monitoring: MonitoringPolicy::Io {
+            kind: IoKind::Network,
+            wait: WaitPolicy::Measured,
+            trace_context: TraceContextPolicy::NotApplicable,
+        },
     },
     BridgeStaticlib {
         lib_name: "elephc_iconv",

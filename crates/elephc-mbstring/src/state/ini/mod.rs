@@ -166,6 +166,9 @@ impl State {
     pub fn with_ini_configuration(overrides: &[(Vec<u8>, Vec<u8>)], defaults: CoreEncodingDefaults,
         mut validate: impl FnMut(&[u8]) -> Result<(), MimeRegexError>) -> (Self, Vec<Diagnostic>) {
         let mut state = Self::default();
+        if let Some((_, value)) = overrides.iter().rev().find(|(name, _)| name == b"sendmail_path") {
+            state.mail_command = value.clone();
+        }
         let (core_ini, mut diagnostics) = super::CoreIni::with_overrides(overrides);
         state.core_ini = core_ini;
         state.response = super::Response::with_overrides(overrides);
@@ -199,9 +202,11 @@ impl State {
         let mut core_ini = self.core_ini.clone();
         core_ini.reset();
         let response = self.response.startup_reset();
+        let mail_command = self.mail_command.clone();
         *self = Self::with_ini_configuration(&overrides, defaults, |_| Ok(())).0;
         self.core_ini = core_ini;
         self.response = response;
+        self.mail_command = mail_command;
     }
 
     /// Updates inherited effective encodings while preserving explicit public/INI overrides and lookup caches.

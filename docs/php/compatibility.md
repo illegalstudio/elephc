@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **978 / 2169** (45%), classes **142 / 329** (43%), constants **1114 / 3180** (35%).
+Overall coverage: functions **979 / 2169** (45%), classes **142 / 329** (43%), constants **1114 / 3180** (35%).
 
 ## Coverage by PHP module
 
@@ -42,7 +42,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `json` | 5 / 5 · 100% | 2 / 2 · 100% | 27 / 29 · 93% |
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
 | `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 0 / 28 · 0% |
-| `mbstring` | 63 / 65 · 97% | - | 9 / 9 · 100% |
+| `mbstring` | 64 / 65 · 98% | - | 9 / 9 · 100% |
 | [`mysqli`](./mysqli.md#functions) | 84 / 106 · 79% | 4 / 6 · 67% | 52 / 110 · 47% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
 | `openssl` | 4 / 64 · 6% | 0 / 3 · 0% | 3 / 70 · 4% |

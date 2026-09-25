@@ -2,7 +2,7 @@
 title: "mb_strimwidth() - internals"
 description: "Compiler internals for mb_strimwidth(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 872
+  order: 873
 ---
 
 ## `mb_strimwidth()` - internals

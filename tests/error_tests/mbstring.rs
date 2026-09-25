@@ -9,6 +9,16 @@
 
 use super::*;
 
+/// Rejects invalid static mail arguments before a transport can run.
+#[test]
+fn test_error_mbstring_send_mail_contract() {
+    for (source, message) in [
+        ("<?php mb_send_mail();", "mb_send_mail() takes 3 to 5 arguments"),
+        ("<?php mb_send_mail(\"to\", \"subject\", []);", "mb_send_mail() message argument must be string"),
+        ("<?php mb_send_mail(\"to\", \"subject\", \"body\", [], []);", "mb_send_mail() additional_params argument must be string or null"),
+    ] { expect_error(source, message); }
+}
+
 /// Rejects impossible callback-replacement argument counts and outer scalar types.
 #[test]
 fn test_error_mbstring_regex_callback_contract() {

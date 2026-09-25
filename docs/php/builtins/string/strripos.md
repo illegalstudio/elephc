@@ -2,7 +2,7 @@
 title: "strripos()"
 description: "Finds the numeric position of the last case-insensitive occurrence of a substring."
 sidebar:
-  order: 926
+  order: 927
 ---
 
 ## strripos()

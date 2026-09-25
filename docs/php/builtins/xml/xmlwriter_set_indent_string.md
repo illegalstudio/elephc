@@ -2,7 +2,7 @@
 title: "xmlwriter_set_indent_string()"
 description: "Sets the string used for one indentation level."
 sidebar:
-  order: 1039
+  order: 1040
 ---
 
 ## xmlwriter_set_indent_string()

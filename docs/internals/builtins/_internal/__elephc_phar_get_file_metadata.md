@@ -2,7 +2,7 @@
 title: "__elephc_phar_get_file_metadata() - internals"
 description: "Compiler internals for __elephc_phar_get_file_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1130
+  order: 1131
 ---
 
 ## `__elephc_phar_get_file_metadata()` - internals

@@ -386,7 +386,8 @@ fn call_array_arguments_balance_extracted_owners_on_return_and_error() {
         );
         assert_eq!(result.is_err(), fail_dispatch);
         let extracted = extracted.unwrap();
-        assert_eq!(values.cell_owners[&(extracted.as_ptr() as usize)], usize::from(!fail_dispatch));
+        // The array keeps its stored owner; the extracted read is a separate lease.
+        assert_eq!(values.cell_owners[&(extracted.as_ptr() as usize)], if fail_dispatch { 1 } else { 2 });
         if let Ok(result) = result {
             assert_eq!(values.string_bytes(result).unwrap(), b"original");
             values.release(result).unwrap();
@@ -514,10 +515,14 @@ $closure = function() {};"#,
         assert!(values.releases[releases..].contains(&method), "{method_name}");
         assert_eq!(
             values.cell_owners[&(object.as_ptr() as usize)],
-            1,
+            2,
             "{method_name}",
         );
         values.release(callback).unwrap();
+        // FakeOps does not recursively release children of its synthetic array cell.
+        values.release(object).unwrap();
+        values.release(method).unwrap();
+        assert_eq!(values.cell_owners[&(object.as_ptr() as usize)], 1, "{method_name}");
     }
 }
 

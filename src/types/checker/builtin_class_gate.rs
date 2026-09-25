@@ -40,7 +40,6 @@ pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
     "ArgumentCountError",
     "ValueError",
     "ArithmeticError",
-    "ArgumentCountError",
     "DivisionByZeroError",
     "Exception",
     "JsonException",

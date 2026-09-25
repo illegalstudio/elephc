@@ -75,8 +75,8 @@ fn emit_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_reverse_boxed_hash");
     emitter.instruction("tbnz x10, #63, __rt_array_reverse_boxed_done");        // minus one terminates the insertion-order chain
+    emitter.instruction("ldr x11, [x11, #40]");                                 // locate the separately allocated hash entries
     emitter.instruction("add x11, x11, x10, lsl #6");                           // locate the live sixty-four-byte bucket
-    emitter.instruction("add x11, x11, #40");                                   // skip the hash header
     emitter.instruction("ldr x9, [x11, #48]");                                  // follow the previous live entry, skipping tombstones
     emitter.instruction("str x9, [sp, #24]");                                   // preserve traversal across allocations
     emitter.instruction("ldp x9, x10, [x11, #8]");                              // borrow the normalized integer or string key
@@ -181,8 +181,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_reverse_boxed_hash");
     emitter.instruction("test r10, r10");                                       // minus one terminates the insertion-order chain
     emitter.instruction("js __rt_array_reverse_boxed_done");                    // no live source entries remain
+    emitter.instruction("mov r11, QWORD PTR [r11 + 40]");                       // locate the separately allocated hash entries
     emitter.instruction("shl r10, 6");                                          // each bucket occupies sixty-four bytes
-    emitter.instruction("lea r11, [r11 + r10 + 40]");                           // locate the bucket after the hash header
+    emitter.instruction("add r11, r10");                                       // locate the entry in the separate storage
     emitter.instruction("mov r10, QWORD PTR [r11 + 48]");                       // follow the previous live entry, skipping tombstones
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve traversal across allocations
     emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                        // borrow the key's integer value or string pointer

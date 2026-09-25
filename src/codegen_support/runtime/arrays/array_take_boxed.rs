@@ -95,8 +95,8 @@ fn emit_take(emitter: &mut Emitter) {
             emitter.instruction("cbz x9, __rt_array_take_entry");               // pop does not need to inspect the head
             emitter.instruction("ldr x10, [x0, #24]");                          // shift selects the insertion-order head
             emitter.label("__rt_array_take_entry");
-            emitter.instruction("add x10, x0, x10, lsl #6");                    // each hash bucket occupies sixty-four bytes
-            emitter.instruction("add x10, x10, #40");                           // skip the fixed hash header
+            emitter.instruction("ldr x0, [x0, #40]");                           // locate the separately allocated hash entries
+            emitter.instruction("add x10, x0, x10, lsl #6");                    // select the sixty-four-byte entry
             emitter.instruction("ldp x1, x2, [x10, #8]");                       // preserve the selected key before helpers can relocate registers
             abi::store_at_offset(emitter, "x1", 32);
             abi::store_at_offset(emitter, "x2", 40);
@@ -116,8 +116,9 @@ fn emit_take(emitter: &mut Emitter) {
             emitter.instruction("jz __rt_array_take_entry");                    // pop does not need to inspect the head
             emitter.instruction("mov r11, QWORD PTR [rax + 24]");               // shift selects the insertion-order head
             emitter.label("__rt_array_take_entry");
+            emitter.instruction("mov rax, QWORD PTR [rax + 40]");               // locate the separately allocated hash entries
             emitter.instruction("shl r11, 6");                                  // each hash bucket occupies sixty-four bytes
-            emitter.instruction("lea r11, [rax + r11 + 40]");                   // skip the fixed hash header
+            emitter.instruction("add r11, rax");                               // select the entry in the separate storage
             emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                // borrow the selected key's low word
             emitter.instruction("mov rsi, QWORD PTR [r11 + 16]");               // borrow its length or integer sentinel
             abi::store_at_offset(emitter, "rdi", 32);
@@ -207,8 +208,8 @@ fn emit_hash_pop(emitter: &mut Emitter) {
             emitter.instruction("ldr x9, [x0]");                                // inspect the live entry count before selecting the tail
             emitter.instruction("cbz x9, __rt_hash_pop_boxed_empty");           // an empty associative array returns owned null
             emitter.instruction("ldr x10, [x0, #32]");                          // load the insertion-order tail slot index
-            emitter.instruction("add x10, x0, x10, lsl #6");                    // scale the tail index by the sixty-four-byte bucket size
-            emitter.instruction("add x10, x10, #40");                           // skip the fixed hash header
+            emitter.instruction("ldr x0, [x0, #40]");                           // locate the separately allocated hash entries
+            emitter.instruction("add x10, x0, x10, lsl #6");                    // scale the tail index by the sixty-four-byte entry size
             emitter.instruction("ldp x1, x2, [x10, #8]");                       // preserve the tail key for unlinking
             abi::store_at_offset(emitter, "x1", 16);
             abi::store_at_offset(emitter, "x2", 24);
@@ -229,8 +230,9 @@ fn emit_hash_pop(emitter: &mut Emitter) {
             emitter.instruction("cmp QWORD PTR [rdi], 0");                      // inspect the live entry count before selecting the tail
             emitter.instruction("je __rt_hash_pop_boxed_empty");                // an empty associative array returns owned null
             emitter.instruction("mov r11, QWORD PTR [rdi + 32]");               // load the insertion-order tail slot index
+            emitter.instruction("mov rdi, QWORD PTR [rdi + 40]");               // locate the separately allocated hash entries
             emitter.instruction("shl r11, 6");                                  // scale the tail index by the sixty-four-byte bucket size
-            emitter.instruction("lea r11, [rdi + r11 + 40]");                   // skip the fixed hash header
+            emitter.instruction("add r11, rdi");                               // select the entry in the separate storage
             emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                // preserve the tail key low word
             emitter.instruction("mov rsi, QWORD PTR [r11 + 16]");               // preserve the tail key high word
             abi::store_at_offset(emitter, "rdi", 16);

@@ -32160,8 +32160,8 @@
     "semantics": {
       "argument_lowering": "count",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "count"
       },
       "effects": {
         "kind": "shared"
@@ -56882,7 +56882,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -68589,9 +68589,9 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/web_prelude/build.rs",
+      "codegen_file": "src/shared_ini_prelude.rs",
       "codegen_function": "ini_get_all",
-      "codegen_line": 5082,
+      "codegen_line": 61,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -84585,6 +84585,235 @@
     },
     "since": null,
     "slug": "mb_scrub",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "to",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "subject",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": [],
+          "name": "additional_headers",
+          "optional": true,
+          "type": "array|string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "additional_params",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "mb_send_mail",
+    "description": "Encodes the subject and body with the active language settings and sends the message through the configured mail transport.",
+    "eval": {
+      "adapter_reason": null,
+      "area": "string",
+      "execution": "shared-runtime",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/mb_send_mail.rs",
+      "hooks": [],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "to",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "subject",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "additional_headers",
+          "optional": true,
+          "type": "array|string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "additional_params",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 3,
+      "runtime_builtin_id": 86,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 680,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.mb_send_mail` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/mb_send_mail.rs",
+      "sig_line": null
+    },
+    "module": "mbstring",
+    "name": "mb_send_mail",
+    "semantics": {
+      "argument_lowering": "preserve_values",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "mb_send_mail"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "mb_send_mail"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_mbstring"
+          }
+        ]
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "mb_send_mail"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": true
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "to",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "subject",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "additional_headers",
+          "optional": true,
+          "type": "array|string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "additional_params",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mb_send_mail",
     "sub_area": "String"
   },
   {
@@ -117141,8 +117370,8 @@
     "semantics": {
       "argument_lowering": "count",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "count"
       },
       "effects": {
         "kind": "shared"
@@ -120031,7 +120260,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "fresh"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",

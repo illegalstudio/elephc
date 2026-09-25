@@ -26,6 +26,7 @@ mod coercion;
 mod encodings;
 mod entities;
 mod mime;
+mod mail;
 mod info;
 mod http_input;
 mod ini;
@@ -173,6 +174,7 @@ unsafe fn dispatch(operation: RuntimeBuiltinId, args: &[MbArgV1], state: &mut St
         RuntimeBuiltinId::MbGetInfo => info::dispatch(&arguments, state),
         RuntimeBuiltinId::MbHttpInput => http_input::dispatch(&arguments, state),
         RuntimeBuiltinId::MbEncodeMimeheader => mime::encode(&arguments, state),
+        RuntimeBuiltinId::MbSendMail => mail::dispatch(&arguments, state),
         RuntimeBuiltinId::MbDecodeMimeheader => Outcome::string(Ok(crate::mime::decode_header(
             arguments.string(0), state.internal_encoding()))),
         RuntimeBuiltinId::MbEncodeNumericentity | RuntimeBuiltinId::MbDecodeNumericentity =>

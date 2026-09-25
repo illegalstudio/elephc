@@ -47,16 +47,16 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func(
             return finish_eval_argument_values(result, [callback], context, values);
         }
     }
-    let operands = args[1..].iter().collect::<Vec<_>>();
-    let result = with_eval_operands(&operands, context, scope, values, |args, context, scope, values| {
-        let borrowed = std::iter::once(callback.borrowed())
-            .chain(args.iter().map(|value| value.borrowed())).collect();
-        let result = eval_call_user_func_with_values_from_scope(borrowed, Some(scope), context, values)?;
-        // A callback may return an argument borrow. Acquire the result before the
-        // operand leases retire, just as ordinary evaluated call arguments do.
-        if result.is_borrowed() { values.retain(result) } else { Ok(result) }
-    });
-    finish_eval_argument_values(result, [callback], context, values)
+    let mut operands = vec![callback];
+    for argument in &args[1..] {
+        match eval_owned_expr(argument, context, scope, values) {
+            Ok(value) => operands.push(value),
+            Err(status) => return finish_eval_argument_values(Err(status), operands, context, values),
+        }
+    }
+    let borrowed = operands.iter().copied().map(RuntimeCellHandle::borrowed).collect();
+    let result = eval_call_user_func_with_values_from_scope(borrowed, Some(scope), context, values);
+    finish_eval_argument_values(result, operands, context, values)
 }
 
 /// Dispatches `call_user_func` after its callback and arguments are already evaluated.

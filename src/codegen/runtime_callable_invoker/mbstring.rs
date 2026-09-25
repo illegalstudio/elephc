@@ -66,13 +66,20 @@ fn stage_default(
         None | Some(DefaultSpec::Null) => (PhpType::Void, 0),
         Some(DefaultSpec::Int(value)) => (PhpType::Int, value),
         Some(DefaultSpec::Bool(value)) => (PhpType::Bool, i64::from(value)),
-        Some(DefaultSpec::Str(_)) => (PhpType::Str, 0),
+        Some(DefaultSpec::Str(_) | DefaultSpec::EmptyArray) => (PhpType::Str, 0),
         _ => unreachable!("mbstring contracts use scalar literal defaults"),
     };
     let scratch = match emitter.target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r10" };
     abi::emit_load_int_immediate(emitter, scratch, crate::codegen::runtime_value_tag(&ty) as i64);
     abi::emit_store_to_sp(emitter, scratch, record);
-    if let Some(DefaultSpec::Str(value)) = default {
+    // An omitted empty header array is observationally the same as an empty header string.
+    // Borrowing that literal avoids creating a heap array solely for callable gap filling.
+    let string_default = match default {
+        Some(DefaultSpec::Str(value)) => Some(value),
+        Some(DefaultSpec::EmptyArray) => Some(""),
+        _ => None,
+    };
+    if let Some(value) = string_default {
         let (label, length) = data.add_string(value.as_bytes());
         abi::emit_symbol_address(emitter, scratch, &label);
         abi::emit_store_to_sp(emitter, scratch, record + 8);

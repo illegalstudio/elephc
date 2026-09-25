@@ -420,7 +420,7 @@ try {
         "ab|Error|Named parameter $second overwrites previous argument\
          |lm|Error|long\
          |ev|Error|Named parameter $second overwrites previous argument\
-         |xy|Error|elephc does not support positional unpacking after named unpacking in dynamically resolved calls\
+         |xy|Error|Cannot use positional argument after named argument during unpacking\
          |i|Error|Cannot use positional argument after named argument during unpacking"
     );
     assert!(

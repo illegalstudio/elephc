@@ -2,7 +2,7 @@
 title: "xmlwriter_full_end_element()"
 description: "Ends the current element with an explicit end tag."
 sidebar:
-  order: 1034
+  order: 1035
 ---
 
 ## xmlwriter_full_end_element()

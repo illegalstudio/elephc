@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_perform() - internals"
 description: "Compiler internals for __elephc_curl_easy_perform(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1078
+  order: 1079
 ---
 
 ## `__elephc_curl_easy_perform()` - internals

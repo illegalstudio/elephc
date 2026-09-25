@@ -2,7 +2,7 @@
 title: "xmlwriter_end_dtd()"
 description: "Ends the current DTD."
 sidebar:
-  order: 1027
+  order: 1028
 ---
 
 ## xmlwriter_end_dtd()

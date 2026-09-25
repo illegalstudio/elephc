@@ -48,7 +48,7 @@ pub(crate) fn all_declaration(web: bool) -> Stmt {
     let mut body = all_prefix();
     let message = e_binop(e_binop(e_str("ini_get_all(): Extension \""), BinOp::Concat,
         e_var("extension")), BinOp::Concat, e_str("\" cannot be found"));
-    let warning = if web { e_call("trigger_error", vec![message, e_const("E_WARNING")]) }
+    let warning = if web { e_call("__elephc_web_trigger_error", vec![message, e_const("E_WARNING")]) }
         else { e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_str("Warning: "), BinOp::Concat, message),
             BinOp::Concat, e_str("\n"))]) };
     body.push(s_if(unsupported, vec![

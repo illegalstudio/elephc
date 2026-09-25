@@ -2,7 +2,7 @@
 title: "mb_str_pad()"
 description: "Pads a string to a character length using the requested side and encoding."
 sidebar:
-  order: 869
+  order: 870
 ---
 
 ## mb_str_pad()

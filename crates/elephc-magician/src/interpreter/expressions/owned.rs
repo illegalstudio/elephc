@@ -60,11 +60,14 @@ pub(super) fn copy_scope_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let copied = if !values.is_reference(value)? && values.is_array_like(value)? {
+    let copied = if values.is_reference(value)? {
+        values.copy_value(value)?
+    } else if values.is_array_like(value)? {
         values.copy_array_value(value)?
     } else {
-        values.copy_value(value)?
+        values.retain(value)?
     };
+    if copied == value { return Ok(copied); }
     context.copy_array_metadata(value, copied);
     if let Err(status) = context.copy_pcntl_foreign_callable(value, copied, values) {
         context.clear_array_metadata(copied);

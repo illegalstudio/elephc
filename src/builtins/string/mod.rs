@@ -68,6 +68,7 @@ pub mod ltrim;
 pub mod mb_ereg_match;
 mod mb_ereg;
 mod mb_parse_str;
+mod mb_send_mail;
 mod mb_output_handler;
 mod mb_eregi;
 mod mb_ereg_search_init;

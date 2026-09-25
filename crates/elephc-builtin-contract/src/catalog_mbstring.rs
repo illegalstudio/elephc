@@ -55,6 +55,23 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         deprecation: None, extension: false, internal: false, requirements: &[],
     },
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("mb_send_mail"), name: "mb_send_mail",
+        area: Area::String, module: PhpModule::Mbstring, since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec { name: "to", ty: TypeSpec::Str, default: None, by_ref: false },
+            ParamSpec { name: "subject", ty: TypeSpec::Str, default: None, by_ref: false },
+            ParamSpec { name: "message", ty: TypeSpec::Str, default: None, by_ref: false },
+            ParamSpec { name: "additional_headers", ty: TypeSpec::Union(&[TypeSpec::Array, TypeSpec::Str]), default: Some(DefaultSpec::EmptyArray), by_ref: false },
+            ParamSpec { name: "additional_params", ty: TypeSpec::Nullable(&TypeSpec::Str), default: Some(DefaultSpec::Null), by_ref: false },
+        ],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None, arity_error: None,
+        returns: TypeSpec::Bool, by_ref_return: false,
+        summary: "Encodes the subject and body with the active language settings and sends the message through the configured mail transport.", examples: &[],
+        php_manual: Some("https://www.php.net/manual/en/function.mb-send-mail.php"),
+        deprecation: None, extension: false, internal: false, requirements: &[],
+    },
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("mb_ereg"), name: "mb_ereg",
         area: Area::String, module: PhpModule::Mbstring, since: None,
         kind: BuiltinKind::Function,

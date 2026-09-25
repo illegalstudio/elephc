@@ -2,7 +2,7 @@
 title: "xml_parser_free()"
 description: "Frees an XML parser; a no-op kept for compatibility."
 sidebar:
-  order: 1010
+  order: 1011
 ---
 
 ## xml_parser_free()

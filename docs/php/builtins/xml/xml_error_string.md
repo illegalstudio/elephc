@@ -2,7 +2,7 @@
 title: "xml_error_string()"
 description: "Returns the message for an XML parser error code."
 sidebar:
-  order: 1001
+  order: 1002
 ---
 
 ## xml_error_string()

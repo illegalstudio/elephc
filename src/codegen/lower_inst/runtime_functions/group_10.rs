@@ -63,6 +63,7 @@ pub(super) fn lower(
         | RuntimeFnId::MbGetInfo
         | RuntimeFnId::SharedIni
         | RuntimeFnId::MbParseStr
+        | RuntimeFnId::MbSendMail
         | RuntimeFnId::MbHttpInput
         | RuntimeFnId::MbRegexEncoding
         | RuntimeFnId::MbRegexSetOptions

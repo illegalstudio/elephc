@@ -62,6 +62,7 @@ pub struct State {
     strict_detection: bool,
     illegal_chars: u64,
     cached_encoding: Option<(Vec<u8>, Encoding)>,
+    mail_command: Vec<u8>,
 }
 
 impl Default for State {
@@ -73,13 +74,17 @@ impl Default for State {
             http_input: None, output_mimetypes: br"^(text/|application/xhtml\+xml)".to_vec(),
             output_conversion: output::OutputState::default(), encoding_translation: false,
             http_input_sources: [None; 4], http_input_encodings: vec![OutputEncoding::Convert(internal)],
-            detect_order: language.detect_order(), substitute: Substitute::default(), strict_detection: false, illegal_chars: 0, cached_encoding: None }
+            detect_order: language.detect_order(), substitute: Substitute::default(), strict_detection: false, illegal_chars: 0, cached_encoding: None,
+            mail_command: b"/usr/sbin/sendmail -t -i".to_vec() }
     }
 }
 
 impl State {
     /// Returns the current language without altering auto expansion or active detection order.
     pub fn language(&self) -> Language { self.language }
+
+    /// Returns the request's configured sendmail transport command.
+    pub fn mail_command(&self) -> &[u8] { &self.mail_command }
 
     /// Changes the language and future auto expansion, preserving the active detection order.
     pub fn set_language(&mut self, name: &[u8]) -> MbResult<()> {

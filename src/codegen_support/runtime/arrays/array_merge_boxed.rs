@@ -81,8 +81,8 @@ fn emit_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_merge_boxed_hash");
     emitter.instruction("tbnz x10, #63, __rt_array_merge_boxed_source_done");   // minus one terminates the live insertion-order chain
+    emitter.instruction("ldr x11, [x11, #40]");                                 // locate the separately allocated hash entries
     emitter.instruction("add x11, x11, x10, lsl #6");                           // each bucket occupies sixty-four bytes
-    emitter.instruction("add x11, x11, #40");                                   // skip the hash's fixed header
     emitter.instruction("ldr x9, [x11, #56]");                                  // follow the next live bucket rather than probing tombstones
     emitter.instruction("str x9, [sp, #40]");                                   // preserve traversal across helper calls
     emitter.instruction("ldp x9, x10, [x11, #8]");                              // borrow the normalized key pair
@@ -205,8 +205,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_merge_boxed_hash");
     emitter.instruction("test r10, r10");                                       // minus one terminates the insertion-order chain
     emitter.instruction("js __rt_array_merge_boxed_source_done");               // no live entries remain in this source
+    emitter.instruction("mov r11, QWORD PTR [r11 + 40]");                       // locate the separately allocated hash entries
     emitter.instruction("shl r10, 6");                                          // each bucket occupies sixty-four bytes
-    emitter.instruction("lea r11, [r11 + r10 + 40]");                           // locate the live bucket after the hash header
+    emitter.instruction("add r11, r10");                                       // locate the live entry in the separate storage
     emitter.instruction("mov r10, QWORD PTR [r11 + 56]");                       // follow the next live bucket, skipping tombstones
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // preserve traversal across allocations
     emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                        // borrow the key's low word

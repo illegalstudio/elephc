@@ -2,7 +2,7 @@
 title: "mb_stripos()"
 description: "Finds the first character position using simple case folding, or returns false."
 sidebar:
-  order: 873
+  order: 874
 ---
 
 ## mb_stripos()

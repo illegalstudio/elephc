@@ -3475,9 +3475,10 @@ mod tests {
             let mut emitter = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
             let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false, false, Vec::new(), target);
+            let label = format!("{}_invoker_ref_mixed_0", local_label_prefix("mixed_ref_cell", target));
             let (ref_cell_reg, source_tag_reg, branch) = match target.arch {
-                Arch::AArch64 => ("x19", "x20", "b.eq mixed_ref_cell_invoker_ref_mixed_0"),
-                Arch::X86_64 => ("r12", "r13", "je mixed_ref_cell_invoker_ref_mixed_0"),
+                Arch::AArch64 => ("x19", "x20", format!("b.eq {label}")),
+                Arch::X86_64 => ("r12", "r13", format!("je {label}")),
             };
 
             emit_materialize_invoker_ref_cell_value_as_mixed(
@@ -3489,10 +3490,10 @@ mod tests {
 
             let asm = emitter.output();
             let boxed = asm.find("__rt_mixed_from_value").unwrap();
-            let mixed = asm.find("mixed_ref_cell_invoker_ref_mixed_0:").unwrap();
+            let mixed = asm.find(&format!("{label}:")).unwrap();
             let retained = asm[mixed..].find("__rt_incref").unwrap() + mixed;
-            let done = asm.find("mixed_ref_cell_invoker_ref_materialized_3:").unwrap();
-            assert!(asm.contains(branch), "{name}: {asm}");
+            let done = asm.find(&format!("{}_invoker_ref_materialized_3:", local_label_prefix("mixed_ref_cell", target))).unwrap();
+            assert!(asm.contains(&branch), "{name}: {asm}");
             assert!(boxed < mixed && mixed < retained && retained < done, "{name}: {asm}");
             assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}: {asm}");
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");

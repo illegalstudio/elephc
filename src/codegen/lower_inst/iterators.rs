@@ -2171,10 +2171,10 @@ fn emit_capture_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
             ctx.emitter.instruction("cmp x10, #0");                             // do the end sentinels leave any successor to anchor on?
             ctx.emitter.instruction(&format!("b.le {}", absent));               // the post-last and done cursors have none
             abi::load_at_offset_scratch(ctx.emitter, "x9", offset - ITER_SOURCE_OFFSET_DELTA, "x12");
+            ctx.emitter.instruction("ldr x9, [x9, #40]");                       // locate the separately allocated hash entries
             ctx.emitter.instruction("sub x10, x10, #1");                        // decode the successor slot index from the cursor
             ctx.emitter.instruction("lsl x10, x10, #6");                        // 64 bytes per hash entry
-            ctx.emitter.instruction("add x10, x9, x10");                        // advance from the table base to the successor slot
-            ctx.emitter.instruction("add x10, x10, #40");                       // skip the fixed 40-byte hash header
+            ctx.emitter.instruction("add x10, x9, x10");                        // advance from entry storage to the successor slot
             ctx.emitter.instruction("ldr x11, [x10, #8]");                      // successor key pointer or integer payload
             ctx.emitter.instruction("ldr x12, [x10, #16]");                     // successor key length or integer sentinel
             abi::store_at_offset_scratch(ctx.emitter, "x11", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA, "x9");
@@ -2183,9 +2183,9 @@ fn emit_capture_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
             ctx.emitter.instruction("cmp x13, #-1");                            // is the primary anchor the current tail?
             ctx.emitter.instruction(&format!("b.eq {retain}"));                 // no fallback exists, retain only the primary key
             abi::load_at_offset_scratch(ctx.emitter, "x9", offset - ITER_SOURCE_OFFSET_DELTA, "x12");
+            ctx.emitter.instruction("ldr x9, [x9, #40]");                       // locate the separately allocated hash entries
             ctx.emitter.instruction("lsl x13, x13, #6");                        // 64 bytes per fallback hash entry
-            ctx.emitter.instruction("add x13, x9, x13");                        // advance from table base to the fallback slot
-            ctx.emitter.instruction("add x13, x13, #40");                       // skip the fixed hash header
+            ctx.emitter.instruction("add x13, x9, x13");                        // advance from entry storage to the fallback slot
             ctx.emitter.instruction("ldr x11, [x13, #8]");                      // fallback key pointer or integer payload
             ctx.emitter.instruction("ldr x12, [x13, #16]");                     // fallback key length or integer sentinel
             abi::store_at_offset_scratch(ctx.emitter, "x11", offset - ITER_FALLBACK_KEY_LO_OFFSET_DELTA, "x9");
@@ -2196,10 +2196,10 @@ fn emit_capture_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
             ctx.emitter.instruction("cmp r10, 0");                              // do the end sentinels leave any successor to anchor on?
             ctx.emitter.instruction(&format!("jle {}", absent));                // the post-last and done cursors have none
             abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
+            ctx.emitter.instruction("mov r11, QWORD PTR [r11 + 40]");           // locate the separately allocated hash entries
             ctx.emitter.instruction("sub r10, 1");                              // decode the successor slot index from the cursor
             ctx.emitter.instruction("shl r10, 6");                              // 64 bytes per hash entry
-            ctx.emitter.instruction("add r10, r11");                            // advance from the table base to the successor slot
-            ctx.emitter.instruction("add r10, 40");                             // skip the fixed 40-byte hash header
+            ctx.emitter.instruction("add r10, r11");                            // advance from entry storage to the successor slot
             ctx.emitter.instruction("mov r11, QWORD PTR [r10 + 8]");            // successor key pointer or integer payload
             ctx.emitter.instruction("mov rcx, QWORD PTR [r10 + 16]");           // successor key length or integer sentinel
             abi::store_at_offset(ctx.emitter, "r11", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA);
@@ -2208,9 +2208,9 @@ fn emit_capture_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
             ctx.emitter.instruction("cmp r9, -1");                              // is the primary anchor the current tail?
             ctx.emitter.instruction(&format!("je {retain}"));                   // no fallback exists, retain only the primary key
             abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
+            ctx.emitter.instruction("mov r11, QWORD PTR [r11 + 40]");           // locate the separately allocated hash entries
             ctx.emitter.instruction("shl r9, 6");                               // 64 bytes per fallback hash entry
-            ctx.emitter.instruction("add r9, r11");                             // advance from table base to the fallback slot
-            ctx.emitter.instruction("add r9, 40");                              // skip the fixed hash header
+            ctx.emitter.instruction("add r9, r11");                             // advance from entry storage to the fallback slot
             ctx.emitter.instruction("mov r11, QWORD PTR [r9 + 8]");             // fallback key pointer or integer payload
             ctx.emitter.instruction("mov rcx, QWORD PTR [r9 + 16]");            // fallback key length or integer sentinel
             abi::store_at_offset(ctx.emitter, "r11", offset - ITER_FALLBACK_KEY_LO_OFFSET_DELTA);

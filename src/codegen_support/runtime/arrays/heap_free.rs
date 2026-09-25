@@ -28,9 +28,9 @@ use crate::codegen_support::platform::Arch;
 /// Input: `x0` = user pointer (as returned by `heap_alloc`)
 ///
 /// ABI: `x0` is callee-saved where needed; all other registers are scratch.
-pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool) {
+pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_heap_free_linux_x86_64(emitter, eval_bridge);
+        emit_heap_free_linux_x86_64(emitter, eval_bridge, mbstring);
         return;
     }
 
@@ -75,6 +75,9 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.label("__rt_heap_free_object_handle_done");
     if eval_bridge {
         super::eval_array_references::emit_eval_array_reference_retirement(emitter);
+    }
+    if mbstring {
+        emitter.instruction("bl __rt_mbstring_ini_forget");                    // retire the string identity before allocator reuse
     }
 
     // -- debug mode: validate the free list before mutating it --
@@ -323,7 +326,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool) {
 ///
 /// Input: `rax` = user pointer
 /// Output: `rax` preserved through the free path; all other scratch registers are clobbered.
-fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) {
+fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) {
     let double_free_msg = "Fatal error: heap debug detected double free\n";
 
     emitter.blank();
@@ -382,6 +385,11 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.label("__rt_heap_free_object_handle_done");
     if eval_bridge {
         super::eval_array_references::emit_eval_array_reference_retirement(emitter);
+    }
+    if mbstring {
+        emitter.instruction("sub rsp, 8");                                      // align the identity-retirement call from the frameless entry
+        emitter.instruction("call __rt_mbstring_ini_forget");                  // retire the string identity before allocator reuse
+        emitter.instruction("add rsp, 8");                                      // restore the allocator's entry stack
     }
 
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
@@ -601,7 +609,7 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
-            emit_heap_free(&mut emitter, false);
+            emit_heap_free(&mut emitter, false, false);
             let output = emitter.output();
             let probe = output.find("_obj_handle_index").unwrap();
             let skip = output.find("__rt_heap_free_object_handle_done").unwrap();

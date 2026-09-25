@@ -20,7 +20,7 @@ fn source_argument_bindings_are_explicit_and_have_direct_hooks() {
     source_arguments.sort_unstable();
     assert_eq!(
         source_arguments,
-        ["buffer_free", "call_user_func", "call_user_func_array"]
+        ["buffer_free", "call_user_func", "call_user_func_array", "clone", "get_defined_vars"]
     );
     for name in source_arguments {
         assert!(

@@ -1,8 +1,8 @@
 /* Independent allocation, destructor, and pending-status observations for native capture stores. */
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "line %d: %s\n", __LINE__, #c); exit(1); } } while (0)
 #if defined(__x86_64__)
@@ -286,6 +286,14 @@ void cleanup(void (*operation)(void *), void *value, uint64_t *pending) {
 }
 void unsupported_resource(void) __asm__("__rt_resource_id_of");
 void unsupported_resource(void) { CHECK(0 && "unexpected resource payload"); }
+
+/* The emitted hash helpers include reference/resource branches excluded by this fixture. */
+#define UNUSED_RUNTIME_HELPER(name) __attribute__((noreturn)) void name(void) { abort(); }
+UNUSED_RUNTIME_HELPER(__rt_decref_mixed)
+UNUSED_RUNTIME_HELPER(__rt_reference_cell_new)
+UNUSED_RUNTIME_HELPER(__rt_reference_cell_value_release)
+UNUSED_RUNTIME_HELPER(__rt_reference_cell_clone)
+UNUSED_RUNTIME_HELPER(__rt_resource_inventory_register)
 
 /* Ordinary conversion transfers existing owners and repeated conversion keeps the same boxes. */
 static void owned_conversion(void) {

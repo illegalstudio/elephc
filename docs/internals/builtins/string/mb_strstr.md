@@ -2,7 +2,7 @@
 title: "mb_strstr() - internals"
 description: "Compiler internals for mb_strstr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 881
+  order: 882
 ---
 
 ## `mb_strstr()` - internals

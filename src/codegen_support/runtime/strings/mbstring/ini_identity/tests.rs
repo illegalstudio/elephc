@@ -105,7 +105,7 @@ fn fixture(target: Target) -> String {
     crate::codegen_support::runtime::strings::emit_str_persist(&mut emitter, true);
     crate::codegen_support::runtime::strings::emit_strtolower(&mut emitter, true);
     crate::codegen_support::runtime::strings::emit_strtoupper(&mut emitter, true);
-    arrays::emit_heap_free(&mut emitter, true);
+    arrays::emit_heap_free(&mut emitter, true, true);
     arrays::emit_heap_kind(&mut emitter);
     for name in ["__rt_object_handle_release", "__rt_heap_debug_validate_free_list"] {
         emitter.label_global(name);

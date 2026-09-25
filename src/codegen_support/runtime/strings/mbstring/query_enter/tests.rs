@@ -25,6 +25,7 @@ fn native_mbstring_query_enter_preserves_nested_ownership() {
     super::super::capture_hash::emit(&mut emitter);
     super::super::capture_destination::emit(&mut emitter);
     super::super::capture_reference::emit_store(&mut emitter);
+    super::super::capture_reference::emit_reference_child_slot(&mut emitter);
     for emit in [arrays::emit_hash_new, arrays::emit_hash_grow, arrays::emit_hash_insert_owned,
         arrays::emit_hash_iter, arrays::emit_hash_get, arrays::emit_hash_key_hash,
         arrays::emit_hash_key_eq, arrays::emit_hash_fnv1a, arrays::emit_hash_pin,

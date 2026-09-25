@@ -7,4 +7,4 @@
 //! Key details:
 //! - Runtime behavior is shared by `core::runtime_introspection`.
 
-eval_builtin! { contract: "get_defined_vars", area: Core, direct: Core, values: Core }
+eval_builtin! { contract: "get_defined_vars", area: Core, source_arguments: true, direct: Core, values: Core }

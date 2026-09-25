@@ -9,6 +9,19 @@
 
 use crate::support::*;
 
+/// Executes mail argument validation through native and opaque eval dispatch.
+#[test]
+fn test_mbstring_send_mail_rejects_nul_subject() {
+    let body = r#"
+try { mb_send_mail("to@example.test", "a\0b", "body"); }
+catch (ValueError $error) { echo $error->getMessage(); }
+"#;
+    for eval in [false, true] {
+        assert_eq!(compile_and_run(&program(body, eval)),
+            "mb_send_mail(): Argument #2 ($subject) must not contain any null bytes");
+    }
+}
+
 /// Wraps the same PHP body as a native program or a runtime-unknown eval source.
 fn program(body: &str, eval: bool) -> String {
     if !eval { return format!("<?php {body}"); }

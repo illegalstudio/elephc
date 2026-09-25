@@ -88,7 +88,9 @@ pub(super) fn emit_store(emitter: &mut Emitter) {
         emitter.instruction("test rsi, rsi");                                   // reject an absent writer before inspecting its marker
         emitter.instruction("jz __rt_mbstring_capture_reference_invalid");      // preserve a missing output reference without dereferencing it
         emitter.instruction("mov rax, rsi");                                    // resolve either managed reference representation
+        emitter.instruction("sub rsp, 8");                                      // align the borrowed reference helper call
         emitter.instruction("call __rt_mbstring_reference_child_slot");         // return the writable child slot
+        emitter.instruction("add rsp, 8");                                      // restore the callback entry stack
         emitter.instruction("test rax, rax");                                   // reject malformed references
         emitter.instruction("jz __rt_mbstring_capture_reference_invalid");
         emitter.instruction("push rbp");                                        // preserve linkage and align nested calls

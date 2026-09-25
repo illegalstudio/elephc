@@ -561,7 +561,12 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::False => "false",
         TypeSpec::Null => "null",
         TypeSpec::Union(members) => {
-            return members.iter().any(|member| php_type_matches(*member, declared));
+            let declared_members = declared.split('|').map(str::trim).collect::<Vec<_>>();
+            return declared_members.len() == members.len()
+                && declared_members.iter().all(|part|
+                    members.iter().any(|member| php_type_matches(*member, part)))
+                && members.iter().all(|member|
+                    declared_members.iter().any(|part| php_type_matches(*member, part)));
         }
         // `declared` already had its `?` stripped above, so compare the inner type.
         TypeSpec::Nullable(inner) => return php_type_matches(*inner, declared),

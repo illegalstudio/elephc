@@ -2,7 +2,7 @@
 title: "xmlwriter_write_raw()"
 description: "Writes raw, unescaped content."
 sidebar:
-  order: 1064
+  order: 1065
 ---
 
 ## xmlwriter_write_raw()

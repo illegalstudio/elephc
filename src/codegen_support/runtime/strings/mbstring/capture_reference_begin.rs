@@ -59,7 +59,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("test rsi, rsi");                                   // require a persistent reference address
         emitter.instruction(&format!("jz {invalid}"));                          // reject a missing reference
         emitter.instruction("mov rax, rsi");                                    // resolve native and eval persistent references alike
+        emitter.instruction("sub rsp, 8");                                      // align the borrowed reference helper call
         emitter.instruction("call __rt_mbstring_reference_child_slot");         // return the writable child slot
+        emitter.instruction("add rsp, 8");                                      // restore the callback entry stack
         emitter.instruction("test rax, rax");                                   // reject ordinary boxed PHP values
         emitter.instruction(&format!("jz {invalid}"));
         emitter.instruction("push rbp");                                        // preserve linkage and align nested calls

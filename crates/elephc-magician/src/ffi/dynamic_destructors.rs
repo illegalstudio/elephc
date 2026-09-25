@@ -442,7 +442,7 @@ unsafe fn dynamic_object_clone_inner(
         context.push_class_scope(scope);
     }
     let clone_result =
-        eval_object_clone_with_properties_for_ffi(object_cell, overrides, context, &mut values);
+        eval_object_clone_with_properties_for_ffi(object_cell, overrides, None, context, &mut values);
     if scope.is_some() {
         context.pop_class_scope();
     }

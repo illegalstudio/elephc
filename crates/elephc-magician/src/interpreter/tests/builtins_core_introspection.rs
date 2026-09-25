@@ -195,6 +195,7 @@ return error_reporting(null);"#,
     let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("execute eval ir");
 
+
     assert_eq!(
         values.output,
         "30719|30719|1234|null|first_handler|second:two|first:512:one:42|"

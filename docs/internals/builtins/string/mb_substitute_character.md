@@ -2,7 +2,7 @@
 title: "mb_substitute_character() - internals"
 description: "Compiler internals for mb_substitute_character(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 885
+  order: 886
 ---
 
 ## `mb_substitute_character()` - internals

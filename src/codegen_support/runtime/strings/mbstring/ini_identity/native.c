@@ -27,6 +27,8 @@ HIDDEN uint64_t debug __asm__("_heap_debug_enabled");
 HIDDEN uint64_t guard __asm__("_web_heap_guard_enabled");
 HIDDEN void *free_list __asm__("_heap_free_list");
 HIDDEN void *bins[4] __asm__("_heap_small_bins");
+HIDDEN uint32_t object_handles[1024] __asm__("_obj_handle_index");
+HIDDEN void *array_reference_retire __asm__("_elephc_eval_array_reference_retire_fn");
 HIDDEN uint64_t active __asm__("_mbstring_ini_native_active");
 HIDDEN _Alignas(16) unsigned char snapshots[2][672] __asm__("_ini_register_snapshots");
 HIDDEN const char double_free[] __asm__("_heap_dbg_double_free_msg") = "unexpected double free";

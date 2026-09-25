@@ -2,7 +2,7 @@
 title: "xml_set_character_data_handler() - internals"
 description: "Compiler internals for xml_set_character_data_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1013
+  order: 1014
 ---
 
 ## `xml_set_character_data_handler()` - internals

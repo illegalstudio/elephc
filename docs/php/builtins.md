@@ -878,6 +878,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mb_regex_set_options()`](./builtins/string/mb_regex_set_options.md) | `(?string $options = null): string` | `string` | ✓ | ✓ |
 | [`mb_rtrim()`](./builtins/string/mb_rtrim.md) | `(string $string, ?string $characters = null, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`mb_scrub()`](./builtins/string/mb_scrub.md) | `(string $string, ?string $encoding = null): string` | `string` | ✓ | ✓ |
+| [`mb_send_mail()`](./builtins/string/mb_send_mail.md) | `(string $to, string $subject, string $message, array|string $additional_headers = [], ?string $additional_params = null): bool` | `bool` | ✓ | ✓ |
 | [`mb_split()`](./builtins/string/mb_split.md) | `(string $pattern, string $string, int $limit = -1): array|false` | `array|false` | ✓ | ✓ |
 | [`mb_str_pad()`](./builtins/string/mb_str_pad.md) | `(string $string, int $length, string $pad_string = ' ', int $pad_type = 1, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`mb_str_split()`](./builtins/string/mb_str_split.md) | `(string $string, int $length = 1, ?string $encoding = null): array` | `array` | ✓ | ✓ |

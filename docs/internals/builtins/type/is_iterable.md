@@ -2,7 +2,7 @@
 title: "is_iterable() - internals"
 description: "Compiler internals for is_iterable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 960
+  order: 961
 ---
 
 ## `is_iterable()` - internals

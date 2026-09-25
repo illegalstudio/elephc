@@ -36,11 +36,10 @@ fn native_argument_ownership_literals() {
     }
 }
 
-/// Releases defaults for fixed and variadic callees on success, type failure, and array insertion failure.
+/// Leaves omitted defaults to the native descriptor for fixed and variadic callees.
 #[test]
 fn native_argument_ownership_defaults() {
     for variadic in [false, true] {
-        for failure in [0, 1, 2] {
             let mut context = ElephcEvalContext::new();
             let mut scope = ElephcEvalScope::new();
             let mut values = FakeOps::default();
@@ -52,20 +51,13 @@ fn native_argument_ownership_defaults() {
             if variadic { assert!(native.set_variadic_index(3)); }
             assert!(native.set_param_default(1, NativeCallableDefault::Int(731)));
             assert!(native.set_param_default(2, NativeCallableDefault::String("732".to_string())));
-            if failure == 1 {
-                assert!(native.set_param_type(2, EvalParameterType::new(
-                    vec![EvalParameterTypeVariant::Class("ExpectedObject".to_string())], false,
-                )));
-            }
-            if failure == 2 { values.fail_array_set_call(1); }
             assert!(context.define_native_function("native_answer", native).is_ok());
             let program = parse_fragment(b"return native_answer($value);").unwrap();
             let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
-            assert_eq!(result.is_ok(), failure == 0);
-            assert_released_once(&values, &FakeValue::Int(731));
-            assert_released_once(&values, &FakeValue::String("732".to_string()));
+            assert_eq!(result.unwrap(), expected);
+            assert!(!values.values.values().any(|value| matches!(value, FakeValue::Int(731))
+                || matches!(value, FakeValue::String(text) if text == "732")));
             assert_borrowed_lease_balanced(&values, borrowed);
-        }
     }
 }
 
