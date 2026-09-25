@@ -26869,10 +26869,12 @@ eval('class EvalCycleDropBox {
     public function __construct($name) { $this->name = $name; }
     public function __destruct() { echo "drop:" . $this->name . ":"; }
 }
+gc_disable();
 $box = new EvalCycleDropBox("A");
 $box->self = $box;
 unset($box);
 $collected = gc_collect_cycles();
+gc_enable();
 echo $collected > 0 ? "collected:" : "uncollected:";
 echo "after";');
 "#,

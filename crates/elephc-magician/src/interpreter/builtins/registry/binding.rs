@@ -23,21 +23,32 @@ pub(in crate::interpreter) fn eval_builtin_call(
     if matches!(name, "count" | "strlen") || eval_builtin_uses_owned_arguments(name) {
         return eval_owned_builtin_call(name, args, false, context, scope, values);
     }
-    with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
-        eval_bound_builtin_call(name, arguments, context, values)
+    with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+        eval_bound_builtin_call_from_scope(name, arguments, Some(scope), context, values)
     })
 }
 
 /// Invokes borrowed source arguments and releases only defaults allocated during named binding.
 pub(in crate::interpreter) fn eval_bound_builtin_call(
     name: &str,
+    arguments: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_bound_builtin_call_from_scope(name, arguments, None, context, values)
+}
+
+/// Retains the caller's lexical scope when a direct builtin consumes callback values.
+fn eval_bound_builtin_call_from_scope(
+    name: &str,
     mut arguments: Vec<EvaluatedCallArg>,
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     for argument in &mut arguments { argument.value = argument.value.borrowed(); }
     let bound = bind_evaluated_builtin_args(name, arguments, values)?;
-    let result = eval_builtin_with_values(name, &bound, context, values)
+    let result = eval_builtin_with_values_from_scope(name, &bound, lexical_scope, context, values)
         .and_then(|result| result.ok_or(EvalStatus::UnsupportedConstruct));
     finish_eval_argument_values(result, bound, context, values)
 }
