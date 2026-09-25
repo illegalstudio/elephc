@@ -10,6 +10,22 @@
 use crate::codegen_support::{emit::Emitter, platform::{Arch, Target}};
 use std::process::Command;
 
+/// The first reference lookup must retain both linkage and the writable output pointer.
+#[test]
+fn mbstring_query_root_preserves_aarch64_entry_state() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+        let mut emitter = Emitter::new(Target::parse(name).unwrap());
+        super::storage::emit(&mut emitter);
+        let assembly = emitter.output();
+        let root = assembly.find("__rt_mbstring_query_root:").unwrap();
+        let lookup = assembly[root..].find("bl __rt_mbstring_reference_child_slot").unwrap() + root;
+        let save_linkage = assembly[root..].find("stp x29, x30, [sp, #16]").unwrap() + root;
+        let save_output = assembly[root..].find("str x2, [sp]").unwrap() + root;
+        assert!(save_linkage < lookup && save_output < lookup, "{name}");
+        assert!(assembly[lookup..].contains("cbz x0, __rt_mbstring_query_root_failed"), "{name}");
+    }
+}
+
 /// Assembles the C7-to-C8 adapter and storage callbacks for every supported target.
 #[test]
 #[ignore = "requires clang with ELF and Apple AArch64 assembler support"]

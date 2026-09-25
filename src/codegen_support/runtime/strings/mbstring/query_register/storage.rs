@@ -26,13 +26,13 @@ fn root(emitter: &mut Emitter) {
     if arm {
         emitter.instruction("str xzr, [x2]");                                   // publish no cursor until a valid managed hash is selected
         emitter.instruction("cbz x1, __rt_mbstring_query_root_invalid");        // require a borrowed persistent writer reference
+        emitter.instruction("sub sp, sp, #32");                                 // preserve the cursor output and linkage before the reference lookup
+        emitter.instruction("stp x29, x30, [sp, #16]");                         // retain the original caller return address across native helpers
+        emitter.instruction("str x2, [sp]");                                    // retain the shared executor's cursor output
         emitter.instruction("mov x0, x1");                                      // resolve either persistent reference representation
         emitter.instruction("bl __rt_mbstring_reference_child_slot");           // return the writable child slot
-        emitter.instruction("cbz x0, __rt_mbstring_query_root_invalid");        // leave ordinary boxed values untouched
+        emitter.instruction("cbz x0, __rt_mbstring_query_root_failed");         // leave ordinary boxed values untouched through frame cleanup
         emitter.instruction("ldr x0, [x0]");                                    // borrow the current boxed PHP value
-        emitter.instruction("sub sp, sp, #32");                                 // preserve the cursor output and linkage across native helpers
-        emitter.instruction("stp x29, x30, [sp, #16]");                         // retain caller linkage during resolution and pinning
-        emitter.instruction("str x2, [sp]");                                    // retain the shared executor's cursor output
     } else {
         emitter.instruction("mov QWORD PTR [rdx], 0");                          // publish no cursor before managed hash selection
         emitter.instruction("test rsi, rsi");                                   // require a borrowed writer handle
