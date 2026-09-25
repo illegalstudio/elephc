@@ -137,7 +137,8 @@ fn validate_declared_builtin_spec(spec: &EvalBuiltinSpec) {
         assert!(
             spec.params
                 .iter()
-                .any(|param| param.name == *by_ref_name && param.by_ref),
+                .any(|param| param.name == *by_ref_name && param.by_ref)
+                || spec.variadic == Some(*by_ref_name),
             "eval builtin {} lists {} as by-ref without marking the parameter",
             spec.name,
             by_ref_name

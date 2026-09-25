@@ -249,6 +249,7 @@ pub(super) fn emit_eval_native_function_invoker_inline(
         crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(ctx.module, None, sig);
     let invoker = RuntimeCallableInvoker {
         mbstring_operation: None,
+        mbstring_variable_ref_warnings: false,
         label: &label,
         sig,
         captures: &captures,

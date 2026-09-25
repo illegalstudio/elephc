@@ -120,6 +120,7 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
     pub(super) mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
+    pub(super) mbstring_variable_ref_warnings: bool,
     pub(super) owns_string_return: bool,
     pub(super) php_return_status: bool,
     /// Parameter defaults ALREADY resolved against the module, indexed like `sig.params`.
@@ -141,6 +142,7 @@ struct InvokerEmitContext {
     label_prefix: String,
     label_counter: usize,
     mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
+    mbstring_variable_ref_warnings: bool,
     argument_owners: InvokerArgumentOwners,
     owns_string_return: bool,
     php_return_status: bool,
@@ -166,6 +168,7 @@ impl InvokerEmitContext {
             php_return_status,
             defaults,
             mbstring_operation: None,
+            mbstring_variable_ref_warnings: false,
         }
     }
 
@@ -235,6 +238,7 @@ fn emit_runtime_callable_invoker_impl(
         emitter.target,
     );
     ctx.mbstring_operation = invoker.mbstring_operation;
+    ctx.mbstring_variable_ref_warnings = invoker.mbstring_variable_ref_warnings;
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -626,6 +630,9 @@ fn emit_loaded_indexed_array_callback_call(
     emit_loaded_array_source_to_reg(array_source, array_reg, emitter);
     abi::emit_load_from_address(emitter, len_reg, array_reg, 0);
     emit_indexed_required_arg_count_check(sig, shape.visible_regular, len_reg, emitter, ctx, data);
+    if ctx.mbstring_variable_ref_warnings {
+        mbstring::warn_indexed_nonreference_roots(emitter, ctx, data, array_reg, len_reg, elem_size);
+    }
 
     let mut arg_types = Vec::new();
     // -- marshal each visible regular from the indexed container --
@@ -823,6 +830,9 @@ fn emit_loaded_assoc_array_callback_call(
     }
     // -- reject an unbindable container before any argument is staged --
     emit_reject_invalid_named_arguments(hash_reg, sig, &shape, emitter, ctx, data);
+    if ctx.mbstring_variable_ref_warnings {
+        mbstring::warn_assoc_nonreference_roots(emitter, ctx, data, hash_reg);
+    }
     let mut arg_types = Vec::new();
 
     // -- marshal each visible regular via hash lookup --
@@ -1243,22 +1253,22 @@ fn push_loaded_indexed_array_ref_arg(
     emit_branch_if_invoker_ref_cell_tag(tag_reg, &special_label, emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {tag_reg}, #11"));
-            emitter.instruction(&format!("b.eq {php_reference_label}"));
-            emitter.instruction(&format!("cmp {tag_reg}, #7"));
-            emitter.instruction(&format!("b.ne {temp_label}"));
+            emitter.instruction(&format!("cmp {tag_reg}, #11"));                // test for a managed PHP reference
+            emitter.instruction(&format!("b.eq {php_reference_label}"));        // forward its original cell
+            emitter.instruction(&format!("cmp {tag_reg}, #7"));                 // test for a persistent reference wrapper
+            emitter.instruction(&format!("b.ne {temp_label}"));                 // ordinary values require temporary cells
             abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
-            emitter.instruction(&format!("cmp {tag_reg}, #1"));
-            emitter.instruction(&format!("b.eq {php_reference_label}"));
+            emitter.instruction(&format!("cmp {tag_reg}, #1"));                 // flag one identifies the persistent reference
+            emitter.instruction(&format!("b.eq {php_reference_label}"));        // preserve its writable target
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {tag_reg}, 11"));
-            emitter.instruction(&format!("je {php_reference_label}"));
-            emitter.instruction(&format!("cmp {tag_reg}, 7"));
-            emitter.instruction(&format!("jne {temp_label}"));
+            emitter.instruction(&format!("cmp {tag_reg}, 11"));                 // test for a managed PHP reference
+            emitter.instruction(&format!("je {php_reference_label}"));          // forward its original cell
+            emitter.instruction(&format!("cmp {tag_reg}, 7"));                  // test for a persistent reference wrapper
+            emitter.instruction(&format!("jne {temp_label}"));                  // ordinary values require temporary cells
             abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
-            emitter.instruction(&format!("cmp {tag_reg}, 1"));
-            emitter.instruction(&format!("je {php_reference_label}"));
+            emitter.instruction(&format!("cmp {tag_reg}, 1"));                  // flag one identifies the persistent reference
+            emitter.instruction(&format!("je {php_reference_label}"));          // preserve its writable target
         }
     }
     abi::emit_jump(emitter, &temp_label);
@@ -1274,12 +1284,12 @@ fn push_loaded_indexed_array_ref_arg(
     let dereference = ctx.next_label("invoker_php_reference_cell");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {tag_reg}, #11"));
-            emitter.instruction(&format!("b.eq {dereference}"));
+            emitter.instruction(&format!("cmp {tag_reg}, #11"));                // distinguish a direct PHP reference from a persistent wrapper
+            emitter.instruction(&format!("b.eq {dereference}"));                // load the managed cell pointer from the direct marker
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {tag_reg}, 11"));
-            emitter.instruction(&format!("je {dereference}"));
+            emitter.instruction(&format!("cmp {tag_reg}, 11"));                 // distinguish a direct PHP reference from a persistent wrapper
+            emitter.instruction(&format!("je {dereference}"));                  // load the managed cell pointer from the direct marker
         }
     }
     abi::emit_push_result_value(emitter, &PhpType::Int);
@@ -1538,18 +1548,18 @@ fn emit_branch_if_boxed_php_reference_cell(
     let tag = abi::temp_int_reg(emitter.target);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {raw_tag_reg}, #7"));
-            emitter.instruction(&format!("b.ne {done}"));
+            emitter.instruction(&format!("cmp {raw_tag_reg}, #7"));             // only boxed hash values can hide references
+            emitter.instruction(&format!("b.ne {done}"));                       // leave other values on the ordinary path
             abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
-            emitter.instruction(&format!("cmp {tag}, #11"));
-            emitter.instruction(&format!("b.eq {label}"));
+            emitter.instruction(&format!("cmp {tag}, #11"));                    // check the inner boxed reference marker
+            emitter.instruction(&format!("b.eq {label}"));                      // forward the live managed cell
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {raw_tag_reg}, 7"));
-            emitter.instruction(&format!("jne {done}"));
+            emitter.instruction(&format!("cmp {raw_tag_reg}, 7"));              // only boxed hash values can hide references
+            emitter.instruction(&format!("jne {done}"));                        // leave other values on the ordinary path
             abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
-            emitter.instruction(&format!("cmp {tag}, 11"));
-            emitter.instruction(&format!("je {label}"));
+            emitter.instruction(&format!("cmp {tag}, 11"));                     // check the inner boxed reference marker
+            emitter.instruction(&format!("je {label}"));                        // forward the live managed cell
         }
     }
     emitter.label(&done);
@@ -1564,24 +1574,24 @@ fn emit_branch_if_boxed_persistent_reference(
     let tag = abi::temp_int_reg(emitter.target);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {raw_tag_reg}, #7"));
-            emitter.instruction(&format!("b.ne {done}"));
+            emitter.instruction(&format!("cmp {raw_tag_reg}, #7"));             // only boxed hash values can hold a persistent wrapper
+            emitter.instruction(&format!("b.ne {done}"));                       // preserve ordinary hash value handling
             abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
-            emitter.instruction(&format!("cmp {tag}, #7"));
-            emitter.instruction(&format!("b.ne {done}"));
+            emitter.instruction(&format!("cmp {tag}, #7"));                     // check the inner wrapper tag
+            emitter.instruction(&format!("b.ne {done}"));                       // leave unrelated boxes on the ordinary path
             abi::emit_load_from_address(emitter, tag, raw_lo_reg, 16);
-            emitter.instruction(&format!("cmp {tag}, #1"));
-            emitter.instruction(&format!("b.eq {label}"));
+            emitter.instruction(&format!("cmp {tag}, #1"));                     // flag one denotes a persistent reference
+            emitter.instruction(&format!("b.eq {label}"));                      // forward its original writable storage
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {raw_tag_reg}, 7"));
-            emitter.instruction(&format!("jne {done}"));
+            emitter.instruction(&format!("cmp {raw_tag_reg}, 7"));              // only boxed hash values can hold a persistent wrapper
+            emitter.instruction(&format!("jne {done}"));                        // preserve ordinary hash value handling
             abi::emit_load_from_address(emitter, tag, raw_lo_reg, 0);
-            emitter.instruction(&format!("cmp {tag}, 7"));
-            emitter.instruction(&format!("jne {done}"));
+            emitter.instruction(&format!("cmp {tag}, 7"));                      // check the inner wrapper tag
+            emitter.instruction(&format!("jne {done}"));                        // leave unrelated boxes on the ordinary path
             abi::emit_load_from_address(emitter, tag, raw_lo_reg, 16);
-            emitter.instruction(&format!("cmp {tag}, 1"));
-            emitter.instruction(&format!("je {label}"));
+            emitter.instruction(&format!("cmp {tag}, 1"));                      // flag one denotes a persistent reference
+            emitter.instruction(&format!("je {label}"));                        // forward its original writable storage
         }
     }
     emitter.label(&done);
@@ -2281,13 +2291,13 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [x4, #40]");                         // inspect the original entry before __rt_hash_get dereferencing
-            emitter.instruction("cmp x9, #11");                               // a PHP reference owns a shared writable cell
-            emitter.instruction(&format!("b.eq {entry_reference_label}"));    // forward that cell to the by-reference callee
+            emitter.instruction("ldr x9, [x4, #40]");                           // inspect the original entry before __rt_hash_get dereferencing
+            emitter.instruction("cmp x9, #11");                                 // a PHP reference owns a shared writable cell
+            emitter.instruction(&format!("b.eq {entry_reference_label}"));      // forward that cell to the by-reference callee
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp QWORD PTR [r8 + 40], 11");               // inspect the original entry before __rt_hash_get dereferencing
-            emitter.instruction(&format!("je {entry_reference_label}"));      // forward that cell to the by-reference callee
+            emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                 // inspect the original entry before __rt_hash_get dereferencing
+            emitter.instruction(&format!("je {entry_reference_label}"));        // forward that cell to the by-reference callee
         }
     }
     emit_branch_if_invoker_ref_cell_tag(raw_tag_reg, &direct_marker_label, emitter);
@@ -2308,8 +2318,8 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     emitter.label(&entry_reference_label);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("ldr x0, [x4, #24]"),           // load the managed reference from its hash entry
-        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [r8 + 24]"), // load the managed reference from its hash entry
+        Arch::AArch64 => emitter.instruction("ldr x0, [x4, #24]"),              // load the managed reference from its hash entry
+        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [r8 + 24]"),    // load the managed reference from its hash entry
     }
     abi::emit_push_result_value(emitter, &PhpType::Int);
     abi::emit_jump(emitter, &done_label);
@@ -3563,6 +3573,7 @@ mod tests {
             sig: &sig,
             captures: &[],
             mbstring_operation: None,
+            mbstring_variable_ref_warnings: false,
             owns_string_return: false,
             php_return_status: false,
             defaults: &[None],
@@ -3761,6 +3772,7 @@ mod tests {
             sig,
             captures: &[],
             mbstring_operation: None,
+            mbstring_variable_ref_warnings: false,
             owns_string_return: false,
             php_return_status: false,
             defaults: &defaults,

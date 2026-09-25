@@ -495,6 +495,9 @@ fn eval_array_element_reference_write(
             let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
             write_back_owned_variable_ref_target(scope, &name, value, context, values)
         }
+        EvalReferenceTarget::Cell { cell } if values.is_reference(cell)? => {
+            write_back_method_ref_target(&target, value, context, values)
+        }
         EvalReferenceTarget::Cell { .. } => {
             context.bind_array_element_alias(array, key, EvalReferenceTarget::Cell { cell: value });
             Ok(())

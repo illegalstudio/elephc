@@ -23,16 +23,23 @@ pub(super) fn emit(emitter: &mut Emitter) {
     }
     emitter.label_global(&emitter.target.extern_symbol("elephc_mbstring_variable_box_v1"));
     if arm {
-        emitter.instruction("b __rt_mixed_from_value");                          // C and native boxing use the same three argument registers
+        emitter.instruction("b __rt_mixed_from_value");                         // C and native boxing use the same three argument registers
     } else {
-        emitter.instruction("mov rax, rdi");                                     // move the C tag into the native mixed-box tag register
-        emitter.instruction("mov rdi, rsi");                                     // move the C low payload into its native register
-        emitter.instruction("mov rsi, rdx");                                     // move the C high payload into its native register
+        emitter.instruction("mov rax, rdi");                                    // move the C tag into the native mixed-box tag register
+        emitter.instruction("mov rdi, rsi");                                    // move the C low payload into its native register
+        emitter.instruction("mov rsi, rdx");                                    // move the C high payload into its native register
         emitter.instruction("jmp __rt_mixed_from_value");                       // let the boxer return its fresh cell directly to Rust
+    }
+    emitter.label_global(&emitter.target.extern_symbol("elephc_mbstring_variable_clone_v1"));
+    if arm {
+        emitter.instruction("b __rt_mixed_clone");                              // clone a borrowed Mixed value into an independent PHP cell
+    } else {
+        emitter.instruction("mov rax, rdi");                                    // adapt the first C pointer argument to the native Mixed register
+        emitter.instruction("jmp __rt_mixed_clone");                            // transfer the independent cell back through the C ABI
     }
     emitter.label_global(&emitter.target.extern_symbol("elephc_mbstring_variable_persist_v1"));
     if arm {
-        emitter.instruction("stp x29, x30, [sp, #-16]!");                      // keep C caller linkage across heap-backed string allocation
+        emitter.instruction("stp x29, x30, [sp, #-16]!");                       // keep C caller linkage across heap-backed string allocation
         emitter.instruction("mov x2, x1");                                      // present the C length as the native string length
         emitter.instruction("mov x1, x0");                                      // present the borrowed C bytes as the native string pointer
         emitter.instruction("bl __rt_str_persist");                             // acquire one independent native string owner
@@ -40,15 +47,15 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("ldp x29, x30, [sp], #16");                         // restore caller linkage after persistence
         emitter.instruction("ret");                                             // leave the Rust callback with one owned string
     } else {
-        emitter.instruction("mov rax, rdi");                                     // adapt the C byte pointer to the native string register
-        emitter.instruction("mov rdx, rsi");                                     // adapt the C length to the native pair
+        emitter.instruction("mov rax, rdi");                                    // adapt the C byte pointer to the native string register
+        emitter.instruction("mov rdx, rsi");                                    // adapt the C length to the native pair
         emitter.instruction("jmp __rt_str_persist");                            // return the new pointer directly through the C ABI
     }
     emitter.label_global(&emitter.target.extern_symbol("elephc_mbstring_variable_release_v1"));
     if arm {
         emitter.instruction("b __rt_decref_any");                               // the native release already accepts the first C pointer argument
     } else {
-        emitter.instruction("mov rax, rdi");                                     // adapt the C pointer to the native release register
+        emitter.instruction("mov rax, rdi");                                    // adapt the C pointer to the native release register
         emitter.instruction("jmp __rt_decref_any");                             // return after the old string, box, or reference owner retires
     }
 }

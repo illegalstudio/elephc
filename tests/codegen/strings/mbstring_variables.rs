@@ -163,6 +163,51 @@ echo $source, "|", bin2hex($value), "|", bin2hex($arguments[2]);
     assert_eq!(compile_and_run(source), "ISO-8859-1|c3a9|c3a9");
 }
 
+/// Ordinary call-array values warn at each variadic position and retire temporary roots.
+#[test]
+fn test_mbstring_variables_call_user_func_array_values_warn_and_retire() {
+    let source = r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    $arguments = ["UTF-8", "ISO-8859-1", chr(233), chr(232)];
+    $source = call_user_func_array("mb_convert_variables", $arguments);
+    echo $source, "|", bin2hex($arguments[2]), "|", bin2hex($arguments[3]), "\n";
+}
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ISO-8859-1|e9|e8\n".repeat(3));
+    assert_eq!(out.stderr.matches("Warning: mb_convert_variables(): Argument #3 ($var) must be passed by reference, value given\n").count(), 3);
+    assert_eq!(out.stderr.matches("Warning: mb_convert_variables(): Argument #4 must be passed by reference, value given\n").count(), 3);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A hash-backed argument array retains a real reference while warning for its ordinary tail.
+#[test]
+fn test_mbstring_variables_call_user_func_array_mixed_reference_tail() {
+    let source = r#"<?php
+$arguments = ["UTF-8", "ISO-8859-1", chr(233), chr(232)];
+$value =& $arguments[2];
+set_error_handler(function($level, $message) { echo $message, "\n"; });
+$source = call_user_func_array("mb_convert_variables", $arguments);
+echo $source, "|", bin2hex($value), "|", bin2hex($arguments[3]);
+"#;
+    assert_eq!(compile_and_run(source),
+        "mb_convert_variables(): Argument #4 must be passed by reference, value given\nISO-8859-1|c3a9|e8");
+}
+
+/// A named $var warns with its declared parameter position even when supplied first.
+#[test]
+fn test_mbstring_variables_call_user_func_array_named_var_order() {
+    let source = r#"<?php
+$arguments = ["var" => chr(233), "to_encoding" => "UTF-8", "from_encoding" => "ISO-8859-1"];
+set_error_handler(function($level, $message) { echo $message, "\n"; });
+$source = call_user_func_array("mb_convert_variables", $arguments);
+echo $source, "|", bin2hex($arguments["var"]);
+"#;
+    assert_eq!(compile_and_run(source),
+        "mb_convert_variables(): Argument #3 ($var) must be passed by reference, value given\nISO-8859-1|e9");
+}
+
 /// Reports recursion after earlier string writes have become visible to PHP.
 #[test]
 fn test_mbstring_variables_recursive_object_partial_write() {

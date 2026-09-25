@@ -135,7 +135,7 @@ unsafe fn indexed_child(array: *mut u8, index: usize) -> Option<Option<MbVariabl
 }
 
 /// Returns the ordinal live hash entry in insertion order without converting its key.
-unsafe fn hash_child(hash: *mut u8, ordinal: usize) -> Option<Option<MbVariableHandleV1>> {
+pub(crate) unsafe fn hash_child(hash: *mut u8, ordinal: usize) -> Option<Option<MbVariableHandleV1>> {
     let count = usize::try_from(unsafe { word(hash, 0) }).ok()?;
     if ordinal >= count { return Some(None); }
     let capacity = usize::try_from(unsafe { word(hash, 8) }).ok()?;

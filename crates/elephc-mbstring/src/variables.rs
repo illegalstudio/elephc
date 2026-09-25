@@ -14,4 +14,5 @@ mod native_host;
 mod plan;
 
 pub use live::{Container, LiveFailure, LiveHost, LiveValue, convert_live};
+pub(crate) use native_host::hash_child;
 pub use plan::VariablePlan;

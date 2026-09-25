@@ -39,7 +39,29 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         return emit_runtime_callable_invoker_inline(ctx, sig, &[]);
     };
     if operation == elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables {
-        return emit_runtime_callable_invoker_inline(ctx, sig, &[]);
+        let label = ctx.next_global_label("callable_invoker");
+        let done_label = ctx.next_label("callable_invoker_done");
+        let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
+            ctx.module, None, sig,
+        );
+        let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+            label: &label,
+            sig,
+            captures: &[],
+            mbstring_operation: None,
+            mbstring_variable_ref_warnings: true,
+            owns_string_return: false,
+            php_return_status: false,
+            defaults: &defaults,
+        };
+        let enclosing = ctx.emitter.current_text_section();
+        abi::emit_jump(ctx.emitter, &done_label);
+        super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
+            ctx.emitter, ctx.data, &invoker,
+        );
+        ctx.emitter.reopen_text_section(enclosing);
+        ctx.emitter.label(&done_label);
+        return label;
     }
     let label = ctx.next_global_label("callable_invoker");
     let done_label = ctx.next_label("callable_invoker_done");
@@ -51,6 +73,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         sig,
         captures: &[],
         mbstring_operation: Some(operation),
+        mbstring_variable_ref_warnings: false,
         owns_string_return: sig.return_type.codegen_repr() == PhpType::Str,
         php_return_status: false,
         defaults: &defaults,
@@ -108,6 +131,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         sig,
         captures,
         mbstring_operation: None,
+        mbstring_variable_ref_warnings: false,
         owns_string_return,
         php_return_status,
         defaults: &defaults,

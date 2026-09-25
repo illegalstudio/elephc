@@ -789,6 +789,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         sig,
         captures,
         mbstring_operation: None,
+        mbstring_variable_ref_warnings: false,
         owns_string_return,
         php_return_status: true,
         defaults: &defaults,
