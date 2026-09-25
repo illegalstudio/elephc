@@ -4419,6 +4419,7 @@ fn test_reflection_builtin_public_properties_are_projected() {
 #[Attribute] class PublicViewAttribute {}
 #[PublicViewAttribute] class PublicViewBase { public int $field = 1; public const VALUE = 7; public function inherited() {} }
 class PublicViewChild extends PublicViewBase { public function own() {} }
+class PublicViewReflectionChild extends ReflectionClass { private string $custom; }
 enum PublicViewUnit { case Case; }
 enum PublicViewBacked: string { case Case = 'value'; }
 function public_view_target(int $value) {}
@@ -4427,6 +4428,8 @@ interface PublicViewContract {}
 class PublicViewImplementation implements PublicViewContract {}
 function public_view_intersection(PublicViewImplementation&PublicViewContract $value) {}
 $attribute = (new ReflectionClass(PublicViewBase::class))->getAttributes()[0];
+$reflectionSubclass = new PublicViewReflectionChild(PublicViewChild::class);
+(new ReflectionProperty(PublicViewReflectionChild::class, 'custom'))->setValue($reflectionSubclass, 'user');
 $values = [
     'attribute' => $attribute,
     'class' => new ReflectionClass(PublicViewChild::class),
@@ -4446,6 +4449,7 @@ $values = [
 foreach ($values as $label => $value) {
     echo $label, ':', json_encode((array)$value), '|', json_encode(get_object_vars($value)), "\n";
 }
+echo 'subclass:', json_encode((array)$reflectionSubclass), '|', json_encode(get_object_vars($reflectionSubclass)), "\n";
 "#,
     );
     assert_eq!(
@@ -4463,6 +4467,7 @@ union-type:[]|[]\n\
 intersection-type:[]|[]\n\
 constant:{\"name\":\"VALUE\",\"class\":\"PublicViewBase\"}|{\"name\":\"VALUE\",\"class\":\"PublicViewBase\"}\n\
 unit:{\"name\":\"Case\",\"class\":\"PublicViewUnit\"}|{\"name\":\"Case\",\"class\":\"PublicViewUnit\"}\n\
-backed:{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}|{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}\n"
+backed:{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}|{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}\n\
+subclass:{\"name\":\"PublicViewChild\",\"\\u0000PublicViewReflectionChild\\u0000custom\":\"user\"}|{\"name\":\"PublicViewChild\"}\n"
     );
 }

@@ -26,16 +26,38 @@ pub(in crate::codegen::lower_inst::objects) fn is_reflection_owner_class(class_n
     )
 }
 
+/// Returns the builtin Reflection owner ancestor represented by a user subclass.
+pub(in crate::codegen::lower_inst::objects) fn reflection_owner_base_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Option<String> {
+    let mut current = class_name.trim_start_matches('\\');
+    for _ in 0..=ctx.module.class_infos.len() {
+        if is_reflection_owner_class(current) {
+            return Some(current.to_string());
+        }
+        let class_info = ctx.module.class_infos.get(current)?;
+        current = class_info.parent.as_deref()?;
+    }
+    None
+}
+
 /// Lowers builtin Reflection owner allocation by populating compile-time metadata slots.
 pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     class_name: &str,
 ) -> Result<()> {
-    if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
+    let owner_class_name = reflection_owner_base_class(ctx, class_name).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "{} is not a builtin Reflection owner or subclass",
+            class_name
+        ))
+    })?;
+    if let Some(object_operand) = reflection_object_operand(ctx, &owner_class_name, inst)? {
         emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
     } else {
-        let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
+        let metadata = reflection_owner_metadata(ctx, &owner_class_name, inst)?;
         emit_reflection_owner_object(ctx, class_name, &metadata)?;
     }
     let result = inst
@@ -277,4 +299,3 @@ pub(super) fn reflection_interface_extends_interface(
         .iter()
         .any(|parent| reflection_interface_extends_interface(ctx, parent, target_interface))
 }
-
