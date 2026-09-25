@@ -312,12 +312,8 @@ pub(super) fn eval_array_without_key_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let tag = values.type_tag(array)?;
-    let mut result = if tag == EVAL_TAG_ASSOC {
-        builtins::collection_builder::EvalArrayBuilder::assoc(values, len.saturating_sub(1))?
-    } else {
-        builtins::collection_builder::EvalArrayBuilder::indexed(values, len.saturating_sub(1))?
-    };
+    // Unset can leave a hole in a dense array, so preserve keys and append history in a hash.
+    let mut result = builtins::collection_builder::EvalArrayBuilder::assoc(values, len.saturating_sub(1))?;
     for position in 0..len {
         let key = result.values().array_iter_key(array, position)?;
         let copied = (|| {
@@ -335,7 +331,12 @@ pub(super) fn eval_array_without_key_result(
         copied?;
         released?;
     }
-    Ok(result.finish())
+    let rebuilt = result.finish();
+    if let Err(status) = values.array_copy_index_history(array, rebuilt) {
+        let _ = values.release(rebuilt);
+        return Err(status);
+    }
+    Ok(rebuilt)
 }
 
 /// Executes `$var[] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.
@@ -494,9 +495,13 @@ fn eval_array_element_reference_write(
             let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
             write_back_owned_variable_ref_target(scope, &name, value, context, values)
         }
-        EvalReferenceTarget::Cell { .. } => {
-            context.bind_array_element_alias(array, key, EvalReferenceTarget::Cell { cell: value });
-            Ok(())
+        EvalReferenceTarget::Cell { cell } => {
+            if values.is_reference(cell)? {
+                write_back_method_ref_target(&EvalReferenceTarget::Cell { cell }, value, context, values)
+            } else {
+                context.bind_array_element_alias(array, key, EvalReferenceTarget::Cell { cell: value });
+                Ok(())
+            }
         }
         _ => write_back_method_ref_target(&target, value, context, values),
     }

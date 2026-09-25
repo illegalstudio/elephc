@@ -66,7 +66,7 @@ echo "Running ${#selected[@]} curl tests in shard $shard/$shard_count"
 output_log=$(mktemp)
 trap 'rm -f "$output_log"' EXIT
 
-"$test_binary" codegen::curl "${skipped[@]}" --test-threads 4 --nocapture 2>&1 | tee "$output_log"
+"$test_binary" codegen::curl "${skipped[@]}" --test-threads 2 --nocapture 2>&1 | tee "$output_log"
 
 # Keep in sync with `curl_native::SKIP_GATE_MARKER` (the only place that spelling is
 # allowed to live besides this line).

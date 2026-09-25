@@ -1178,6 +1178,7 @@ jobs:
       - name: Run curl codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_BINARY_TIMEOUT_SECS: "120"
           ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
@@ -1255,6 +1256,7 @@ jobs:
       - name: Run curl codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_BINARY_TIMEOUT_SECS: "120"
           ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
@@ -1332,6 +1334,7 @@ jobs:
       - name: Run curl codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_BINARY_TIMEOUT_SECS: "120"
           ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
