@@ -10,5 +10,7 @@
 
 mod live;
 pub mod host;
+mod plan;
 
 pub use live::{Container, LiveFailure, LiveHost, LiveValue, convert_live};
+pub use plan::VariablePlan;
