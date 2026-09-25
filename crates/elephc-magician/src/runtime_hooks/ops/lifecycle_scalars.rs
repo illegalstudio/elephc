@@ -45,6 +45,12 @@ macro_rules! impl_lifecycle_scalar_ops {
         self.release_cells([value])
     }
 
+    /// Runs an automatic collection safe point after eval releases a scope root.
+    fn collect_cycles(&mut self) -> Result<(), EvalStatus> {
+        let status = unsafe { __elephc_eval_collect_cycles() };
+        self.handle_native_cleanup_status(status)
+    }
+
     /// Forces collection and schedules a bounded native Throwable for eval's catch machinery.
     fn gc_collect_cycles(&mut self) -> Result<i64, EvalStatus> {
         let mut throwable = std::ptr::null_mut();
