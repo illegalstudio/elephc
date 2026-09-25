@@ -161,10 +161,11 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
     None
 }
 
-/// Selects shared runtime builtins and callback wrappers that own their argument values through invocation.
+/// Selects builtins whose source values need owned call-boundary storage.
+/// `count()` can consume a temporary array element without retaining its unused lvalue key.
 pub(in crate::interpreter) fn eval_builtin_uses_owned_arguments(name: &str) -> bool {
     eval_declared_builtin_spec(name).is_some_and(|spec|
         spec.runtime_builtin.is_some_and(|id| id.is_mbstring())
-            || matches!(spec.name, "call_user_func" | "call_user_func_array" | "var_dump"
+            || matches!(spec.name, "call_user_func" | "call_user_func_array" | "count" | "var_dump"
                 | "bin2hex" | "header" | "ob_start"))
 }
