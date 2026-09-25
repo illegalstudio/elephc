@@ -127,6 +127,11 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(unsafe { __elephc_eval_value_is_reference(value.as_ptr()) } != 0)
     }
 
+    /// Inspects the native wrapper's physical owners before COW separates an orphan reference.
+    fn reference_is_shared(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_reference_is_shared(value.as_ptr()) } != 0)
+    }
+
     /// Allocates an independently owned reference wrapper around a copied PHP value.
     fn reference_new(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_reference_new(value.as_ptr()) })

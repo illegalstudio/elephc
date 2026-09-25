@@ -323,7 +323,7 @@ pub(super) fn eval_array_without_key_result(
             let matches = matches?;
             released?;
             if !matches {
-                result.entry(|values| values.array_get(array, key), |values, _| values.retain(key))?;
+                result.entry(|values| values.array_get_preserving_references(array, key), |values, _| values.retain(key))?;
             }
             Ok(())
         })();
@@ -495,7 +495,7 @@ fn eval_array_element_reference_write(
             let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
             write_back_owned_variable_ref_target(scope, &name, value, context, values)
         }
-        EvalReferenceTarget::Cell { cell } if values.is_reference(cell)? => {
+        EvalReferenceTarget::Cell { cell } if values.reference_is_shared(cell)? => {
             write_back_method_ref_target(&target, value, context, values)
         }
         EvalReferenceTarget::Cell { .. } => {
@@ -715,7 +715,7 @@ pub(super) fn eval_array_set_target_for_index(
     for position in 0..len {
         let key = assoc.values().array_iter_key(array, position)?;
         let inserted = assoc.entry(
-            |values| values.array_get(array, key),
+            |values| values.array_get_preserving_references(array, key),
             |values, _| values.retain(key),
         );
         let released = assoc.values().release(key);

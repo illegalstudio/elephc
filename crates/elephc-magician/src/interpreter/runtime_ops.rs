@@ -694,6 +694,9 @@ pub trait RuntimeValueOps {
     /// Reports whether a boxed value is a writable persistent PHP reference.
     fn is_reference(&mut self, _value: RuntimeCellHandle) -> Result<bool, EvalStatus> { Ok(false) }
 
+    /// Reports whether a reference still has another physical owner before array COW.
+    fn reference_is_shared(&mut self, _value: RuntimeCellHandle) -> Result<bool, EvalStatus> { Ok(false) }
+
     /// Creates an owned reference containing an independent PHP value.
     fn reference_new(&mut self, _value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Err(EvalStatus::UnsupportedConstruct)

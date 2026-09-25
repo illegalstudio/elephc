@@ -21,6 +21,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_reference_new(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Reports whether a boxed value is a runtime reference cell.
     pub(super) fn __elephc_eval_value_is_reference(value: *mut RuntimeCell) -> u64;
+    /// Reports whether a persistent reference has another physical owner.
+    pub(super) fn __elephc_eval_value_reference_is_shared(value: *mut RuntimeCell) -> u64;
     /// Replaces a reference payload and transfers its previous value to the caller.
     pub(super) fn __elephc_eval_value_reference_replace(reference: *mut RuntimeCell, value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Makes an ordinary value copy detached from a reference cell.
