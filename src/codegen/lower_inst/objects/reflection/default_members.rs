@@ -230,6 +230,9 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
         let default_value_constant_name = source_default_expr
             .or(default_expr)
             .and_then(reflection_parameter_default_constant_name);
+        let default_value_export = source_default_expr.or(default_expr).and_then(|default| {
+            reflection_parameter_default_export(ctx, current_class, current_info, default)
+        });
         let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
         let is_callable_type =
             reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
@@ -270,6 +273,7 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
             type_metadata,
             default_value,
             default_value_constant_name,
+            default_value_export,
         });
     }
     Ok(parameters)

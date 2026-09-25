@@ -49,6 +49,7 @@ mod method_members;
 mod property_members;
 mod default_members;
 mod parameter_defaults;
+mod default_export;
 mod names_constants;
 mod operand_extract;
 mod string_attrs_emit;
@@ -73,6 +74,7 @@ use method_members::*;
 use property_members::*;
 use default_members::*;
 use parameter_defaults::*;
+use default_export::*;
 use names_constants::*;
 use operand_extract::*;
 use string_attrs_emit::*;
@@ -199,6 +201,8 @@ struct ReflectionParameterMember {
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
     default_value_constant_name: Option<String>,
+    /// The default as PHP's dump prints its written AST, for the shapes the value cannot rebuild.
+    default_value_export: Option<String>,
 }
 
 /// Metadata needed for `ReflectionParameter::getDeclaringFunction()`.

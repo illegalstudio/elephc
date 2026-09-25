@@ -247,6 +247,7 @@ pub(super) fn reflection_property_hook_parameter_member(
         type_metadata,
         default_value: None,
         default_value_constant_name: None,
+        default_value_export: None,
     }
 }
 

@@ -203,7 +203,13 @@ fn reflection_parameter_to_string_at_position(
 ///
 /// A default written as a constant prints the CONSTANT's name, not its value — `= LIMIT` and
 /// `= self::CEIL`, measured on 8.5.10 — which is why the constant name is consulted first.
+/// The exported AST comes before both: an object default keeps its written arguments
+/// (`new \Foo(Foo::VALUE)`), and a named class constant prints fully qualified
+/// (`= \N\Foo::VALUE`) although `getDefaultValueConstantName()` answers `N\Foo::VALUE`.
 fn reflection_parameter_default_to_string(parameter: &ReflectionParameterMember) -> Option<String> {
+    if let Some(exported) = parameter.default_value_export.as_ref() {
+        return Some(exported.clone());
+    }
     if let Some(constant_name) = parameter.default_value_constant_name.as_ref() {
         return Some(constant_name.clone());
     }
@@ -273,7 +279,7 @@ fn reflection_dump_default_value(default: &ReflectionParameterDefaultValue) -> S
 /// decimal range, where Rust expands every digit. Measured on 8.5.10: `1e100` prints `1.0E+100`,
 /// `1e-5` prints `1.0E-5` and `1e15` prints `1.0E+15`, while `1.5` and `0.1` stay decimal, and
 /// `function f(float $x = INF, float $y = -INF, float $z = NAN) {}` dumps those three names.
-fn reflection_dump_float(value: f64) -> String {
+pub(super) fn reflection_dump_float(value: f64) -> String {
     if value.is_nan() {
         return "NAN".to_string();
     }
