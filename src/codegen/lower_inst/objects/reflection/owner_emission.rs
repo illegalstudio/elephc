@@ -38,8 +38,31 @@ pub(super) fn emit_reflection_owner_object(
     )?;
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
+        let has_public_name = ctx
+            .module
+            .class_infos
+            .get(class_name)
+            .is_some_and(|info| info.property_offsets.contains_key("name"));
+        if has_public_name && class_name != "ReflectionParameter" {
+            emit_reflection_owner_string_property_by_name(ctx, class_name, "name", reflected_name)?;
+        }
         if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
+        }
+        if let Some(declaring_class_name) = metadata.parent_class_name.as_deref() {
+            let has_public_class = ctx
+                .module
+                .class_infos
+                .get(class_name)
+                .is_some_and(|info| info.property_offsets.contains_key("class"));
+            if has_public_class {
+                emit_reflection_owner_string_property_by_name(
+                    ctx,
+                    class_name,
+                    "class",
+                    declaring_class_name,
+                )?;
+            }
         }
         if is_reflection_class_owner {
             emit_reflection_owner_string_array_property_by_name(

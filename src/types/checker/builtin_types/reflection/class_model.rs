@@ -20,6 +20,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
         is_final: false,
         is_readonly_class: false,
         properties: vec![
+            builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
             builtin_property(
                 "__name",
                 Visibility::Private,

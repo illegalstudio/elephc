@@ -4409,3 +4409,50 @@ echo "built\n";
     );
     assert_eq!(out, "built\n");
 }
+
+
+/// Reflection casts and get_object_vars expose only PHP's public name/class fields.
+#[test]
+fn test_reflection_builtin_public_properties_are_projected() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute] class PublicViewAttribute {}
+#[PublicViewAttribute] class PublicViewBase { public int $field = 1; public const VALUE = 7; public function inherited() {} }
+class PublicViewChild extends PublicViewBase { public function own() {} }
+enum PublicViewUnit { case Case; }
+enum PublicViewBacked: string { case Case = 'value'; }
+function public_view_target(int $value) {}
+$attribute = (new ReflectionClass(PublicViewBase::class))->getAttributes()[0];
+$values = [
+    'attribute' => $attribute,
+    'class' => new ReflectionClass(PublicViewChild::class),
+    'object' => new ReflectionObject(new PublicViewChild()),
+    'enum' => new ReflectionEnum(PublicViewBacked::class),
+    'function' => new ReflectionFunction('public_view_target'),
+    'method' => new ReflectionMethod(PublicViewChild::class, 'inherited'),
+    'property' => new ReflectionProperty(PublicViewChild::class, 'field'),
+    'parameter' => new ReflectionParameter('public_view_target', 'value'),
+    'constant' => new ReflectionClassConstant(PublicViewChild::class, 'VALUE'),
+    'unit' => new ReflectionEnumUnitCase(PublicViewUnit::class, 'Case'),
+    'backed' => new ReflectionEnumBackedCase(PublicViewBacked::class, 'Case'),
+];
+foreach ($values as $label => $value) {
+    echo $label, ':', json_encode((array)$value), '|', json_encode(get_object_vars($value)), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "attribute:{\"name\":\"PublicViewAttribute\"}|{\"name\":\"PublicViewAttribute\"}\n\
+class:{\"name\":\"PublicViewChild\"}|{\"name\":\"PublicViewChild\"}\n\
+object:{\"name\":\"PublicViewChild\"}|{\"name\":\"PublicViewChild\"}\n\
+enum:{\"name\":\"PublicViewBacked\"}|{\"name\":\"PublicViewBacked\"}\n\
+function:{\"name\":\"public_view_target\"}|{\"name\":\"public_view_target\"}\n\
+method:{\"name\":\"inherited\",\"class\":\"PublicViewBase\"}|{\"name\":\"inherited\",\"class\":\"PublicViewBase\"}\n\
+property:{\"name\":\"field\",\"class\":\"PublicViewBase\"}|{\"name\":\"field\",\"class\":\"PublicViewBase\"}\n\
+parameter:{\"name\":\"value\"}|{\"name\":\"value\"}\n\
+constant:{\"name\":\"VALUE\",\"class\":\"PublicViewBase\"}|{\"name\":\"VALUE\",\"class\":\"PublicViewBase\"}\n\
+unit:{\"name\":\"Case\",\"class\":\"PublicViewUnit\"}|{\"name\":\"Case\",\"class\":\"PublicViewUnit\"}\n\
+backed:{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}|{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}\n"
+    );
+}

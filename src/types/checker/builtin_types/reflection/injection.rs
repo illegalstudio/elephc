@@ -75,6 +75,7 @@ pub(crate) fn inject_builtin_reflection(
             is_final: true,
             is_readonly_class: false,
             properties: vec![
+                builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
                 builtin_property(
                     "__name",
                     Visibility::Private,
