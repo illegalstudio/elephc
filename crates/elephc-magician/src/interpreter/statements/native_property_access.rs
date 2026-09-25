@@ -95,6 +95,9 @@ pub(in crate::interpreter) fn eval_native_property_set_authorized(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    validate_eval_native_array_property_assignment(
+        declaring_class, property, value, context, values,
+    )?;
     if let Some(result) = eval_native_property_hook(
         object, declaring_class, property, Some(value), context, values,
     )? {
