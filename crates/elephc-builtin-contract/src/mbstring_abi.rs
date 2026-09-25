@@ -18,6 +18,7 @@ pub mod invoke;
 pub mod ini;
 pub mod regex;
 pub mod exception;
+pub mod variables;
 
 /// A null or omitted argument, distinguished by the call's argument count.
 pub const ARG_NULL: u64 = 0;

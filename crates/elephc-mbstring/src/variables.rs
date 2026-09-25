@@ -9,5 +9,6 @@
 //! - Host adapters preserve array COW, object identity, and PHP reference replacement.
 
 mod live;
+pub mod host;
 
 pub use live::{Container, LiveFailure, LiveHost, LiveValue, convert_live};
