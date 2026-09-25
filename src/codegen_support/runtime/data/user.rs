@@ -215,6 +215,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_stack_class_id", "SplStack"),
         ("_spl_queue_class_id", "SplQueue"),
         ("_spl_fixed_array_class_id", "SplFixedArray"),
+        ("_spl_exception_class_id", "Exception"),
         ("_spl_error_class_id", "Error"),
         ("_spl_logic_exception_class_id", "LogicException"),
         ("_spl_runtime_exception_class_id", "RuntimeException"),

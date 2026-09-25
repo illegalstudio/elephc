@@ -37,6 +37,17 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value_ty = ctx.value_php_type(value)?;
     let is_x86 = ctx.emitter.target.arch == Arch::X86_64;
 
+    if let PhpType::Object(class_name) = &value_ty {
+        if is_reflection_serialization_denied(ctx, class_name) {
+            let class_name = class_name.trim_start_matches('\\');
+            super::super::exceptions::emit_exception(
+                ctx,
+                &format!("Serialization of '{}' is not allowed", class_name),
+            );
+            return store_if_result(ctx, inst);
+        }
+    }
+
     // Reset the reference-tracking state (value counter + seen-objects map) so this
     // top-level serialize() assigns r:/R: indices from scratch, matching PHP.
     abi::emit_call_label(ctx.emitter, "__rt_serialize_begin");
@@ -155,6 +166,40 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns true when a statically typed Reflection object inherits PHP's serialization denial.
+fn is_reflection_serialization_denied(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    let mut current = class_name.trim_start_matches('\\');
+    for _ in 0..=ctx.module.class_infos.len() {
+        if matches!(
+            current,
+            "ReflectionAttribute"
+                | "ReflectionClass"
+                | "ReflectionObject"
+                | "ReflectionEnum"
+                | "ReflectionFunction"
+                | "ReflectionMethod"
+                | "ReflectionProperty"
+                | "ReflectionParameter"
+                | "ReflectionNamedType"
+                | "ReflectionUnionType"
+                | "ReflectionIntersectionType"
+                | "ReflectionClassConstant"
+                | "ReflectionEnumUnitCase"
+                | "ReflectionEnumBackedCase"
+        ) {
+            return true;
+        }
+        let Some(info) = ctx.module.class_infos.get(current) else {
+            return false;
+        };
+        let Some(parent) = info.parent.as_deref() else {
+            return false;
+        };
+        current = parent.trim_start_matches('\\');
+    }
+    false
 }
 
 /// Lowers `unserialize($data, $options?)` into the shared unserialize runtime helper.

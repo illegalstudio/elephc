@@ -1124,6 +1124,26 @@ echo "end";
     assert_eq!(out, "a:1:{s:4:\"name\";s:6:\"string\";}|1|string|string|end");
 }
 
+/// Reflection objects deny serialization with a catchable Exception, as PHP does.
+#[test]
+fn test_serialize_reflection_parameter_throws_exception() {
+    let out = compile_and_run(
+        r#"<?php
+$parameter = new ReflectionParameter("strlen", "string");
+try {
+    serialize($parameter);
+    echo 'serialized';
+} catch (Exception $error) {
+    echo get_class($error), ':', $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Exception:Serialization of 'ReflectionParameter' is not allowed"
+    );
+}
+
 /// Verifies an array cast of a runtime `mixed` value preserves PHP semantics
 /// for scalar, null, and already-array payload tags.
 #[test]
