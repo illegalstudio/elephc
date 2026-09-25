@@ -16,7 +16,7 @@
 //!   The eval bridge omits the same line, but still differs in two places the compiled path gets
 //!   right: the prototype marker and the empty body. Both print a union in PHP's order (#1118).
 //! - A union prints in PHP's type-mask order, not the declared one: `int|string` comes back as
-//!   `string|int`. See `reflection_union_member_rank`.
+//!   `string|int`. See `elephc_builtin_contract::union_member_rank`.
 //! - Internal callable origins include their owning PHP module under the name PHP registers it
 //!   with: `<internal:Core>`, `<internal:SPL>`, `<internal:standard>`.
 

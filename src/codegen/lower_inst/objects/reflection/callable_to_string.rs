@@ -13,8 +13,8 @@
 //!   runs, and baking the build machine's path in would be worse than leaving it out. The eval
 //!   bridge omits the same line, but still differs in two places this renderer gets right: the
 //!   prototype marker and the empty body. Both now print a union in the same PHP order (#1118).
-//! - Union members print in PHP's order, not the declared one — see `reflection_union_member_rank`,
-//!   which the property dump shares.
+//! - Union members print in PHP's order, not the declared one — see
+//!   `elephc_builtin_contract::union_member_rank`, which the property dump and eval share.
 //! - Whether a callable is internal is decided by the caller (the builtin signature registry for a
 //!   function, the class catalog for a method), the same answer `isInternal()` gives. Only the
 //!   MODULE comes from here: the shared builtin contract for a function, the declaring class's
