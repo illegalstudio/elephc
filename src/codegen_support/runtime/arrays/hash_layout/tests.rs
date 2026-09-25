@@ -50,7 +50,7 @@ fn native_hash_owned_growth_preserves_identity_and_entries() {
         }
     }
     for symbol in [
-        "__rt_reference_cell_clone", "__rt_hash_to_mixed_x86_box_owned",
+        "__rt_reference_cell_clone", "__rt_hash_to_mixed_box_owned", "__rt_hash_to_mixed_x86_box_owned",
         "__rt_mixed_from_value", "__rt_decref_mixed", "__rt_reference_cell_new",
         "__rt_reference_cell_value_release",
     ] {

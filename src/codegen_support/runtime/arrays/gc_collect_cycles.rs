@@ -46,8 +46,6 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("ldr x10, [x9]");                                       // load the current collector-active flag
     emitter.instruction("cbnz x10, __rt_gc_collect_cycles_done");               // nested collection attempts are ignored
-    emitter.instruction("mov x10, #1");                                         // suppress nested collection throughout destructor callbacks
-    emitter.instruction("str x10, [x9]");                                       // distinguish collection activity from the later sweep phase
 
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_gc_release_suppressed", 0);
     emitter.instruction("cbnz x10, __rt_gc_collect_cycles_done");               // defer root scans until enclosing container cleanup is complete
@@ -460,4 +458,24 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     emitter.label("__rt_gc_collect_cycles_done");
     emitter.instruction("ret");                                                 // return to the caller
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    #[test]
+    fn suppressed_aarch64_collection_does_not_set_active_flag() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_gc_collect_cycles(&mut emitter);
+            let output = emitter.output();
+            let suppression = output.find("_gc_release_suppressed").unwrap();
+            let skip = output[suppression..].find("cbnz x10, __rt_gc_collect_cycles_done").unwrap() + suppression;
+            let active = output[skip..].find("str x10, [x9]").unwrap() + skip;
+            assert!(skip < active, "{name}");
+            assert!(!output[..skip].contains("str x10, [x9]"), "{name}");
+        }
+    }
 }
