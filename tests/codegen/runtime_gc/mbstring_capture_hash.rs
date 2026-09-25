@@ -37,6 +37,18 @@ mod query_invoke;
 #[path = "mbstring_capture_hash/ini_materialize.rs"]
 mod ini_materialize;
 
+/// Appends a C fixture without changing the atom boundaries of the preceding PHP assembly.
+fn append_c_provider_asm(assembly: &mut String, provider: &str) {
+    for line in provider.lines() {
+        // Clang emits this file-wide Mach-O directive at the end of its assembly. In a
+        // combined file it makes EIR conditional branch targets separate symbols.
+        if line.trim() != ".subsections_via_symbols" {
+            assembly.push_str(line);
+            assembly.push('\n');
+        }
+    }
+}
+
 /// Completes object and callable-capture replacement before destructor throws, with no retained owners.
 #[test]
 fn test_mbstring_capture_hash_native_destructor_boundary() {

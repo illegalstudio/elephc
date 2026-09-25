@@ -70,7 +70,7 @@ echo "done\n";
     let built = compiler.arg(&provider).arg("-o").arg(&provider_asm).output().unwrap();
     assert!(built.status.success(), "{}: {}", directory.display(), String::from_utf8_lossy(&built.stderr));
     patched.push_str(&shims());
-    patched.push_str(&std::fs::read_to_string(provider_asm).unwrap());
+    append_c_provider_asm(&mut patched, &std::fs::read_to_string(provider_asm).unwrap());
     std::fs::write(directory.join("caller.s"), &patched).unwrap();
     let output = assemble_and_run_capture(&patched, &runtime_obj_for_asm(&runtime), &directory,
         &libraries, &default_link_paths(), &[]);
