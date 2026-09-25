@@ -4422,6 +4422,10 @@ class PublicViewChild extends PublicViewBase { public function own() {} }
 enum PublicViewUnit { case Case; }
 enum PublicViewBacked: string { case Case = 'value'; }
 function public_view_target(int $value) {}
+function public_view_union(int|string $value) {}
+interface PublicViewContract {}
+class PublicViewImplementation implements PublicViewContract {}
+function public_view_intersection(PublicViewImplementation&PublicViewContract $value) {}
 $attribute = (new ReflectionClass(PublicViewBase::class))->getAttributes()[0];
 $values = [
     'attribute' => $attribute,
@@ -4432,6 +4436,9 @@ $values = [
     'method' => new ReflectionMethod(PublicViewChild::class, 'inherited'),
     'property' => new ReflectionProperty(PublicViewChild::class, 'field'),
     'parameter' => new ReflectionParameter('public_view_target', 'value'),
+    'named-type' => (new ReflectionParameter('public_view_target', 'value'))->getType(),
+    'union-type' => (new ReflectionParameter('public_view_union', 'value'))->getType(),
+    'intersection-type' => (new ReflectionParameter('public_view_intersection', 'value'))->getType(),
     'constant' => new ReflectionClassConstant(PublicViewChild::class, 'VALUE'),
     'unit' => new ReflectionEnumUnitCase(PublicViewUnit::class, 'Case'),
     'backed' => new ReflectionEnumBackedCase(PublicViewBacked::class, 'Case'),
@@ -4451,6 +4458,9 @@ function:{\"name\":\"public_view_target\"}|{\"name\":\"public_view_target\"}\n\
 method:{\"name\":\"inherited\",\"class\":\"PublicViewBase\"}|{\"name\":\"inherited\",\"class\":\"PublicViewBase\"}\n\
 property:{\"name\":\"field\",\"class\":\"PublicViewBase\"}|{\"name\":\"field\",\"class\":\"PublicViewBase\"}\n\
 parameter:{\"name\":\"value\"}|{\"name\":\"value\"}\n\
+named-type:[]|[]\n\
+union-type:[]|[]\n\
+intersection-type:[]|[]\n\
 constant:{\"name\":\"VALUE\",\"class\":\"PublicViewBase\"}|{\"name\":\"VALUE\",\"class\":\"PublicViewBase\"}\n\
 unit:{\"name\":\"Case\",\"class\":\"PublicViewUnit\"}|{\"name\":\"Case\",\"class\":\"PublicViewUnit\"}\n\
 backed:{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}|{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}\n"
