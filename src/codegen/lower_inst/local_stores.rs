@@ -570,7 +570,7 @@ fn mixed_value_is_statically_destructor_free(
     if matches!(inst.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow) {
         return Ok(true);
     }
-    if matches!(inst.op, Op::Acquire | Op::Borrow | Op::Move | Op::Cast | Op::MixedBox) {
+    if matches!(inst.op, Op::Acquire | Op::Borrow | Op::Move | Op::Cast | Op::MixedBox | Op::MixedClone) {
         let Some(source) = inst.operands.first().copied() else {
             return Ok(false);
         };

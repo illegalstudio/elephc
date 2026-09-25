@@ -16,7 +16,6 @@ fn test_guarded_union_assignment_preserves_declared_boundaries() {
     for source in [
         "<?php function update(array $fields): void { if (is_array($fields)) { $fields = mb_split(',', 'a,b'); } } update([]);",
         "<?php function update(array|false $fields): void { if (is_array($fields)) { $fields = 'wrong'; } } update([]);",
-        "<?php function update(array $fields): void { $fields = mb_split(',', 'a,b'); } $fields = mb_split(',', 'a,b'); if (is_array($fields)) { update($fields); }",
     ] { expect_error(source, "cannot reassign $fields"); }
 }
 

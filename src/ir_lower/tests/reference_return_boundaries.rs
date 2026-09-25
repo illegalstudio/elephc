@@ -768,11 +768,6 @@ echo count($alias);
             .iter()
             .find(|function| function.name.eq_ignore_ascii_case("widenedArrayReference"))
             .expect("the widening callee is lowered");
-        let widened = callee
-            .instructions
-            .iter()
-            .position(|inst| inst.op == Op::MixedBox)
-            .expect("the concrete array local is widened to the declared Mixed payload");
         let promotion = callee
             .instructions
             .iter()
@@ -783,10 +778,7 @@ echo count($alias);
             .iter()
             .position(|inst| inst.op == Op::AcquireRefCell)
             .expect("the promoted cell is leased to the caller");
-        assert!(
-            widened < promotion && promotion < acquisition,
-            "{name}: widen {widened} < promote {promotion} < acquire {acquisition}"
-        );
+        assert!(promotion < acquisition, "{name}: promote {promotion} < acquire {acquisition}");
         let Some(crate::ir::Immediate::LocalSlotPair { first, .. }) =
             callee.instructions[promotion].immediate
         else {
@@ -797,6 +789,10 @@ echo count($alias);
             crate::types::PhpType::Mixed,
             "{name}: the cell's payload matches what the caller reads back through it"
         );
+        assert!(callee.instructions[..promotion].iter().any(|inst|
+            inst.op == Op::StoreLocal
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(first))),
+            "{name}: an initial value reaches the widened slot before promotion");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }

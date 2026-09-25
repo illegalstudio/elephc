@@ -141,6 +141,8 @@ impl RuntimeFeatures {
             | ((self.directory_resource as u64) << 11)
             | ((self.handler_state as u64) << 12)
             | ((self.object_clone as u64) << 13)
+            | ((self.mbregex as u64) << 14)
+            | ((self.mbstring_mime as u64) << 15)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.

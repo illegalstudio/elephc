@@ -176,7 +176,7 @@ echo count($set);
     }
 }
 
-/// Verifies an in-loop unset widens cleanup loads to the final boxed local representation.
+/// Verifies an in-loop unset retires the final boxed local representation.
 #[test]
 fn test_unset_loop_retype_cleanup_uses_final_mixed_slot_type_in_both_modes() {
     let source = r#"<?php
@@ -193,17 +193,15 @@ echo "ok";
     for ir_opt in [false, true] {
         let ir = emit_release_ir(source, ir_opt);
         let cleanup = ir.lines().find(|line| {
-            line.contains("php=mixed own=owned = load_local") && line.contains("span: 5:5")
+            line.contains("release_local_slot slot[2]") && line.contains("span: 5:5")
         });
         assert!(
             cleanup.is_some(),
-            "assignment cleanup must load the final Mixed slot with ir_opt={ir_opt}:\n{ir}"
+            "assignment cleanup must retire the local slot with ir_opt={ir_opt}:\n{ir}"
         );
         assert!(
-            !ir.lines().any(|line| {
-                line.contains("php=string own=owned = load_local") && line.contains("span: 5:5")
-            }),
-            "assignment cleanup must not retain the stale String type with ir_opt={ir_opt}:\n{ir}"
+            ir.lines().any(|line| line.contains("php=mixed own=owned = invoker_ref_arg slot[2]")),
+            "the live local must be widened to Mixed before the call with ir_opt={ir_opt}:\n{ir}"
         );
 
         let (stdout, stderr) = run_release_fixture(source, ir_opt);
