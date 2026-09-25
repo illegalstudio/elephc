@@ -625,12 +625,12 @@ opaque eval and runtime-unknown callbacks; run `elephc native add oniguruma` in
 the project before linking. Text operations and regex settings alone need only
 the shared Rust bridge. The old PCRE2-based matching adapters have been removed.
 
-Public `mb_ereg_replace_callback` now has AOT and eval bindings, bringing public
-binding coverage to 63 of 65 functions. Its focused public call, ownership,
+Public `mb_ereg_replace_callback` and `mb_send_mail` now have AOT and eval bindings,
+bringing public binding coverage to 64 of 65 functions. Their focused public call, ownership,
 effects, and error tests pass. This is not complete callback support: the native
 retained-owner regression still reports two unreleased string owners per regex
 invocation in the exercised callback shape, and closure and method callback
-frontend coverage remains open. `mb_convert_variables`, `mb_send_mail`, public
+frontend coverage remains open. `mb_convert_variables`, public
 INI host integration, and the earlier compatibility debts are still pending.
 
 The three native CI archive jobs prepare `target/debug/elephc-oniguruma` with
