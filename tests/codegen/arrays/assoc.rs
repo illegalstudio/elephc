@@ -1026,6 +1026,7 @@ fn test_array_slice_builtin_types_do_not_collide_across_included_files() {
         "main.php",
     );
     assert_eq!(out, "12|tf");
+}
 
 /// PHP 8.0-8.2 append keys must agree between specialized and runtime-selected hash paths.
 ///
