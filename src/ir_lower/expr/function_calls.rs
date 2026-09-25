@@ -127,7 +127,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         // like the same fixed signature reached through a builtin descriptor surface.
         sig.as_ref()
             .and_then(|signature| {
-                dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, canonical)
+                dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, canonical, false)
             })
             .unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args))
     } else if is_extern {

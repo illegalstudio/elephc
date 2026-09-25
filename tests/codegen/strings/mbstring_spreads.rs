@@ -57,6 +57,17 @@ var_dump(mb_internal_encoding(...$empty));
     assert_eq!(compile_and_run(source), "int(32)\nchanged\nstring(5) \"猫é\"\nA猫:éB:\nstring(5) \"UTF-8\"\n");
 }
 
+/// Binds keys from an untyped PHP array return before applying mbstring's optional encoding.
+#[test]
+fn test_mbstring_dynamic_spread_named_array_return() {
+    let source = r#"<?php
+function named_mb_arguments(): array { return ["encoding" => "UTF-8", "string" => "猫é"]; }
+function single_mb_argument(): array { return ["string" => "猫"]; }
+echo mb_strlen(...named_mb_arguments()), ":", mb_strlen(...single_mb_argument());
+"#;
+    assert_eq!(compile_and_run(source), "2:1");
+}
+
 /// Keeps strict source parameter rules when a dynamic array contains original Mixed scalar values.
 #[test]
 fn test_mbstring_dynamic_spread_strict_types() {

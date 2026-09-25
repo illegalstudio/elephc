@@ -1,11 +1,12 @@
 //! Purpose:
-//! Materializes required, fixed-arity builtin calls whose unpacked PHP arrays have boxed storage.
+//! Materializes fixed-arity builtin calls whose unpacked PHP arrays have boxed storage.
 //!
 //! Called from:
 //! - Builtin signature-based argument lowering, including statically selected CUF/FCC targets.
 //!
 //! Key details:
 //! - Consumes the shared source plan, then binds runtime keys without discarding named arguments.
+//! - Preserve-values builtins retain optional null slots and defer coercion to their coordinator.
 //! - Iterator sources and argument values stay in rooted slots across later evaluation and throws.
 
 use super::*;
@@ -19,19 +20,21 @@ struct SpreadBindings {
     span: Span,
 }
 
-/// Lowers boxed unpack sources for required signatures without reference, optional or hidden parameters.
+/// Lowers boxed unpack sources for fixed signatures without references or hidden parameters.
 pub(super) fn lower_boxed_spread_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     args: &[Expr],
     builtin: &str,
+    preserve_values: bool,
 ) -> Option<Vec<ValueId>> {
     if sig.variadic.is_some() || sig.ref_params.iter().any(|by_ref| *by_ref)
-        || sig.defaults.iter().any(Option::is_some)
+        || !preserve_values && sig.defaults.iter().any(Option::is_some)
         || crate::func_args::sig_has_hidden_argc_param(sig)
         || !args.iter().any(|arg| match &arg.kind {
             ExprKind::Spread(source) => {
-                array_literal_element_type_for_ir(ctx, source).codegen_repr() == PhpType::Mixed
+                preserve_values
+                    || array_literal_element_type_for_ir(ctx, source).codegen_repr() == PhpType::Mixed
                     || nested_spread_assoc_literal(source)
             }
             _ => false,
@@ -79,7 +82,10 @@ pub(super) fn lower_boxed_spread_args(
     let max = emit_i64_at_span(ctx, sig.params.len() as i64, span);
     let valid = compare_ints(ctx, count.value, max.value, CmpPredicate::Sle, span);
     require(ctx, valid, "ArgumentCountError", &format!("{builtin}(): Too many arguments for unpacked call"), span);
-    for filled in &state.filled {
+    for (index, filled) in state.filled.iter().enumerate() {
+        if preserve_values && sig.defaults.get(index).is_some_and(Option::is_some) {
+            continue;
+        }
         let ready = ctx.load_local(filled, Some(span));
         require(ctx, ready, "ArgumentCountError", "Too few arguments for unpacked call", span);
     }
@@ -98,7 +104,7 @@ pub(super) fn lower_boxed_spread_args(
     for slot in state.slots.into_iter().rev() {
         retire_slot(ctx, &slot, span);
     }
-    Some(coerce_operands_to_params(ctx, sig, operands))
+    Some(if preserve_values { operands } else { coerce_operands_to_params(ctx, sig, operands) })
 }
 
 /// Returns true for an unpack source that is a keyed literal carrying a nested `...$source`.

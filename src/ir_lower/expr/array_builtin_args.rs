@@ -121,9 +121,11 @@ pub(super) fn lower_builtin_call_args(
     if matches!(argument_lowering,
         crate::builtins::semantics::BuiltinArgumentLowering::Standard
         | crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
+        | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
     ) {
         if let Some(sig) = sig {
-            if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, name) {
+            if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, name,
+                argument_lowering == crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues) {
                 return operands;
             }
         }
