@@ -1372,6 +1372,19 @@ foreach ($m as $k => $v) { echo $k, "=", $v, ";"; }
     assert_eq!(out, "a=p!;b=q!;");
 }
 
+/// A descriptor callback's transient string remains live after later string operations reuse scratch storage.
+#[test]
+fn test_array_map_assoc_descriptor_string_result_owns_bytes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$source = ["A" => chr(233)];
+$mapped = array_map(fn($value) => bin2hex($value), $source);
+echo bin2hex($mapped["A"]), "|", $mapped["A"];
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "6539|e9");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies `array_map()` over a `string => int` hash keeps the source keys.
 /// Fixture: `["a" => 1, "b" => 2]` doubled through an arrow function.
 #[test]

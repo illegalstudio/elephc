@@ -270,6 +270,22 @@ fn lower_unary_string(
         )));
     }
     abi::emit_call_label(ctx.emitter, unary_string_symbol(runtime));
+    if runtime == UnaryStringRuntime::BinToHex {
+        let owned = ctx.next_label("bin2hex_heap_result_owned");
+        let ready = ctx.next_label("bin2hex_result_ready");
+        let (pointer, length) = abi::string_result_regs(ctx.emitter);
+        abi::emit_push_reg_pair(ctx.emitter, pointer, length);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.emitter.instruction(&format!("cmp {result}, 1"));                 // reserve returns a fresh owned string only after leaving scratch storage
+        ctx.emitter.instruction(&format!("{} {owned}", if ctx.emitter.target.arch == crate::codegen::platform::Arch::AArch64 { "b.eq" } else { "je" })); // preserve an already-owned heap result
+        abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
+        abi::emit_call_label(ctx.emitter, "__rt_str_persist");                 // copy the scratch result before later string operations reuse it
+        abi::emit_jump(ctx.emitter, &ready);
+        ctx.emitter.label(&owned);
+        abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
+        ctx.emitter.label(&ready);
+    }
     store_if_result(ctx, inst)
 }
 
