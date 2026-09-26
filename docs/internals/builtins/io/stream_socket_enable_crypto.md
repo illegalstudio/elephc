@@ -2,7 +2,7 @@
 title: "stream_socket_enable_crypto() - internals"
 description: "Compiler internals for stream_socket_enable_crypto(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 387
+  order: 389
 ---
 
 ## `stream_socket_enable_crypto()` - internals

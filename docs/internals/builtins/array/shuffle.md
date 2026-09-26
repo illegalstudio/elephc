@@ -2,7 +2,7 @@
 title: "shuffle() - internals"
 description: "Compiler internals for shuffle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 66
+  order: 68
 ---
 
 ## `shuffle()` - internals

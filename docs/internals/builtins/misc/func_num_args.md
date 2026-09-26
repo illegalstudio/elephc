@@ -2,7 +2,7 @@
 title: "func_num_args() - internals"
 description: "Compiler internals for func_num_args(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 614
+  order: 616
 ---
 
 ## `func_num_args()` - internals

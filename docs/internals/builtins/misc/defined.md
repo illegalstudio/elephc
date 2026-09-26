@@ -2,7 +2,7 @@
 title: "defined() - internals"
 description: "Compiler internals for defined(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 608
+  order: 610
 ---
 
 ## `defined()` - internals

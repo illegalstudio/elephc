@@ -2,7 +2,7 @@
 title: "natsort()"
 description: "Sorts an array using a natural order algorithm."
 sidebar:
-  order: 60
+  order: 62
 ---
 
 ## natsort()

@@ -2,7 +2,7 @@
 title: "cairo_set_matrix() - internals"
 description: "Compiler internals for cairo_set_matrix(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 438
+  order: 440
 ---
 
 ## `cairo_set_matrix()` - internals

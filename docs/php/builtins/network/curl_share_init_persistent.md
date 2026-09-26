@@ -2,7 +2,7 @@
 title: "curl_share_init_persistent()"
 description: "Initializes a persistent cURL share handle."
 sidebar:
-  order: 721
+  order: 723
 ---
 
 ## curl_share_init_persistent()

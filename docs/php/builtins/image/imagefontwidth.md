@@ -2,7 +2,7 @@
 title: "imagefontwidth()"
 description: "Returns the pixel width of a built-in font."
 sidebar:
-  order: 509
+  order: 511
 ---
 
 ## imagefontwidth()

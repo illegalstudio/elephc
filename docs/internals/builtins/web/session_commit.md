@@ -2,7 +2,7 @@
 title: "session_commit() - internals"
 description: "Compiler internals for session_commit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 918
+  order: 920
 ---
 
 ## `session_commit()` - internals

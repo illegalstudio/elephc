@@ -2,7 +2,7 @@
 title: "imagecreatefromwebp() - internals"
 description: "Compiler internals for imagecreatefromwebp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 493
+  order: 495
 ---
 
 ## `imagecreatefromwebp()` - internals

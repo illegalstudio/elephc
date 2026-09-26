@@ -2,7 +2,7 @@
 title: "imagechar() - internals"
 description: "Compiler internals for imagechar(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 462
+  order: 464
 ---
 
 ## `imagechar()` - internals

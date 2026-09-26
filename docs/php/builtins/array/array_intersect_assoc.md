@@ -2,7 +2,7 @@
 title: "array_intersect_assoc()"
 description: "Computes the intersection of arrays with additional index check."
 sidebar:
-  order: 16
+  order: 17
 ---
 
 ## array_intersect_assoc()

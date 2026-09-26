@@ -2,7 +2,7 @@
 title: "imagedestroy()"
 description: "Releases an image handle. A no-op since PHP 8.0."
 sidebar:
-  order: 498
+  order: 500
 ---
 
 ## imagedestroy()

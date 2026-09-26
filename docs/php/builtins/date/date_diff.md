@@ -2,7 +2,7 @@
 title: "date_diff()"
 description: "Returns the DateInterval between two dates."
 sidebar:
-  order: 198
+  order: 200
 ---
 
 ## date_diff()

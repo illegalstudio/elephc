@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_linear()"
 description: "Creates a linear gradient pattern between two points."
 sidebar:
-  order: 425
+  order: 427
 ---
 
 ## cairo_pattern_create_linear()

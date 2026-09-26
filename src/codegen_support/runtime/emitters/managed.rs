@@ -109,6 +109,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_diff_refcounted(emitter);
     arrays::emit_array_is_list(emitter);
     arrays::emit_array_edge_key(emitter);
+    arrays::emit_array_edge_value(emitter);
     arrays::emit_array_ptr_seek(emitter);
     arrays::emit_array_ptr_key(emitter);
     arrays::emit_array_ptr_value(emitter);

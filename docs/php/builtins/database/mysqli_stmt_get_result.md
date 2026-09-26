@@ -2,7 +2,7 @@
 title: "mysqli_stmt_get_result()"
 description: "Returns a prepared statement's result as a mysqli_result."
 sidebar:
-  order: 169
+  order: 171
 ---
 
 ## mysqli_stmt_get_result()

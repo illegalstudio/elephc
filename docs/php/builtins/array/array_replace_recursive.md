@@ -2,7 +2,7 @@
 title: "array_replace_recursive()"
 description: "Replaces elements from passed arrays into the first array recursively."
 sidebar:
-  order: 34
+  order: 36
 ---
 
 ## array_replace_recursive()

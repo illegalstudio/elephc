@@ -2,7 +2,7 @@
 title: "mysqli_error()"
 description: "Returns the error message of the last call on a connection."
 sidebar:
-  order: 110
+  order: 112
 ---
 
 ## mysqli_error()

@@ -2,7 +2,7 @@
 title: "get_called_class() - internals"
 description: "Compiler internals for get_called_class(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 84
+  order: 86
 ---
 
 ## `get_called_class()` - internals

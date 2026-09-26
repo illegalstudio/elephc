@@ -2,7 +2,7 @@
 title: "date_diff() - internals"
 description: "Compiler internals for date_diff(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 198
+  order: 200
 ---
 
 ## `date_diff()` - internals

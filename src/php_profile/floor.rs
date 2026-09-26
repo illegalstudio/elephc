@@ -81,6 +81,14 @@ const NEW_FUNCTIONS: &[NewFunction] = &[
         name: "array_all",
         profile: PhpVersion::Php84,
     },
+    NewFunction {
+        name: "array_first",
+        profile: PhpVersion::Php84,
+    },
+    NewFunction {
+        name: "array_last",
+        profile: PhpVersion::Php84,
+    },
 ];
 
 /// Returns the binding minimum-version requirement for `program`, or `None` when nothing in
@@ -303,6 +311,22 @@ mod tests {
         .expect("array_find is not guarded and must still bind");
         assert_eq!(found.profile, PhpVersion::Php84);
         assert_eq!(found.construct, "array_find");
+    }
+
+    /// `array_first()` and `array_last()` are PHP 8.4 functions, so calling either sets an 8.4
+    /// floor, while a `function_exists()` guard for them is still not a requirement.
+    #[test]
+    fn array_first_and_last_require_84() {
+        for name in ["array_first", "array_last"] {
+            let found = floor(&parse(&format!("<?php\n$v = {name}([1, 2]);\n")))
+                .unwrap_or_else(|| panic!("{name} must set a floor"));
+            assert_eq!(found.profile, PhpVersion::Php84);
+            assert_eq!(found.construct, name);
+            assert!(floor(&parse(&format!(
+                "<?php if (function_exists('{name}')) {{ echo 'y'; }}"
+            )))
+            .is_none());
+        }
     }
 
     /// The HIGHEST requirement is the binding one and the one reported.

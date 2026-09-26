@@ -2,7 +2,7 @@
 title: "imageline() - internals"
 description: "Compiler internals for imageline(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 517
+  order: 519
 ---
 
 ## `imageline()` - internals

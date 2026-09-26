@@ -2,7 +2,7 @@
 title: "imagealphablending()"
 description: "Turns alpha blending on or off for subsequent drawing."
 sidebar:
-  order: 458
+  order: 460
 ---
 
 ## imagealphablending()

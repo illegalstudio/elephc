@@ -2,7 +2,7 @@
 title: "pcntl_setpriority() - internals"
 description: "Compiler internals for pcntl_setpriority(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 657
+  order: 659
 ---
 
 ## `pcntl_setpriority()` - internals

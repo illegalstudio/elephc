@@ -1,0 +1,55 @@
+---
+title: "array_first() - internals"
+description: "Compiler internals for array_first(): lowering path, type checks, and runtime helpers."
+sidebar:
+  order: 14
+---
+
+## `array_first()` - internals
+
+## Where it lives
+
+- **Signature**: [`src/builtins/array/array_first.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_first.rs)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
+
+
+### Lowering notes
+
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.array_first` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
+
+## Semantic descriptor
+
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `fresh`
+- **Effects**: `static (2 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.array_first`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
+
+## Signature summary
+
+```php
+function array_first(array $array): mixed
+```
+
+## What the type checker enforces
+
+- **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
+## Cross-references
+
+- [User reference for `array_first()`](../../../php/builtins/array/array_first.md)

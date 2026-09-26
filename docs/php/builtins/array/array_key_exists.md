@@ -2,7 +2,7 @@
 title: "array_key_exists()"
 description: "Checks if the given key or index exists in the array."
 sidebar:
-  order: 19
+  order: 20
 ---
 
 ## array_key_exists()

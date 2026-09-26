@@ -2,7 +2,7 @@
 title: "gettimeofday() - internals"
 description: "Compiler internals for gettimeofday(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 221
+  order: 223
 ---
 
 ## `gettimeofday()` - internals

@@ -2,7 +2,7 @@
 title: "array_pop() - internals"
 description: "Compiler internals for array_pop(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 28
+  order: 30
 ---
 
 ## `array_pop()` - internals

@@ -2,7 +2,7 @@
 title: "stream_set_timeout()"
 description: "Sets timeout period on a stream."
 sidebar:
-  order: 383
+  order: 385
 ---
 
 ## stream_set_timeout()

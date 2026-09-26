@@ -2,7 +2,7 @@
 title: "cairo_image_surface_get_height()"
 description: "Returns an image surface's height in pixels."
 sidebar:
-  order: 410
+  order: 412
 ---
 
 ## cairo_image_surface_get_height()

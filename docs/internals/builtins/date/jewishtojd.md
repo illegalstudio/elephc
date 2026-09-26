@@ -2,7 +2,7 @@
 title: "jewishtojd() - internals"
 description: "Compiler internals for jewishtojd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 235
+  order: 237
 ---
 
 ## `jewishtojd()` - internals

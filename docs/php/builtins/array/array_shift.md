@@ -2,7 +2,7 @@
 title: "array_shift()"
 description: "Shifts an element off the beginning of array."
 sidebar:
-  order: 37
+  order: 39
 ---
 
 ## array_shift()

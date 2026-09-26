@@ -2,7 +2,7 @@
 title: "imagesavealpha() - internals"
 description: "Compiler internals for imagesavealpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 526
+  order: 528
 ---
 
 ## `imagesavealpha()` - internals

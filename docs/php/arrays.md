@@ -342,6 +342,8 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_is_list()` | `array_is_list($arr): bool` | `true` if the keys are exactly `0..count-1` in order (the empty array is a list) |
 | `array_key_first()` | `array_key_first($arr): int\|string\|null` | First key in insertion order, or `null` if the array is empty |
 | `array_key_last()` | `array_key_last($arr): int\|string\|null` | Last key in insertion order, or `null` if the array is empty |
+| `array_first()` | `array_first($arr): mixed` | (PHP 8.4) First value in insertion order, or `null` if the array is empty |
+| `array_last()` | `array_last($arr): mixed` | (PHP 8.4) Last value in insertion order, or `null` if the array is empty |
 | `key()` | `key($arr): int\|string\|null` | Key under the array's internal pointer, or `null` once the pointer is off either end |
 | `current()` | `current($arr): mixed` | Element under the array's internal pointer, or `false` once the pointer is off either end |
 | `next()` | `next(&$arr): mixed` | Advance the internal pointer one position and return the new element, or `false` |

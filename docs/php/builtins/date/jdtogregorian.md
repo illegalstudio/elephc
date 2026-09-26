@@ -2,7 +2,7 @@
 title: "jdtogregorian()"
 description: "Converts a Julian Day count into a Gregorian date string."
 sidebar:
-  order: 231
+  order: 233
 ---
 
 ## jdtogregorian()

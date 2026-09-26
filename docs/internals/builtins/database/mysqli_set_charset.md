@@ -2,7 +2,7 @@
 title: "mysqli_set_charset() - internals"
 description: "Compiler internals for mysqli_set_charset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 156
+  order: 158
 ---
 
 ## `mysqli_set_charset()` - internals

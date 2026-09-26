@@ -2,7 +2,7 @@
 title: "min() - internals"
 description: "Compiler internals for min(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 589
+  order: 591
 ---
 
 ## `min()` - internals

@@ -2,7 +2,7 @@
 title: "cairo_matrix_multiply()"
 description: "Returns the product of two transformation matrices."
 sidebar:
-  order: 417
+  order: 419
 ---
 
 ## cairo_matrix_multiply()

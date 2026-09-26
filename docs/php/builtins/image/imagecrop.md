@@ -2,7 +2,7 @@
 title: "imagecrop()"
 description: "Returns the given rectangle of an image as a new image."
 sidebar:
-  order: 495
+  order: 497
 ---
 
 ## imagecrop()

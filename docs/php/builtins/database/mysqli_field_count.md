@@ -2,7 +2,7 @@
 title: "mysqli_field_count()"
 description: "Returns how many columns the last query produced."
 sidebar:
-  order: 125
+  order: 127
 ---
 
 ## mysqli_field_count()

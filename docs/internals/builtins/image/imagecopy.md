@@ -2,7 +2,7 @@
 title: "imagecopy() - internals"
 description: "Compiler internals for imagecopy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 481
+  order: 483
 ---
 
 ## `imagecopy()` - internals

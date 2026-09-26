@@ -2,7 +2,7 @@
 title: "array_product() - internals"
 description: "Compiler internals for array_product(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 29
+  order: 31
 ---
 
 ## `array_product()` - internals

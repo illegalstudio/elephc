@@ -2,7 +2,7 @@
 title: "imagecolorclosesthwb() - internals"
 description: "Compiler internals for imagecolorclosesthwb(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 469
+  order: 471
 ---
 
 ## `imagecolorclosesthwb()` - internals

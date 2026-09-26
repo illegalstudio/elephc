@@ -300,10 +300,12 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_any",
     "array_diff_assoc",
     "array_find",
+    "array_first",
     "array_intersect_assoc",
     "array_is_list",
     "array_key_first",
     "array_key_last",
+    "array_last",
     "array_merge_recursive",
     "array_multisort",
     "array_replace",
@@ -372,16 +374,17 @@ mod tests {
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
         assert_eq!(eval_internal, 100);
-        // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
+        // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 353);
+        assert_eq!(eval_pending, 355);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
         // internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
         // builtins (`xml_parse_into_struct` plus the nine handler setters), and the two
-        // PHP 8.5 Core handler getters, plus `sizeof`.
-        assert_eq!(aot_registry, 660);
+        // PHP 8.5 Core handler getters, plus `sizeof`, plus the PHP 8.4 `array_first` /
+        // `array_last` pair.
+        assert_eq!(aot_registry, 662);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 409 + curl_surface);
@@ -432,7 +435,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 595 + curl_surface);
-        assert_eq!(unsupported, 453);
+        assert_eq!(unsupported, 455);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

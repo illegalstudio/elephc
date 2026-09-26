@@ -2,7 +2,7 @@
 title: "array_walk() - internals"
 description: "Compiler internals for array_walk(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 46
+  order: 48
 ---
 
 ## `array_walk()` - internals

@@ -2,7 +2,7 @@
 title: "timezone_name_from_abbr()"
 description: "Resolves a timezone abbreviation and offset to an identifier."
 sidebar:
-  order: 247
+  order: 249
 ---
 
 ## timezone_name_from_abbr()

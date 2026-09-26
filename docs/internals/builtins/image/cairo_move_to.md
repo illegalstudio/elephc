@@ -2,7 +2,7 @@
 title: "cairo_move_to() - internals"
 description: "Compiler internals for cairo_move_to(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 419
+  order: 421
 ---
 
 ## `cairo_move_to()` - internals

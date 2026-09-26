@@ -2,7 +2,7 @@
 title: "array_map()"
 description: "Applies a callback to the elements of an array."
 sidebar:
-  order: 23
+  order: 25
 ---
 
 ## array_map()

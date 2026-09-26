@@ -2,7 +2,7 @@
 title: "sizeof() - internals"
 description: "Compiler internals for sizeof(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 67
+  order: 69
 ---
 
 ## `sizeof()` - internals

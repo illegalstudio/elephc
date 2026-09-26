@@ -2,7 +2,7 @@
 title: "mysqli_autocommit()"
 description: "Turns automatic committing on or off."
 sidebar:
-  order: 100
+  order: 102
 ---
 
 ## mysqli_autocommit()

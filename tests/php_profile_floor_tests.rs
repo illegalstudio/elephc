@@ -166,6 +166,32 @@ fn new_function_call_under_82_is_rejected() {
     );
 }
 
+/// Calling PHP 8.4's `array_first()` / `array_last()` is rejected for the 8.3 profile and
+/// names the function, while the 8.4 profile builds the same program — the gating
+/// `array_find` already has.
+#[test]
+fn array_first_and_last_require_84() {
+    for name in ["array_first", "array_last"] {
+        let source = format!("<?php\nvar_dump({name}([1, 2]));\n");
+        let out = compile(&format!("{name}83"), &source, Some("8.3"));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success(),
+            "calling {name} for the 8.3 profile must fail, stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("needs PHP 8.4") && stderr.contains(name),
+            "the error must name the required profile and {name}, got:\n{stderr}"
+        );
+        let out = compile(&format!("{name}84"), &source, Some("8.4"));
+        assert!(
+            out.status.success(),
+            "{name} must compile for the 8.4 profile, stderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 /// An ordinary program is untouched at the oldest profile.
 #[test]
 fn plain_program_compiles_at_the_oldest_profile() {

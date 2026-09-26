@@ -2,7 +2,7 @@
 title: "get_parent_class() - internals"
 description: "Compiler internals for get_parent_class(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 92
+  order: 94
 ---
 
 ## `get_parent_class()` - internals
