@@ -44,6 +44,13 @@ pub(super) fn emit_reflection_member_object(
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let name_offset = reflection_property_offset(class_info, "__name")?;
     emit_reflection_string_property(ctx, &member.name, name_offset, name_offset + 8);
+    let public_name_offset = reflection_property_offset(class_info, "name")?;
+    emit_reflection_string_property(
+        ctx,
+        &member.name,
+        public_name_offset,
+        public_name_offset + 8,
+    );
     emit_reflection_attrs_property(
         ctx,
         member_class_name,

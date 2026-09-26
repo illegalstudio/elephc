@@ -31,6 +31,8 @@ struct ReflectionAttributeLayout {
     property_count: usize,
     name_lo: usize,
     name_hi: usize,
+    public_name_lo: usize,
+    public_name_hi: usize,
     args_lo: usize,
     args_hi: usize,
     factory_lo: usize,
@@ -202,6 +204,7 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
         .get("ReflectionAttribute")
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let name_lo = reflection_property_offset(info, "__name")?;
+    let public_name_lo = reflection_property_offset(info, "name")?;
     let args_lo = reflection_property_offset(info, "__args")?;
     let factory_lo = reflection_property_offset(info, "__factory")?;
     let target_lo = reflection_property_offset(info, "__target")?;
@@ -211,6 +214,8 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
         property_count: info.properties.len(),
         name_lo,
         name_hi: name_lo + 8,
+        public_name_lo,
+        public_name_hi: public_name_lo + 8,
         args_lo,
         args_hi: args_lo + 8,
         factory_lo,
@@ -254,10 +259,8 @@ fn emit_reflection_attribute_object(
             ctx.emitter
                 .instruction(&format!("mov rax, {}", payload_size));            // request ReflectionAttribute object payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            ));                                                                 // materialize the x86_64 object heap kind word
+            let heap_kind = crate::codegen_support::sentinels::x86_64_heap_kind_word(4);
+            ctx.emitter.instruction(&format!("mov r10, 0x{heap_kind:x}"));      // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the object heap header before the payload
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter
@@ -281,22 +284,27 @@ fn emit_set_name_property(
 ) {
     let (label, len) = ctx.data.add_string(attr_name.as_bytes());
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x1", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
-            abi::emit_store_to_address(ctx.emitter, "x1", object_reg, layout.name_lo);
-            abi::emit_store_to_address(ctx.emitter, "x2", object_reg, layout.name_hi);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rax", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
-            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, layout.name_lo);
-            abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, layout.name_hi);
+    for (low_offset, high_offset) in [
+        (layout.name_lo, layout.name_hi),
+        (layout.public_name_lo, layout.public_name_hi),
+    ] {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_symbol_address(ctx.emitter, "x1", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+                abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+                abi::emit_store_to_address(ctx.emitter, "x1", object_reg, low_offset);
+                abi::emit_store_to_address(ctx.emitter, "x2", object_reg, high_offset);
+            }
+            Arch::X86_64 => {
+                abi::emit_symbol_address(ctx.emitter, "rax", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+                abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+                abi::emit_store_to_address(ctx.emitter, "rax", object_reg, low_offset);
+                abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, high_offset);
+            }
         }
     }
 }

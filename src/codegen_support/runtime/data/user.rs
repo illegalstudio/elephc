@@ -40,6 +40,45 @@ const EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED: u64 = 512;
 const EVAL_REFLECTION_PROPERTY_FLAG_VIRTUAL: u64 = 1024;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET: u64 = 4096;
+
+/// Reflection internals are compiler-only properties even when inherited by user subclasses.
+fn is_builtin_reflection_object_class(class_name: &str) -> bool {
+    matches!(
+        class_name,
+        "ReflectionAttribute"
+            | "ReflectionClass"
+            | "ReflectionObject"
+            | "ReflectionEnum"
+            | "ReflectionFunction"
+            | "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionParameter"
+            | "ReflectionNamedType"
+            | "ReflectionUnionType"
+            | "ReflectionIntersectionType"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
+    )
+}
+
+/// Omits private backing slots declared by built-in Reflection classes from dump descriptors.
+fn reflection_public_view_property(
+    class_info: &ClassInfo,
+    class_name: &str,
+    property_name: &str,
+) -> bool {
+    let declaring_class = class_info
+        .property_declaring_classes
+        .get(property_name)
+        .map(String::as_str)
+        .unwrap_or(class_name);
+    !is_builtin_reflection_object_class(declaring_class)
+        || matches!(
+            class_info.property_visibilities.get(property_name),
+            None | Some(Visibility::Public)
+        )
+}
 const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_METHOD_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
@@ -419,12 +458,12 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
-    out.push_str(".globl _class_reflection_parameter_cast_public_flags\n_class_reflection_parameter_cast_public_flags:\n");
+    out.push_str(".globl _class_reflection_public_cast_flags\n_class_reflection_public_cast_flags:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
             let flag = class_name_by_id
                 .get(&class_id)
-                .is_some_and(|class_name| class_name.as_str() == "ReflectionParameter");
+                .is_some_and(|class_name| is_builtin_reflection_object_class(class_name));
             out.push_str(&format!("    .quad {}\n", u8::from(flag)));
         }
     }
@@ -1131,10 +1170,9 @@ pub(crate) fn emit_runtime_data_user(
             out.push('\n');
         }
 
-        // Serialize property-info table: one row per declared property in
-        // declaration order with the PHP-mangled serialize key bytes, the
-        // property's byte offset within the object, and its runtime value tag.
-        // __rt_serialize_object / __rt_unserialize_object walk this by class id.
+        // Serialize property-info table: one row per declared property in declaration order,
+        // including PHP-mangled private keys. The cast walker separately hides Reflection's
+        // compiler-owned private rows by checking each row's declaring class.
         for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
             let mangled = mangled_property_name(class_info, class_name, prop_name);
             out.push_str(&format!(
@@ -3222,10 +3260,13 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
             })
             .collect();
     }
-    class_info
+    let rows = class_info
         .properties
         .iter()
         .enumerate()
+        .filter(|(_, (prop_name, _))| {
+            reflection_public_view_property(class_info, class_name, prop_name)
+        })
         .map(|(layout_index, (prop_name, prop_ty))| VarDumpRow {
             key: var_dump_property_key(class_info, class_name, prop_name),
             print_r_key: print_r_property_key(class_info, class_name, prop_name),
@@ -3238,7 +3279,8 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
             tag: prop_value_tag(class_info, prop_name, prop_ty),
             type_name: var_dump_property_type_name(prop_ty),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    rows
 }
 
 /// Folds a class's `__debugInfo()` into the `(array key, property name)` pairs

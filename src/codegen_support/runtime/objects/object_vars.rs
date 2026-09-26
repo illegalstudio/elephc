@@ -8,7 +8,7 @@
 //! Key details:
 //! - Both projections use serialize descriptors: lexical visibility filtering
 //!   demangles accessible keys, while casts retain PHP's mangled keys for user objects.
-//! - ReflectionParameter casts apply a per-class public-only view so synthetic private backing
+//! - Builtin Reflection casts apply a per-class public-only view so synthetic private backing
 //!   slots never escape; its modeled public `name` property is still projected.
 //! - Protected filtering uses each descriptor row's declaring class, and copied
 //!   dynamic-property names are normalized with PHP array-key semantics.
@@ -24,7 +24,7 @@ use crate::codegen_support::platform::Arch;
 ///
 /// `cast_mode == 0` exposes properties visible from `scope_class_id`, with `-1`
 /// representing global scope. A non-zero mode exposes declared properties under
-/// PHP's visibility-mangled cast keys, except ReflectionParameter's compiler-only
+/// PHP's visibility-mangled cast keys, except Reflection classes' compiler-only
 /// private slots. Both modes append dynamic
 /// properties and expose the synthetic incomplete-class marker plus retained
 /// opaque values.
@@ -59,8 +59,8 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10]");                                      // load the current object/descriptor operand for `ldr x10, [x10]`
     emitter.instruction("cmp x9, x10");                                         // evaluate `cmp x9, x10` before selecting the projection branch
     emitter.instruction("b.hs __rt_object_to_hash_empty");                      // use `__rt_object_to_hash_empty` when the object or metadata is absent
-    abi::emit_symbol_address(emitter, "x11", "_class_reflection_parameter_cast_public_flags");
-    emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // select ReflectionParameter cast projection policy
+    abi::emit_symbol_address(emitter, "x11", "_class_reflection_public_cast_flags");
+    emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // select Reflection public-only cast projection policy
     emitter.instruction("str x11, [sp, #104]");                                 // retain the cast projection flag across property iteration
     abi::emit_symbol_address(emitter, "x11", "_class_serprop_ptrs");
     emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // load the current object/descriptor operand for `ldr x11, [x11, x9, lsl #3]`
@@ -89,11 +89,24 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x16, [x11, #24]");                                 // load the current object/descriptor operand for `ldr x16, [x11, #24]`
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload cast mode before selecting the property projection policy
     emitter.instruction("cbz x9, __rt_object_to_hash_visibility");              // get_object_vars keeps lexical PHP visibility
-    emitter.instruction("ldr x9, [sp, #104]");                                  // check for ReflectionParameter's public-only cast view
-    emitter.instruction("cbz x9, __rt_object_to_hash_row_ready");               // ordinary casts retain PHP-mangled private properties
+    emitter.instruction("ldr x9, [sp, #104]");                                  // check for Reflection classes' public-only cast view
+    emitter.instruction("cbnz x9, __rt_object_to_hash_reflection_cast");        // exact Reflection objects omit all private backing rows
+    emitter.instruction("ldr x10, [sp, #0]");                                   // load the runtime object before checking the row's declaring class
+    emitter.instruction("ldr x10, [x10]");                                      // load the concrete runtime class id
+    abi::emit_symbol_address(emitter, "x11", "_class_serprop_declaring_ptrs");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // load the concrete class's property declaring-class ids
+    emitter.instruction("ldr x10, [sp, #32]");                                  // reload this descriptor row's property index
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // load this property row's declaring class id
+    abi::emit_symbol_address(emitter, "x10", "_class_reflection_public_cast_flags");
+    emitter.instruction("ldr x10, [x10, x11, lsl #3]");                         // is the declaring class a builtin Reflection class?
+    emitter.instruction("cbz x10, __rt_object_to_hash_row_ready");              // preserve private properties declared by user subclasses
     emitter.instruction("ldrb w9, [x13]");                                      // inspect the first key byte for a private backing slot
-    emitter.instruction("cbz w9, __rt_object_to_hash_next");                    // omit ReflectionParameter's synthetic private fields
+    emitter.instruction("cbz w9, __rt_object_to_hash_next");                    // omit Reflection classes' synthetic private fields
     emitter.instruction("b __rt_object_to_hash_row_ready");                     // retain the declared public `name` property
+    emitter.label("__rt_object_to_hash_reflection_cast");
+    emitter.instruction("ldrb w9, [x13]");                                      // inspect the first key byte for private visibility
+    emitter.instruction("cbz w9, __rt_object_to_hash_next");                    // exact Reflection objects omit their private backing slots
+    emitter.instruction("b __rt_object_to_hash_row_ready");                     // retain their declared public properties
     emitter.label("__rt_object_to_hash_visibility");
     emitter.instruction("ldrb w9, [x13]");                                      // inspect the first key byte to distinguish public from mangled visibility
     emitter.instruction("cbnz w9, __rt_object_to_hash_row_ready");              // ordinary public names are globally visible without demangling
@@ -267,8 +280,8 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rip + _class_gc_desc_count]");     // load the current object/descriptor operand for `mov r10, QWORD PTR [rip + _class_gc_desc_count]`
     emitter.instruction("cmp r9, r10");                                         // evaluate `cmp r9, r10` before selecting the projection branch
     emitter.instruction("jae __rt_object_to_hash_empty_x");                     // use `__rt_object_to_hash_empty_x` when the object or metadata is absent
-    emitter.instruction("lea r10, [rip + _class_reflection_parameter_cast_public_flags]"); // materialize the ReflectionParameter cast-policy table
-    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // select the ReflectionParameter cast projection policy
+    emitter.instruction("lea r10, [rip + _class_reflection_public_cast_flags]"); // materialize the Reflection public-only cast-policy table
+    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // select the Reflection public-only cast projection policy
     emitter.instruction("mov QWORD PTR [rbp - 128], r10");                      // retain the cast projection flag across property iteration
     emitter.instruction("lea r10, [rip + _class_serprop_ptrs]");                // materialize the metadata symbol used by `lea r10, [rip + _class_serprop_ptrs]`
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // load the current object/descriptor operand for `mov r10, QWORD PTR [r10 + r9 * 8]`
@@ -296,11 +309,25 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r15, QWORD PTR [r10 + 24]");                       // load the current object/descriptor operand for `mov r15, QWORD PTR [r10 + 24]`
     emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // choose cast policy or get_object_vars visibility
     emitter.instruction("je __rt_object_to_hash_visibility_x");                 // get_object_vars keeps lexical PHP visibility
-    emitter.instruction("cmp QWORD PTR [rbp - 128], 0");                        // check for ReflectionParameter's public-only cast view
-    emitter.instruction("je __rt_object_to_hash_row_ready_x");                  // ordinary casts retain PHP-mangled private properties
-    emitter.instruction("cmp BYTE PTR [r12], 0");                               // inspect the first key byte for a private backing slot
-    emitter.instruction("je __rt_object_to_hash_next_x");                       // omit ReflectionParameter's synthetic private fields
-    emitter.instruction("jmp __rt_object_to_hash_row_ready_x");                 // retain the declared public `name` property
+    emitter.instruction("cmp QWORD PTR [rbp - 128], 0");                        // check for exact Reflection classes' public-only cast view
+    emitter.instruction("jne __rt_object_to_hash_reflection_cast_x");           // exact builtins omit all private backing rows
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // load the runtime object before checking the row's declaring class
+    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the concrete runtime class id
+    abi::emit_symbol_address(emitter, "r10", "_class_serprop_declaring_ptrs");
+    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // load the concrete class's property declaring-class ids
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload this descriptor row's property index
+    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // load this property row's declaring class id
+    abi::emit_symbol_address(emitter, "r9", "_class_reflection_public_cast_flags");
+    emitter.instruction("mov r9, QWORD PTR [r9 + r10 * 8]");                    // is the declaring class a builtin Reflection class?
+    emitter.instruction("test r9, r9");                                         // should this private backing row be hidden from casts?
+    emitter.instruction("jz __rt_object_to_hash_row_ready_x");                  // preserve private properties declared by user subclasses
+    emitter.instruction("cmp BYTE PTR [r12], 0");                               // inspect the first key byte for private visibility
+    emitter.instruction("je __rt_object_to_hash_next_x");                       // omit inherited Reflection private backing slots
+    emitter.instruction("jmp __rt_object_to_hash_row_ready_x");                 // retain public and user-owned properties
+    emitter.label("__rt_object_to_hash_reflection_cast_x");
+    emitter.instruction("cmp BYTE PTR [r12], 0");                               // inspect the first key byte for private visibility
+    emitter.instruction("je __rt_object_to_hash_next_x");                       // exact Reflection objects omit their private backing slots
+    emitter.instruction("jmp __rt_object_to_hash_row_ready_x");                 // retain their declared public properties
     emitter.label("__rt_object_to_hash_visibility_x");
     emitter.instruction("cmp BYTE PTR [r12], 0");                               // distinguish public names from visibility-mangled keys
     emitter.instruction("jne __rt_object_to_hash_row_ready_x");                 // ordinary public names are globally visible
@@ -459,9 +486,9 @@ mod tests {
     use crate::codegen_support::platform::{Platform, Target};
 
     /// Both runtime architectures consult per-class cast policy before exposing visibility-mangled
-    /// rows, keeping the ReflectionParameter-only projection gate target-symmetric.
+    /// rows, keeping the Reflection public-only projection gate target-symmetric.
     #[test]
-    fn reflection_parameter_cast_policy_is_emitted_for_both_architectures() {
+    fn reflection_cast_policy_is_emitted_for_both_architectures() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
             Target::new(Platform::Linux, Arch::X86_64),
@@ -469,7 +496,7 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_object_to_hash(&mut emitter);
             let asm = emitter.output();
-            assert!(asm.contains("_class_reflection_parameter_cast_public_flags"));
+            assert!(asm.contains("_class_reflection_public_cast_flags"));
             assert!(asm.contains("__rt_object_to_hash_visibility"));
             assert!(asm.contains("__rt_object_to_hash_next"));
         }

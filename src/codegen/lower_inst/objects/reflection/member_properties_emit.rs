@@ -193,11 +193,12 @@ pub(super) fn emit_reflection_declaring_class_property(
         .class_infos
         .get(member_class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
-    let Some(low_offset) = class_info
-        .property_offsets
-        .get("__declaring_class")
-        .copied()
-    else {
+    let declaring_class_offset = class_info.property_offsets.get("__declaring_class").copied();
+    let public_class_name_offset = class_info.property_offsets.get("class").copied();
+    if let (Some(offset), Some(name)) = (public_class_name_offset, declaring_class_name) {
+        emit_reflection_string_property(ctx, name, offset, offset + 8);
+    }
+    let Some(low_offset) = declaring_class_offset else {
         return Ok(());
     };
     let high_offset = low_offset + 8;
