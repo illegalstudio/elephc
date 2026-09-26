@@ -37,9 +37,9 @@
 //!   either), and sharing the stack keeps one bound and one `*RECURSION*` policy.
 //!   PHP marks the object only around its BODY, so two sibling references to one
 //!   instance both render in full.
-//! - KNOWN DIVERGENCE: dynamic (undeclared) properties are not rendered, because
-//!   they are not in the descriptor. This matches what elephc's `var_dump`
-//!   already does for the same objects.
+//! - DYNAMIC PROPERTIES are not in the descriptor: after the declared rows the walker
+//!   appends the instance's dynamic-property hash (`__rt_obj_dump_dyn_props`) through
+//!   `__rt_print_r_hash_entries`, in insertion order, at the same entry indent.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -93,7 +93,8 @@ pub fn emit_pr_obj_desc(emitter: &mut Emitter) {
 ///
 /// Writes `C Object\n` (or the enum header), then the `<base>(\n` … `<base>)\n`
 /// body with one `<base+4>[key] => value\n` line per initialized declared
-/// property, or ` *RECURSION*` when the instance is already being walked.
+/// property followed by one per dynamic property, or ` *RECURSION*` when the
+/// instance is already being walked.
 /// Input: AArch64 x0=object x1=base indent / x86_64 rdi=object rsi=base indent.
 pub fn emit_print_r_object(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -241,6 +242,13 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pr_obj_loop");                                  // continue the walk
 
     emitter.label("__rt_pr_obj_done");
+    // -- dynamic properties follow the declared ones, in insertion order --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("bl __rt_obj_dump_dyn_props");                          // x0 = dynamic-property hash, or 0
+    emitter.instruction("cbz x0, __rt_pr_obj_close");                           // no dynamic properties to append
+    emitter.instruction("ldr x1, [sp, #16]");                                   // entry indent → entry walker
+    emitter.instruction("bl __rt_print_r_hash_entries");                        // write one `[name] => value` line per dynamic property
+    emitter.label("__rt_pr_obj_close");
     emitter.instruction("ldr x0, [sp, #8]");                                    // base → close helper argument
     emitter.instruction("bl __rt_print_r_close");                               // write `<base>)\n`
     emitter.instruction("bl __rt_vd_seen_pop");                                 // the object is no longer on the walk stack
@@ -404,6 +412,14 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_pr_obj_loop_x86");                            // continue the walk
 
     emitter.label("__rt_pr_obj_done_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("call __rt_obj_dump_dyn_props");                        // rax = dynamic-property hash, or 0
+    emitter.instruction("test rax, rax");                                       // does the object carry dynamic properties?
+    emitter.instruction("jz __rt_pr_obj_close_x86");                            // no dynamic properties to append
+    emitter.instruction("mov rdi, rax");                                        // dynamic-property hash → entry walker
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // entry indent → entry walker
+    emitter.instruction("call __rt_print_r_hash_entries");                      // write one `[name] => value` line per dynamic property
+    emitter.label("__rt_pr_obj_close_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → close helper argument
     emitter.instruction("call __rt_print_r_close");                             // write `<base>)\n`
     emitter.instruction("call __rt_vd_seen_pop");                               // the object is no longer on the walk stack

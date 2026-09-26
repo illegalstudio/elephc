@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for classes, object GC aliasing, magic methods, property access, constructor property promotion, and related suites.
+//! - Submodules group focused fixtures for classes, object GC aliasing, magic methods, dynamic-property dumps, property access, constructor property promotion, and related suites.
 //! - `mixed_sourced_typed_param_limitation` is a KNOWN-MISCOMPILE pin rather than a parity fixture: it asserts today's WRONG answer for an object that reaches a typed object parameter through Mixed storage, and names the curl workaround that exists because of it.
 
 use crate::support::*;
@@ -18,6 +18,8 @@ mod gc_aliasing;
 mod magic_methods;
 #[path = "objects/cloning.rs"]
 mod cloning;
+#[path = "objects/dynamic_property_dumps.rs"]
+mod dynamic_property_dumps;
 #[path = "objects/property_access/mod.rs"]
 mod property_access;
 #[path = "objects/constructor_promotion.rs"]

@@ -359,10 +359,6 @@ Known divergences:
 - **HMAC streaming is unsupported.** `hash_init($algo, HASH_HMAC, $key)` is rejected at
   compile time (`Function 'hash_init' expects 1 arguments, got 3`). Use
   [`hash_hmac()`](builtins/string/hash_hmac.md) instead, which is fully supported.
-- **Object rendering omits undeclared dynamic properties.** `print_r()` and
-  `var_export()` render declared object properties, including a `HashContext`'s
-  class-shaped output, but properties created dynamically at runtime are not yet
-  included by the renderer.
 - **Inside `eval()`**, `hash_init()` still returns a resource: the eval interpreter has
   its own hashing implementation that has not been moved to the object model.
 

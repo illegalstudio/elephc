@@ -419,6 +419,24 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Per-class "the dump walkers append the dynamic-property tail" flags, read by
+    // `__rt_obj_dump_dyn_props`. A class carries the tail exactly when the flag above is
+    // set, EXCEPT when `__debugInfo()` folded into a projection: PHP then prints only the
+    // returned array, so the dynamic properties must stay out of the dump as well.
+    out.push_str(".globl _class_dump_dyn_prop_flags\n_class_dump_dyn_prop_flags:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let flag = match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
+                (Some(class_info), Some(class_name)) => u8::from(
+                    class_uses_dynamic_property_tail(class_name, class_info)
+                        && var_dump_debug_info_projection(class_info).is_none(),
+                ),
+                _ => 0,
+            };
+            out.push_str(&format!("    .quad {}\n", flag));
+        }
+    }
+
     out.push_str(".globl _class_reflection_parameter_cast_public_flags\n_class_reflection_parameter_cast_public_flags:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {

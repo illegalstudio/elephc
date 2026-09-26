@@ -269,6 +269,8 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_var_dump_emit_enum_line(emitter);
     objects::emit_pr_obj_desc(emitter);
     objects::emit_print_r_object(emitter);
+    objects::emit_obj_dump_dyn_props(emitter);
+    objects::emit_obj_dyn_prop_at(emitter);
     objects::emit_obj_prop_count(emitter);
     objects::emit_obj_prop_name(emitter);
     objects::emit_obj_prop_value(emitter);

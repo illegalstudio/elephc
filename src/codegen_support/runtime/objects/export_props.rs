@@ -21,14 +21,21 @@
 //!   the value is boxed PHP null. PHP omits uninitialized typed properties from
 //!   `var_export` output, and no real property name is empty, so the prelude skips
 //!   on an empty name without needing a fourth accessor.
+//! - DYNAMIC PROPERTIES extend the index space: indices past the descriptor's rows
+//!   address the instance's dynamic-property hash in insertion order
+//!   (`__rt_obj_dyn_prop_at`), so the count is rows + hash entries and the prelude's
+//!   loop needs no second walk. An integer-keyed entry has no name here and is skipped
+//!   like an uninitialized row.
 //! - `__rt_obj_prop_value` ALWAYS returns a freshly boxed cell: a slot that already
 //!   holds a `Mixed` cell is unboxed and re-boxed rather than handed back, because
 //!   the caller owns and releases what it receives and must not be able to free
 //!   storage that belongs to the object. `__rt_mixed_from_value` persists strings
 //!   and increfs containers/objects, so the copy is independently owned.
-//! - The two leaf helpers make no calls and touch caller-saved scratch only;
-//!   `__rt_obj_prop_value` sets up a frame because it calls into the boxing helpers.
+//! - The count helper and the declared-row name path make no calls and touch
+//!   caller-saved scratch only; the name helper's dynamic path and
+//!   `__rt_obj_prop_value` set up a frame because they call other runtime helpers.
 
+use super::dump_dynamic_props::emit_load_dump_dyn_hash;
 use crate::codegen_support::abi;
 use crate::codegen_support::sentinels::{emit_branch_if_null_container, NULL_SENTINEL};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -39,7 +46,8 @@ const PROP_DESC_ROW_BYTES: u64 = 48;
 /// `__rt_obj_prop_count`: number of properties an object renders.
 ///
 /// Input: AArch64 x0 / x86_64 rdi = object pointer (0 for a non-object).
-/// Output: AArch64 x0 / x86_64 rax = row count, 0 when there is no descriptor.
+/// Output: AArch64 x0 / x86_64 rax = descriptor rows plus dynamic-property entries,
+/// 0 when there is no descriptor.
 pub fn emit_obj_prop_count(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: obj_prop_count ---");
@@ -55,7 +63,12 @@ pub fn emit_obj_prop_count(emitter: &mut Emitter) {
             emitter.instruction("b.hs __rt_obj_prop_count_none");               // an unknown class renders no properties
             abi::emit_symbol_address(emitter, "x11", "_class_prop_desc_ptrs");  // resolve the per-class descriptor pointer table
             emitter.instruction("ldr x11, [x11, x9, lsl #3]");                  // load this class's property descriptor
-            emitter.instruction("ldr x0, [x11]");                               // the row count sits at descriptor offset 0
+            emitter.instruction("ldr x12, [x11]");                              // the row count sits at descriptor offset 0
+            emit_load_dump_dyn_hash(emitter, "x0", "x9", "x13", "x10", "__rt_obj_prop_count_rows");
+            emitter.instruction("ldr x13, [x13]");                              // load the dynamic-property hash entry count
+            emitter.instruction("add x12, x12, x13");                           // dynamic properties follow the declared rows
+            emitter.label("__rt_obj_prop_count_rows");
+            emitter.instruction("mov x0, x12");                                 // return declared rows plus dynamic entries
             emitter.instruction("ret");                                         // return to caller
             emitter.label("__rt_obj_prop_count_none");
             emitter.instruction("mov x0, #0");                                  // report zero renderable properties
@@ -72,6 +85,9 @@ pub fn emit_obj_prop_count(emitter: &mut Emitter) {
             abi::emit_symbol_address(emitter, "r11", "_class_prop_desc_ptrs");  // resolve the per-class descriptor pointer table
             emitter.instruction("mov r11, QWORD PTR [r11 + r9 * 8]");           // load this class's property descriptor
             emitter.instruction("mov rax, QWORD PTR [r11]");                    // the row count sits at descriptor offset 0
+            emit_load_dump_dyn_hash(emitter, "rdi", "r9", "r10", "r11", "__rt_obj_prop_count_rows_x86");
+            emitter.instruction("add rax, QWORD PTR [r10]");                    // dynamic properties follow the declared rows
+            emitter.label("__rt_obj_prop_count_rows_x86");
             emitter.instruction("ret");                                         // return to caller
             emitter.label("__rt_obj_prop_count_none_x86");
             emitter.instruction("xor rax, rax");                                // report zero renderable properties
@@ -105,7 +121,7 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
             emitter.instruction("ldr x11, [x11, x9, lsl #3]");                  // load this class's property descriptor
             emitter.instruction("ldr x12, [x11]");                              // load the descriptor row count
             emitter.instruction("cmp x1, x12");                                 // is the requested index within the row count?
-            emitter.instruction("b.hs __rt_obj_prop_name_none");                // past the last property → empty string
+            emitter.instruction("b.hs __rt_obj_prop_name_dyn");                 // past the declared rows → a dynamic property
             emitter.instruction(&format!("mov x13, #{}", PROP_DESC_ROW_BYTES)); // each descriptor row occupies 48 bytes
             emitter.instruction("mul x13, x1, x13");                            // byte offset of this property's row
             emitter.instruction("add x13, x11, x13");                           // advance into the descriptor
@@ -119,6 +135,16 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
             emitter.instruction("ldr x2, [x13, #40]");                          // load the bare property-name length
             emitter.instruction("ldr x1, [x13, #32]");                          // load the bare property-name pointer
             emitter.instruction("ret");                                         // return to caller
+            emitter.label("__rt_obj_prop_name_dyn");
+            emitter.instruction("sub x1, x1, x12");                             // index past the declared rows = dynamic ordinal
+            emitter.instruction("stp x29, x30, [sp, #-16]!");                   // save frame pointer and return address
+            emitter.instruction("mov x29, sp");                                 // establish the dynamic-lookup frame
+            emitter.instruction("bl __rt_obj_dyn_prop_at");                     // x0=found x1=key ptr x2=key len
+            emitter.instruction("ldp x29, x30, [sp], #16");                     // restore frame pointer and return address
+            emitter.instruction("cbz x0, __rt_obj_prop_name_none");             // no such dynamic property → empty string
+            emitter.instruction("cmn x2, #1");                                  // an integer key has no string spelling here
+            emitter.instruction("b.eq __rt_obj_prop_name_none");                // skip it rather than print a bogus name
+            emitter.instruction("ret");                                         // return the borrowed dynamic-property name
             emitter.label("__rt_obj_prop_name_none");
             abi::emit_symbol_address(emitter, "x1", "_class_name_missing");     // reuse the shared empty-name slot as the buffer
             emitter.instruction("mov x2, #0");                                  // a zero-length string means "no property here"
@@ -138,7 +164,7 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
             emitter.instruction("mov r11, QWORD PTR [r11 + r9 * 8]");           // load this class's property descriptor
             emitter.instruction("mov r10, QWORD PTR [r11]");                    // load the descriptor row count
             emitter.instruction("cmp rsi, r10");                                // is the requested index within the row count?
-            emitter.instruction("jae __rt_obj_prop_name_none_x86");             // past the last property → empty string
+            emitter.instruction("jae __rt_obj_prop_name_dyn_x86");              // past the declared rows → a dynamic property
             emitter.instruction("mov rax, rsi");                                // copy the index for row-offset scaling
             let scale = format!("imul rax, rax, {}", PROP_DESC_ROW_BYTES);
             emitter.instruction(&scale);                                        // each descriptor row occupies 48 bytes
@@ -152,6 +178,18 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
             emitter.instruction("je __rt_obj_prop_name_none_x86");              // PHP omits it from var_export output
             emitter.instruction("mov rdx, QWORD PTR [rax + 40]");               // load the bare property-name length
             emitter.instruction("mov rax, QWORD PTR [rax + 32]");               // load the bare property-name pointer
+            emitter.instruction("ret");                                         // return to caller
+            emitter.label("__rt_obj_prop_name_dyn_x86");
+            emitter.instruction("sub rsi, r10");                                // index past the declared rows = dynamic ordinal
+            emitter.instruction("push rbp");                                    // save caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish the dynamic-lookup frame
+            emitter.instruction("call __rt_obj_dyn_prop_at");                   // rax=found rdi=key ptr rdx=key len
+            emitter.instruction("pop rbp");                                     // restore caller frame pointer
+            emitter.instruction("test rax, rax");                               // was the dynamic property found?
+            emitter.instruction("jz __rt_obj_prop_name_none_x86");              // no such dynamic property → empty string
+            emitter.instruction("cmp rdx, -1");                                 // an integer key has no string spelling here
+            emitter.instruction("je __rt_obj_prop_name_none_x86");              // skip it rather than print a bogus name
+            emitter.instruction("mov rax, rdi");                                // return the borrowed dynamic-property name
             emitter.instruction("ret");                                         // return to caller
             emitter.label("__rt_obj_prop_name_none_x86");
             abi::emit_symbol_address(emitter, "rax", "_class_name_missing");    // reuse the shared empty-name slot as the buffer
@@ -205,7 +243,7 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // load this class's property descriptor
     emitter.instruction("ldr x12, [x11]");                                      // load the descriptor row count
     emitter.instruction("cmp x1, x12");                                         // is the requested index within the row count?
-    emitter.instruction("b.hs __rt_obj_prop_value_null");                       // past the last property → PHP null
+    emitter.instruction("b.hs __rt_obj_prop_value_dyn");                        // past the declared rows → a dynamic property
     emitter.instruction(&format!("mov x13, #{}", PROP_DESC_ROW_BYTES));         // each descriptor row occupies 48 bytes
     emitter.instruction("mul x13, x1, x13");                                    // byte offset of this property's row
     emitter.instruction("add x13, x11, x13");                                   // advance into the descriptor
@@ -219,6 +257,7 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x14]");                                       // load the slot low word (the payload)
     emitter.instruction("ldr x0, [x13, #24]");                                  // load the property's runtime value tag
 
+    emitter.label("__rt_obj_prop_value_tagged");
     emitter.instruction("cmp x0, #4");                                          // only pointer-shaped tags can carry a null payload
     emitter.instruction("b.lt __rt_obj_prop_value_box");                        // scalar payloads box exactly as stored
     emit_branch_if_null_container(emitter, "x1", "x9", "__rt_obj_prop_value_null"); // a zero/sentinel pointer is PHP null
@@ -230,6 +269,15 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emitter.label("__rt_obj_prop_value_box");
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = freshly owned Mixed cell
     emitter.instruction("b __rt_obj_prop_value_done");                          // return the boxed property value
+
+    emitter.label("__rt_obj_prop_value_dyn");
+    emitter.instruction("sub x1, x1, x12");                                     // index past the declared rows = dynamic ordinal
+    emitter.instruction("bl __rt_obj_dyn_prop_at");                             // x0=found x3=lo x4=hi x5=tag
+    emitter.instruction("cbz x0, __rt_obj_prop_value_null");                    // no such dynamic property → PHP null
+    emitter.instruction("mov x0, x5");                                          // dynamic value tag → boxing path
+    emitter.instruction("mov x1, x3");                                          // dynamic value low word → boxing path
+    emitter.instruction("mov x2, x4");                                          // dynamic value high word → boxing path
+    emitter.instruction("b __rt_obj_prop_value_tagged");                        // box a fresh copy exactly like a declared slot
 
     emitter.label("__rt_obj_prop_value_null");
     emitter.instruction("mov x0, #8");                                          // runtime tag 8 = canonical PHP null
@@ -266,7 +314,7 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r11 + r9 * 8]");                   // load this class's property descriptor
     emitter.instruction("mov r10, QWORD PTR [r11]");                            // load the descriptor row count
     emitter.instruction("cmp rsi, r10");                                        // is the requested index within the row count?
-    emitter.instruction("jae __rt_obj_prop_value_null_x86");                    // past the last property → PHP null
+    emitter.instruction("jae __rt_obj_prop_value_dyn_x86");                     // past the declared rows → a dynamic property
     emitter.instruction("mov rax, rsi");                                        // copy the index for row-offset scaling
     emitter.instruction(&format!("imul rax, rax, {}", PROP_DESC_ROW_BYTES));    // each descriptor row occupies 48 bytes
     emitter.instruction("add rax, r11");                                        // advance into the descriptor
@@ -280,6 +328,7 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the slot low word (the payload)
     emitter.instruction("mov rax, QWORD PTR [rax + 24]");                       // load the property's runtime value tag
 
+    emitter.label("__rt_obj_prop_value_tagged_x86");
     emitter.instruction("cmp rax, 4");                                          // only pointer-shaped tags can carry a null payload
     emitter.instruction("jl __rt_obj_prop_value_box_x86");                      // scalar payloads box exactly as stored
     emit_branch_if_null_container(emitter, "rdi", "r9", "__rt_obj_prop_value_null_x86"); // a zero/sentinel pointer is PHP null
@@ -292,6 +341,16 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_obj_prop_value_box_x86");
     emitter.instruction("call __rt_mixed_from_value");                          // rax = freshly owned Mixed cell
     emitter.instruction("jmp __rt_obj_prop_value_done_x86");                    // return the boxed property value
+
+    emitter.label("__rt_obj_prop_value_dyn_x86");
+    emitter.instruction("sub rsi, r10");                                        // index past the declared rows = dynamic ordinal
+    emitter.instruction("call __rt_obj_dyn_prop_at");                           // rax=found rcx=lo r8=hi r9=tag
+    emitter.instruction("test rax, rax");                                       // was the dynamic property found?
+    emitter.instruction("jz __rt_obj_prop_value_null_x86");                     // no such dynamic property → PHP null
+    emitter.instruction("mov rax, r9");                                         // dynamic value tag → boxing path
+    emitter.instruction("mov rdi, rcx");                                        // dynamic value low word → boxing path
+    emitter.instruction("mov rsi, r8");                                         // dynamic value high word → boxing path
+    emitter.instruction("jmp __rt_obj_prop_value_tagged_x86");                  // box a fresh copy exactly like a declared slot
 
     emitter.label("__rt_obj_prop_value_null_x86");
     emitter.instruction("mov rax, 8");                                          // runtime tag 8 = canonical PHP null
