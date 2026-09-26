@@ -182,6 +182,56 @@ fn run_binary_with_heap_report(bin: &Path) -> (String, String) {
 // BUG 1 — `var_export`'s `$return` flag decides the result type
 // ---------------------------------------------------------------------------
 
+/// Verifies `var_export()` of an array of floats does not exhaust the shared concat scratch.
+///
+/// Floats are the expensive case: `__elephc_var_export_float` finds the shortest round-tripping
+/// precision and then rebuilds the digit string through a dozen `substr`/`str_replace`/concat
+/// steps. Every one of those lands in the 64 KiB `_concat_buf`, and until the fix NONE of them
+/// were ever reclaimed — the statement-boundary reset was skipped for any statement whose span
+/// was not from source, which is every statement in an injected prelude.
+///
+/// The failure was not a clean one. Below about a kilobyte of output the result was simply
+/// CORRECT; past it `var_export()` returned a nine-byte string with no diagnostic at all; past
+/// that it fatalled with `sprintf(): formatted result exceeds the 65536-byte string buffer`,
+/// naming a function the program never called and a size the result came nowhere near.
+/// `var_export(opcache_get_configuration())` was the report that surfaced it: 54 directives,
+/// two of them floats, 2048 bytes in reference PHP.
+///
+/// The three sizes are the point. A single size cannot tell "works" from "works below the
+/// threshold", and the silent-wrong-answer band sat between the two that were easiest to try.
+/// Expected values are reference PHP 8.5's, byte for byte.
+#[test]
+fn var_export_of_many_floats_does_not_exhaust_the_concat_scratch() {
+    let dir = make_test_dir("var_export_float_scratch");
+    for (count, expected) in [(24usize, 959usize), (32, 1279), (64, 2559)] {
+        let source = format!(
+            r#"<?php
+$a = [];
+for ($i = 0; $i < {count}; $i++) {{ $a["opcache.directive.name.$i"] = 0.005; }}
+echo strlen(var_export($a, true)), "\n";
+"#
+        );
+        let bin = compile(&dir, &source, &format!("floats{count}"));
+        assert_eq!(
+            run_binary(&bin).trim(),
+            expected.to_string(),
+            "var_export of {count} floats diverged from reference PHP"
+        );
+    }
+
+    // The shape that was reported: a mixed array whose floats sit among other types.
+    let source = r#"<?php
+$a = [];
+for ($i = 0; $i < 32; $i++) {
+    $k = "opcache.directive.name.$i";
+    $a[$k] = ($i % 2) ? true : 0.005;
+}
+echo strlen(var_export($a, true)), "\n";
+"#;
+    let bin = compile(&dir, source, "mixed32");
+    assert_eq!(run_binary(&bin).trim(), "1263");
+}
+
 /// THE REGRESSION ANCHOR, verbatim: `var_export($x, true)` used inside a `: string` function.
 ///
 /// Reference PHP 8.5.6 (`php -d xdebug.mode=off`) prints `42`. elephc rejected the program with

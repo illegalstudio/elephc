@@ -412,6 +412,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     emit_probe_init(ctx);
     register_main_instr(ctx);
     emit_instr_init(ctx);
+    emit_opcache_configuration(ctx);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
@@ -804,6 +805,8 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // every function is emitted; the call here forward-references its label.
     ctx.emitter.comment("reset per-request persistent state");
     abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    emit_opcache_configuration(ctx);
+    emit_opcache_restart_boundary(ctx);
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
@@ -816,6 +819,98 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // profiler before the bridge invokes this handler.
     register_main_instr(ctx);
     emit_registered_instr_enter(ctx);
+}
+
+/// Installs the compiled OPcache configuration before any of the program's code runs.
+///
+/// php-src configures OPcache during module startup, so every directive is in force for the
+/// first statement. elephc installed it lazily at the first `ensure_eval_context` instead,
+/// which made the ANSWER depend on program order: `opcache_compile_file()` returned `false`
+/// before the program's first `eval()` and `true` after it, and
+/// `opcache_get_configuration()['blacklist']` was `[]` then populated — same binary, same
+/// directives, two answers decided by where the call happened to sit.
+///
+/// Emitted only when the binary links the eval bridge, so pay-for-use is unchanged: without
+/// one there is no runtime cache to configure and every `rt_*` call folds away anyway.
+///
+/// Under `--web` this runs per request rather than once. The call is a setter over
+/// compile-time constants, so re-installing is idempotent, and putting it in the handler
+/// prologue is what guarantees a recycled worker starts configured.
+fn emit_opcache_configuration(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    ctx.emitter
+        .comment("install the compiled OPcache configuration (php-src does this at startup)");
+    crate::codegen::lower_inst::builtins::configure_eval_opcache(ctx);
+}
+
+/// Runs `opcache.preload`'s top-level code ONCE, here in the master, before serving starts.
+///
+/// php-src runs preload during startup, before any request exists. elephc's `--web` top-level
+/// body IS the per-request handler, so the preload's statements used to execute inside the
+/// FIRST request of every worker — and again after each `--max-requests` recycle. MEASURED on
+/// reference `php -S`: the preload's output goes to the server log once, no header it sets
+/// reaches a response, and a global it assigns reads back as `NULL` in the request. elephc put
+/// all three into response 1.
+///
+/// `web_prelude::lift_preload_to_startup` has already moved those statements into a synthetic
+/// function, leaving the preload file's DECLARATIONS at the top level where they compile into
+/// the binary. This calls that function.
+///
+/// POSITION IS THE WHOLE FIX, in two ways that both fall out of it rather than needing code:
+/// this runs in the master before `elephc_web_run` forks, so it happens once for every worker
+/// rather than once per worker; and `_elephc_web_capture` is still clear, so `__rt_stdout_write`
+/// takes its plain `write(1, …)` path and the output reaches the server's stdout instead of a
+/// response body.
+fn emit_web_preload_startup(ctx: &mut FunctionContext<'_>) -> crate::codegen::Result<()> {
+    let declared = ctx
+        .module
+        .functions
+        .iter()
+        .any(|function| function.name == crate::web_prelude::PRELOAD_STARTUP_FN);
+    if !declared {
+        return Ok(());
+    }
+    // STATIC PROPERTY DEFAULTS FIRST. They are written by a runtime store into a
+    // zero-initialized symbol, not baked into the data section, and the store lives in the
+    // per-request HANDLER body — which runs after this stub. A preload reading
+    // `SomeClass::$n` therefore saw `0` where reference sees the declared default, while
+    // every request after it saw the right value. Reference initializes class statics during
+    // startup, before preload runs, so seeding them here is the ordering php-src has.
+    //
+    // The handler still seeds them per request, and must: `__rt_web_reset` clears
+    // process-persistent state between requests, so each one needs its own fresh defaults.
+    // This call is the master's copy, which is what the preload reads.
+    super::block_emit::emit_static_property_initializers(ctx)?;
+    ctx.emitter
+        .comment("run opcache.preload once, before serving (php-src does this at startup)");
+    let symbol = crate::names::function_symbol(crate::web_prelude::PRELOAD_STARTUP_FN);
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
+}
+
+/// Emits the request-boundary call that performs a deferred `opcache_reset()`.
+///
+/// php-src schedules a restart and performs it at the START of the next request, so this
+/// sits beside the other per-request resets rather than inside `opcache_reset()` itself.
+/// A request that calls `opcache_reset()` therefore keeps being served by the cache, and
+/// the one after it starts cold — which is what reference PHP does.
+///
+/// PAY-FOR-USE, the same rule the `opcache_get_status()` readers follow: a binary with no
+/// eval bridge has no runtime script cache to restart, so the call is not emitted at all
+/// and the interpreter archive stays unlinked.
+fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    ctx.emitter
+        .comment("apply a restart scheduled by opcache_reset() in an earlier request");
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_apply_restart");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.
@@ -872,7 +967,7 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_entry_stub(
     ctx: &mut FunctionContext<'_>,
     isolation: super::WebIsolation,
-) {
+) -> crate::codegen::Result<()> {
     let target = ctx.emitter.target;
     if target.arch == Arch::AArch64 {
         ctx.emitter.raw(".align 2");
@@ -905,6 +1000,19 @@ pub(super) fn emit_web_entry_stub(
     // request. (A `--no-web-heap-guard` opt-out for benchmarking is a follow-up.)
     ctx.emitter.comment("enable web heap-guard flag");
     abi::emit_enable_web_heap_guard_flag(ctx.emitter);
+    // BEFORE the preload, not after. The preload's own code can call `opcache_*`, and every
+    // one of those answers comes from the bridge. Running it first left the bridge at its
+    // DEFAULT configuration — a disabled cache — so `opcache_compile_file()` in a preload
+    // answered `false` while the same call in every request answered `true`: one binary, one
+    // file, opposite answers. That is the order-dependence the prologue install was added to
+    // remove, reintroduced by the hoist in the one place that now runs ahead of it.
+    //
+    // The handler prologue still installs it per request, and that is not redundant: a worker
+    // forked from this master inherits the installed configuration, but the handler call is
+    // what a RECYCLED worker relies on. The call is a setter over compile-time constants, so
+    // installing twice costs two stores.
+    emit_opcache_configuration(ctx);
+    emit_web_preload_startup(ctx)?;
     let argc_reg = abi::int_arg_reg_name(target, 0);
     let argv_reg = abi::int_arg_reg_name(target, 1);
     let handler_reg = abi::int_arg_reg_name(target, 2);
@@ -917,6 +1025,7 @@ pub(super) fn emit_web_entry_stub(
     let bridge_entry = target.extern_symbol(isolation.bridge_symbol());
     abi::emit_call_label(ctx.emitter, &bridge_entry);
     abi::emit_exit_with_result_reg(ctx.emitter);
+    Ok(())
 }
 
 /// Zero-initializes cleanup-tracked locals so skipped assignments stay safe at epilogue.

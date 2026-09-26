@@ -16,7 +16,10 @@ use crate::names::canonical_name_for_decl;
 use crate::parser::ast::{CatchClause, ClassMethod, ExprKind, Stmt, StmtKind};
 
 use super::discovery::FunctionVariantRegistry;
-use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
+use super::engine_includes::{
+    discard_first_include_return, expand_value_include, resolve_include_stmt,
+    IncludeValueCapture,
+};
 use super::include_path::fold_include_path;
 use super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
@@ -114,7 +117,7 @@ pub(super) fn resolve_stmts(
         )?;
         match &stmt.kind {
             StmtKind::Include { path, once, required } => {
-                if let Some(resolved) = resolve_include_stmt(
+                if let Some(mut resolved) = resolve_include_stmt(
                     &stmt,
                     path,
                     *once,
@@ -125,6 +128,8 @@ pub(super) fn resolve_stmts(
                     state,
                     function_variants,
                 )? {
+                    // A top-level `return` in the included file ends the FILE, not the caller.
+                    discard_first_include_return(&mut resolved);
                     result.extend(resolved);
                 }
             }

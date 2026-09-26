@@ -24,6 +24,7 @@ mod files;
 mod function_variants;
 /// Read by the checker, which must compare a CALL SITE name against a variant declaration.
 mod include_once;
+pub(crate) use include_once::include_once_label;
 mod include_path;
 mod state;
 mod stmt_exprs;

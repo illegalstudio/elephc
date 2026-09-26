@@ -343,6 +343,84 @@ echo inspectNameOwner([new NameOwnerChild()]);
     }
 }
 
+/// The normalizer's tag dispatch must reach its arms from ANY distance on AArch64.
+///
+/// `b.cond` encodes a ±1 MiB displacement there. The normalizer emits one arm per callable
+/// target in the program, so on a large program the distance from the tag compare to its arm
+/// exceeds that and the ASSEMBLER rejects the whole translation unit:
+///
+/// ```text
+/// error: fixup value out of range
+///     b.eq L_eir__eir_callable_argument_normalizer_mixed_callable_value_array_33079
+/// ```
+///
+/// Nothing wrong is emitted — the build simply stops, on a program the user has every right
+/// to write. MEASURED on a two-class fixture whose only unusual feature is an `eval()`:
+/// 2.0M lines of assembly and that error. The entire `codegen::eval` group failed this way,
+/// and CI never noticed because it excludes `codegen::eval` on every runner.
+///
+/// The form asserted here is the one `codegen::stack_guard` already documents: keep the
+/// CONDITIONAL branch local, jumping over an unconditional `b`, which reaches ±128 MiB and
+/// takes linker veneers past that.
+///
+/// A SMALL FIXTURE CANNOT SHOW THE OVERFLOW, which is why this asserts the FORM rather than
+/// compiling something a megabyte long. A test that needed 1 MiB of dispatch to fail would
+/// be too slow to keep, and would stop failing the moment the arm layout shifted.
+///
+/// x86_64 keeps the plain `je`: it takes a rel32 and reaches ±2 GiB, so the extra jump would
+/// be pure cost.
+#[test]
+fn the_normalizer_dispatch_branches_survive_any_distance() {
+    let source = r#"<?php
+class FarBranchInvokable { public function __invoke(): void { echo "called"; } }
+class FarBranchTarget { public function run(): void { echo "ran"; } }
+function farBranchConsume(callable $callback): void { $callback(); }
+function farBranchDispatch(mixed $target, mixed $callback): void { $target($callback); }
+farBranchDispatch(farBranchConsume(...), new FarBranchInvokable());
+farBranchDispatch(farBranchConsume(...), [new FarBranchTarget(), 'run']);
+"#;
+    for target in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let normalizer = asm
+            .split_once("_eir_callable_argument_normalizer:\n")
+            .expect("the normalizer must be emitted")
+            .1;
+        let dispatch: String = normalizer
+            .lines()
+            .take_while(|line| !line.contains("mixed_callable_value_not_callable"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if target == "linux-x86_64" {
+            // The point on x86_64 is that it is NOT paying for the workaround: `jcc` takes a
+            // rel32 and reaches ±2 GiB, so the inverted-branch-over-a-jump form would be
+            // pure cost. Its absence is the assertion; asserting the presence of a `je`
+            // would pin the dispatch's instruction selection, which is not what this test
+            // is about.
+            assert!(
+                !dispatch.contains("b.ne "),
+                "{target}: x86_64 emitted the AArch64 long-distance form:\n{dispatch}"
+            );
+            continue;
+        }
+        assert!(
+            !dispatch.contains("b.eq L_eir__eir_callable_argument_normalizer_mixed_callable_value_"),
+            "{target}: a dispatch arm is reached by a bare `b.eq`, which cannot span 1 MiB:\n{dispatch}"
+        );
+        assert!(
+            dispatch.contains("b.ne "),
+            "{target}: the long-distance form inverts the condition over an unconditional \
+             branch; neither is present:\n{dispatch}"
+        );
+    }
+}
+
 /// Descriptor-only invocations emit one complete normalizer without requiring the eval bridge.
 #[test]
 fn callable_argument_normalizer_is_emitted_once_on_all_targets() {

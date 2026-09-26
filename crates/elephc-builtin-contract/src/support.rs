@@ -370,8 +370,23 @@ mod tests {
         // through forwarding homes (see `eval_support`).
         assert_eq!(eval_registry, 616 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
-        // image prelude declares for its own use.
-        assert_eq!(eval_internal, 100);
+        // image prelude declares for its own use, plus the ELEVEN
+        // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
+        //
+        // Six REPORT on the cache: `_stat`, `_script_field` and `_script_path`, which the
+        // injected `opcache_get_status()` body reads; `_blacklist_entry`, which
+        // `opcache_get_configuration()` uses to list the resolved patterns; `_swap`, which
+        // `ini_set()` uses to install a directive on the live cache; and `_reset`, which
+        // `opcache_reset()` uses to schedule its restart.
+        //
+        // Five ACT on it, by path: `_is_cached`, `_discard`, `_soft_invalidate`, `_compile`
+        // and `_in_file_cache`. They are what let the natively compiled bodies answer about
+        // a dynamically included file, and about the on-disk cache, instead of only about
+        // the manifest. `opcache_invalidate` needs TWO of them because php-src's predicate
+        // differs by `$force` and the non-forced arm reads the cache's recorded mtime.
+        //
+        // None of the eleven is callable from eval'd code.
+        assert_eq!(eval_internal, 111);
         // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 353);
@@ -380,8 +395,9 @@ mod tests {
         // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
         // internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
         // builtins (`xml_parse_into_struct` plus the nine handler setters), and the two
-        // PHP 8.5 Core handler getters, plus `sizeof`.
-        assert_eq!(aot_registry, 660);
+        // PHP 8.5 Core handler getters, plus `sizeof`; and, on this branch, the eleven
+        // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above.
+        assert_eq!(aot_registry, 671);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 409 + curl_surface);
@@ -432,7 +448,9 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 595 + curl_surface);
-        assert_eq!(unsupported, 453);
+        // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
+        // call from AOT code and have no eval execution route of their own.
+        assert_eq!(unsupported, 464);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

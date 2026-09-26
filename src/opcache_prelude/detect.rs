@@ -258,6 +258,89 @@ pub(crate) fn program_references(program: &[Stmt], target: &str) -> bool {
     first_reference(program, Symbol::function(target)).is_some()
 }
 
+/// Returns whether an `eval()` argument string mentions `target` as a whole word.
+///
+/// A name that appears ONLY inside an `eval()` fragment is still a reference to it. The
+/// string-literal rule above matches an exact name, which covers `function_exists('f')` and
+/// the callable spellings, but an `eval` argument carries the name embedded in code —
+/// `'return opcache_get_status();'` — so it never matched and no prelude was injected.
+///
+/// The consequence was not a missing function but a CONTRADICTORY one: with no declaration
+/// to fall through to, the interpreter's own fallback answered, and that fallback reports the
+/// compile-time CLI default. One program could be told the cache was disabled by
+/// `opcache_get_status()` and, two lines later, that `opcache_compile_file()` had cached a
+/// file — because its siblings read the live cache and it did not.
+///
+/// Whole-word rather than substring, so `my_opcache_get_status_helper` does not count —
+/// see `mentions_word` for why the `\\` boundary is deliberately asymmetric. The
+/// heuristic errs toward injecting: a false positive costs a declaration the program never
+/// calls, which the reachability pruner then removes, while a false negative is the silent
+/// wrong answer above.
+fn fragment_mentions(name: &Name, args: &[Expr], target: Symbol<'_>) -> bool {
+    if target.kind != SymbolKind::Function || !name.as_str().eq_ignore_ascii_case("eval") {
+        return false;
+    }
+    // A FRAGMENT THE COMPILER CANNOT READ DOES NOT COUNT, and it is worth saying why, since
+    // the rest of this module goes the other way: `args_select_subject` treats an
+    // unresolvable argument as a match, and the module docblock states that rule.
+    //
+    // Answering `true` here was tried and MEASURED, and the cost is not the bounded one that
+    // reasoning assumes. It is not "a declaration the program never reaches": every watched
+    // OPcache name gets its prelude injected, and the injected surface is large enough that
+    // `$c = "echo " . "1;"; eval($c);` — a program with nothing whatever to do with OPcache —
+    // stopped compiling, with `fixup value out of range` from the assembler on an AArch64
+    // conditional branch that no longer reached its target across 1.8M lines of output. Any
+    // `eval()` on a computed string paid that, which is most of them.
+    //
+    // So the gap stays open, stated rather than papered over: a fragment the compiler cannot
+    // read that calls an OPcache function reaches the interpreter's own builtin, which
+    // answers from the compile-time CLI default instead of the live cache. Closing it belongs
+    // THERE — in `crates/elephc-magician`'s opcache builtins, which already run with the
+    // configuration this binary installed at startup — and not in a wider injection here.
+    // The literal spellings, which are what programs actually write, are covered above.
+    args.iter().any(|arg| match &arg.kind {
+        ExprKind::StringLiteral(source) => mentions_word(source, target.name),
+        _ => false,
+    })
+}
+
+/// Returns whether `needle` appears in `haystack` bounded by non-identifier characters.
+fn mentions_word(haystack: &str, needle: &str) -> bool {
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let haystack_lower = haystack.to_ascii_lowercase();
+    let needle_lower = needle.to_ascii_lowercase();
+    let bytes = haystack_lower.as_bytes();
+    let mut from = 0;
+    while let Some(offset) = haystack_lower[from..].find(&needle_lower) {
+        let start = from + offset;
+        let end = start + needle_lower.len();
+        // THE TWO SIDES ARE NOT SYMMETRIC, because `\\` is not symmetric in PHP.
+        //
+        // On the LEFT it may be the global-namespace prefix: `\\opcache_get_status()` is a
+        // call to exactly this function, written the way a code generator or a namespaced
+        // file writes it. Treating `\\` as an identifier byte made that spelling a false
+        // negative — no declaration injected, the interpreter's stale fallback answering,
+        // and the self-contradicting status this detector exists to prevent. So a `\\` is
+        // skipped and the test moves to the character before it, which is where
+        // `Other\\opcache_get_status()` — a DIFFERENT function that merely ends in the same
+        // segment — is still correctly rejected.
+        //
+        // On the RIGHT it can only be a namespace separator: `opcache_get_status\\foo` makes
+        // this name a prefix, not the function, so `\\` stays a blocking boundary there.
+        let before_ok = match start {
+            0 => true,
+            _ if bytes[start - 1] == b'\\' => start < 2 || !is_ident(bytes[start - 2]),
+            _ => !is_ident(bytes[start - 1]),
+        };
+        let after_ok = end == bytes.len() || !(is_ident(bytes[end]) || bytes[end] == b'\\');
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
 /// Returns the span of the FIRST reference to `target`, or `None` when the program never
 /// mentions it.
 ///
@@ -478,6 +561,7 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         ExprKind::FunctionCall { name, args } => (name_is(name, target)
             && args_select_subject(args, target))
         .then_some(expr.span)
+        .or_else(|| fragment_mentions(name, args, target).then_some(expr.span))
         .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => expr_refs(object, target)

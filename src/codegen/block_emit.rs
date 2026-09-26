@@ -966,7 +966,7 @@ fn emit_main_function(
     }
     emit_endfn_marker(ctx.emitter, &function.name);
     if web {
-        frame::emit_web_entry_stub(&mut ctx, web_isolation);
+        frame::emit_web_entry_stub(&mut ctx, web_isolation)?;
     }
     Ok(())
 }
@@ -977,7 +977,7 @@ fn is_main(function: &Function) -> bool {
 }
 
 /// Initializes static-property storage before user code runs.
-fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()> {
+pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let mut default_initializers = Vec::new();
     let mut uninitialized_static_properties = Vec::new();
     let mut class_names = super::runtime_referenced_class_names(ctx.module)

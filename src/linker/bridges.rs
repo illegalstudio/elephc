@@ -250,7 +250,13 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "eval",
         whole_archive: false,
         apple_frameworks: &[],
-        apple_libraries: &[],
+        // The interpreter's `mb_strlen` path calls `iconv` directly, so the archive
+        // references `_iconv` whether or not the program uses the iconv EXTENSION. That went
+        // unnoticed while the only way to link this archive was an `eval()` in the program:
+        // the checker then required the library along the eval path anyway. A binary that
+        // links the interpreter for the runtime script cache alone has no such path, and
+        // failed at the linker with `_iconv` undefined.
+        apple_libraries: &["iconv"],
         needs_libdl: true,
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extensions: &[],
@@ -444,7 +450,14 @@ where
 
     // Apple system libraries first, then frameworks: both trail every archive in the
     // plan (bridge and managed alike) so a static `libxml2.a` member pulled in above
-    // still finds `-liconv` to its right under a single left-to-right scan.
+    // still finds `-liconv` to its right under a single left-to-right scan. A library the
+    // plan already names (the checker requires `iconv` for `mb_*` and for `eval()`) is
+    // dropped from its earlier position rather than named twice, which `ld` warns about;
+    // the trailing position satisfies every archive the earlier one did.
+    ordered.retain(|item| {
+        !matches!(item, LinkItem::NamedLibrary { name, .. }
+            if metadata.seen_apple_libraries.contains(name.as_str()))
+    });
     ordered.extend(metadata.apple_libraries);
     ordered.extend(metadata.frameworks);
     let mut plan = LinkPlan::from_items(ordered);
@@ -1718,6 +1731,35 @@ mod tests {
         linux.record(xml);
         assert!(linux.apple_libraries.is_empty());
         assert!(linux.needs_libdl);
+    }
+
+    /// A library the plan already names is not named again by a bridge declaring it.
+    ///
+    /// The checker requires `iconv` for every `eval()` program, and the magician bridge
+    /// declares it too, so each such program linked `-liconv` twice and `ld` warned
+    /// "ignoring duplicate libraries". The one kept is the bridge's, after the archives.
+    #[test]
+    fn a_library_the_plan_names_is_not_named_again_by_a_bridge() {
+        let archive = std::env::current_exe().expect("test executable path");
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::named_runtime("iconv"),
+            LinkItem::named_runtime("elephc_magician"),
+        ]);
+        let resolution = resolve_with(&plan, &[], Platform::MacOS, |_| Ok(archive.clone()))
+            .expect("magician bridge must resolve on Apple");
+        let items = resolution.plan.items();
+        let named: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches!(item, LinkItem::NamedLibrary { name, .. } if name == "iconv"))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(named.len(), 1, "iconv must be named exactly once: {items:?}");
+        let last_archive = items
+            .iter()
+            .rposition(|item| matches!(item, LinkItem::StaticArchive { .. }))
+            .expect("resolved plan carries the magician archive");
+        assert!(named[0] > last_archive, "-liconv must trail every archive: {items:?}");
     }
 
     /// Verifies automatic TLS linking stays lazy while `--with-tls` force-loads the archive.

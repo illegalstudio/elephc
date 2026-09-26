@@ -22,13 +22,25 @@ pub(super) fn release_expr_statement_result(
 
 /// Emits the statement-boundary concat-buffer reset expected by the ASM backend.
 ///
-/// Skipped for compiler-generated statements — which is every statement in an injected prelude,
-/// whether it carries `dummy()` or a synthetic span. Testing `line == 0` here would have started
-/// emitting resets for prelude loops the moment they were given distinct spans.
+/// Emitted for EVERY statement, including compiler-generated ones. It used to be skipped for
+/// any statement whose span was not from source, which is every statement in an injected
+/// prelude — and a prelude is exactly where it matters most, because a prelude is where the
+/// compiler puts recursive, string-building PHP that the user never sees.
+///
+/// Without it a prelude's scratch use only ever grows. `__elephc_var_export_float` builds its
+/// digit string through a dozen intermediate `substr`/`str_replace`/concat steps, none of
+/// which were ever reclaimed, so every float cost roughly 2 KB of the shared 64 KiB
+/// `_concat_buf` for the whole call. Two dozen floats in one `var_export()` exhausted it and
+/// the next `sprintf` fatalled with `formatted result exceeds the 65536-byte string buffer` —
+/// an absurd diagnostic for a one-kilobyte result, and one that pointed at the wrong function.
+/// `var_export(opcache_get_configuration())` reproduced it: 54 directives, two of them floats.
+///
+/// The reset rewinds `_concat_off` to the FRAME base, not to zero, so a prelude function can
+/// only ever reclaim what it allocated itself; a caller's accumulated output is out of reach
+/// by construction. Values that must outlive a statement have been persisted by then — a `Str`
+/// store goes through `__rt_str_persist` — which is the same premise that already made this
+/// safe for user code.
 pub(super) fn lower_statement_concat_reset(ctx: &mut LoweringContext<'_, '_>, span: Span) {
-    if !span.is_from_source() {
-        return;
-    }
     ctx.emit_void(
         Op::ConcatReset,
         vec![],

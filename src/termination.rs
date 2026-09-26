@@ -272,6 +272,14 @@ fn try_guarantees_function_exit(
     }) {
         return true;
     }
+    // A `finally` that can BREAK out overrides whatever the try was doing, a throw included:
+    // control resumes after the loop it leaves. Only an included file's `return`, rewritten into
+    // a `break` to the include's wrapper, can do this (the checker refuses any other jump out
+    // of a `finally`). Missing it made `try { throw … } finally { return 9; }` in an included
+    // file look like a function exit, and everything after the include was pruned as dead.
+    if finally_body.as_ref().is_some_and(|body| block_may_break_current_loop(body)) {
+        return false;
+    }
 
     block_guarantees_function_exit_with_divergence(try_body, additional_expr_diverges)
         && catches.iter().all(|catch| {

@@ -77,6 +77,347 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
     crate::eval_php_profile::set_eval_php_version_id(version_id);
 }
 
+/// Installs this binary's OPcache configuration, which governs the runtime script
+/// cache for dynamically included files.
+///
+/// Generated code emits this call while initializing the eval context, carrying the
+/// `--ini`-effective directive values the compiler resolved — the runtime cannot
+/// derive them, because `--ini` is a compile-time flag with no runtime counterpart.
+/// `enabled` is the master gate and mirrors `opcache_cache_enabled`, so a default CLI
+/// binary (where `opcache.enable_cli` is off) installs a disabled cache and every
+/// include keeps re-reading and re-parsing its file exactly as before.
+///
+/// The bridge defaults to DISABLED, so any consumer linking this archive without
+/// elephc's codegen observes the pre-cache behaviour unchanged.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_configure_opcache(
+    enabled: u8,
+    validate_timestamps: u8,
+    revalidate_freq: u64,
+    max_file_size: u64,
+    memory_consumption: u64,
+    max_accelerated_files: u64,
+) {
+    crate::script_cache::set_config(crate::script_cache::ScriptCacheConfig {
+        enabled: enabled != 0,
+        validate_timestamps: validate_timestamps != 0,
+        revalidate_freq,
+        max_file_size,
+        memory_consumption: usize::try_from(memory_consumption).unwrap_or(usize::MAX),
+        max_accelerated_files: usize::try_from(max_accelerated_files).unwrap_or(usize::MAX),
+        // `opcache.file_update_protection` does not travel on this call — its argument
+        // budget is full — so it keeps php-src's default until
+        // `__elephc_eval_opcache_swap_directive` installs the compiled value, which
+        // generated code emits immediately after this. A consumer linking this archive
+        // without elephc's codegen therefore observes php-src's default rather than 0.
+        ..crate::script_cache::ScriptCacheConfig::disabled()
+    });
+    // AFTER `set_config`, which clears it. The configure call IS the request boundary —
+    // once in the CLI prologue, once per request under `--web` — so stamping here gives the
+    // cache php-src's fixed `ZCG(request_time)` instead of a clock that moves under a long
+    // request.
+    crate::script_cache::stamp_request_time_now();
+}
+
+/// Installs the accelerator diagnostic channel and applies php-src's startup validation
+/// of `opcache.file_cache` / `opcache.file_cache_read_only`.
+///
+/// This is a SECOND bridge call rather than four more parameters on the one above, and
+/// that is an ABI constraint, not a style choice: `__elephc_eval_configure_opcache`
+/// already spends all six integer argument registers the x86_64 SysV ABI provides, so a
+/// seventh would have to be passed on the stack — which the emitter's
+/// `int_arg_reg_name` cannot express. Splitting also leaves the existing, working call
+/// byte-identical.
+///
+/// ORDER IS LOAD-BEARING: generated code emits this AFTER
+/// `__elephc_eval_configure_opcache`, because the validation is gated on the cache being
+/// enabled and reads that flag from the configuration the first call installed. The log
+/// configuration is installed before the validation runs so that a fatal is written to
+/// `opcache.error_log` when one is configured.
+///
+/// A fatal here TERMINATES THE PROCESS with status 254, exactly as reference PHP's
+/// startup does — see `crate::script_cache::file_cache`.
+///
+/// # Safety
+/// `file_cache_ptr` must be readable for `file_cache_len` bytes when `file_cache_len > 0`,
+/// and `error_log_ptr` for `error_log_len` bytes when `error_log_len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_configure_opcache_file_cache(
+    file_cache_ptr: *const u8,
+    file_cache_len: u64,
+    file_cache_read_only: u8,
+    log_verbosity_level: i64,
+    error_log_ptr: *const u8,
+    error_log_len: u64,
+) {
+    // SAFETY: the caller guarantees each pointer is readable for its paired length.
+    let file_cache = unsafe { borrow_configured_string(file_cache_ptr, file_cache_len) };
+    // SAFETY: as above.
+    let error_log = unsafe { borrow_configured_string(error_log_ptr, error_log_len) };
+    crate::script_cache::set_accel_log_config(crate::script_cache::AccelLogConfig {
+        verbosity: i32::try_from(log_verbosity_level).unwrap_or(i32::MAX),
+        error_log,
+    });
+    let file_cache = crate::script_cache::FileCacheConfig {
+        path: file_cache,
+        read_only: file_cache_read_only != 0,
+    };
+    crate::script_cache::validate_file_cache_directives_at_startup(
+        &file_cache,
+        crate::script_cache::config().enabled,
+    );
+    // Kept after the validation, never before: only a directory php-src would have
+    // accepted may go on to be read from or written to.
+    crate::script_cache::set_file_cache_config(file_cache);
+}
+
+/// Loads `opcache.blacklist_filename`, the list of paths that RUN but are never cached.
+///
+/// Emitted at eval-context setup, which is elephc's analogue of php-src's `MINIT`: the
+/// directive is `PHP_INI_SYSTEM`, so reference PHP reads the files once at startup and
+/// never re-reads them. A separate symbol rather than another argument on the two
+/// `configure` calls above, because both already spend all six integer argument registers
+/// x86_64 provides.
+///
+/// ORDER MATTERS: generated code emits this AFTER
+/// `__elephc_eval_configure_opcache_file_cache`, because a value matching no file logs
+/// through the accelerator channel that call installs — without it the warning would be
+/// written at the wrong verbosity and to the wrong place.
+///
+/// An empty value is "unset" and loads nothing.
+///
+/// # Safety
+/// `value_ptr` must be readable for `value_len` bytes when `value_len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_load_blacklist(
+    value_ptr: *const u8,
+    value_len: u64,
+) {
+    // SAFETY: the caller guarantees the pointer is readable for the paired length.
+    let value = unsafe { borrow_configured_string(value_ptr, value_len) };
+    crate::script_cache::load_blacklist(&value);
+}
+
+/// Installs one runtime-cache directive by id, returning the value it replaced.
+///
+/// Two callers, one symbol, told apart by `as_override`. Generated code emits it with `0`
+/// at eval-context setup to carry the COMPILED settings that did not fit the two configure
+/// calls above — both of which already spend all six integer argument registers x86_64
+/// provides — and `ini_set()` emits it with `1` at run time for the three directives
+/// php-src registers as `PHP_INI_ALL`.
+///
+/// THE FLAG IS NOT COSMETIC. The compiled install runs when the eval context is first
+/// built, which is the program's FIRST eval — after any `ini_set()` that precedes it. An
+/// override is therefore kept in its own table and applied on read, so the later install
+/// cannot clobber the earlier `ini_set()`. The runtime cache reads all three on every
+/// lookup, so either write applies to the next include.
+///
+/// Returning the PREVIOUS value is what lets `ini_set()` answer with it, as PHP requires.
+/// An unknown id writes nothing and answers `u64::MAX`.
+///
+/// See `crate::script_cache::config::swap_directive` for the id contract.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_opcache_swap_directive(
+    id: u64,
+    value: u64,
+    as_override: u8,
+) -> u64 {
+    crate::script_cache::swap_directive(id, value, as_override != 0)
+}
+
+/// Schedules a restart of the runtime script cache, as `opcache_reset()` does.
+///
+/// Answers `1` for the call that scheduled it and `0` for any later one in the same
+/// request, matching php-src, whose `zend_accel_schedule_restart` clears the flag
+/// `opcache_reset()`'s own guard tests.
+///
+/// SCHEDULES ONLY — the restart itself runs at the next request boundary, through
+/// [`__elephc_eval_opcache_apply_restart`]. Generated code emits this from the natively
+/// compiled `opcache_reset()`, which without it moved only the reported latch and left the
+/// dynamic tier untouched.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_opcache_schedule_restart() -> u64 {
+    u64::from(crate::script_cache::schedule_restart())
+}
+
+/// Opens a `--web` request on the cache: drops last request's `ini_set()` overrides, then
+/// performs a restart `opcache_reset()` scheduled in an earlier request, if any.
+///
+/// THE REQUEST BOUNDARY php-src restarts at. Generated code emits this at the top of the
+/// `--web` handler, beside the other per-request resets, so the flush lands where reference
+/// PHP's does: at the START of the request after the one that called `opcache_reset()`,
+/// never inside it.
+///
+/// The override drop belongs here for the same reason and not merely for convenience: this is
+/// the one symbol that runs once per request before any of the program's own code. An
+/// `ini_set('opcache.validate_timestamps', '0')` in request 1 used to outlive it and turn a
+/// per-request override into a permanent property of that worker — invisible under CLI, which
+/// has no second request to observe it with.
+///
+/// A CLI program is a single request and never emits this call, which is also right —
+/// reference PHP would restart at a next request that a CLI process does not have, so the
+/// cache correctly keeps answering for that program's whole life, and its overrides with it.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_opcache_apply_restart() {
+    crate::script_cache::clear_directive_overrides();
+    crate::script_cache::apply_pending_restart();
+}
+
+/// Answers whether the runtime script cache holds a live entry for `path`.
+///
+/// THE POINT OF THESE THREE is that the natively compiled `opcache_*` bodies and the ones
+/// reached from inside `eval()` give the same answer. Before them the native declarations
+/// knew only the compile-time manifest, so `opcache_is_script_cached($dynamic)` answered
+/// `false` for a file the cache was actively serving, `opcache_invalidate($dynamic, true)`
+/// returned `true` and discarded nothing, and `opcache_compile_file()` refused every path
+/// outside the manifest. One binary, one cache, and the answer depended on where in the
+/// program the question was written.
+///
+/// A `0` length is the empty path, which is never cached.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_is_cached(ptr: *const u8, len: u64) -> u64 {
+    let path = unsafe { borrow_configured_string(ptr, len) };
+    if path.is_empty() {
+        return 0;
+    }
+    u64::from(crate::script_cache::store::is_cached(std::path::Path::new(
+        &path,
+    )))
+}
+
+/// Retires the runtime cache's entry for `path`, as a FORCED `opcache_invalidate()` does,
+/// and answers whether anything was retired.
+///
+/// The in-memory entry keeps its slot and its accounted footprint, matching php-src holding
+/// the shared-memory block until the next restart — so `num_cached_scripts` does not move.
+/// THE ON-DISK ENTRY IS DIFFERENT and is removed: `accel_invalidate` calls
+/// `zend_file_cache_invalidate`, and a surviving file-cache copy resurrects the script in
+/// the next process, which is the one thing an invalidate must not allow.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_discard(ptr: *const u8, len: u64) -> u64 {
+    let path = unsafe { borrow_configured_string(ptr, len) };
+    if path.is_empty() {
+        return 0;
+    }
+    u64::from(crate::script_cache::invalidate(
+        std::path::Path::new(&path),
+        true,
+    ))
+}
+
+/// The NON-FORCED `opcache_invalidate()`: retires `path` only when php-src's predicate says
+/// to — `!validate_timestamps || the source has moved on`.
+///
+/// A SEPARATE ENTRY POINT RATHER THAN A FLAG, because the prelude cannot answer either half
+/// of that predicate. `validate_timestamps` it could read, but the timestamp comparison
+/// needs the mtime the ENTRY recorded when it was cached, which lives only in the cache.
+/// Splitting by force keeps the whole predicate on this side and leaves the prelude with a
+/// plain two-way branch, and it lets both spellings share the one-string-argument lowering
+/// the rest of this family already uses.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_soft_invalidate(
+    ptr: *const u8,
+    len: u64,
+) -> u64 {
+    let path = unsafe { borrow_configured_string(ptr, len) };
+    if path.is_empty() {
+        return 0;
+    }
+    u64::from(crate::script_cache::invalidate(
+        std::path::Path::new(&path),
+        false,
+    ))
+}
+
+/// Reads and caches `path` WITHOUT executing it, as `opcache_compile_file()` does.
+///
+/// Answers whether the file could be read AND PARSED. php-src reports the compile, not the
+/// store, so a file that parses but which the budget then refuses still answers `1`; a file
+/// with a syntax error answers `0`, where reference throws a `ParseError` — see
+/// `store::compile_file` for why the throw is out of reach of this signature.
+///
+/// A FILE IT CANNOT OPEN WARNS HERE, with the real `strerror` text, because only this side
+/// holds the `io::Error`. The native prelude used to word the warning itself, from
+/// `realpath()` failing, and so could only guess: it said "No such file or directory" for a
+/// file under a directory without search permission, where reference says
+/// `Permission denied`. MEASURED. The eval surface prints the same two lines through
+/// `store::compile_open_failure_warnings`, so both spell them one way.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_compile(ptr: *const u8, len: u64) -> u64 {
+    let path = unsafe { borrow_configured_string(ptr, len) };
+    if path.is_empty() {
+        return 0;
+    }
+    let file = std::path::Path::new(&path);
+    if crate::script_cache::store::compile_file(file) {
+        return 1;
+    }
+    if let Some(reason) = crate::script_cache::store::compile_open_failure(file) {
+        for warning in crate::script_cache::store::compile_open_failure_warnings(&path, &reason) {
+            eprint!("{warning}");
+        }
+    }
+    0
+}
+
+/// Answers whether the ON-DISK `opcache.file_cache` holds a usable entry for `path`.
+///
+/// The fourth path-taking runtime-tier operation, and the one that was missing. Its native
+/// prelude body was a hardcoded `return false`, written when elephc had no file cache — a
+/// claim this branch makes false, since it ships `file_store`, `opcache.file_cache` and
+/// `opcache.file_cache_read_only`. Widening the eval interception guard to all eight OPcache
+/// names then made that stub authoritative inside `eval()` as well, so merely MENTIONING the
+/// function in native code flipped the eval answer from correct to wrong.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_in_file_cache(
+    ptr: *const u8,
+    len: u64,
+) -> u64 {
+    let path = unsafe { borrow_configured_string(ptr, len) };
+    if path.is_empty() {
+        return 0;
+    }
+    u64::from(crate::script_cache::file_cache_contains(
+        std::path::Path::new(&path),
+    ))
+}
+
+/// Copies one generated directive string out of the binary's read-only data.
+///
+/// A null pointer or a zero length is the EMPTY string, which both directives spell as
+/// "unset". Invalid UTF-8 is replaced rather than refused: these are filesystem paths,
+/// and losing the fatal a malformed one should raise would be the worse failure.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+unsafe fn borrow_configured_string(ptr: *const u8, len: u64) -> String {
+    if ptr.is_null() || len == 0 {
+        return String::new();
+    }
+    let Ok(len) = usize::try_from(len) else {
+        return String::new();
+    };
+    // SAFETY: the caller guarantees `ptr` is readable for `len` bytes, and the slice is
+    // copied into an owned `String` before this borrow ends.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// Frees a process-level eval context handle allocated by the eval bridge.
 ///
 /// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP

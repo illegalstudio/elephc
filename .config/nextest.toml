@@ -144,6 +144,22 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'binary(/^eval_/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# The `opcache_*` integration binaries are in the same position: most of their programs call
+# `eval()` or `include` a path known only at run time — the only ways to reach the runtime
+# script cache they test — so every such program links Magician, like the `eval_*` binaries,
+# and they run in the non-codegen shards under the plain 60s cap. On the macOS runners
+# `a_non_forced_invalidate_follows_the_timestamp_directive` and
+# `a_runtime_eval_source_is_refused_as_native_calls_are` were terminated at 60s on both
+# attempts, and others of the family measured 57.4s, 51.2s and 46.3s in the same run. Give
+# the whole family the eval budget rather than chasing them one test at a time.
+[[profile.default.overrides]]
+filter = 'binary(/^opcache_/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(/^opcache_/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # These eval fixtures live outside the Core eval GC naming family. Boxed method
 # arguments hit 60s on both macOS attempts; hook-default and post-eval instanceof
 # controls passed only on retry at 59.687s and 58.843s respectively. The latter
@@ -192,6 +208,28 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
 filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# The two `web_session_tests` cases that compile a `--web` program WITH `eval()` — the only way
+# to reach the runtime script cache, which is what they test. Measured with `--timings`: that
+# program is ~3.1M lines of assembly and takes ~34s to compile on a fast unloaded Mac, 61% of it
+# assembling the object file. The volume is the eval bridge, not OPcache: the same `--web`
+# program with `eval()` and no OPcache call is already 3.08M lines. Both terminated at the 60s
+# guard on the macOS runners, on both attempts, in two consecutive runs.
+[[profile.default.overrides]]
+filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may

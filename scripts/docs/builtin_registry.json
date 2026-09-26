@@ -7932,6 +7932,1201 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "index",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_blacklist_entry",
+    "description": "Internal: the Nth pattern loaded from opcache.blacklist_filename.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_blacklist_entry` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_blacklist_entry.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_blacklist_entry",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "alloc_heap"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_blacklist_entry"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_blacklist_entry"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "index",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_blacklist_entry",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "path",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_compile",
+    "description": "Internal: read and cache this path without executing it; true when it parsed.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_compile` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_compile.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_compile",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_compile"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_compile"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "path",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_compile",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "path",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_discard",
+    "description": "Internal: mark this path's runtime cache entry discarded; true when there was one.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_discard` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_discard.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_discard",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_discard"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_discard"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "path",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_discard",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "path",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_in_file_cache",
+    "description": "Internal: whether the on-disk opcache.file_cache holds an entry for this path.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_in_file_cache` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_in_file_cache.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_in_file_cache",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "reads_fs",
+          "writes_fs"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_in_file_cache"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_in_file_cache"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "path",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_in_file_cache",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "path",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_is_cached",
+    "description": "Internal: whether the runtime script cache holds a live entry for this path.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_is_cached` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_is_cached.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_is_cached",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "writes_global",
+          "reads_fs"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_is_cached"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_is_cached"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "path",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_is_cached",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_reset",
+    "description": "Internal: schedule a runtime script-cache restart; true only for the call that scheduled it.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_reset` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_reset.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_reset",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "writes_global"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_reset"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_reset"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_reset",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "index",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "field",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_script_field",
+    "description": "Internal: one numeric field of the Nth runtime-cached script.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_script_field` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_script_field.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_script_field",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_script_field"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_script_field"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "index",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "field",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_script_field",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "index",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_script_path",
+    "description": "Internal: canonical path of the Nth runtime-cached script.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_script_path` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_script_path.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_script_path",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "alloc_heap"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_script_path"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_script_path"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "index",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_script_path",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "path",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_soft_invalidate",
+    "description": "Internal: mark this path's runtime cache entry discarded; true when there was one.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_soft_invalidate` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_soft_invalidate.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_soft_invalidate",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_soft_invalidate"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_soft_invalidate"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "path",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_soft_invalidate",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "key",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_stat",
+    "description": "Internal: one runtime script-cache figure, selected by key.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_stat` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_stat.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_stat",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_stat"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_stat"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "key",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_stat",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "id",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_opcache_rt_swap",
+    "description": "Internal: install one runtime script-cache directive, returning the previous value.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_opcache_rt_swap` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_opcache_rt_swap.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_opcache_rt_swap",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "writes_global"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_opcache_rt_swap"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_opcache_rt_swap"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "id",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_opcache_rt_swap",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "kind",
           "optional": false,
           "type": "int"
@@ -68383,7 +69578,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_get_all",
-      "codegen_line": 5071,
+      "codegen_line": 5079,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -68525,7 +69720,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_set",
-      "codegen_line": 4494,
+      "codegen_line": 4899,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -87415,7 +88610,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_compile_file",
-      "codegen_line": 503,
+      "codegen_line": 956,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -87471,7 +88666,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_get_configuration",
-      "codegen_line": 128,
+      "codegen_line": 204,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -87527,7 +88722,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_get_status",
-      "codegen_line": 348,
+      "codegen_line": 489,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -87598,7 +88793,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_invalidate",
-      "codegen_line": 439,
+      "codegen_line": 849,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -87669,7 +88864,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached",
-      "codegen_line": 374,
+      "codegen_line": 737,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -87733,7 +88928,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached_in_file_cache",
-      "codegen_line": 513,
+      "codegen_line": 974,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -87797,7 +88992,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_jit_blacklist",
-      "codegen_line": 540,
+      "codegen_line": 998,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -87853,7 +89048,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_reset",
-      "codegen_line": 153,
+      "codegen_line": 231,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -124424,7 +125619,7 @@
       "checker_line": null,
       "codegen_file": "src/var_export_prelude.rs",
       "codegen_function": "var_export",
-      "codegen_line": 330,
+      "codegen_line": 370,
       "notes": [
         "Implemented by the compiler-injected var_export prelude."
       ],

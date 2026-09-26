@@ -10,7 +10,7 @@
 use super::*;
 
 /// Runtime interface declared by an eval fragment.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalInterface {
     name: String,
     source_location: Option<EvalSourceLocation>,
@@ -128,7 +128,7 @@ impl EvalInterface {
 }
 
 /// Property hook contract metadata for a runtime eval interface.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalInterfaceProperty {
     name: String,
     attributes: Vec<EvalAttribute>,
@@ -260,7 +260,7 @@ const fn eval_visibility_rank(visibility: EvalVisibility) -> u8 {
 }
 
 /// Method signature metadata for a runtime eval interface.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalInterfaceMethod {
     name: String,
     source_location: Option<EvalSourceLocation>,

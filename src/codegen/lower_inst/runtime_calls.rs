@@ -26,6 +26,7 @@ pub(super) fn lower(
 ) -> Result<()> {
     match target {
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
+        RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
         RuntimeCallTarget::ArrayFetchForWrite => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
@@ -70,6 +71,30 @@ fn lower_array_unpack_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     super::exceptions::emit_error(ctx, "Only arrays and Traversables can be unpacked");
     ctx.emitter.label(&valid);
     store_if_result(ctx, inst)
+}
+
+/// Appends the pending exception (operand 1, consumed) to the new one's chain (operand 0).
+///
+/// `__rt_exception_chain` takes the new exception in the integer result register and the owned
+/// pending one beside it — `x0`/`x1` on AArch64, `rax`/`rdi` on x86_64 — which is not the
+/// ordinary argument order on x86_64, so the pair is staged by hand.
+fn lower_exception_chain(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 2 {
+        return Err(CodegenIrError::invalid_module("exception chaining requires two operands"));
+    }
+    let new = expect_operand(inst, 0)?;
+    let pending = expect_operand(inst, 1)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(pending)?;
+    abi::emit_push_reg(ctx.emitter, result);
+    ctx.load_value_to_result(new)?;
+    let pending_reg = match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => "x1",
+        crate::codegen::platform::Arch::X86_64 => "rdi",
+    };
+    abi::emit_pop_reg(ctx.emitter, pending_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_exception_chain");
+    Ok(())
 }
 
 /// Materializes normalized constructor parameters through the shared target-aware call ABI.

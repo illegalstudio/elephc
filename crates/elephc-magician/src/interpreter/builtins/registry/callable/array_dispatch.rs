@@ -231,5 +231,21 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
         )?;
         return eval_native_function_with_values(function, evaluated_args, context, values);
     }
+    // THE RUNTIME HANDLERS ARE A CALLABLE TARGET TOO. Names such as `opcache_get_status` are
+    // not PHP-visible builtins here: they are plain handlers in `eval_builtin_with_values`,
+    // which `call_user_func` consults and this path did not. So `$f = 'opcache_' .
+    // 'get_status'; $f();` and `call_user_func_array($f, [])` inside eval() died on an
+    // unsupported construct where reference returns the status array, and the same name
+    // through `call_user_func` worked. MEASURED on reference PHP 8.5.
+    //
+    // LAST, and positional only: every name that resolved before still resolves the same
+    // way, and only a call that used to be fatal gains a target.
+    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
+        let positional: Vec<RuntimeCellHandle> =
+            evaluated_args.iter().map(|arg| arg.value).collect();
+        if let Some(result) = eval_builtin_with_values(name, &positional, context, values)? {
+            return Ok(result);
+        }
+    }
     Err(EvalStatus::UnsupportedConstruct)
 }

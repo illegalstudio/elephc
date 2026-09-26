@@ -69,6 +69,7 @@ mod expressions;
 mod functions_namespaces;
 mod method_arguments;
 mod native_scope;
+mod opcache_script_cache;
 mod operand_ownership;
 mod operand_string_sources;
 mod operand_shared_runtime;

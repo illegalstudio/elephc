@@ -82,40 +82,51 @@ pub(in crate::interpreter) fn eval_call(
     if eval_xml_builtin_name(name) {
         return eval_builtin_xml_call(name, args, context, scope, values);
     }
-    // `opcache_get_configuration` is prelude-provided on the native side (not a
-    // catalog builtin), so eval dispatches it as a plain runtime handler rather than
-    // through the PHP-visible builtin registry, keeping the two builtin sets in sync.
-    if name == "opcache_get_configuration" {
-        return eval_opcache_get_configuration_call(args, context, scope, values);
-    }
-    // `opcache_reset` is likewise prelude-provided on native; eval returns the CLI
-    // default cache-enabled boolean (false) as a plain runtime handler.
-    if name == "opcache_reset" {
-        return eval_opcache_reset_call(args, context, scope, values);
-    }
-    // `opcache_get_status` is likewise prelude-provided on native; eval reports the CLI
-    // default (cache disabled) and so returns `false` as a plain runtime handler.
-    if name == "opcache_get_status" {
-        return eval_opcache_get_status_call(args, context, scope, values);
-    }
-    // The five OPcache file/script functions are likewise prelude-provided on native; eval
-    // reports the CLI default (cache disabled) and returns `false` from each, except the
-    // `void` `opcache_jit_blacklist`, which evaluates to `NULL`. See
-    // `network_env::opcache_file_functions`.
-    if name == "opcache_is_script_cached" {
-        return eval_opcache_is_script_cached_call(args, context, scope, values);
-    }
-    if name == "opcache_invalidate" {
-        return eval_opcache_invalidate_call(args, context, scope, values);
-    }
-    if name == "opcache_compile_file" {
-        return eval_opcache_compile_file_call(args, context, scope, values);
-    }
-    if name == "opcache_is_script_cached_in_file_cache" {
-        return eval_opcache_is_script_cached_in_file_cache_call(args, context, scope, values);
-    }
-    if name == "opcache_jit_blacklist" {
-        return eval_opcache_jit_blacklist_call(args, context, scope, values);
+    // ALL EIGHT OPcache functions are prelude-provided on the native side (they are not
+    // catalog builtins), so eval carries a fallback handler for each. Every one of those
+    // handlers is guarded the same way, and the uniformity is the point rather than a
+    // stylistic preference.
+    //
+    // When the binary DOES carry the prelude declaration, that declaration is the only thing
+    // that knows the compile-time manifest, the live runtime script cache, the resolved
+    // `--ini` values and `ini_set()` overrides — and `opcache.restrict_api`, which the
+    // prelude implements as a guard at the top of each body. A handler that intercepts ahead
+    // of it does not merely answer with stale data: it answers INSTEAD of the refusal. With
+    // `opcache.restrict_api=/nonexistent`, native `opcache_reset()` warns and returns
+    // `false` while an eval'd `opcache_reset()` returned `true` and scheduled a real flush,
+    // so `eval()` was a way around the directive for seven of the eight names.
+    //
+    // The handlers below stay the answer for a program with NO such declaration — above all
+    // the compile-time const-folder, where no prelude has been injected and the CLI default
+    // (cache disabled) is correct.
+    if context.native_function(name).is_none() {
+        match name {
+            "opcache_get_configuration" => {
+                return eval_opcache_get_configuration_call(args, context, scope, values)
+            }
+            "opcache_reset" => return eval_opcache_reset_call(args, context, scope, values),
+            "opcache_get_status" => {
+                return eval_opcache_get_status_call(args, context, scope, values)
+            }
+            "opcache_is_script_cached" => {
+                return eval_opcache_is_script_cached_call(args, context, scope, values)
+            }
+            "opcache_invalidate" => {
+                return eval_opcache_invalidate_call(args, context, scope, values)
+            }
+            "opcache_compile_file" => {
+                return eval_opcache_compile_file_call(args, context, scope, values)
+            }
+            "opcache_is_script_cached_in_file_cache" => {
+                return eval_opcache_is_script_cached_in_file_cache_call(
+                    args, context, scope, values,
+                )
+            }
+            "opcache_jit_blacklist" => {
+                return eval_opcache_jit_blacklist_call(args, context, scope, values)
+            }
+            _ => {}
+        }
     }
     if let Some(result) = eval_date_procedural_alias_call(name, args, context, scope, values)? {
         return Ok(result);

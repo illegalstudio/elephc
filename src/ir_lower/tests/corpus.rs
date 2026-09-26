@@ -125,8 +125,10 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         "web-session-trans-sid",
         "web-session-upload",
         // OPcache introspection functions are provided by the pay-for-use OPcache
-        // prelude, which the plain CLI-mode corpus lowering does not inject.
+        // prelude, which the plain CLI-mode corpus lowering does not inject. The
+        // opcache_* integration suites compile both examples' surfaces for real.
         "opcache_get_configuration",
+        "opcache-runtime-cache",
     ];
     main_php
         .parent()

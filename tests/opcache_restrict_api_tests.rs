@@ -350,3 +350,64 @@ fn restriction_follows_the_entry_script_not_the_executing_file() {
     );
     assert!(entry_err.is_empty(), "entry-prefixed build must not warn: {entry_err:?}");
 }
+
+/// A RUNTIME-PROVIDED `eval()` source is refused exactly as a native call is.
+///
+/// The program names no OPcache function anywhere, so the guarded native bodies are never
+/// injected and every call lands in the interpreter's own handlers — which did not check the
+/// restriction, and scheduled a real restart. The PR review's reproducer, extended to every
+/// restricted function and to a `$f()` spelling. MEASURED on reference PHP 8.5: the warning, then
+/// `bool(false)`, for each; with an allowing prefix, `opcache_reset()` answers `bool(true)`.
+#[test]
+fn a_runtime_eval_source_is_refused_as_native_calls_are() {
+    let dir = make_test_dir("opcache_ra_runtime_eval");
+    fs::write(dir.join("lib.php"), "<?php\n").unwrap();
+    let source = "<?php\n$code = getenv('REVIEW_CODE');\neval($code);\n";
+    assert!(!source.contains("opcache"), "PREMISE: nothing statically names the OPcache API");
+    let build = |stem: &str, restrict: &str| -> PathBuf {
+        fs::write(dir.join(format!("{stem}.php")), source).unwrap();
+        let output = Command::new(elephc_bin())
+            .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .current_dir(&dir)
+            .arg(dir.join(format!("{stem}.php")))
+            .args(["--php-version", "8.5"])
+            .args(["--ini", "opcache.enable_cli=1"])
+            .args(["--ini", "opcache.file_update_protection=0"])
+            .arg("--ini")
+            .arg(format!("opcache.restrict_api={restrict}"))
+            .output()
+            .expect("failed to spawn elephc");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        dir.join(stem)
+    };
+    let run = |bin: &Path, code: &str| -> (String, String) {
+        let output = Command::new(bin)
+            .env("REVIEW_CODE", code)
+            .output()
+            .expect("failed to run compiled binary");
+        (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+
+    let denied = build("denied", "/nonexistent");
+    for code in [
+        "var_dump(opcache_reset());",
+        "var_dump(opcache_get_status(false));",
+        "var_dump(opcache_get_configuration());",
+        "var_dump(opcache_is_script_cached(__DIR__ . '/lib.php'));",
+        "var_dump(opcache_invalidate(__DIR__ . '/lib.php'));",
+        "var_dump(opcache_is_script_cached_in_file_cache(__DIR__ . '/lib.php'));",
+        "$f = 'opcache_' . 'reset'; var_dump($f());",
+    ] {
+        let (stdout, stderr) = run(&denied, code);
+        assert_eq!(stdout, "bool(false)\n", "{code}");
+        assert_eq!(stderr.matches(RESTRICT_WARNING).count(), 1, "{code}:\n{stderr}");
+    }
+
+    let allowed = build("allowed", &dir.display().to_string());
+    let (stdout, stderr) = run(&allowed, "var_dump(opcache_reset());");
+    assert_eq!(stdout, "bool(true)\n", "an allowing prefix leaves the API usable");
+    assert!(!stderr.contains(RESTRICT_WARNING), "{stderr}");
+}
