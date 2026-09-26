@@ -21,6 +21,15 @@ class Probe extends Widget {
     }
 }
 
+// The class to test against can come from a property.
+class Rule {
+    public function __construct(public string $className) {}
+
+    public function accepts(Widget $item): bool {
+        return $item instanceof $this->className;
+    }
+}
+
 $item = new Button();
 echo ($item instanceof Button) ? "button\n" : "not button\n";
 echo ($item instanceof Widget) ? "widget\n" : "not widget\n";
@@ -37,3 +46,7 @@ echo ($item instanceof $targetObject) ? "dynamic object\n" : "not dynamic object
 $probe = new Probe();
 $probe->check($item);
 $probe->check(new Probe());
+
+$rule = new Rule("Renderable");
+echo $rule->accepts($item) ? "rule accepts button\n" : "rule rejects button\n";
+echo $rule->accepts(new Widget()) ? "rule accepts widget\n" : "rule rejects widget\n";

@@ -183,7 +183,7 @@ $target = "Button";
 echo ($item instanceof $target) ? "yes" : "no";     // yes
 ```
 
-The runtime check uses emitted class metadata, so subclasses match parent classes and implemented interfaces. The left-hand side may be a direct object or a boxed `mixed` / nullable / union value; non-object payloads return `false` once any dynamic target has been validated. Supported targets are named classes/interfaces, `self`, `parent`, late-bound `static`, dynamic class/interface strings, and dynamic object expressions.
+The runtime check uses emitted class metadata, so subclasses match parent classes and implemented interfaces. The left-hand side may be a direct object or a boxed `mixed` / nullable / union value; non-object payloads return `false` once any dynamic target has been validated. Supported targets are named classes/interfaces, `self`, `parent`, late-bound `static`, dynamic class/interface strings, and dynamic object expressions. A dynamic target can be any variable expression holding the class name or object, not just a local: `$value instanceof $this->className`, `$value instanceof $map['type']`, `$value instanceof self::$fallback`.
 
 ## Abstract classes
 ```php

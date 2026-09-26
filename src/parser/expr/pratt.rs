@@ -714,6 +714,11 @@ fn parse_instanceof_target(
     pos: &mut usize,
     span: Span,
 ) -> Result<InstanceOfTarget, CompileError> {
+    // `self::$fallback` and `Config::$class` read a static property holding the class name.
+    if names_static_property(tokens, *pos) {
+        let target = parse_expr_bp(tokens, pos, 36)?;
+        return Ok(InstanceOfTarget::Expr(Box::new(target)));
+    }
     match tokens.get(*pos).map(|(token, _)| token) {
         Some(Token::Self_) => {
             *pos += 1;
@@ -727,7 +732,9 @@ fn parse_instanceof_target(
             *pos += 1;
             Ok(InstanceOfTarget::Name(Name::unqualified("static")))
         }
-        Some(Token::Variable(_)) | Some(Token::LParen) => {
+        // A variable expression names the class at run time: `$name`, `$this->className`,
+        // `$config['type']`, `(expr)`.
+        Some(Token::Variable(_)) | Some(Token::This) | Some(Token::LParen) => {
             let target = parse_expr_bp(tokens, pos, 36)?;
             Ok(InstanceOfTarget::Expr(Box::new(target)))
         }
@@ -739,6 +746,28 @@ fn parse_instanceof_target(
         )
         .map(InstanceOfTarget::Name),
     }
+}
+
+/// Returns true when the tokens at `pos` are a class reference followed by `::$name`, the
+/// static-property form of an `instanceof` target.
+fn names_static_property(tokens: &[SpannedToken], pos: usize) -> bool {
+    let mut cursor = pos;
+    match tokens.get(cursor).map(|(token, _)| token) {
+        Some(Token::Self_ | Token::Parent | Token::Static) => cursor += 1,
+        _ => {
+            while matches!(
+                tokens.get(cursor).map(|(token, _)| token),
+                Some(Token::Identifier(_) | Token::Backslash)
+            ) {
+                cursor += 1;
+            }
+            if cursor == pos {
+                return false;
+            }
+        }
+    }
+    matches!(tokens.get(cursor).map(|(token, _)| token), Some(Token::DoubleColon))
+        && matches!(tokens.get(cursor + 1).map(|(token, _)| token), Some(Token::Variable(_)))
 }
 
 /// Looks up binary operator binding power for Pratt parsing.
