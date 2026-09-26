@@ -168,6 +168,32 @@ pub(super) fn lower_lazy_empty(
         return None;
     }
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
+        if array_access_expr_satisfies_array_access(ctx, array) {
+            let object = evaluate_once(ctx, array, &args[0]);
+            return Some(lower_array_access_object_empty(
+                ctx, &object, index, name, expr, &args[0],
+            ));
+        }
+        // A call or `new` result has no syntactic type, so it is lowered once and judged by
+        // the type it lowers to; that value is then the receiver on either path.
+        if receiver_is_computed_value(array) {
+            let object = super::pipe::lower_pipe_value_temp(ctx, array, &args[0]);
+            if array_access_expr_satisfies_array_access(ctx, &object) {
+                return Some(lower_array_access_object_empty(
+                    ctx, &object, index, name, expr, &args[0],
+                ));
+            }
+            let value =
+                lower_array_access_with_missing_warning(ctx, &object, index, &args[0], false);
+            return Some(emit_builtin_call_value(
+                ctx,
+                name,
+                vec![value.value],
+                PhpType::Bool,
+                expr.span,
+                None,
+            ));
+        }
         let value = lower_array_access_with_missing_warning(ctx, array, index, &args[0], false);
         return Some(emit_builtin_call_value(
             ctx,
@@ -224,14 +250,93 @@ pub(super) fn lower_lazy_empty(
         }
     }
     let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;
+    Some(lower_empty_through_exists_then_get(
+        ctx,
+        &exists_call,
+        &get_call,
+        name,
+        expr,
+    ))
+}
 
+/// Lowers `empty($object[$index])` on an `ArrayAccess` receiver the way PHP does:
+/// `offsetExists` decides first, and `offsetGet` is read only when it said yes. `object` is
+/// already evaluated; the offset is evaluated here, once, before either call names it.
+fn lower_array_access_object_empty(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    index: &Expr,
+    name: &str,
+    expr: &Expr,
+    arg: &Expr,
+) -> LoweredValue {
+    let key = evaluate_once(ctx, index, arg);
+    let exists_call = synthetic_method_call(object, "offsetExists", &key, arg.span);
+    let get_call = synthetic_method_call(object, "offsetGet", &key, arg.span);
+    lower_empty_through_exists_then_get(ctx, &exists_call, &get_call, name, expr)
+}
+
+/// Returns an expression that can be named twice with the effects of evaluating `expr` once.
+/// A variable or a literal already is one; anything else is lowered into a hidden temp.
+fn evaluate_once(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, arg: &Expr) -> Expr {
+    match expr.kind {
+        ExprKind::Variable(_)
+        | ExprKind::This
+        | ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => expr.clone(),
+        _ => super::pipe::lower_pipe_value_temp(ctx, expr, arg),
+    }
+}
+
+/// Returns true for a receiver that is a call or `new` result: evaluating it has effects, and
+/// its type is only known once it is lowered.
+fn receiver_is_computed_value(receiver: &Expr) -> bool {
+    matches!(
+        receiver.kind,
+        ExprKind::FunctionCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::NewObject { .. }
+            | ExprKind::NewDynamic { .. }
+            | ExprKind::NewDynamicObject { .. }
+            | ExprKind::NewScopedObject { .. }
+    )
+}
+
+/// Builds `$object->method($key)` for a receiver and key that are already side-effect free.
+fn synthetic_method_call(object: &Expr, method: &str, key: &Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(object.clone()),
+            method: method.to_string(),
+            args: vec![key.clone()],
+        },
+        span,
+    )
+}
+
+/// Lowers PHP's two-step `empty()` over an overloaded read: `exists_call` decides whether the
+/// value is set at all, and only a truthy answer evaluates `get_call` to test its emptiness.
+/// An unset value is empty without ever being read.
+fn lower_empty_through_exists_then_get(
+    ctx: &mut LoweringContext<'_, '_>,
+    exists_call: &Expr,
+    get_call: &Expr,
+    name: &str,
+    expr: &Expr,
+) -> LoweredValue {
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let present_block = ctx.builder.create_named_block("empty.present", Vec::new());
     let absent_block = ctx.builder.create_named_block("empty.absent", Vec::new());
     let merge = ctx.builder.create_named_block("empty.merge", Vec::new());
 
     // `__isset(prop)` decides whether the property is considered set at all.
-    let exists = lower_expr(ctx, &exists_call);
+    let exists = lower_expr(ctx, exists_call);
     ctx.builder.terminate(Terminator::CondBr {
         cond: exists.value,
         then_target: present_block,
@@ -242,16 +347,11 @@ pub(super) fn lower_lazy_empty(
 
     // Set: empty is the emptiness of the `__get` value (reuses the eager builtin).
     ctx.builder.position_at_end(present_block);
-    let get_value = lower_expr(ctx, &get_call);
-    let empty_name = ctx.intern_function_name(name);
-    let empty_value = ctx.emit_value(
-        Op::LanguageConstructCall,
-        vec![get_value.value],
-        Some(Immediate::Data(empty_name)),
-        PhpType::Bool,
-        effects_lookup::language_construct_effects(name),
-        Some(expr.span),
-    );
+    // The read value is a fresh call result nothing else owns, so the builtin path, which
+    // releases owned operands once the test has consumed them, is the one to take.
+    let get_value = lower_expr(ctx, get_call);
+    let empty_value =
+        emit_builtin_call_value(ctx, name, vec![get_value.value], PhpType::Bool, expr.span, None);
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, expr.span);
     branch_to(ctx, merge);
 
@@ -262,7 +362,7 @@ pub(super) fn lower_lazy_empty(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    Some(ctx.load_local(&temp_name, Some(expr.span)))
+    ctx.load_local(&temp_name, Some(expr.span))
 }
 
 /// Applies php's `empty()` emptiness test to an already probed property value.

@@ -489,3 +489,30 @@ fn test_example_magic_methods_compiles_and_runs() {
 // =============================================================================
 // Non-class regression edge cases
 // =============================================================================
+
+/// `empty($o->p)` through `__isset`/`__get` releases the value `__get` returned once it has
+/// been tested. A `mixed` return is boxed, and that box used to leak on every call.
+#[test]
+fn test_empty_through_magic_get_releases_the_read_value() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class M {
+    public function __isset($n) { return true; }
+    public function __get($n): mixed { return $n === 'a' ? str_repeat('x', 3) : 0; }
+}
+$m = new M();
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    if (empty($m->a)) { $n++; }
+    if (empty($m->z)) { $n++; }
+}
+echo $n, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "20\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
