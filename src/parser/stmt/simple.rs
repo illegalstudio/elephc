@@ -279,8 +279,16 @@ pub(super) fn parse_const_decl(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'const'
 
-    let name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(n)) => n.clone(),
+    let name = match tokens.get(*pos) {
+        Some((Token::Identifier(n), _)) => n.clone(),
+        // `NAN`, `INF`, `PHP_EOL` and the other predefined constants the lexer turns into
+        // dedicated tokens are still legal names for a namespaced user constant (`Demo\NAN`).
+        Some((token, metadata))
+            if super::namespace_use::token_as_import_name(token, metadata).is_some() =>
+        {
+            super::namespace_use::token_as_import_name(token, metadata)
+                .expect("constant-like token was checked immediately above")
+        }
         _ => {
             return Err(CompileError::new(
                 span,

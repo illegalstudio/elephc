@@ -44,3 +44,33 @@ fn test_php_float_max() {
     let out = compile_and_run("<?php echo is_float(PHP_FLOAT_MAX);");
     assert_eq!(out, "1");
 }
+
+/// A namespaced user constant may be named after a predefined constant the lexer tokenizes
+/// on its own (`NAN`, `PHP_EOL`). The declaration binds `Demo\NAN`, and the global constant
+/// stays reachable through its import. It failed with `Expected constant name after
+/// 'const'`. Regression for #834.
+#[test]
+fn test_namespaced_constant_named_after_a_predefined_constant() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+
+use const NAN as PHP_NAN;
+
+const NAN = PHP_NAN;
+const PHP_EOL = "<eol>";
+
+var_dump(is_nan(PHP_NAN));
+var_dump(\defined('Demo\NAN'));
+var_dump(\constant('Demo\PHP_EOL'));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "string(5) \"<eol>\"\n",
+        )
+    );
+}
