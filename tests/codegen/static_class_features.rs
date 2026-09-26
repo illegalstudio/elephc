@@ -174,3 +174,68 @@ fn test_static_arrow_function_runs() {
     let out = compile_and_run("<?php $g = static fn($x) => $x * 2; echo $g(5);");
     assert_eq!(out, "10");
 }
+
+/// `new static(...)` pads omitted constructor defaults and gathers variadic arguments, as
+/// `new self()` and a named `new Child()` already did: one default omitted, several omitted,
+/// a variadic constructor with and without arguments, and a named argument. It failed with
+/// `dynamic object construction for Tagged without EIR-lowered candidates`, because the
+/// padding thunks were only generated for `new $class()` sites. Regression for #797.
+#[test]
+fn test_new_static_pads_omitted_constructor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class Tagged {
+    public function __construct(private int $tag = 5) {}
+    public static function make(): static { return new static(); }
+    public function tag(): int { return $this->tag; }
+}
+class SubTagged extends Tagged {}
+echo SubTagged::make()->tag(), "\n";
+echo Tagged::make()->tag(), "\n";
+
+class Pair {
+    public function __construct(public int $a = 1, public int $b = 2) {}
+    public static function one(int $a): static { return new static($a); }
+    public static function none(): static { return new static(); }
+}
+class SubPair extends Pair {}
+$p = SubPair::one(9);
+echo get_class($p), " ", $p->a, ",", $p->b, "\n";
+$q = Pair::none();
+echo $q->a, ",", $q->b, "\n";
+
+class Bag {
+    public array $items;
+    public function __construct(int ...$items) { $this->items = $items; }
+    public static function of(int $x): static { return new static($x, $x + 1, $x + 2); }
+    public static function empty(): static { return new static(); }
+}
+class SubBag extends Bag {}
+echo count(SubBag::of(3)->items), " ", array_sum(SubBag::of(3)->items), "\n";
+echo count(SubBag::empty()->items), "\n";
+
+class Named {
+    public function __construct(public string $label = "default", public int $n = 0) {}
+    public static function labelled(): static { return new static(label: "x"); }
+}
+class SubNamed extends Named {}
+$n = SubNamed::labelled();
+echo $n->label, " ", $n->n, "\n";
+for ($i = 0; $i < 20; $i++) { $t = SubTagged::make(); }
+echo $t->tag(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "5\n",
+            "5\n",
+            "SubPair 9,2\n",
+            "1,2\n",
+            "3 12\n",
+            "0\n",
+            "x 0\n",
+            "5\n",
+        )
+    );
+}
