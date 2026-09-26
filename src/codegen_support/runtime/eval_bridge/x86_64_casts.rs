@@ -251,7 +251,7 @@ pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
     emitter.instruction("jmp __elephc_eval_value_cast_string_done_x86");        // restore the wrapper frame and return
     emitter.label("__elephc_eval_value_cast_string_float_x86");
     emitter.instruction("movq xmm0, rdi");                                      // move the double payload bits into the FP argument register
-    emitter.instruction("call __rt_ftoa");                                      // format the double cast result as a string pair
+    emitter.instruction("call __rt_ftoa_coerce");                               // format the double cast result as a string pair
     emitter.instruction("mov rdi, rax");                                        // move the formatted string pointer into mixed value_lo
     emitter.instruction("mov rsi, rdx");                                        // move the formatted string length into mixed value_hi
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string

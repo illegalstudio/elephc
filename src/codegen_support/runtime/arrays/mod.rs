@@ -494,8 +494,7 @@ pub use foreach_non_iterable_warning::{
 /// Emit the PHP `foreach()` non-iterable-argument warning helper.
 pub use nan_bool_coercion_warning::{
     emit_nan_bool_coercion_probe, emit_nan_bool_coercion_probe_leaf,
-    emit_nan_bool_coercion_warning, nan_bool_coercion_warning_enabled,
-    NAN_BOOL_COERCION_MESSAGES,
+    emit_nan_coercion_warnings, nan_bool_coercion_warning_enabled, NAN_COERCION_MESSAGES,
 };
 /// Emit the PHP 8.5 NAN-to-bool coercion warning helper and its inline call-site probe.
 pub use iterable_unsupported_kind::emit_iterable_unsupported_kind;

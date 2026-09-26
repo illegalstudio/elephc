@@ -162,7 +162,7 @@ pub(in crate::codegen::lower_inst::builtins) fn load_value_as_string_to_regs(
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+            abi::emit_call_label(ctx.emitter, "__rt_ftoa_coerce");
             move_string_result_to_regs(ctx, ptr_reg, len_reg);
             Ok(())
         }
@@ -239,7 +239,7 @@ pub(super) fn emit_mixed_borrowed_string_aarch64(ctx: &mut FunctionContext<'_>, 
 
     ctx.emitter.label(&from_float);
     ctx.emitter.instruction("fmov d0, x1");                                     // move unboxed float bits into the FP argument register
-    abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa_coerce");
     ctx.emitter.instruction(&format!("b {}", done));                            // finish with the concat-backed float string
 
     ctx.emitter.label(&from_bool);
@@ -289,7 +289,7 @@ pub(super) fn emit_mixed_borrowed_string_x86_64(ctx: &mut FunctionContext<'_>, v
 
     ctx.emitter.label(&from_float);
     ctx.emitter.instruction("movq xmm0, rdi");                                  // move unboxed float bits into the FP argument register
-    abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa_coerce");
     ctx.emitter.instruction(&format!("jmp {}", done));                          // finish with the concat-backed float string
 
     ctx.emitter.label(&from_bool);

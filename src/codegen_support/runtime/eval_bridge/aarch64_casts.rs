@@ -253,7 +253,7 @@ pub(super) fn emit_aarch64_casts(emitter: &mut Emitter) {
     emitter.instruction("b __elephc_eval_value_cast_string_done");              // restore the wrapper frame and return
     emitter.label("__elephc_eval_value_cast_string_float");
     emitter.instruction("fmov d0, x1");                                         // move the double payload bits into the FP argument register
-    emitter.instruction("bl __rt_ftoa");                                        // format the double cast result as a string pair
+    emitter.instruction("bl __rt_ftoa_coerce");                                 // format the double cast result as a string pair
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the formatted double string
     emitter.instruction("b __elephc_eval_value_cast_string_done");              // restore the wrapper frame and return
