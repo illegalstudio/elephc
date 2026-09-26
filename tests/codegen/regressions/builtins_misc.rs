@@ -470,3 +470,55 @@ echo date_diff(1, 2), "|", timezone_name_get(5);
     );
     assert_eq!(out, "user:3|tz:5");
 }
+
+/// `implode()` over a homogeneous float array joins each element in PHP's `precision = 14` text,
+/// for indexed and associative arrays, `join()`, a long separator, runtime values, exponents and
+/// infinities. The raw 8-byte doubles were read through the string-slot layout, and the call is
+/// now refused at compile time instead of printing nothing. Regression for #640.
+#[test]
+fn test_implode_joins_a_float_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = [1.5, 2.5];
+echo implode(",", $r), "\n";
+echo implode(", ", [1.5, 2.5, 3.5]), "\n";
+echo join([0.1, 0.2]), "\n";
+$scale = $argc + 0.5;
+$vals = [$scale, $scale * 3, -$scale / 7, 1e20 * $scale, 1.0e-7 * $scale, 100.0];
+echo implode(" | ", $vals), "\n";
+echo implode("<long separator of many bytes>", [INF, -INF, 0.0, -0.0]), "\n";
+$assoc = ["a" => 1.25, "b" => 2.75];
+echo implode("-", $assoc), "\n";
+echo "[" . implode(",", []) . "]\n";
+$f = [];
+for ($i = 0; $i < 5; $i++) { $f[] = $i / 4; }
+echo implode(";", $f), "\n";
+$total = 0;
+for ($i = 0; $i < 40; $i++) { $total += strlen(implode("/", [$i + 0.5, $i * 1.5])); }
+echo $total, "\n";
+echo strtoupper(implode("x", [1.5, 2.0])) . "!" . "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "1.5,2.5\n",
+            "1.5, 2.5, 3.5\n",
+            "0.10.2\n",
+            "1.5 | 4.5 | -0.21428571428571 | 1.5E+20 | 1.5E-7 | 100\n",
+            "INF<long separator of many bytes>-INF<long separator of many bytes>0<long separator of many bytes>-0\n",
+            "1.25-2.75\n",
+            "[]\n",
+            "0;0.25;0.5;0.75;1\n",
+            "303\n",
+            "1.5X2!\n",
+        ),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
