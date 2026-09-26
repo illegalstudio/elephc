@@ -336,6 +336,59 @@ fn test_parse_asymmetric_visibility_set_only_defaults_get_public() {
     }
 }
 
+/// Verifies that PHP 8.4 asymmetric visibility on promoted constructor parameters (issue #823)
+/// parses into the same `visibility` / `set_visibility` pair as an ordinary declaration: a lone
+/// `private(set)` defaults the read side to public, the modifiers combine with `readonly` in any
+/// order, and a plain promoted parameter keeps no `set` visibility.
+#[test]
+fn test_parse_constructor_promoted_asymmetric_visibility() {
+    let stmts = parse_source(
+        "<?php class P { public function __construct(private(set) string $a, public protected(set) int $b, protected private(set) int $c, readonly public private(set) int $d, protected(set) readonly string $e, public int $f) {} }",
+    );
+    let StmtKind::ClassDecl {
+        properties,
+        methods,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("Expected ClassDecl, got {:?}", stmts[0].kind);
+    };
+    let expected = [
+        ("a", Visibility::Public, Some(Visibility::Private), false),
+        ("b", Visibility::Public, Some(Visibility::Protected), false),
+        ("c", Visibility::Protected, Some(Visibility::Private), false),
+        ("d", Visibility::Public, Some(Visibility::Private), true),
+        ("e", Visibility::Public, Some(Visibility::Protected), true),
+        ("f", Visibility::Public, None, false),
+    ];
+    assert_eq!(properties.len(), expected.len());
+    for (property, (name, visibility, set_visibility, readonly)) in
+        properties.iter().zip(expected)
+    {
+        assert_eq!(property.name, name);
+        assert_eq!(property.visibility, visibility);
+        assert_eq!(property.set_visibility, set_visibility);
+        assert_eq!(property.readonly, readonly);
+        assert!(property.is_promoted);
+    }
+    assert_eq!(methods[0].params.len(), 6);
+    for (stmt, name) in methods[0].body.iter().zip(["a", "b", "c", "d", "e", "f"]) {
+        assert_promoted_assignment(stmt, name);
+    }
+}
+
+/// Verifies that a promoted constructor parameter rejects a repeated `(set)` visibility, and
+/// that `(set)` visibility still counts as promotion outside a constructor (both rejected).
+#[test]
+fn test_parse_constructor_promoted_asymmetric_visibility_rejections() {
+    assert!(parse_fails(
+        "<?php class P { public function __construct(private(set) protected(set) int $a) {} }"
+    ));
+    assert!(parse_fails(
+        "<?php class P { public function run(private(set) int $a) {} }"
+    ));
+}
+
 /// Verifies that an ordinary property without a `(set)` modifier has no asymmetric write
 /// visibility.
 #[test]

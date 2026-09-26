@@ -52,6 +52,17 @@ impl Parser {
                 };
                 self.parse_optional_parameter_type(position)?
             };
+            // PHP 8.4 asymmetric visibility on a promoted property follows the declared-property
+            // rules: the `set` visibility may not be weaker than the read one, and needs a type.
+            if promotion.is_some_and(|(visibility, set_visibility, _)| {
+                set_visibility.is_some_and(|set_visibility| {
+                    Self::eval_visibility_rank(set_visibility)
+                        > Self::eval_visibility_rank(visibility)
+                        || param_type.is_none()
+                })
+            }) {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             let is_by_ref = self.consume(TokenKind::Ampersand);
             let is_variadic = self.consume(TokenKind::Ellipsis);
             let TokenKind::DollarIdent(name) = self.current() else {
@@ -60,7 +71,7 @@ impl Parser {
             if promotion.is_some() && is_variadic {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            if let Some((visibility, is_readonly)) = promotion {
+            if let Some((visibility, set_visibility, is_readonly)) = promotion {
                 promoted_properties.push(
                     EvalClassProperty::with_visibility_static_final_and_readonly(
                         name.clone(),
@@ -71,6 +82,7 @@ impl Parser {
                         None,
                     )
                     .with_type(param_type.clone())
+                    .with_set_visibility(set_visibility)
                     .with_promoted()
                     .with_attributes(attributes.clone()),
                 );
@@ -118,39 +130,43 @@ impl Parser {
         })
     }
 
-    /// Parses visibility and readonly modifiers on a promoted constructor parameter.
+    /// Parses visibility, PHP 8.4 asymmetric `(set)` visibility, and readonly modifiers on a
+    /// promoted constructor parameter. Returns `(read visibility, set visibility, readonly)`,
+    /// with the read visibility defaulting to public, or `None` when no modifier is present.
+    /// A repeated read or write visibility is rejected.
     pub(super) fn parse_promoted_parameter_modifiers(
         &mut self,
-    ) -> Result<Option<(EvalVisibility, bool)>, EvalParseError> {
+    ) -> Result<Option<(EvalVisibility, Option<EvalVisibility>, bool)>, EvalParseError> {
         let mut visibility = None;
+        let mut set_visibility = None;
         let mut is_readonly = false;
         let mut saw_modifier = false;
         loop {
-            match self.current() {
-                TokenKind::Ident(name) if ident_eq(name, "public") => {
-                    if visibility.is_some() {
-                        return Err(EvalParseError::UnsupportedConstruct);
-                    }
-                    saw_modifier = true;
-                    visibility = Some(EvalVisibility::Public);
-                    self.advance();
-                }
+            let keyword = match self.current() {
+                TokenKind::Ident(name) if ident_eq(name, "public") => Some(EvalVisibility::Public),
                 TokenKind::Ident(name) if ident_eq(name, "protected") => {
-                    if visibility.is_some() {
-                        return Err(EvalParseError::UnsupportedConstruct);
-                    }
-                    saw_modifier = true;
-                    visibility = Some(EvalVisibility::Protected);
-                    self.advance();
+                    Some(EvalVisibility::Protected)
                 }
                 TokenKind::Ident(name) if ident_eq(name, "private") => {
-                    if visibility.is_some() {
-                        return Err(EvalParseError::UnsupportedConstruct);
-                    }
-                    saw_modifier = true;
-                    visibility = Some(EvalVisibility::Private);
-                    self.advance();
+                    Some(EvalVisibility::Private)
                 }
+                _ => None,
+            };
+            if let Some(keyword) = keyword {
+                self.advance();
+                let slot = if self.consume_set_marker()? {
+                    &mut set_visibility
+                } else {
+                    &mut visibility
+                };
+                if slot.is_some() {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                *slot = Some(keyword);
+                saw_modifier = true;
+                continue;
+            }
+            match self.current() {
                 TokenKind::Ident(name) if ident_eq(name, "readonly") => {
                     if is_readonly {
                         return Err(EvalParseError::UnsupportedConstruct);
@@ -165,6 +181,7 @@ impl Parser {
         if saw_modifier {
             Ok(Some((
                 visibility.unwrap_or(EvalVisibility::Public),
+                set_visibility,
                 is_readonly,
             )))
         } else {

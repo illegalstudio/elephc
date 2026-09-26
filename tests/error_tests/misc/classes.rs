@@ -1233,6 +1233,54 @@ fn test_error_asymmetric_visibility_on_static_property() {
     );
 }
 
+/// Verifies that writing a promoted `public private(set)` constructor property from outside the
+/// class is rejected with the same diagnostic as the ordinary declaration (issue #823).
+#[test]
+fn test_error_promoted_asymmetric_visibility_external_write() {
+    expect_error(
+        "<?php class C { public function __construct(public private(set) int $v) {} } $c = new C(1); $c->v = 9;",
+        "Cannot access private property: C::v",
+    );
+}
+
+/// Verifies that writing a promoted `protected(set)` constructor property from outside the class
+/// hierarchy is rejected, like the ordinary `public protected(set)` declaration.
+#[test]
+fn test_error_promoted_protected_set_visibility_external_write() {
+    expect_error(
+        "<?php class C { public function __construct(public protected(set) string $n) {} } $c = new C('a'); $c->n = 'b';",
+        "Cannot access protected property: C::n",
+    );
+}
+
+/// Verifies that a promoted property's `set` visibility may not be weaker than its read
+/// visibility, matching the ordinary declaration check.
+#[test]
+fn test_error_promoted_asymmetric_visibility_set_weaker_than_get() {
+    expect_error(
+        "<?php class C { public function __construct(private public(set) int $v) {} }",
+        "Asymmetric set visibility must not be weaker than the get visibility",
+    );
+}
+
+/// Verifies that asymmetric visibility on an untyped promoted property is rejected.
+#[test]
+fn test_error_promoted_asymmetric_visibility_requires_type() {
+    expect_error(
+        "<?php class C { public function __construct(private(set) $v) {} }",
+        "Property with asymmetric visibility must have a type",
+    );
+}
+
+/// Verifies that a promoted constructor parameter rejects a second `(set)` visibility.
+#[test]
+fn test_error_promoted_duplicate_set_visibility() {
+    expect_error(
+        "<?php class C { public function __construct(private(set) protected(set) int $v) {} }",
+        "Duplicate parameter set visibility",
+    );
+}
+
 /// Verifies incompatible same-named constants from multiple traits reject class composition.
 #[test]
 fn test_error_incompatible_trait_constant_composition() {

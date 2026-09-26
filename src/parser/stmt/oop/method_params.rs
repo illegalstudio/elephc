@@ -19,6 +19,7 @@ use crate::span::Span;
 
 use super::super::expect_token;
 use super::super::params::{looks_like_typed_param, parse_type_expr};
+use super::body::consume_set_marker;
 
 type MethodParam = (String, Option<TypeExpr>, Option<Expr>, bool);
 type ParsedMethodParams = (
@@ -30,6 +31,16 @@ type ParsedMethodParams = (
     Vec<ClassProperty>,
     Vec<Stmt>,
 );
+
+/// Modifiers that turn a constructor parameter into a promoted property: the read visibility,
+/// the optional PHP 8.4 asymmetric write (`set`) visibility, `readonly`, and the span of the
+/// first modifier token (used as the synthetic property's span).
+struct PromotedModifiers {
+    visibility: Visibility,
+    set_visibility: Option<Visibility>,
+    readonly: bool,
+    span: Span,
+}
 
 /// Parses method or constructor parameters from `(` to `)`, including PHP 8.0 promoted
 /// properties. Returns the parameter list, optional variadic name, promoted property
@@ -133,7 +144,13 @@ pub(super) fn parse_method_params(
                 } else {
                     None
                 };
-                if let Some((visibility, readonly, property_span)) = promotion {
+                if let Some(PromotedModifiers {
+                    visibility,
+                    set_visibility,
+                    readonly,
+                    span: property_span,
+                }) = promotion
+                {
                     if readonly && is_ref {
                         return Err(CompileError::new(
                             ref_span.unwrap_or(property_span),
@@ -143,9 +160,9 @@ pub(super) fn parse_method_params(
                     promoted_properties.push(ClassProperty {
                         name: n.clone(),
                         visibility,
-                        // Asymmetric visibility on promoted constructor parameters is not parsed
-                        // yet; only declared properties carry a `set` visibility.
-                        set_visibility: None,
+                        // The checker validates and records the `set` visibility exactly as for
+                        // an ordinary `public private(set)` property declaration.
+                        set_visibility,
                         type_expr: type_ann.clone(),
                         hooks: PropertyHooks::none(),
                         readonly,
@@ -180,57 +197,51 @@ pub(super) fn parse_method_params(
     ))
 }
 
-/// Scans the token stream for visibility modifiers (`public`/`protected`/`private`)
-/// and `readonly` in any order, returning `(Visibility, readonly, first_token_span)`.
-/// Returns `Ok(None)` if none are present. Rejects `static`/`abstract`/`final` with an
-/// error. Visibility defaults to `Public` if only `readonly` is present.
+/// Scans the token stream for visibility modifiers (`public`/`protected`/`private`), PHP 8.4
+/// asymmetric write visibilities (`private(set)`/`protected(set)`/`public(set)`), and `readonly`
+/// in any order. Returns `Ok(None)` if none are present. Rejects duplicate read or write
+/// visibilities and `static`/`abstract`/`final` with an error. The read visibility defaults to
+/// `Public` when only `readonly` or a `(set)` visibility is present, as in PHP.
 fn parse_promoted_param_modifiers(
     tokens: &[SpannedToken],
     pos: &mut usize,
-) -> Result<Option<(Visibility, bool, Span)>, CompileError> {
+) -> Result<Option<PromotedModifiers>, CompileError> {
     let mut visibility = None;
+    let mut set_visibility = None;
     let mut readonly = false;
     let mut first_span = None;
 
     loop {
-        match tokens
+        let Some((token, token_span)) = tokens
             .get(*pos)
             .map(|(token, metadata)| (token, metadata.span))
-        {
-            Some((Token::Public, token_span)) => {
-                if visibility.is_some() {
-                    return Err(CompileError::new(
-                        token_span,
-                        "Duplicate parameter visibility",
-                    ));
-                }
-                first_span.get_or_insert(token_span);
-                visibility = Some(Visibility::Public);
-                *pos += 1;
+        else {
+            break;
+        };
+        let keyword = match token {
+            Token::Public => Some(Visibility::Public),
+            Token::Protected => Some(Visibility::Protected),
+            Token::Private => Some(Visibility::Private),
+            _ => None,
+        };
+        if let Some(keyword) = keyword {
+            *pos += 1;
+            // A visibility keyword immediately followed by `(set)` is the asymmetric write
+            // visibility; otherwise it is the ordinary read visibility.
+            let (slot, message) = if consume_set_marker(tokens, pos) {
+                (&mut set_visibility, "Duplicate parameter set visibility")
+            } else {
+                (&mut visibility, "Duplicate parameter visibility")
+            };
+            if slot.is_some() {
+                return Err(CompileError::new(token_span, message));
             }
-            Some((Token::Protected, token_span)) => {
-                if visibility.is_some() {
-                    return Err(CompileError::new(
-                        token_span,
-                        "Duplicate parameter visibility",
-                    ));
-                }
-                first_span.get_or_insert(token_span);
-                visibility = Some(Visibility::Protected);
-                *pos += 1;
-            }
-            Some((Token::Private, token_span)) => {
-                if visibility.is_some() {
-                    return Err(CompileError::new(
-                        token_span,
-                        "Duplicate parameter visibility",
-                    ));
-                }
-                first_span.get_or_insert(token_span);
-                visibility = Some(Visibility::Private);
-                *pos += 1;
-            }
-            Some((Token::ReadOnly, token_span)) => {
+            *slot = Some(keyword);
+            first_span.get_or_insert(token_span);
+            continue;
+        }
+        match token {
+            Token::ReadOnly => {
                 if readonly {
                     return Err(CompileError::new(token_span, "Duplicate readonly modifier"));
                 }
@@ -238,19 +249,19 @@ fn parse_promoted_param_modifiers(
                 readonly = true;
                 *pos += 1;
             }
-            Some((Token::Static, token_span)) => {
+            Token::Static => {
                 return Err(CompileError::new(
                     token_span,
                     "Cannot use the static modifier on a parameter",
                 ))
             }
-            Some((Token::Abstract, token_span)) => {
+            Token::Abstract => {
                 return Err(CompileError::new(
                     token_span,
                     "Cannot use the abstract modifier on a parameter",
                 ))
             }
-            Some((Token::Final, token_span)) => {
+            Token::Final => {
                 return Err(CompileError::new(
                     token_span,
                     "Cannot use the final modifier on a parameter",
@@ -260,15 +271,16 @@ fn parse_promoted_param_modifiers(
         }
     }
 
-    let Some(property_span) = first_span else {
+    let Some(span) = first_span else {
         return Ok(None);
     };
 
-    Ok(Some((
-        visibility.unwrap_or(Visibility::Public),
+    Ok(Some(PromotedModifiers {
+        visibility: visibility.unwrap_or(Visibility::Public),
+        set_visibility,
         readonly,
-        property_span,
-    )))
+        span,
+    }))
 }
 
 /// Builds a synthetic `PropertyAssign` statement: `$this-><name> = $<name>` using the

@@ -310,6 +310,7 @@ Rules:
 - The property must be typed, and the modifier is not allowed on static properties.
 - Indirect writes through an array element (`$obj->items[] = x`, `$obj->items['k'] = x`) are writes too, so they honor the `set` visibility — not the (wider) read visibility.
 - Abstract and interface property hook contracts may carry asymmetric write visibility on writable (`{ set; }`) contracts. `private(set)` contracts are final and cannot be implemented or redeclared by a concrete child property.
+- Promoted constructor properties accept the same modifiers (`public private(set) int $x`, `protected(set) readonly string $label`), with the same rules, write checks, and Reflection flags as the equivalent declared property. See [Constructor](#constructor).
 
 ### Property redeclaration
 
@@ -491,6 +492,22 @@ echo $user->name();  // Ada
 ```
 
 Promoted properties support `public`, `protected`, `private`, `readonly`, nullable and union type declarations, constructor parameter defaults, and by-reference parameters. Variadic promotion is rejected, matching PHP.
+
+Promoted properties also accept PHP 8.4 [asymmetric visibility](#asymmetric-visibility-privateset). A `(set)` modifier alone is enough to promote the parameter, and it leaves the read visibility at `public`:
+
+```php
+<?php
+class Money {
+    public function __construct(
+        private(set) int $amount,                  // read: public, write: private
+        public protected(set) string $currency = "EUR",
+    ) {}
+}
+
+$m = new Money(5);
+echo $m->amount;    // 5
+// $m->amount = 9;  // rejected: write is private
+```
 
 By-reference promoted properties are supported when the constructor argument is a variable:
 
