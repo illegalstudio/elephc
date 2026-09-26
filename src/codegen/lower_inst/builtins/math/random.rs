@@ -207,6 +207,18 @@ fn load_numeric_as_int(
             abi::emit_float_result_to_int_result(ctx.emitter);
             Ok(())
         }
+        // A `mixed` or union bound (a parameter the caller could not type, #754) is coerced the
+        // way `(int)` does: an int passes through, a float truncates, a numeric string parses.
+        // The box stays owned by its value; the call's operand release handles it afterwards.
+        PhpType::Mixed | PhpType::Union(_) => {
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            if result_reg != arg_reg {
+                abi::emit_reg_move(ctx.emitter, arg_reg, result_reg);
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name, other
