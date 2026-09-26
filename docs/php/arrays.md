@@ -306,9 +306,9 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_count_values()` | `array_count_values($array): array` | Maps each distinct `int`/`string` value to its number of occurrences; other values are skipped with a warning |
 | `array_push()` | `array_push($arr, ...$values): int` | Append any number of elements and return the new count. `array_push($a, 3, 4)` appends both in source order, and `array_push($a)` with no values just reads the count back. |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
-| `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. |
+| `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. A `mixed` haystack (for example a `json_decode()` result) is searched at run time; a non-array payload raises a `TypeError`. |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
-| `array_values()` | `array_values($arr): array` | Returns copy of values |
+| `array_values()` | `array_values($arr): array` | Returns copy of values. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError` |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $haystack, $strict = false): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found. `$strict` compares with `===` |
 | `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice from an indexed OR associative array. `$offset` and `$length` count positions in insertion order, not keys, and must be literal only for `$preserve_keys`, which must be a literal `true`/`false`. `$preserve_keys` keeps the source INTEGER keys; string keys survive either way, so `array_slice(["x"=>1,"y"=>2], 1, 1)` is `["y"=>2]` with or without it, while `array_slice([5=>1,9=>2], 1, 1)` is `[0=>2]` without and `[9=>2]` with. Indexed **string** arrays are supported: the slice copies each element's `{pointer, length}` pair and owns its own bytes, so writing into the result never disturbs the source. |
@@ -333,7 +333,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_uintersect()` | `array_uintersect($arr1, $arr2, $cmp): array` | Two-array form: keeps values also present in $arr2, preserving $arr1 keys and value types. The comparator result is cast to int before testing equality with zero. |
 | `array_unique()` | `array_unique($arr): array` | Remove duplicates, keeping each survivor's original key — an indexed input therefore returns a sparse, hash-shaped result (keys `0, 1, 3` for `[1,2,2,3,1]`), exactly as in PHP |
 | `array_reverse()` | `array_reverse($arr, $preserve_keys = false): array` | Reverse order. `$preserve_keys` must be a literal `bool` in AOT mode because it changes the result shape: `true` keeps the original integer keys, producing an integer-keyed array |
-| `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys |
+| `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError` |
 | `array_shift()` | `array_shift($arr): mixed` | Remove and return first |
 | `array_unshift()` | `array_unshift($arr, ...$values): int` | Prepend one or more elements, in source order, and return the new count |
 | `array_sum()` | `array_sum($arr): int\|float` | Sum of values |

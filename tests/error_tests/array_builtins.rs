@@ -321,6 +321,29 @@ fn test_error_array_values_wrong_args() {
     );
 }
 
+/// Accepting a `mixed` receiver (issue #630) must not open the door to a statically known
+/// non-array: a scalar, or a union with no array member, can never succeed and stays a compile
+/// error for `array_values()`, `array_flip()` and `in_array()`.
+#[test]
+fn test_error_mixed_receiver_array_builtins_still_reject_non_arrays() {
+    expect_error(
+        "<?php array_values(42);",
+        "array_values() argument must be array",
+    );
+    expect_error(
+        "<?php array_flip(\"s\");",
+        "array_flip() argument must be array",
+    );
+    expect_error(
+        "<?php in_array(1, 5);",
+        "in_array() second argument must be array",
+    );
+    expect_error(
+        "<?php function pick(int|string $v): void { array_values($v); } pick(1);",
+        "array_values() argument must be array",
+    );
+}
+
 /// Verifies that error sort wrong args.
 #[test]
 fn test_error_sort_wrong_args() {

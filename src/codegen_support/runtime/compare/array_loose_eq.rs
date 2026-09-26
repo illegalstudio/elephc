@@ -22,6 +22,8 @@
 //!   per-entry comparison block.
 //! - Every value read through `__rt_mixed_array_get` is owned by this helper and is
 //!   released before the next entry.
+//! - Operand cells that wrap another Mixed cell (tag 7) are peeled on entry, because the
+//!   count and read helpers only recognize a container tag on the cell they are handed.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -49,6 +51,7 @@ fn emit_mixed_array_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_loose_eq ---");
     emitter.label_global("__rt_mixed_array_loose_eq");
+    emit_peel_nested_mixed_operands(emitter);
 
     emitter.instruction("sub sp, sp, #128");                                    // allocate the array comparison frame
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
@@ -174,6 +177,49 @@ fn emit_mixed_array_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the array loose-equality boolean
 }
 
+/// Replaces each operand cell that wraps another Mixed cell (tag 7) with the cell it wraps.
+///
+/// `__rt_mixed_count` and `__rt_mixed_array_get` read the tag word of the cell they are given
+/// and treat tag 7 as "not a container", so a wrapper operand counted 0 and read every entry as
+/// null. `__rt_in_array_boxed` hands over exactly such cells — a Mixed needle, and each element
+/// of a Mixed-slot haystack, is described by a borrowed tag-7 stack cell — which made
+/// `in_array([1, 2], $mixed)` miss a real match and match an unrelated array of the same size.
+/// The walker is only entered once `__rt_mixed_loose_eq` unboxed both operands to array tags, so
+/// every chain ends at a concrete array cell and no wrapper holds a null pointer. Only the
+/// operand registers are rewritten; the cells stay borrowed.
+fn emit_peel_nested_mixed_operands(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.label("__rt_male_peel_left");
+            emitter.instruction("ldr x9, [x0]");                                // inspect the left operand cell tag
+            emitter.instruction("cmp x9, #7");                                  // does the left cell wrap another Mixed cell?
+            emitter.instruction("b.ne __rt_male_peel_right");                   // a concrete left cell is ready for the walk
+            emitter.instruction("ldr x0, [x0, #8]");                            // follow the wrapped left cell pointer
+            emitter.instruction("b __rt_male_peel_left");                       // keep peeling nested left wrappers
+            emitter.label("__rt_male_peel_right");
+            emitter.instruction("ldr x9, [x1]");                                // inspect the right operand cell tag
+            emitter.instruction("cmp x9, #7");                                  // does the right cell wrap another Mixed cell?
+            emitter.instruction("b.ne __rt_male_peeled");                       // a concrete right cell is ready for the walk
+            emitter.instruction("ldr x1, [x1, #8]");                            // follow the wrapped right cell pointer
+            emitter.instruction("b __rt_male_peel_right");                      // keep peeling nested right wrappers
+            emitter.label("__rt_male_peeled");
+        }
+        Arch::X86_64 => {
+            emitter.label("__rt_male_peel_left");
+            emitter.instruction("cmp QWORD PTR [rdi], 7");                      // does the left cell wrap another Mixed cell?
+            emitter.instruction("jne __rt_male_peel_right");                    // a concrete left cell is ready for the walk
+            emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                // follow the wrapped left cell pointer
+            emitter.instruction("jmp __rt_male_peel_left");                     // keep peeling nested left wrappers
+            emitter.label("__rt_male_peel_right");
+            emitter.instruction("cmp QWORD PTR [rsi], 7");                      // does the right cell wrap another Mixed cell?
+            emitter.instruction("jne __rt_male_peeled");                        // a concrete right cell is ready for the walk
+            emitter.instruction("mov rsi, QWORD PTR [rsi + 8]");                // follow the wrapped right cell pointer
+            emitter.instruction("jmp __rt_male_peel_right");                    // keep peeling nested right wrappers
+            emitter.label("__rt_male_peeled");
+        }
+    }
+}
+
 /// Emits the x86_64 array comparison walker.
 ///
 /// Frame (112 bytes below `rbp`): `[rbp-8]` left cell, `[rbp-16]` right cell,
@@ -185,6 +231,7 @@ fn emit_mixed_array_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_loose_eq ---");
     emitter.label_global("__rt_mixed_array_loose_eq");
+    emit_peel_nested_mixed_operands(emitter);
 
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the array comparison frame pointer
