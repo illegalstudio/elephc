@@ -90,6 +90,8 @@ pub struct CheckResult {
     /// Reads proven to use native buffers on every checker visit to the source span.
     /// Buffer bounds checks cannot invoke PHP warning handlers.
     pub buffer_read_sites: HashSet<Span>,
+    /// See `Checker::first_class_builtin_call_types`.
+    pub first_class_builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: LoopStorageTypes,
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
