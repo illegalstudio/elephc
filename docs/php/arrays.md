@@ -91,6 +91,10 @@ echo isset($arr[1]) ? "y" : "n";               // n
 `unset()` respects copy-on-write: removing a key from one array never mutates another array that
 was assigned from it. Unsetting a key that is not present is a no-op.
 
+Once `PHP_INT_MAX` is a key, there is no next integer key: `$arr[] = $v` and an integer-keyed
+spread (`[PHP_INT_MAX => 'x', ...$items]`) throw `Error("Cannot add element to the array as the
+next element is already occupied")` and leave the array unchanged, as PHP does.
+
 ```php
 <?php
 $a = ["x" => 1, "y" => 2];
