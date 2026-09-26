@@ -40,14 +40,26 @@ pub(super) fn parse_prefix(
 
     let span = tokens[*pos].1.span;
 
-    // `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`...: the lexer turns these predefined constants into
-    // dedicated tokens, so the name parser never sees an identifier after the `\` (#1307). The
-    // fully qualified spelling names the same global constant, so it parses as the bare token.
+    // `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\true`...: the lexer turns these predefined
+    // constants into dedicated tokens, so the name parser never sees an identifier after the `\`
+    // (#1307). The fully qualified spelling names the same global constant, so it parses as the
+    // bare token. The few that stay constant references keep their fully qualified kind, so a
+    // namespace-local constant of the same name can never shadow them.
     if tokens[*pos].0 == Token::Backslash {
         if let Some((next, metadata)) = tokens.get(*pos + 1) {
-            if crate::parser::stmt::token_as_import_name(next, metadata).is_some() {
+            let literal_constant = matches!(next, Token::True | Token::False | Token::Null);
+            if literal_constant || crate::parser::stmt::token_as_import_name(next, metadata).is_some() {
                 *pos += 1;
-                return parse_prefix(tokens, pos);
+                let mut expr = parse_prefix(tokens, pos)?;
+                if let ExprKind::ConstRef(name) = &expr.kind {
+                    if name.kind == crate::names::NameKind::Unqualified {
+                        expr.kind = ExprKind::ConstRef(Name::from_parts(
+                            crate::names::NameKind::FullyQualified,
+                            name.parts.clone(),
+                        ));
+                    }
+                }
+                return Ok(expr);
             }
         }
     }

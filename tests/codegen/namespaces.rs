@@ -710,7 +710,11 @@ echo is_infinite(\INF) ? "inf" : "no", " ", is_nan(\NAN) ? "nan" : "no", \PHP_EO
 echo \M_E > 2.7 ? "e" : "no", " ", \M_SQRT2 > 1.41 ? "sqrt2" : "no", " ", \PHP_FLOAT_EPSILON > 0 ? "eps" : "no", \PHP_EOL;
 echo is_resource(\STDOUT) ? "stdout" : "no", " ", strlen(\PHP_OS) > 0 ? "os" : "no", \PHP_EOL;
 echo match (\PHP_INT_SIZE) { 8 => "eight", default => "other" }, \PHP_EOL;
+var_dump(\true, \false, \null, \TRUE);
 "#,
     );
-    assert_eq!(out, "eol\nmax\npi\nmin|/\ninf nan\ne sqrt2 eps\nstdout os\neight\n");
+    assert_eq!(
+        out,
+        "eol\nmax\npi\nmin|/\ninf nan\ne sqrt2 eps\nstdout os\neight\nbool(true)\nbool(false)\nNULL\nbool(true)\n"
+    );
 }
