@@ -39,6 +39,40 @@ const BUILTIN_REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionIntersectionType",
 ];
 
+/// Reflection slots codegen fills with a freshly built Reflection object of another class.
+///
+/// Each row is the getter that hands the slot back, the slot, and the classes it can hold. The
+/// allocations happen in `codegen::lower_inst::objects::reflection` (the
+/// `emit_reflection_*_property` materializers), not as an EIR `ObjectNew`, and the getters are
+/// typed `mixed`, so the EIR scan cannot see these classes on its own (#1229).
+///
+/// The type rows matter even where a program does not crash without them today: most type
+/// getters were only safe through an incidental cascade (a `getDeclaringClass()` typed
+/// `ReflectionClass`, whose surface reaches `ReflectionParameter::getType()`'s patched union).
+/// `ReflectionEnum::getBackingType()` has no such path; its row lowers the type classes, but the
+/// object that getter returns is unusable for a separate reason — it crashes even when nothing
+/// stringifies it — so no test can exercise that row until that is fixed.
+const MATERIALIZED_REFLECTION_SLOTS: &[(&str, &str, &[&str])] = &[
+    ("getdeclaringfunction", "__declaring_function", &["ReflectionFunction", "ReflectionMethod"]),
+    ("getdeclaringclass", "__declaring_class", &["ReflectionClass"]),
+    ("getclass", "__class", &["ReflectionClass"]),
+    ("getparentclass", "__parent_class", &["ReflectionClass"]),
+    ("getinterfaces", "__interfaces", &["ReflectionClass"]),
+    ("gettraits", "__traits", &["ReflectionClass"]),
+    ("getenum", "__enum", &["ReflectionEnum"]),
+    ("gettype", "__type", REFLECTION_TYPE_CLASSES),
+    ("getreturntype", "__type", REFLECTION_TYPE_CLASSES),
+    ("getsettabletype", "__settable_type", REFLECTION_TYPE_CLASSES),
+    ("getbackingtype", "__backing_type", REFLECTION_TYPE_CLASSES),
+];
+
+/// Every class the shared type materializer can build into a `__*type` slot.
+const REFLECTION_TYPE_CLASSES: &[&str] = &[
+    "ReflectionNamedType",
+    "ReflectionUnionType",
+    "ReflectionIntersectionType",
+];
+
 /// Lowers only synthetic Reflection classes reachable from native EIR, or the full
 /// surface when the dynamic eval bridge can construct and invoke them by name.
 pub(super) fn lower_referenced_builtin_methods(
@@ -162,6 +196,7 @@ fn referenced_builtin_reflection_classes(module: &Module) -> BTreeSet<String> {
             }
         }
     }
+    collect_named_materialized_companions(module, &mut classes);
     classes
 }
 
@@ -259,6 +294,78 @@ fn insert_builtin_reflection_class(
         .collect::<Vec<_>>();
     for dependency in dependencies {
         insert_builtin_reflection_class(module, &dependency, classes);
+    }
+}
+
+/// Adds the Reflection classes codegen can hand back through a getter the program names.
+///
+/// Codegen fills some Reflection slots with a freshly built Reflection object of ANOTHER class —
+/// `ReflectionParameter`'s declaring function is a `ReflectionFunction` or a `ReflectionMethod`,
+/// its declaring class a `ReflectionClass`, an enum case's enum a `ReflectionEnum`. Those
+/// allocations happen in `codegen::lower_inst::objects::reflection` (the
+/// `emit_reflection_*_property` materializers), not as an EIR `ObjectNew`, and the getters that
+/// hand them back are typed `mixed`, so neither the instruction scan nor the type scan ever saw
+/// the class. Its methods were never lowered, its vtable held null, and the first implicit
+/// `__toString` on such an object — `(string)`, `echo`, `.`, interpolation, `strval()`,
+/// `strlen()` — jumped to address zero (#1229). `sprintf("%s")`, which asks the class metadata
+/// instead, reported the object as not convertible.
+///
+/// A companion is added when a referenced class holds the slot AND the program names the getter
+/// somewhere in its string data. That one condition covers every route by which the getter is
+/// written out: a direct call (`MethodCall` keeps the name as data), `call_user_func([$p, ...])`,
+/// a first-class callable (kept as `object::<method>`), a `Class::method` callable string, and a
+/// method name held in a variable. It is deliberately not keyed on the owner alone: pulling
+/// `ReflectionClass` in for every program that merely builds a `ReflectionParameter` cascades
+/// through its whole surface, and multiplied such a program's assembly by 3.6.
+///
+/// A getter name that never appears as a literal — assembled at run time, or read back from
+/// metadata such as `get_class_methods()` — can only reach the getter through a call resolved at
+/// run time: `$holder->$name()`, `call_user_func([$holder, $name])` and `[$holder, $name]()` all
+/// lower to a `CallableDescriptorInvoke`. A program holding one counts every getter as named, so
+/// its companions are lowered whatever the name turns out to be. `ExprCall` is not counted: it
+/// carries receiver-bound first-class callables, whose method name is known at compile time and
+/// already in the data pool. The size cost falls only on programs that build a holder AND make a
+/// descriptor call; a literal `call_user_func("strlen", …)` or a closure call does not change the
+/// emitted size.
+///
+/// The slots are filled eagerly when the holder is built, so a route that reaches one without its
+/// getter would escape this rule too. `(array) $holder` was that route until #1278 stopped the
+/// cast exposing the internal `__*` slots (#1251).
+fn collect_named_materialized_companions(module: &Module, classes: &mut BTreeSet<String>) {
+    // A first-class callable keeps its target as `object::<method>`, and a callable string may
+    // be `Class::method`, so the name is also matched after a `::` qualifier.
+    let literally_named = |getter: &str| {
+        module.data.strings.iter().any(|string| {
+            let method = string.rsplit_once("::").map_or(string.as_str(), |(_, method)| method);
+            php_method_key(method) == getter
+        })
+    };
+    let calls_by_runtime_name = all_lowered_functions(module).any(|function| {
+        function.instructions.iter().any(|inst| {
+            inst.op == Op::CallableDescriptorInvoke
+        })
+    });
+    let named = |getter: &str| calls_by_runtime_name || literally_named(getter);
+    // A companion can itself hold a slot of an earlier row, so repeat until nothing is added
+    // rather than rely on the table's row order.
+    loop {
+        let before = classes.len();
+        for (getter, slot, held) in MATERIALIZED_REFLECTION_SLOTS {
+            let holder_referenced = classes.iter().any(|class_name| {
+                module
+                    .class_infos
+                    .get(class_name.as_str())
+                    .is_some_and(|class_info| class_info.property_offsets.contains_key(*slot))
+            });
+            if holder_referenced && named(getter) {
+                for companion in held.iter() {
+                    insert_builtin_reflection_class(module, companion, classes);
+                }
+            }
+        }
+        if classes.len() == before {
+            break;
+        }
     }
 }
 

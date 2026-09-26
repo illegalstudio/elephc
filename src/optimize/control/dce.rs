@@ -719,7 +719,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                     variadic_type,
                     return_type,
                     body: with_function_scope(|| {
-                        crate::optimize::body_preserving_yields(body, |body| {
+                        crate::optimize::generator_bodies::rewrite_preserving_yield(body, |body| {
                             dce_block_with_guards(body, function_guards)
                         })
                     }),

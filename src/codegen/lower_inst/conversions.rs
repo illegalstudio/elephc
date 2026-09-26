@@ -112,6 +112,18 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            if matches!(inst.immediate, Some(Immediate::StringOffsetCast)) {
+                load_value_to_first_int_arg(ctx, value)?;
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                let no_warning = ctx.next_label("string_offset_no_cast_warning");
+                predicates::emit_mixed_tag_eq(ctx, value, 2)?;
+                abi::emit_branch_if_int_result_zero(ctx.emitter, &no_warning);
+                super::floats::emit_string_offset_cast_warning(ctx);
+                ctx.emitter.label(&no_warning);
+                abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                return store_if_result(ctx, inst);
+            }
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
         }
@@ -546,6 +558,7 @@ fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
 fn expect_cast_target(inst: &Instruction) -> Result<IrType> {
     match inst.immediate {
         Some(Immediate::CastTarget(target)) => Ok(target),
+        Some(Immediate::StringOffsetCast) => Ok(IrType::I64),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing cast target immediate",
             inst.op.name()

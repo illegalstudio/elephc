@@ -166,6 +166,7 @@ fn descriptor_invoker_placeholder_sig() -> FunctionSig {
         declared_params: Vec::new(),
         variadic: None,
         deprecation: None,
+        is_generator: false,
     }
 }
 
@@ -217,6 +218,7 @@ fn signature_from_closure(closure: &Function, visible_abi_param_count: usize) ->
             .find(|param| param.variadic)
             .map(|param| param.name.clone()),
         deprecation: None,
+        is_generator: false,
     }
 }
 

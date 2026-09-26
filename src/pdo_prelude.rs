@@ -843,10 +843,9 @@ class PDOException extends RuntimeException {
     public ?array $errorInfo = null;
     private string $sqlStateCode = "";
 
-    // F-SURF-11: the previous exception in the chain. php-src keeps this in the base
-    // Exception's private slot. elephc stores it here because the compiler-owned base
-    // Throwable layout has no previous slot; PDOException's getPrevious() is deliberately
-    // dispatched to the PHP method below instead of the generic null intrinsic.
+    // F-SURF-11: the previous exception in the chain. The inherited final Exception
+    // getPrevious() reads this compiler-owned Throwable slot; this property preserves PDO's
+    // existing bridge-side access to the stored previous value.
     public ?Throwable $previous = null;
 
     // F-SURF-10/F-SURF-11: the public constructor matches inherited Exception. Structured
@@ -894,9 +893,6 @@ class PDOException extends RuntimeException {
         return $this->code;
     }
 
-    public function getPrevious(): ?Throwable {
-        return $this->previous;
-    }
 }
 
 // Compiler-owned wrapper behind Pdo\Sqlite::openBlob(). The native bridge keeps

@@ -888,9 +888,9 @@ function inner(): Generator { yield 1; yield 2; }
 function factory(): Generator { return inner(); }   // an ordinary function
 ```
 
-`factory` holds no token, so PHP runs its body to completion and hands back the object `inner()` produced. Lowering used the checked return type as its generator-ness signal and compiled `factory` as a coroutine, which made `return inner()` the value `getReturn()` reports rather than the function's result: iterating it never terminated (issue #1086). `ir_lower::function` now asks `body_contains_yield` and only that.
+`factory` holds no token, so PHP runs its body to completion and hands back the object `inner()` produced. Lowering used the checked return type as its generator-ness signal and compiled `factory` as a coroutine, which made `return inner()` the value `getReturn()` reports rather than the function's result: iterating it never terminated (issue #1086). The checker records the syntactic fact on `FunctionSig::is_generator` from the source body, and `ir_lower::function` reads that bit. A later body scan can still add generator-ness; a declared `: Generator` return cannot.
 
-The token is a reliable signal because no optimizer pass may delete a body's last `yield` (`optimize::body_preserving_yields`). Before that guard existed it was not, and the declared type was the fallback that recovered generator-ness after a fold had removed the token — which is how the two questions came to be conflated.
+The token stays in the body because `optimize::generator_bodies::rewrite_preserving_yield` refuses a rewrite that would delete a body's last `yield`, including pre-check target folding. Before that guard existed, the declared type was the fallback that recovered generator-ness after a fold had removed the token — which is how the two questions came to be conflated.
 
 ## Output: CheckResult
 
@@ -918,6 +918,42 @@ pub struct CheckResult {
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>, // access violations lowered to runtime Error throws
 }
 ```
+
+### Two maps of builtin call results, and why they are two
+
+A builtin whose result depends on its arguments cannot be typed from its declaration.
+`array_slice()` returns an associative array for an associative source and an indexed one
+otherwise; the registry declares `array` for both. Only the contract knows, so lowering asks the
+checker what it decided for that call — by SPAN.
+
+`builtin_call_types` is that map, keyed by the span of whatever call the checker was inferring.
+For a builtin written out at its own call site, the span is the call and the entry is its result.
+
+That is not true of every span. `call_user_func($f, …)` with a VARIABLE callee records
+`call_user_func`'s own result — `Mixed`, because the checker cannot resolve `$f` — while lowering
+DOES resolve it statically and calls the builtin directly. Reading the shared map there labels a
+`bool`-returning builtin's raw result as `Mixed`, and the consumer dereferences it as a pointer.
+That is a segfault, and it is why the per-span lookup is absent from the static-callable path.
+
+`first_class_builtin_call_types` is the second map, written only where the checker resolved the
+SAME callee lowering will. The static-callable lowering reads that one and nothing else. Keeping
+them apart is what lets a callable-dispatched builtin keep its checked result without reopening
+the collision (issues #1042, #1092).
+
+The line between the two maps is *resolved by the checker from the same syntax lowering reads*,
+not *spelled a particular way*:
+
+| callback | recorded | why |
+|---|---|---|
+| `$fn($assoc, 1, 2)` where `$fn = array_slice(...)` | yes | the target is in `first_class_callable_targets`, which lowering mirrors in `static_callable_locals` |
+| `array_slice(...)($assoc, 1, 2)` | yes | the callee is the syntax itself |
+| `call_user_func("array_slice", …)` | yes | a literal name, resolved extern → builtin → user on both sides |
+| `call_user_func(array_slice(...), …)`, `call_user_func($fn, …)` | yes | the same two resolutions, reached through `call_user_func` |
+| `call_user_func_array(…, [<literal>])`, all three callback forms | yes | same lowering entry point; a literal argument array is the only shape whose elements lowering can hand to the builtin |
+| `call_user_func($f, …)` where `$f` is runtime-opaque | **no** | the checker cannot resolve `$f`; lowering may |
+| `call_user_func_array(…, $dynamic)` | **no** | the arguments are not known, so the contract cannot be asked with them |
+| a name that is also an EXTERN function | **no** | lowering resolves the extern first and never reads this map for it |
+| `$fn = "array_slice"; $fn($assoc, …)` | **no** | lowering resolves that string statically; the checker does not track string-literal callable locals at all |
 
 This is passed to the [code generator](the-codegen.md), which uses it to:
 - Allocate the right amount of stack space per variable

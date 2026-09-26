@@ -117,6 +117,7 @@ fn hidden_argument_snapshot_enables_backtrace_activations_without_a_core_instruc
         declared_params: vec![true],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     });
     module.add_function(function);
 

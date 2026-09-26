@@ -230,6 +230,16 @@ pub(in crate::codegen) fn seed_builtin_reflection_class_names(module: &Module, n
             names.insert(class_name.to_string());
         }
     }
+    // ReflectionEnum owner construction eagerly materializes one internal case object per enum
+    // case, even when user code never calls getCases(). Keep both layouts available; only one
+    // family can be instantiated for a given enum, depending on whether it is backed.
+    if names.contains("ReflectionEnum") {
+        for case_class in ["ReflectionEnumBackedCase", "ReflectionEnumUnitCase"] {
+            if module.class_infos.contains_key(case_class) {
+                names.insert(case_class.to_string());
+            }
+        }
+    }
 }
 
 /// Returns true when any EIR function is emitted through the generator bridge.

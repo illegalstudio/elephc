@@ -158,21 +158,32 @@ fn test_x86_64_runtime_defines_php_float_to_int() {
     }
 }
 
-/// Verifies the array/cast runtime helpers call the shared conversion instead of truncating.
+/// Verifies array-key diagnostics and Mixed casts still use the shared conversion.
 ///
-/// `__rt_mixed_cast_int` (PHP `(int)` on a boxed Mixed) and `__rt_array_set_mixed_key` (float
-/// array keys) each used a bare `fcvtzs` / `cvttsd2si`, which is where the per-target `(int)NAN`
-/// and `$a[INF]` divergence came from.
+/// Array-key writes now call a diagnostic wrapper, which must forward to the shared PHP
+/// conversion. Boxed Mixed casts continue to call that conversion directly.
 #[test]
 fn test_runtime_float_consumers_call_the_shared_helper() {
-    for (arch, expected_calls) in [(Arch::AArch64, "bl __rt_php_float_to_int"), (
-        Arch::X86_64,
-        "call __rt_php_float_to_int",
-    )] {
+    for (arch, conversion_call, key_call, cast_label) in [
+        (Arch::AArch64, "bl __rt_php_float_to_int", "bl __rt_float_key_to_int", "__rt_mixed_cast_int_from_float:"),
+        (Arch::X86_64, "call __rt_php_float_to_int", "call __rt_float_key_to_int", "__rt_mixed_cast_int_from_float_linux_x86_64:"),
+    ] {
         let asm = runtime_asm_for(arch, Platform::Linux);
+        let key_helper = asm.split_once("__rt_float_key_to_int:").expect("float-key helper exists").1;
         assert!(
-            asm.matches(expected_calls).count() >= 4,
-            "{arch:?} runtime should route every float->int consumer through the shared helper"
+            key_helper.lines().take(25).any(|line| line.contains(conversion_call)),
+            "{arch:?} float-key diagnostics must use the shared PHP conversion"
+        );
+        let array_set = asm.split_once("__rt_array_set_mixed_key:").expect("array-key writer exists").1
+            .split_once("__rt_array_get_mixed_key:").expect("array-key reader follows writer").0;
+        assert_eq!(
+            array_set.matches(key_call).count(), 2,
+            "{arch:?} indexed and hash float-key writes must use the diagnostic wrapper"
+        );
+        let cast = asm.split_once(cast_label).expect("Mixed float cast arm exists").1;
+        assert!(
+            cast.lines().take(4).any(|line| line.contains(conversion_call)),
+            "{arch:?} Mixed float casts must use the shared PHP conversion"
         );
     }
 }

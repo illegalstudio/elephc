@@ -88,7 +88,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, PHP 8 attributes on declarations, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, generator functions and generator closures with `yield` / `yield from`, namespaces, includes, compile-time Composer/SPL autoloading, class/introspection helpers, `PDO` database access (`PDO` / `PDOStatement` / `PDOException`) with SQLite, PostgreSQL, MySQL/MariaDB, and optional DBLIB, Firebird, ODBC, Informix, IBM, SQLSRV, and Oracle drivers, image creation and manipulation (GD raster I/O, drawing, transforms/filters, Exif/IPTC metadata, and the `Imagick`/`Gmagick`/Cairo object APIs) on a pure-Rust codec/raster bridge, and PHP 8.1-style `Fiber` coroutines on the three executable/release hosts: macOS ARM64, Linux ARM64, and Linux x86_64. The iOS compile targets are library-only and do not run Fibers.
 
-Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/), [`examples/eval-globals/`](examples/eval-globals/), and the opt-in regex example [`examples/eval_regex/`](examples/eval_regex/).
+Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/), [`examples/eval-globals/`](examples/eval-globals/), [`examples/eval-throw/`](examples/eval-throw/) for throwing a class declared by `eval()`, and the opt-in regex example [`examples/eval_regex/`](examples/eval_regex/).
 
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
@@ -762,6 +762,15 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ./scripts/test-linux-arm64.sh   # Linux ARM64 suite in Docker
 ./scripts/test-linux-x86_64.sh  # Linux x86_64 suite in Docker
 ```
+
+The Docker test scripts limit the test container to one CPU and 8 GiB of memory
+without swap. They check its temporary Cargo target volume every 30 seconds and
+stop the test if it exceeds 24 GiB or Docker's filesystem has less than 20 GiB
+free. These disk checks are periodic, not a filesystem quota. Override the
+defaults with `ELEPHC_DOCKER_CPUS`, `ELEPHC_DOCKER_MEMORY`,
+`ELEPHC_DOCKER_MAX_TARGET_GIB`, `ELEPHC_DOCKER_MIN_FREE_GIB`, and
+`ELEPHC_DOCKER_DISK_CHECK_SECONDS`. The target volume is removed after the run;
+the Docker image and build cache remain available for later runs.
 
 ## Documentation
 

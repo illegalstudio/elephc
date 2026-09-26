@@ -68,6 +68,34 @@ and link the resulting user object against the cached runtime object.
 The active backend must remain target-aware. New lowering paths should use the
 ABI helpers instead of hardcoding AArch64 or x86_64 register and stack details.
 
+For a nested write into an associative array, `ArrayFetchForWrite` ensures the
+parent entry exists and diagnoses a float key while normalizing it. The
+following `HashGetForWrite` carries a boolean EIR marker indicating that the
+same key was already diagnosed. Its target lowering rebuilds the normalized
+key for the read without emitting the deprecation again. Missing ordinary
+hash reads likewise avoid repeating the float diagnostic while formatting
+their undefined-key warning.
+Compound hash updates carry the same diagnosed-key marker from the read half
+to `HashSet`. Increment and decrement expressions capture the old element once,
+then calculate and write the new value, so one source operation reports one
+float-key diagnostic. These updates also capture a mutable dimension after
+eager right-hand-side evaluation and before the read, so an error handler
+cannot redirect the write by changing the source index variable.
+
+Packed indexed arrays apply the same float-key conversion before `ArrayGet`,
+`ArraySet`, and existence probes. Compound writes reuse the read's diagnosis,
+including when a key becomes boxed `Mixed` or the array is promoted to hash
+storage at runtime. Integral float keys convert without a deprecation.
+
+String indexing returns a null sentinel for a missing offset when lowered for
+`isset()`, `empty()`, or `??`, allowing null coalescing to select its fallback
+without an out-of-bounds warning. Ordinary reads still return an empty string
+and warn. A float string offset is converted to an integer by a warning-marked
+`FToI` instruction before `StrCharAt`. A boxed float uses a marked integer cast
+that checks its runtime tag and issues the same warning. A boxed variable is
+fetched again after its warning handler returns, matching PHP when the handler
+changes that variable.
+
 ## Runtime Split
 
 Codegen always produces two compiler-owned artifacts:
@@ -101,6 +129,27 @@ typed `RuntimeCallTarget`. `src/codegen/lower_inst/runtime_calls.rs` and the bou
 builtin names are absent from backend dispatch. Only compiler-resident language
 constructs such as `eval`, `isset`, `unset`, `empty`, `exit`, and `die` retain the
 separate `LanguageConstructCall` path.
+
+## Reflection Reachability
+
+Synthetic builtin Reflection classes are lowered from EIR reachability rather than emitted as a
+fixed full surface in every native program. The EIR lowerer collects Reflection classes found in
+value types, object construction, static calls, and method-dispatch candidates, then adds their
+parents and implementation owners before lowering concrete methods and property-initializer
+thunks. Dynamic eval keeps the full Reflection surface because its class and method names can be
+resolved only at runtime.
+
+Some Reflection getters materialize a new Reflection object into a `mixed` property slot instead
+of emitting an EIR object-construction operation. For those slots, the lowerer also includes the
+materialized class when the holder is reachable and the getter name is present in the module's
+string data. It repeats this companion scan to a fixed point because a returned Reflection object
+can itself hold another materialized Reflection object. This keeps getter-returned objects' method
+and `__toString` tables available without pulling the entire Reflection hierarchy into programs
+that never call those getters. A getter name assembled at runtime never reaches the string data,
+but it can only be called through a runtime-resolved callable — `$holder->$name()`,
+`call_user_func([$holder, $name])` and `[$holder, $name]()` all lower to a
+`CallableDescriptorInvoke` — so a module containing one treats every getter as named. That cost
+falls only on programs that build a holder and make such a call.
 
 ## Eval Lowering Boundary
 
@@ -286,6 +335,53 @@ normalized payload and null/int tag use `x0`/`x1` on AArch64 and `rax`/`rdx` on
 x86_64. `substr_count()` copies the tag to `x7` or `r11` only after conversion
 calls have finished, then restores the subject, needle, and offset ABI
 registers before window validation.
+
+## Property Writes Through a Runtime-Typed Receiver
+
+A property write resolves its slot at compile time from the receiver's class. When the receiver is
+statically `mixed` or an object union there is no class to resolve, so the class is read at runtime
+and the slot chosen from it.
+
+Both spellings of the write dispatch the same way, on the payload's **class id** — the object
+header's first word:
+
+| write | lowering | chain |
+|---|---|---|
+| `$o->name = $v` | `lower_mixed_static_prop_set` | one compare per class in the build that declares `name` and can hold this value |
+| `$o->{$expr} = $v` | `lower_runtime_mixed_prop_set` | the same compare, then a name comparison per candidate |
+
+A match stores straight into that class's declared slot. A **stdClass** payload and a **non-object**
+payload both fall through to `__rt_mixed_property_set`, which writes a dynamic property for the
+first and drops the write for the second — PHP's *attempt to assign property on non-object*.
+
+Until issue #1094 only the runtime-name spelling dispatched. The static-name spelling went straight
+to `__rt_mixed_property_set`, whose class-id check only admits stdClass, so `$o->n = 9` through a
+`mixed` receiver was discarded in silence for every other class while `$o->{$p} = 9` on the same
+object wrote. The receiver does not have to be spelled `mixed` to reach it: a local the checker
+widened across a loop back-edge (`$o = null; for (...) { $o = new T(); $o->n = 9; }`) is boxed too.
+
+### Ownership: the release belongs to lowering
+
+`emit_property_store` **retains** what it stores, on both of these paths — the class-id dispatch
+and `materialize_dynamic_property_mixed_value`'s fresh Mixed cell — so `PropSet` never consumes its
+source. A declared-receiver write is therefore followed by an explicit EIR release
+(`release_property_assignment_source_after_retaining_store`), gated on the source being an owning
+temporary.
+
+A runtime-typed receiver never got one: `object_property_type` answers only for a statically known
+class, so the gate returned `None` and an owning temporary assigned through a `mixed` receiver
+leaked once per write — three blocks for an array literal and its two boxed elements.
+`release_runtime_typed_property_assignment_source` closes that, with the same ownership gate.
+
+The property's declared type is the one fact lowering does not have, because the payload's class is
+not known until runtime. It matters only for the transfer `property_store_keeps_independent_ref`
+excludes — a `Mixed` value into a `Mixed` slot, where the backend hands the source's own cell to the
+property instead of retaining — so a `Mixed`-typed source is left alone.
+
+Doing this in the backend instead does not work, and the reason is worth keeping: whether the SSA
+source owns a reference is not a property of its type. A backend release gated on types alone
+destroyed the property's own reference for a *borrowed* source, which reads back as a pointer and
+trips `heap debug detected bad refcount`.
 
 ## Backend Contract
 

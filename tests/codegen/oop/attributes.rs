@@ -4379,3 +4379,33 @@ echo "ok";
     );
     assert_eq!(out, "ok");
 }
+
+/// Releasing a ReflectionNamedType returned by ReflectionEnum must remain safe even when the
+/// program never calls a method on the returned object and its class has no other reference.
+#[test]
+fn test_reflection_enum_backing_type_without_method_use_is_heap_safe() {
+    let out = compile_and_run(
+        r#"<?php
+enum BackingTypeOnly: string { case One = 'one'; }
+$reflection = new ReflectionEnum(BackingTypeOnly::class);
+echo 'built|';
+$type = $reflection->getBackingType();
+echo 'got', "\n";
+"#,
+    );
+    assert_eq!(out, "built|got\n");
+}
+
+/// Releasing a unit-enum ReflectionEnum must retain its distinct case layout,
+/// even when the program never reads the eagerly-created case objects.
+#[test]
+fn test_reflection_enum_unit_case_layout_without_method_use_is_heap_safe() {
+    let out = compile_and_run(
+        r#"<?php
+enum UnitCaseLayout { case One; }
+$reflection = new ReflectionEnum(UnitCaseLayout::class);
+echo "built\n";
+"#,
+    );
+    assert_eq!(out, "built\n");
+}

@@ -134,6 +134,15 @@ impl Checker {
         // `0`. With no declaring class the runtime would fatal, so `mixed` is the
         // safe static result.
         if matches!(obj_ty, PhpType::Mixed) {
+            // A Reflection owner is one of those candidates, so the `getAttributes()` flag guard
+            // applies here as well — without this the call answers with exact-name matches only,
+            // which is the silent subset the guard exists to prevent.
+            self.reject_unsupported_reflection_attribute_filter_flags(
+                None,
+                &php_symbol_key(method),
+                args,
+                expr.span,
+            )?;
             // The callee is picked from the runtime class id over every candidate that declares
             // the method, so no single parameter list governs the arguments: any candidate's
             // by-reference parameter would alias the local behind them.
@@ -371,6 +380,12 @@ impl Checker {
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
+        self.reject_unsupported_reflection_attribute_filter_flags(
+            Some(class_name),
+            &method_key,
+            args,
+            expr.span,
+        )?;
         let late_static_return_type = self
             .instance_method_late_static_return(class_name, &method_key)
             .map(|return_type| {

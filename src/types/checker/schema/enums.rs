@@ -332,6 +332,7 @@ pub(crate) fn insert_enum_metadata(
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+            is_generator: false,
         },
     );
     static_method_visibilities.insert("cases".to_string(), Visibility::Public);
@@ -360,6 +361,7 @@ pub(crate) fn insert_enum_metadata(
                     declared_params: vec![true],
                     variadic: None,
                     deprecation: None,
+                    is_generator: false,
                 },
             );
             static_method_visibilities.insert(method_name.to_string(), Visibility::Public);

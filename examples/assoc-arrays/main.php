@@ -187,3 +187,27 @@ echo "spread between:  " . implode(",", array_keys($surrounded)) . "\n";
 
 // Spreading reads the source; it is unchanged afterwards and can be spread again.
 echo "source intact:   " . implode(",", $ports) . "\n";
+
+// array_chunk() splits an associative array too. Its $preserve_keys rule is not
+// array_slice()'s: with false it drops EVERY key, string keys included, and each
+// chunk renumbers from 0.
+$stock = ["apples" => 12, "pears" => 4, "plums" => 7, "figs" => 2, "kiwis" => 9];
+$kept = array_chunk($stock, 2, true);
+echo "\nPages of two, keys kept:\n";
+foreach ($kept as $page => $items) {
+    echo "  page " . $page . ":";
+    foreach ($items as $fruit => $count) {
+        echo " " . $fruit . "=" . $count;
+    }
+    echo "\n";
+}
+$dropped = array_chunk($stock, 2);
+echo "Pages of two, keys dropped:\n";
+foreach ($dropped as $page => $items) {
+    echo "  page " . $page . ":";
+    foreach ($items as $slot => $count) {
+        echo " " . $slot . "=" . $count;
+    }
+    echo "\n";
+}
+echo "Source is untouched: " . count($stock) . " entries\n";

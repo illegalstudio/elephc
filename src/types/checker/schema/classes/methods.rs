@@ -223,6 +223,8 @@ fn apply_instance_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
+    let internal_exception_override = injected_exception_final_override(class, method, &method_key);
+    let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
     let sig = build_method_sig(checker, method, &class.name)?;
     if state.final_static_methods.contains(&method_key) {
         return Err(final_method_error(
@@ -237,7 +239,7 @@ fn apply_instance_method(
     if state.static_sigs.contains_key(&method_key) {
         return Err(method_kind_error(class, method));
     }
-    if state.final_methods.contains(&method_key) {
+    if state.final_methods.contains(&method_key) && !internal_exception_override {
         return Err(final_method_error(
             state
                 .method_declaring_classes
@@ -265,19 +267,21 @@ fn apply_instance_method(
         }
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
-        let parent_is_source = state
-            .method_declaring_classes
-            .get(&method_key)
-            .is_none_or(|owner| declaration_is_source(checker, owner));
-        validate_override_signature(
-            checker,
-            class,
-            method,
-            parent_sig,
-            state.late_static_method_returns.get(&method_key),
-            false,
-            parent_is_source,
-        )?;
+        if !internal_exception_override {
+            let parent_is_source = state
+                .method_declaring_classes
+                .get(&method_key)
+                .is_none_or(|owner| declaration_is_source(checker, owner));
+            validate_override_signature(
+                checker,
+                class,
+                method,
+                parent_sig,
+                state.late_static_method_returns.get(&method_key),
+                false,
+                parent_is_source,
+            )?;
+        }
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, false)
     {
@@ -307,14 +311,19 @@ fn apply_instance_method(
     state
         .method_visibilities
         .insert(method_key.clone(), method.visibility.clone());
-    if method.is_final {
+    if method.is_final || internal_exception_override {
         state.final_methods.insert(method_key.clone());
     } else {
         state.final_methods.remove(&method_key);
     }
+    let declaring_class = if internal_exception_override {
+        inherited_declaring_class.unwrap_or_else(|| class.name.clone())
+    } else {
+        class.name.clone()
+    };
     state
         .method_declaring_classes
-        .insert(method_key.clone(), class.name.clone());
+        .insert(method_key.clone(), declaring_class);
     state
         .method_attribute_names
         .insert(method_key.clone(), collect_attribute_names(&method.attributes));
@@ -339,6 +348,22 @@ fn apply_instance_method(
 }
 
 /// Constructs a `CompileError` for overriding a `final` method.
+/// Allows the compiler-injected PDOException getCode body to model its internal SQLSTATE
+/// behavior while retaining the inherited final flag and declaring class. Source declarations
+/// with the same class or method name never receive this exception.
+fn injected_exception_final_override(
+    class: &FlattenedClass,
+    method: &ClassMethod,
+    method_key: &str,
+) -> bool {
+    class.span.line == 0
+        && class.span.col == 0
+        && method.span.line == 0
+        && method.span.col == 0
+        && php_symbol_key(&class.name) == "pdoexception"
+        && method_key == "getcode"
+}
+
 fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileError {
     CompileError::new(
         method.span,

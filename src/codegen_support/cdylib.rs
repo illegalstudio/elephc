@@ -352,6 +352,7 @@ mod tests {
             declared_params: vec![true],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         };
         ExportedFunction {
             name: "roundtrip".to_string(),

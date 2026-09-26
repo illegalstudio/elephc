@@ -255,7 +255,7 @@ pub(super) fn lower_variadic_tail_source_value(
             {
                 ctx.promote_local_mixed_ref_cell(name, Some(expr.span));
             }
-            return lower_invoker_ref_arg_marker(ctx, name, expr.span);
+            return lower_invoker_ref_variadic_arg_marker(ctx, name, expr.span);
         }
     }
     let value = prelowered

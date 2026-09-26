@@ -1032,6 +1032,16 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 10. **Resource scope-cleanup** — Mixed-boxed resources (tag 9) carry a resource-kind subtype in the high payload word, and `__rt_mixed_free_deep` runs the matching destructor when the box is released: kind 1 = native stream fd (`close()`), kind 2 = HashContext handle (`elephc_crypto_free` through `__rt_hash_ctx_free`), kind 3 = `popen` pipe (`__rt_pclose`, which closes the `FILE*` and reaps the child), kind 4 = `opendir` stream (`__rt_closedir`). Kind 0 resources (generic resources) are skipped, and every fd-backed kind also skips handles `>= 0x40000000` — synthetic wrapper handles and the `-1` sentinel that an explicit `fclose`/`pclose`/`closedir` stamps into the box so the descriptor is never released twice (even if its fd number was reused). Alias safety comes from the Mixed box refcount — `$b = $a` increfs the box, so only the last release triggers the destructor
 11. **Process exit** — all memory reclaimed by the OS
 
+### Unboxing a Mixed hands back a reference
+
+`Op::MixedUnbox` is the coercion behind a typed target initialized from a Mixed source — `coerce_typed_assign_value` is its only emitter, for an `object` or `callable` target, and it has two callers: a typed local (`lower_typed_assign`) and a typed property write (`lower_property_assign`). Its lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so the payload it produces carries a reference of its OWN rather than borrowing the box's.
+
+That makes it an owning temporary, and `LoweringContext::value_is_owning_temporary` says so. The distinction is not cosmetic: while the unboxed value was read as a borrow, the store that consumed it acquired a second reference, and the one slot release in the function epilogue never balanced it. The unboxed object stayed alive for the rest of the process, and so did everything it owned — five heap blocks per call for a `ReflectionAttribute`, whose name string and argument array go with it.
+
+The shape to watch for when adding another unbox site: an acquire is only correct on top of a BORROW. Ask what the producing op's lowering already did before pairing one with it.
+
+The property-write caller has a leak of its own that this does not reach — three blocks per `$obj->untypedProp = $mixed;` where the property is refined to an object type, measured identically with the predicate on and off (#1115).
+
 ### What is NOT freed
 
 - **Non-adjacent free blocks** are still not compacted — fragmentation can still occur over time even though adjacent neighbors are coalesced on free and oversized free blocks are split on allocation

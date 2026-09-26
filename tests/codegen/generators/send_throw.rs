@@ -11,6 +11,44 @@
 
 use crate::support::*;
 
+/// Guards issue #355: throwing into a suspended generator runs its finally block once.
+#[test]
+fn test_generator_throw_runs_finally_without_catch_regression() {
+    let out = compile_and_run(
+        r#"<?php
+function g() {
+    try { yield 1; }
+    finally { echo 'F'; }
+}
+$g = g();
+$g->rewind();
+try { $g->throw(new Exception('x')); }
+catch (Exception $e) { echo ':', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(out, "F:x");
+}
+
+/// Guards nested finally ordering when a throw enters a suspended generator.
+#[test]
+fn test_generator_throw_runs_nested_finally_regression() {
+    let out = compile_and_run(
+        r#"<?php
+function g() {
+    try {
+        try { yield 1; }
+        finally { echo 'I'; }
+    } finally { echo 'O'; }
+}
+$g = g();
+$g->rewind();
+try { $g->throw(new Exception('x')); }
+catch (Exception $e) { echo ':', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(out, "IO:x");
+}
+
 /// Verifies `Generator::send(int)` routes the payload into a `YieldAssign` resume,
 /// which unboxes the `sent_value` slot back to `int` and assigns it to the LHS local.
 /// PHP: `send(100)` makes `$a = yield 1` resolve to `$a = 100` on resume.

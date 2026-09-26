@@ -12,8 +12,9 @@ use crate::codegen_support::emit::Emitter;
 
 /// Returns true when a direct method call can be satisfied from the compact Throwable payload.
 ///
-/// PDOException and its subclasses keep `getCode()` and `getPrevious()` on their PHP
-/// implementations because those values live outside the compiler-owned base payload.
+/// PDOException keeps getCode on its PHP implementation because its SQLSTATE string lives
+/// outside the compiler-owned integer code payload. getPrevious uses the inherited final
+/// Throwable accessor.
 pub(super) fn is_throwable_standard_method_call(
     ctx: &FunctionContext<'_>,
     class_name: &str,
@@ -33,7 +34,7 @@ pub(super) fn is_throwable_standard_method_call(
             .get(name)
             .and_then(|info| info.parent.as_deref());
     }
-    if pdo_exception_receiver && matches!(method_key.as_str(), "getcode" | "getprevious") {
+    if pdo_exception_receiver && method_key == "getcode" {
         return false;
     }
     is_throwable_standard_method_key(&method_key)

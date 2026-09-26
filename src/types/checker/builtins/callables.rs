@@ -1391,6 +1391,9 @@ pub(crate) fn check_call_user_func_array(
                     )?;
                 }
                 if let Some(ret_ty) = checker.check_builtin(&builtin_name, elems, span, env)? {
+                    checker
+                        .first_class_builtin_call_types
+                        .insert(span, ret_ty.clone());
                     return Ok(ret_ty);
                 }
             }
@@ -1653,6 +1656,16 @@ pub(crate) fn check_call_user_func(
             if let Some(ret_ty) =
                 checker.check_builtin(&builtin_name, &args[1..], span, env)?
             {
+                // Lowering resolves this literal callee to the same builtin and asks for its
+                // result by span. Without the entry it falls back to the DECLARED return type,
+                // which for a builtin whose result depends on its arguments is a different type
+                // -- `call_user_func("array_slice", $assoc, 1, 2)` was refused outright for that
+                // reason (issue #1092). Safe here, and in the two arms above for the same reason,
+                // because the callee the checker resolved is the one lowering will resolve; it is
+                // the runtime-opaque callee that must record nothing.
+                checker
+                    .first_class_builtin_call_types
+                    .insert(span, ret_ty.clone());
                 return Ok(ret_ty);
             }
         }

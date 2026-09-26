@@ -174,6 +174,12 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::Bool(value) => {
             let _ = write!(out, " {}", if *value { "true" } else { "false" });
         }
+        Immediate::FloatKeyDiagnostic => {
+            let _ = write!(out, " float_key_diagnostic");
+        }
+        Immediate::StringOffsetCast => {
+            let _ = write!(out, " string_offset_cast");
+        }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
         }

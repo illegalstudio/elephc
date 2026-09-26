@@ -44,9 +44,7 @@ pub(super) fn decl_class_mysqli_sql_exception() -> Stmt {
     class("mysqli_sql_exception")
         .extends("RuntimeException")
         .prop("sqlstate", TypeExpr::Str, Some(e_str("00000")))
-        // The previous exception in the chain. Same storage note as PDOException: the
-        // compiler-owned base Throwable layout has no previous slot, so the class keeps its own
-        // and dispatches getPrevious() below.
+        // The previous exception in the chain, stored in Exception's inherited Throwable slot.
         .prop("previous", t_nullable(t_class("Throwable")), Some(e_null()))
         .method(
             method("__construct")
@@ -61,13 +59,6 @@ pub(super) fn decl_class_mysqli_sql_exception() -> Stmt {
                     s_prop_assign(e_this(), "message", e_var("message")),
                     s_prop_assign(e_this(), "code", e_var("code")),
                     s_prop_assign(e_this(), "previous", e_var("previous")),
-                ]),
-        )
-        .method(
-            method("getPrevious")
-                .returns(t_nullable(t_class("Throwable")))
-                .body(vec![
-                    s_return(e_this_prop("previous")),
                 ]),
         )
         // php 8.1+: the documented accessor for the SQLSTATE (the property itself is protected in

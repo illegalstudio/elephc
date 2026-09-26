@@ -106,6 +106,7 @@ pub(super) fn lower_property_array_assign(
         // the same source line.
         let (index, value) =
             crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+        let index = coerce_array_key_to_int_at_span(ctx, index, Some(span), false);
         let value = coerce_indexed_array_set_value(ctx, &property_ty, value, Some(span));
         ctx.emit_void(
             Op::ArraySet,

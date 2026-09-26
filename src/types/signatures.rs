@@ -57,6 +57,23 @@ pub struct FunctionSig {
     /// `Some("")` indicates the attribute was present without an explicit
     /// reason. `None` means the function/method is not deprecated.
     pub deprecation: Option<String>,
+    /// `true` when the SOURCE body contained `yield` / `yield from`, recorded before any
+    /// optimization runs.
+    ///
+    /// This is PHP's own definition of a generator function and the only sound one: it is
+    /// syntactic, it includes an unreachable `yield`, and it is fixed at declaration. Two things
+    /// that look like substitutes are not:
+    ///
+    /// - Scanning the body at LOWERING time answers `false` once a pass has pruned the last
+    ///   `yield`, which is what made a folded generator compile to a plain function returning
+    ///   null and hang its `foreach` (issue #673).
+    /// - `return_type == Generator` conflates a generator with a FACTORY —
+    ///   `function f(): Generator { return inner(); }` declares and returns a `Generator`
+    ///   without being one. Treating it as a generator turns its `return` into
+    ///   `Generator::getReturn()` and its `foreach` yields nothing.
+    ///
+    /// Always `false` for builtins, externs and synthesized signatures.
+    pub is_generator: bool,
 }
 
 impl FunctionSig {
@@ -399,6 +416,7 @@ fn make_sig(params: &[&str], defaults: Vec<Option<Expr>>, variadic: Option<&str>
         declared_params: vec![false; params.len()],
         variadic: variadic.map(str::to_string),
         deprecation: None,
+        is_generator: false,
     }
 }
 
@@ -456,6 +474,7 @@ mod tests {
             params,
             variadic: Some("values".to_string()),
             deprecation: None,
+            is_generator: false,
         }
     }
 

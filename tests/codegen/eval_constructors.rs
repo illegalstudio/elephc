@@ -3,10 +3,13 @@
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests eval_constructor` through Rust's test harness.
+//! - `cargo test --test codegen_tests aot_throw` for eval-declared throwables.
 //!
 //! Key details:
 //! - Fixtures focus on constructor bridge argument binding and by-reference
 //!   writeback for non-variable eval caller targets.
+//! - Throw fixtures cover eval-declared `Exception` and `Error` subclasses,
+//!   including rethrow and nested `try`/`catch`.
 //! - A constructor bridge is called directly, one argument per PHYSICAL parameter, so the
 //!   argument-frame fixture also covers the compiler-internal count and collector slots eval has
 //!   to materialize on top of the PHP-visible signature.
@@ -540,4 +543,93 @@ return $c->tally;');
     );
 
     assert_eq!(out, "1:1:1|2:2:3|1:1:1");
+}
+
+/// AOT throw statements defer Throwable validation for classes introduced by an earlier eval.
+#[test]
+fn test_aot_throw_accepts_eval_declared_throwable_class() {
+    let out = compile_and_run(r#"<?php
+eval('class EvalThrownRuntimeException extends RuntimeException {}');
+try { $unused = true ? throw new EvalThrownRuntimeException('expression') : null; } catch (Exception $error) { echo $error->getMessage(), '|'; }
+$through_local = new EvalThrownRuntimeException('local');
+try { throw $through_local; } catch (Exception $error) { echo $error->getMessage(), '|'; }
+try { throw new EvalThrownRuntimeException('direct'); } catch (Exception $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "expression|local|direct");
+}
+
+/// PHP still raises a catchable TypeError if eval has widened a non-object throw operand to Mixed.
+#[test]
+fn test_aot_throw_runtime_checks_eval_mixed_values_are_throwable() {
+    let out = compile_and_run(r#"<?php
+eval('$scalar = 42; $plain_object = new stdClass();');
+try { throw $scalar; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+try { throw $plain_object; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+try { $unused = true ? throw $scalar : null; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+try { $unused = true ? throw $plain_object : null; } catch (TypeError $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "Can only throw objects|Can only throw objects|Can only throw objects|Can only throw objects");
+}
+
+/// An eval-declared class that extends Error is throwable and is not an Exception.
+#[test]
+fn test_aot_throw_accepts_eval_declared_error_subclass() {
+    let out = compile_and_run(r#"<?php
+eval('class EvalThrownError extends Error {}');
+try { throw new EvalThrownError('direct'); } catch (Exception $error) { echo 'exception|'; } catch (Error $error) { echo $error->getMessage(), '|'; }
+$through_local = new EvalThrownError('local');
+try { throw $through_local; } catch (Error $error) { echo $error->getMessage(), '|'; }
+try { $unused = true ? throw new EvalThrownError('expression') : null; } catch (Throwable $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "direct|local|expression");
+}
+
+/// Rethrowing a caught eval-declared throwable reaches the outer handler.
+#[test]
+fn test_aot_throw_rethrows_eval_declared_throwable() {
+    let out = compile_and_run(r#"<?php
+eval('class EvalRethrownException extends Exception {}');
+try {
+    try {
+        throw new EvalRethrownException('once');
+    } catch (Exception $error) {
+        echo 'inner:', $error->getMessage(), '|';
+        throw $error;
+    }
+} catch (Exception $error) {
+    echo 'outer:', $error->getMessage();
+}
+"#);
+    assert_eq!(out, "inner:once|outer:once");
+}
+
+/// Nested try/catch distinguishes eval-declared Exception and Error subclasses.
+#[test]
+fn test_aot_throw_nests_try_around_eval_declared_throwables() {
+    let out = compile_and_run(r#"<?php
+eval('class EvalNestedException extends Exception {} class EvalNestedError extends Error {}');
+try {
+    try {
+        throw new EvalNestedException('inner');
+    } catch (Exception $error) {
+        echo 'inner:', $error->getMessage(), '|';
+    }
+    $outer = new EvalNestedError('outer');
+    throw $outer;
+} catch (Exception $error) {
+    echo 'missed-exception|';
+} catch (Error $error) {
+    echo 'outer:', $error->getMessage(), '|';
+}
+try {
+    try {
+        throw new EvalNestedError('bubble');
+    } catch (Exception $error) {
+        echo 'missed-inner|';
+    }
+} catch (Error $error) {
+    echo 'bubbled:', $error->getMessage();
+}
+"#);
+    assert_eq!(out, "inner:inner|outer:outer|bubbled:bubble");
 }

@@ -646,8 +646,48 @@ pub(crate) fn lower_is_a_relation(
             return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
         }
     }
-    let result = static_relation_holds(ctx, object, target, exclude_self)?;
-    emit_bool_result(ctx, result);
+    // `$allow_string` decides whether a string first operand names a class, and the two builtins
+    // disagree on its default: `is_subclass_of` takes names unless told otherwise, `is_a` only
+    // when told to. Measured, `is_a("Derived", "Base")` is false and `is_a("Derived", "Base",
+    // true)` is true.
+    let literal_flag = match inst.operands.get(2) {
+        Some(flag) => const_bool_operand(ctx, *flag)?,
+        None => Some(exclude_self),
+    };
+    let subject_is_object = matches!(ctx.value_php_type(object)?, PhpType::Object(_));
+    if let Some(allow_string_subject) = literal_flag {
+        let result =
+            static_relation_holds(ctx, object, target, exclude_self, allow_string_subject)?;
+        emit_bool_result(ctx, result);
+        return store_if_result(ctx, inst);
+    }
+    if subject_is_object {
+        // The flag only governs a STRING subject; an object never consults it, so its runtime
+        // value cannot change this answer.
+        let result = static_relation_holds(ctx, object, target, exclude_self, false)?;
+        emit_bool_result(ctx, result);
+        return store_if_result(ctx, inst);
+    }
+    // A literal name with a RUNTIME flag. Substituting the builtin's default here answered `y`
+    // for `is_subclass_of("Derived", "Base", $false)`, where PHP answers `n` — a wrong answer
+    // this lowering did not produce before it learned to read names at all. The result is simply
+    // `$allow_string && relation`, so when the relation holds the flag IS the answer.
+    let holds = static_relation_holds(ctx, object, target, exclude_self, true)?;
+    if !holds {
+        emit_bool_result(ctx, false);
+        return store_if_result(ctx, inst);
+    }
+    let flag = expect_operand(inst, 2)?;
+    if matches!(ctx.value_php_type(flag)?, PhpType::Bool) {
+        ctx.load_value_to_result(flag)?;
+        return store_if_result(ctx, inst);
+    }
+    // The declared signature is `bool $allow_string`, but coercive mode admits any scalar and the
+    // argument lowering does not cast it, so an `int`, `string` or `float` flag reaches here.
+    // Answering `false` made `$flag = 1; is_subclass_of("Derived", "Base", $flag)` report `n`
+    // where PHP reports `y`. The relation already holds at this point, so the answer is exactly
+    // the flag's PHP truthiness.
+    super::super::predicates::emit_value_truthiness(ctx, flag, name)?;
     store_if_result(ctx, inst)
 }
 
@@ -1321,9 +1361,50 @@ fn static_relation_holds(
     object: ValueId,
     target: ValueId,
     exclude_self: bool,
+    allow_string_subject: bool,
 ) -> Result<bool> {
-    let PhpType::Object(object_class) = ctx.value_php_type(object)? else {
-        return Ok(false);
+    // PHP takes a class NAME as readily as an object here, and answering `false` for the name
+    // form is a silent wrong answer rather than a refusal (issue #1113). A literal name is as
+    // decidable as a typed object: the parent and interface walks below need a class name, and
+    // do not care which operand shape it arrived in.
+    let object_class = match ctx.value_php_type(object)? {
+        PhpType::Object(class_name) => class_name,
+        _ if allow_string_subject => {
+            let Some(name) = optional_const_string_operand(ctx, object)? else {
+                return Ok(false);
+            };
+            let subject = name.trim_start_matches('\\');
+            // An interface name is a legal subject and is reachable ONLY this way — there is no
+            // instance of an interface to pass, so the object form can never ask the question.
+            // `interface J extends I {}` makes `is_subclass_of("J", "I")` true in PHP.
+            if lookup_class(ctx, subject).is_none() {
+                // A name that is neither a class nor an interface resolves to nothing, and PHP
+                // answers `false` for it — including for `is_a("Ghost", "Ghost", true)`, where
+                // the self-check must not fire before the name is known to exist.
+                if super::class_relations::lookup_interface(ctx, subject).is_none() {
+                    return Ok(false);
+                }
+                let Some(target_class) = optional_const_string_operand(ctx, target)? else {
+                    return Ok(false);
+                };
+                let target_key = php_symbol_key(target_class.trim_start_matches('\\'));
+                // `is_a` counts the subject itself, `is_subclass_of` does not — the same
+                // asymmetry the class path applies below.
+                if !exclude_self && php_symbol_key(subject) == target_key {
+                    return Ok(true);
+                }
+                // The transitive parent walk is `class_implements()`'s own, shared rather than
+                // copied: two walks over the same tables are how `is_subclass_of("J","I")` and
+                // `class_implements("J")` come to disagree.
+                let mut parents = Vec::new();
+                super::class_relations::collect_interface_parents(ctx, subject, &mut parents);
+                return Ok(parents
+                    .iter()
+                    .any(|parent| php_symbol_key(parent.trim_start_matches('\\')) == target_key));
+            }
+            name
+        }
+        _ => return Ok(false),
     };
     let Some(target_class) = optional_const_string_operand(ctx, target)? else {
         return Ok(false);

@@ -128,6 +128,7 @@ mod gc_note_child_ref;
 mod hash_count;
 mod hash_append;
 mod hash_clone_shallow;
+mod hash_chunk;
 mod hash_fnv1a;
 mod hash_free_deep;
 mod hash_get;
@@ -170,6 +171,7 @@ mod object_free_deep;
 mod range;
 mod incref;
 mod foreach_non_iterable_warning;
+mod float_key_to_int;
 mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
@@ -416,6 +418,8 @@ pub use hash_append::emit_hash_append;
 /// Emit hash append helper.
 pub use hash_clone_shallow::emit_hash_clone_shallow;
 /// Emit shallow hash clone helper.
+pub use hash_chunk::emit_hash_chunk;
+/// Emit the associative array_chunk() helper.
 pub use gc_collect_cycles::emit_gc_collect_cycles;
 /// Emit garbage collection cycle collector.
 pub use gc_control::emit_gc_control;
@@ -552,6 +556,7 @@ pub use sort_int::emit_sort_int;
 pub use sort_str::emit_sort_str;
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
+pub use float_key_to_int::emit_float_key_to_int;
 /// Emit user-defined sort helper.
 pub use php_compare_slots::emit_php_compare_slots;
 pub use usort::emit_usort;

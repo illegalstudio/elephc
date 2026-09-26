@@ -106,6 +106,8 @@ pub(crate) fn build_method_sig(
             .collect(),
         variadic: method.variadic.clone(),
         deprecation: extract_deprecation(&method.attributes),
+        // Generator-ness is syntactic and must survive DCE removing an unreachable yield.
+        is_generator: crate::types::checker::yield_validation::body_contains_yield(&method.body),
     });
     // A declared element type on the variadic (`int ...$xs`) constrains every collected argument.
     // `callable_wrapper_sig` defaults the variadic container to `array<mixed>`; refine it to the

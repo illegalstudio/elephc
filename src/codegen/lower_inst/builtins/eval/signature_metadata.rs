@@ -323,6 +323,7 @@ mod tests {
             declared_params: vec![false; count],
             variadic: variadic.map(str::to_string),
             deprecation: None,
+            is_generator: false,
         }
     }
 

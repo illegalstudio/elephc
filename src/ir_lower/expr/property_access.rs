@@ -176,7 +176,7 @@ pub(crate) fn lower_ref_assign_array_elem(
             if elem_ty.codegen_repr() == PhpType::Mixed {
                 PhpType::Mixed
             } else {
-                index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+                index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
                 normalize_value_php_type(*elem_ty)
             }
         }

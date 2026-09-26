@@ -35,6 +35,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // String runtime functions
     strings::emit_concat_scratch(emitter);
     strings::emit_itoa(emitter);
+    strings::emit_string_offset_warning(emitter);
     strings::emit_resource_to_string(emitter);
     strings::emit_resource_type_name(emitter);
     strings::emit_resource_write_stdout(emitter);

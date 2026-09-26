@@ -171,7 +171,7 @@ fn class_uses(ctx: &FunctionContext<'_>, target: &ClassLikeTarget) -> Vec<String
 }
 
 /// Collects parent interfaces without duplicates.
-fn collect_interface_parents(
+pub(super) fn collect_interface_parents(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
     names: &mut Vec<String>,
@@ -277,7 +277,7 @@ fn lookup_class<'a>(ctx: &'a FunctionContext<'_>, name: &str) -> Option<&'a Clas
 }
 
 /// Looks up an interface by PHP-style case-insensitive name.
-fn lookup_interface<'a>(
+pub(super) fn lookup_interface<'a>(
     ctx: &'a FunctionContext<'_>,
     name: &str,
 ) -> Option<&'a InterfaceInfo> {
