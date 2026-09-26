@@ -35,6 +35,11 @@ class User {
         return $this->name . ":" . $suffix;
     }
 
+    // `$this(...)` invokes the object from inside its own class.
+    public function tagged() {
+        return $this("self");
+    }
+
     public function __call($method, $args) {
         return "missing " . $method . "(" . $args[0] . ")";
     }
@@ -52,6 +57,7 @@ echo $user . "\n";
 echo $user->missing . "\n";
 echo $user->log . "\n";
 echo $user("active") . "\n";
+echo $user->tagged() . "\n";
 echo $user->displayName("short") . "\n";
 echo (isset($user->active) ? "active" : "inactive") . "\n";
 unset($user->active);
