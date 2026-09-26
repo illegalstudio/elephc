@@ -732,3 +732,51 @@ echo (new AlwaysCopyable())->copy()->label();
     );
     assert_eq!(out, "copy");
 }
+
+/// `??` over object operands keeps an object type: `?Contract ?? new Implementation()` is a
+/// `Contract`, and two unrelated implementations are a union both of whose members satisfy a
+/// declared `Contract`. It was typed `mixed`, so passing it to a `Contract` parameter or
+/// returning it from a `Contract` function was refused. Regression for #822.
+#[test]
+fn test_null_coalesce_over_objects_keeps_the_object_type() {
+    let out = compile_and_run(
+        r#"<?php
+interface Contract { public function name(): string; }
+final class Implementation implements Contract { public function name(): string { return "impl"; } }
+final class Other implements Contract { public function name(): string { return "other"; } }
+
+final class Consumer
+{
+    public function __construct(public Contract $value) {}
+
+    public static function make(?Contract $value = null): self
+    {
+        return new self($value ?? new Implementation());
+    }
+}
+
+echo Consumer::make()->value->name(), "\n";
+echo Consumer::make(new Other())->value->name(), "\n";
+
+function pick(?Implementation $a, Other $b): Contract { return $a ?? $b; }
+echo pick(null, new Other())->name(), " ", pick(new Implementation(), new Other())->name(), "\n";
+
+function maybe(?Contract $c, ?Other $d): ?Contract { return $c ?? $d; }
+var_dump(maybe(null, null));
+echo maybe(null, new Other())->name(), "\n";
+for ($i = 0; $i < 20; $i++) { $k = Consumer::make($i % 2 ? new Other() : null); }
+echo $k->value->name(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "impl\n",
+            "other\n",
+            "other impl\n",
+            "NULL\n",
+            "other\n",
+            "other\n",
+        )
+    );
+}

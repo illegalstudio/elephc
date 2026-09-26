@@ -96,7 +96,7 @@ impl Checker {
                 } else {
                     vt
                 };
-                Ok(merge_null_coalesce_result_type(non_null_value, dt))
+                Ok(merge_null_coalesce_result_type(self, non_null_value, dt))
             }
             ExprKind::Pipe { value, callable } => {
                 self.infer_pipe_type(value, callable, expr, env)
