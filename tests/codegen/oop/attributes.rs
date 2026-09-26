@@ -4451,3 +4451,34 @@ echo implode(',', array_keys((new ReflectionClass('E'))->getConstants())), "\n";
          B,X,A\n"
     );
 }
+
+/// The same order holds where the first version of the fix missed it: a class that compatibly
+/// redeclares trait constants after an earlier own one, a trait reflected directly, and the eval
+/// bridge, which served the same API alphabetically. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_reflection_constant_order_for_redeclarations_traits_and_eval() {
+    let out = compile_and_run(
+        r#"<?php
+trait T { const P = 1; const Q = 2; const TB = 4; const TA = 5; }
+class C { use T; const A = 3; const P = 1; const Q = 2; }
+echo implode(',', array_keys((new ReflectionClass('C'))->getConstants())), "\n";
+echo implode(',', array_keys((new ReflectionClass('T'))->getConstants())), "\n";
+interface J0 { const J0A = 1; }
+interface J extends J0 { const JA = 1; }
+class P implements J { const PB = 1; const PA = 1; }
+class D extends P { const Z = 1; const K = 2; }
+enum E: string { case B = 'b'; const X = 'x'; case A = 'a'; }
+eval('echo implode(",", array_keys((new ReflectionClass("D"))->getConstants())), "\n";');
+eval('echo implode(",", array_keys((new ReflectionClass("C"))->getConstants())), "\n";');
+eval('echo implode(",", array_keys((new ReflectionClass("E"))->getConstants())), "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "A,P,Q,TB,TA\n\
+         P,Q,TB,TA\n\
+         Z,K,PB,PA,JA,J0A\n\
+         A,P,Q,TB,TA\n\
+         B,X,A\n"
+    );
+}

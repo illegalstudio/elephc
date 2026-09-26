@@ -264,6 +264,9 @@ pub(super) fn reflection_trait_constant_members(
             push_unique_constant_member(constant_name, value, &mut members, &mut seen);
         }
     }
+    // `declared_trait_constants` is a map; the trait's declaration order is the name list.
+    let order = reflection_trait_constant_names(ctx, trait_name);
+    members.sort_by_key(|member| order.iter().position(|name| *name == member.name).unwrap_or(usize::MAX));
     Ok(members)
 }
 
@@ -483,6 +486,9 @@ pub(super) fn reflection_trait_constant_reflection_members(
             &mut seen,
         );
     }
+    // `declared_trait_constants` is a map; the trait's declaration order is the name list.
+    let order = reflection_trait_constant_names(ctx, trait_name);
+    members.sort_by_key(|member| order.iter().position(|name| *name == member.name).unwrap_or(usize::MAX));
     Ok(members)
 }
 
