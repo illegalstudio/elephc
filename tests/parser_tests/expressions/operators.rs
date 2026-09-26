@@ -352,20 +352,39 @@ fn test_statement_postfix_scan_declines_behind_a_top_level_assignment() {
 ///
 /// `$c ? $a[0]++ : $b;` has a top-level `?`, so the `++` sits in a BRANCH. The scan used to
 /// claim the statement, truncate it at the `++`, and report `Expected ':' in ternary operator`
-/// from the middle of a fragment it had cut itself. A ternary as a statement is a separate,
-/// tracked gap (#827, #841) — this pins that the increment scan is no longer what reports it.
+/// from the middle of a fragment it had cut itself. Since #827 the whole statement parses as
+/// one ternary expression statement.
 #[test]
 fn test_ternary_statement_with_an_element_increment_is_not_an_increment_statement() {
-    assert!(parse_fails("<?php $c ? $a[0]++ : $b;"));
-
-    let tokens = elephc::lexer::tokenize("<?php $c ? $a[0]++ : $b;").expect("tokenize");
-    let reported = elephc::parser::parse(&tokens)
-        .expect_err("a ternary statement is not parsed yet")
-        .to_string();
+    let stmts = parse_source("<?php $c ? $a[0]++ : $b;");
     assert!(
-        !reported.contains("ternary operator"),
-        "the increment scan must not report a truncated ternary: {reported}"
+        matches!(&stmts[0].kind, StmtKind::ExprStmt(expr) if matches!(expr.kind, ExprKind::Ternary { .. })),
+        "expected one ternary expression statement, got {:?}",
+        stmts[0].kind
     );
+}
+
+/// Verifies variable-led expressions that are not assignments parse as expression statements
+/// (#827, #841): a ternary, a `||`/`&&` guard, `instanceof`, and a bare `and`/`or` chain. A
+/// missing `=` still reports as one.
+#[test]
+fn test_variable_led_expression_statements_parse() {
+    for source in [
+        "<?php $flag ? left() : right();",
+        "<?php $ok || throw new RuntimeException('x');",
+        "<?php $ok && $v = 5;",
+        "<?php $o instanceof Foo;",
+        "<?php $ok and go();",
+        "<?php $n ?? fallback();",
+    ] {
+        let stmts = parse_source(source);
+        assert!(
+            matches!(&stmts[0].kind, StmtKind::ExprStmt(_)),
+            "{source}: expected an expression statement, got {:?}",
+            stmts[0].kind
+        );
+    }
+    assert!(parse_fails("<?php $x \"hi\";"));
 }
 
 /// Verifies that `<?php echo ~$x;` parses as a bitwise NOT unary operation.

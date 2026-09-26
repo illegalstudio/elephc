@@ -115,6 +115,24 @@ pub(in crate::parser::stmt) fn parse_variable_stmt(
         return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
     }
 
+    // Any other variable-led statement is an expression PHP evaluates for its effects:
+    // `$ok || throw new E()`, `$flag ? a() : b()`, `$x instanceof C`.
+    let followed_by_assignment = tokens
+        .get(*pos + 1)
+        .is_some_and(|(token, _)| compound::assignment_operator(token).is_some());
+    if !followed_by_assignment && *pos + 1 < tokens.len() {
+        let start = *pos;
+        let expr = parse_expr(tokens, pos)?;
+        // `$x "hi";` is a missing `=`, not an expression; the assignment path says so.
+        let bare_variable = matches!(expr.kind, ExprKind::Variable(_)) && *pos == start + 1;
+        let at_semicolon = matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Semicolon));
+        if !bare_variable || at_semicolon {
+            expect_semicolon(tokens, pos)?;
+            return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+        }
+        *pos = start;
+    }
+
     // Regular or compound assignment
     compound::parse_assign(tokens, pos, span)
 }

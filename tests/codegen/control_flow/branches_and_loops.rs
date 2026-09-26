@@ -463,3 +463,54 @@ var_dump($never);
 }
 
 // --- Ternary operator ---
+
+/// A statement that starts with a variable but is not an assignment is an expression PHP
+/// evaluates for its effects: a ternary choosing a call, `||`/`&&`/`and`/`or` guards including
+/// `|| throw`, `??`, and a discarded concatenation. They failed to parse with
+/// `Expected '=' after variable name`. Regression for #827 and #841.
+#[test]
+fn test_variable_led_expression_statements_run() {
+    let out = compile_and_run(
+        r#"<?php
+function left(): void { echo "left\n"; }
+function right(): void { echo "right\n"; }
+$flag = $argc > 0;
+$flag ? left() : right();
+$flag ? print "yes\n" : print "no\n";
+$valid = $argc > 0;
+$valid || throw new RuntimeException('invalid');
+$value = 0;
+$valid && $value = 5;
+echo $value, "\n";
+$flag and left();
+$flag or right();
+$s = "a";
+$s . "b";
+$flag;
+try {
+    $zero = $argc - 1;
+    $zero || throw new RuntimeException('thrown');
+} catch (RuntimeException $e) {
+    echo $e->getMessage(), "\n";
+}
+$n = null;
+$n ?? right();
+$x = 3;
+$x += 2;
+$x .= "!";
+echo $x, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "left\n",
+            "yes\n",
+            "5\n",
+            "left\n",
+            "thrown\n",
+            "right\n",
+            "5!\n",
+        )
+    );
+}
