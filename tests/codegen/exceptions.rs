@@ -1100,3 +1100,20 @@ echo overwritten();
     );
     assert_eq!(out, "9");
 }
+
+/// Exception's seven accessors are final, while its constructor and string conversion stay overridable.
+#[test]
+fn test_exception_method_finality_matches_php() {
+    let out = compile_and_run(r#"<?php
+echo (new ReflectionMethod(Exception::class, 'getMessage'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getCode'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getFile'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getLine'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getTrace'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getTraceAsString'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, 'getPrevious'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, '__toString'))->isFinal() ? '1|' : '0|';
+echo (new ReflectionMethod(Exception::class, '__construct'))->isFinal() ? '1|' : '0|';
+"#);
+    assert_eq!(out, "1|1|1|1|1|1|1|0|0|");
+}

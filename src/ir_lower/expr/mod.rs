@@ -190,7 +190,9 @@ pub(crate) use array_access::{
     lower_array_access_from_lowered_receiver, lower_by_ref_foreach_element_source,
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
-pub(crate) use instanceof_coercions::coerce_to_int_at_span;
+pub(crate) use instanceof_coercions::{
+    coerce_array_key_to_int_at_span, coerce_to_int_at_span,
+};
 pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use property_access::{
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,

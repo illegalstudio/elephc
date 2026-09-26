@@ -117,6 +117,22 @@ These helpers implement PHP's `@` error-suppression operator and the runtime war
 | `__rt_diag_pop_suppression` | Leave one `@` suppression scope, clamped against underflow | — | — |
 | `__rt_diag_warning` | Write a runtime warning string to stderr unless suppression is active | `x1`/`x2` = message string | — |
 
+Array-key conversion uses `__rt_float_key_to_int` to apply PHP's integer
+conversion and report precision loss or an unrepresentable float through the
+diagnostic channel. A single PHP array access can probe, insert, and probe the
+same key again. Only its first conversion emits diagnostics; subsequent probes
+use `__rt_php_float_to_int` to obtain the same integer key without repeating the
+message. This applies to typed float keys and float values inside `Mixed` cells.
+
+Out-of-bounds string reads use `__rt_warn_string_offset` to report
+the missing offset. Silent existence probes such as `isset()` and `??` do not
+call that warning helper. A float string offset instead reports `String offset
+cast occurred` before truncating the offset, including for integral-valued
+floats. These warnings follow `@` suppression and the registered PHP error
+handler through the shared diagnostic dispatcher.
+Boxed float offsets use the same warning before the string fetch.
+Integer-form string offsets remain silent, including when their value is boxed.
+
 ## String routines
 
 **Source:** `src/codegen_support/runtime/strings/`
@@ -686,7 +702,7 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 
 **Files:** `system/serialize.rs`, `system/unserialize/` (11 Rust modules including `mod.rs`)
 
-These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes PHP's exact wire format (`N;`, `b:0;`/`b:1;`, `i:<int>;`, `d:<shortest-round-trip>;`, `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and `O:<len>:"<class>":<n>:{...}`) directly into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad), reusing `__rt_json_ftoa` for shortest-round-trip float digits. Object serialization honors `__sleep()` / `Serializable` and reuses an object back-reference table so repeated instances emit `r:`/`R:` references.
+These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes PHP's exact wire format (`N;`, `b:0;`/`b:1;`, `i:<int>;`, `d:<shortest-round-trip>;`, `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and `O:<len>:"<class>":<n>:{...}`) directly into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad), reusing `__rt_json_ftoa` for shortest-round-trip float digits. Object serialization honors `__sleep()` / `Serializable` and reuses an object back-reference table so repeated instances emit `r:`/`R:` references. A class PHP refuses to serialize (the Reflection family, `Generator`, `Fiber` and `SplFileInfo`, which php-src flags `ZEND_ACC_NOT_SERIALIZABLE`, and anything extending them) has its `_class_serialize_ptrs` entry pointed at `__rt_throw_serialization_denied` instead of a `__serialize` method. That helper throws a catchable `Exception("Serialization of '<Class>' is not allowed")`, so the denial holds wherever the serializer meets the object: typed, behind `mixed`, nested in an array, or on a subclass that declares its own `__serialize()`.
 
 The unserializer keeps the fixed runtime-emission order in `unserialize/mod.rs`. Shared diagnostics and per-call context lifecycle are separated from target-specific allowed-class policy parsing, allocation-free validation, recursive decoding, and object-storage/key helpers. The two decoder files are cohesive architecture leaves; every surrounding orchestration or support module remains below the repository's 500-line warning threshold.
 

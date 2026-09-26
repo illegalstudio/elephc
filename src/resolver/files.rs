@@ -49,8 +49,9 @@ pub(super) fn parse_file(
     let file = path.display().to_string();
 
     let mode = SourceMode::from_path(path);
-    let tokens =
-        lexer::tokenize_with_mode(&source, mode).map_err(|e| e.with_file(file.clone()))?;
+    let source_id = Span::fresh_source_id();
+    let tokens = lexer::tokenize_with_mode_and_source_id(&source, mode, source_id)
+        .map_err(|e| e.with_file(file.clone()))?;
 
     let parsed = parser::parse_with_mode(&tokens, mode).map_err(|e| e.with_file(file))?;
     crate::source::finalize_physical_program(parsed, path, mode, defines)

@@ -125,6 +125,27 @@ pub(crate) fn coerce_to_int_at_span(
     }
 }
 
+/// Converts a packed-array float key with PHP diagnostics unless its read already did so.
+pub(crate) fn coerce_array_key_to_int_at_span(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+    already_diagnosed: bool,
+) -> LoweredValue {
+    if value.ir_type == IrType::F64 && !already_diagnosed {
+        ctx.emit_value(
+            Op::FToI,
+            vec![value.value],
+            Some(Immediate::FloatKeyDiagnostic),
+            PhpType::Int,
+            Op::FToI.default_effects() | Effects::MAY_WARN,
+            span,
+        )
+    } else {
+        coerce_to_int_at_span(ctx, value, span)
+    }
+}
+
 /// Coerces a value to float when the storage type allows a direct conversion.
 pub(super) fn coerce_to_float(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
     coerce_to_float_at_span(ctx, value, Some(expr.span))

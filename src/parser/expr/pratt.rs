@@ -410,6 +410,11 @@ fn parse_expr_bp_inner(
                 } else {
                     lowerer.bind_value(&target, rhs)
                 };
+                let target = if matches!(op, AssignmentOperator::Compound(_)) {
+                    lowerer.snapshot_update_dimension(target)
+                } else {
+                    target
+                };
                 let (value, result_target) = match op {
                     AssignmentOperator::Assign => (rhs.clone(), rhs),
                     AssignmentOperator::NullCoalesce => {

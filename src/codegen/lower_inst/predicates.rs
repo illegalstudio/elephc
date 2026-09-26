@@ -20,6 +20,20 @@ use crate::codegen::{CodegenIrError, Result};
 /// Lowers scalar PHP truthiness into a concrete boolean integer result.
 pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    emit_value_truthiness(ctx, value, inst.op.name())?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits PHP truthiness for one value into the integer result register.
+///
+/// Split out of [`lower_is_truthy`] so a lowering that needs PHP's boolean conversion for an
+/// argument, rather than for an `IsTruthy` instruction, can reuse it. `op_name` only names the
+/// caller in the unsupported-type error.
+pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    op_name: &str,
+) -> Result<()> {
     match ctx.raw_value_php_type(value)? {
         PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
             ctx.load_value_to_result(value)?;
@@ -47,12 +61,11 @@ pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for PHP type {:?}",
-                inst.op.name(),
-                other
+                op_name, other
             )))
         }
     }
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Emits PHP truthiness for a tagged scalar: null is false, otherwise integer truthiness.

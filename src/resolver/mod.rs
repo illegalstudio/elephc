@@ -124,6 +124,7 @@ fn resolve_collecting_includes_with_defines_inner(
     base_dir: &Path,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    Span::reset_source_ids();
     if !has_includes(&program) {
         return Ok((program, Vec::new()));
     }

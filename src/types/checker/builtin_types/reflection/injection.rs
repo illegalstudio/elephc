@@ -115,7 +115,11 @@ pub(crate) fn inject_builtin_reflection(
                 builtin_reflection_class_bool_method("isRepeated", "__is_repeated"),
             ],
             attributes: Vec::new(),
-            constants: Vec::new(),
+            // PHP declares exactly one constant on this class, and it is the second argument to
+            // every `getAttributes()` call that wants subclasses as well as exact matches. Without
+            // it the flag is unnameable from PHP, so the filter added for issue #983 could only be
+            // reached by writing the bare literal 2.
+            constants: vec![builtin_class_const("IS_INSTANCEOF", 2)],
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
         },

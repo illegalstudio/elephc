@@ -346,6 +346,35 @@ pub(super) fn lower_array_chunk_call(
     Ok(())
 }
 
+/// Calls `__rt_hash_chunk` for an associative `array_chunk()` receiver.
+///
+/// Same receiver/length prologue as the indexed helpers, plus the literal `preserve_keys` flag in
+/// the third argument register. That register is loaded AFTER the length guard, which can branch
+/// into the ValueError path and does not promise to preserve it.
+pub(super) fn lower_hash_chunk_call(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    length: ValueId,
+    preserve_keys: bool,
+) -> Result<()> {
+    let flag_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(hash, "x0")?;
+            ctx.load_value_to_reg(length, "x1")?;
+            "x2"
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(hash, "rdi")?;
+            ctx.load_value_to_reg(length, "rsi")?;
+            "rdx"
+        }
+    };
+    emit_array_chunk_length_guard(ctx);
+    abi::emit_load_int_immediate(ctx.emitter, flag_reg, i64::from(preserve_keys));
+    abi::emit_call_label(ctx.emitter, "__rt_hash_chunk");
+    Ok(())
+}
+
 /// Calls the appropriate legacy runtime helper after materializing pad arguments.
 pub(super) fn lower_array_pad_call(
     ctx: &mut FunctionContext<'_>,
