@@ -15,6 +15,11 @@ pub(super) fn lower_unset_locals(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    for arg in args {
+        if let Some(message) = unset_property_element_refusal(ctx, arg) {
+            crate::ir_lower::diagnostics::refuse(arg.span, &message);
+        }
+    }
     if !args.iter().all(|arg| unset_target_supported(ctx, arg)) {
         return None;
     }
@@ -48,6 +53,9 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
+                || unset_array_access_property_array_type(ctx, array).is_some()
+                || unset_array_access_has_array_access_property_receiver(ctx, array)
+                || unset_array_access_static_php_array_receiver(ctx, array).is_some()
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -101,6 +109,138 @@ pub(super) fn unset_array_access_has_local_array_receiver(
     }
 }
 
+/// Returns the property storage type when `unset($object->prop[$key])` lowers directly.
+///
+/// Two property shapes qualify, the two the element-write path already mutates in place:
+///
+/// - a declared PHP `array` (the boxed packed-or-hash contract), removed through `OffsetUnset`
+///   after the cell is detached, which is how a declared-array local is handled;
+/// - an associative `array<K, V>` (an untyped property whose values are keyed), removed through
+///   `HashUnset`.
+///
+/// A packed indexed `array<T>` property is refused on purpose. `unset()` leaves a key hole, so
+/// the storage would have to become a hash, and a property slot is not the unset site's to
+/// retype: every other method of the class reads that slot as a packed list. A declared `array`
+/// property is the boxed contract instead, which is why the ordinary spelling
+/// (`private array $items`) is covered. The receiver must be one non-null object of a known
+/// class, and the property must be declared and reachable from this scope; anything else keeps
+/// the shared unsupported diagnostic.
+pub(super) fn unset_array_access_property_array_type(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> Option<PhpType> {
+    let ExprKind::PropertyAccess { object, property } = &array.kind else {
+        return None;
+    };
+    let property_ty = unset_receiver_declared_property_type(ctx, object, property)?;
+    if property_ty.is_php_array() {
+        return Some(property_ty);
+    }
+    match property_ty.codegen_repr() {
+        assoc @ PhpType::AssocArray { .. } => Some(assoc),
+        _ => None,
+    }
+}
+
+/// Returns true when `unset($object->prop[$key])` targets a property holding an ArrayAccess
+/// object, which dispatches to that object's `offsetUnset($key)`.
+pub(super) fn unset_array_access_has_array_access_property_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::PropertyAccess { object, property } = &array.kind else {
+        return false;
+    };
+    unset_receiver_declared_property_type(ctx, object, property)
+        .is_some_and(|ty| type_satisfies_array_access_for_ir(ctx, &ty))
+}
+
+/// Returns the declared type of `$object->property` when the receiver is one non-null object of
+/// a known class and the property is declared and accessible from the current scope.
+fn unset_receiver_declared_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> Option<PhpType> {
+    let (class_name, nullable) = instance_callable_object_class_and_nullability(ctx, object)?;
+    if nullable {
+        return None;
+    }
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    if !property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
+        return None;
+    }
+    class_info
+        .visible_property(property)
+        .map(|(_, (_, property_ty))| property_ty.clone())
+}
+
+/// Returns the static receiver and property when `unset(Class::$prop[$key])` lowers directly,
+/// which is the case for a declared PHP `array` static property.
+pub(super) fn unset_array_access_static_php_array_receiver<'e>(
+    ctx: &LoweringContext<'_, '_>,
+    array: &'e Expr,
+) -> Option<(&'e StaticReceiver, &'e str)> {
+    let ExprKind::StaticPropertyAccess { receiver, property } = &array.kind else {
+        return None;
+    };
+    crate::ir_lower::stmt::static_property_type(ctx, receiver, property)
+        .is_some_and(|ty| ty.is_php_array())
+        .then_some((receiver, property.as_str()))
+}
+
+/// Explains why `unset()` of a property ARRAY ELEMENT has no lowering, for the shapes that are
+/// refused on purpose rather than simply not implemented.
+///
+/// Both refusals name the declared `array` type as the fix, because that is the representation
+/// that can hold the key hole `unset()` leaves:
+///
+/// - a packed indexed `array<T>` object property (an untyped property whose default is a list)
+///   would have to become a hash, which retypes a slot every method of the class reads;
+/// - an untyped static array property has no separated-cell write path to remove through.
+///
+/// Recorded as a source diagnostic so the user sees the line, not the backend's generic
+/// unsupported-shape message.
+fn unset_property_element_refusal(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> Option<String> {
+    let ExprKind::ArrayAccess { array, .. } = &arg.kind else {
+        return None;
+    };
+    match &array.kind {
+        ExprKind::PropertyAccess { object, property } => {
+            let property_ty = unset_receiver_declared_property_type(ctx, object, property)?;
+            if property_ty.is_php_array()
+                || !matches!(property_ty.codegen_repr(), PhpType::Array(_))
+            {
+                return None;
+            }
+            Some(format!(
+                "Unsupported unset(): removing an element of `${property}` needs hash storage, \
+                 because PHP's unset() leaves a key hole without renumbering, but this untyped \
+                 property holds a packed list and every method of its class reads the slot as \
+                 one. Declare the property `array` (for example `public array ${property} = \
+                 [...];`), whose storage can hold sparse keys"
+            ))
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            let property_ty = crate::ir_lower::stmt::static_property_type(ctx, receiver, property)?;
+            if property_ty.is_php_array()
+                || !matches!(
+                    property_ty.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                )
+            {
+                return None;
+            }
+            Some(format!(
+                "Unsupported unset(): an element of static property `${property}` can be removed \
+                 only when the property is declared `array` (for example `public static array \
+                 ${property} = [...];`)"
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// Returns true when an array-access unset receiver is a static ArrayAccess object.
 pub(super) fn unset_array_access_has_object_receiver(
     ctx: &LoweringContext<'_, '_>,
@@ -127,12 +267,26 @@ pub(super) fn unset_array_access_has_object_receiver(
 /// representation change and therefore stays limited to a local this function owns. An
 /// `ArrayAccess` object dispatches to its `offsetUnset($key)` method like before, and a raw
 /// by-reference INDEXED local falls through to that path.
+///
+/// An element of a declared-array or associative object property, and of a declared-array static
+/// property, is removed through the same storage the element writes mutate (issue #750); a
+/// property holding an ArrayAccess object reaches the `offsetUnset` dispatch below.
 pub(super) fn lower_unset_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     index: &Expr,
     expr: &Expr,
 ) {
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if let Some(property_ty) = unset_array_access_property_array_type(ctx, array) {
+            lower_unset_property_array_element(ctx, object, property, &property_ty, index, expr);
+            return;
+        }
+    }
+    if let Some((receiver, property)) = unset_array_access_static_php_array_receiver(ctx, array) {
+        lower_unset_static_property_array_element(ctx, receiver, property, index, expr);
+        return;
+    }
     if let ExprKind::Variable(name) = &array.kind {
         if ctx.local_type(name).is_php_array()
             || (ctx.is_ref_bound_local(name)
@@ -167,6 +321,70 @@ pub(super) fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Lowers `unset($object->prop[$key])` for a declared-array or associative property.
+///
+/// PHP's order is receiver, key, then the property fetch, so both operands are lowered here and
+/// the property is read by `lower_property_array_unset` last. The removed value's release can run
+/// a destructor that throws, so an owning receiver temporary and the key are rooted in an
+/// unwind-visible slot across the removal, the same protection the declared-array local path
+/// gives its key.
+fn lower_unset_property_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    property_ty: &PhpType,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let object_value = lower_expr(ctx, object);
+    // Only a receiver the expression itself produced (`make()->items[$k]`) needs a root; a
+    // variable or `$this` is kept alive by its own slot across the removal.
+    let (object_value, object_owner) = if ctx.value_is_owning_temporary(object_value) {
+        root_owned_call_operand(ctx, object_value, object.span)
+    } else {
+        (object_value, None)
+    };
+    let index_value = lower_expr(ctx, index);
+    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
+    crate::ir_lower::stmt::lower_property_array_unset(
+        ctx,
+        object_value,
+        property,
+        property_ty,
+        index_value,
+        expr.span,
+    );
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    if let Some(slot) = object_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+}
+
+/// Lowers `unset(Class::$prop[$key])` for a declared PHP `array` static property, rooting an
+/// owning key temporary across the removal like the other element paths do.
+fn lower_unset_static_property_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let index_value = lower_expr(ctx, index);
+    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
+    crate::ir_lower::stmt::lower_static_property_array_unset(
+        ctx,
+        receiver,
+        property,
+        index_value,
+        expr.span,
+    );
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
 }
 
 /// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.
