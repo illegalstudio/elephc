@@ -8,6 +8,7 @@
 //! Key details:
 //! - Assignment statement parsing is split to keep PHP l-value and evaluation-order rules localized.
 
+mod append_chain;
 mod compound;
 mod list;
 mod locals;
@@ -28,6 +29,11 @@ pub(super) use locals::{
     parse_incdec_stmt,
     parse_static_var,
     parse_typed_assign,
+};
+pub(crate) use append_chain::{
+    lower_append_chain_expr,
+    parse_append_dimensions,
+    REFERENCE_APPEND_UNSUPPORTED,
 };
 pub(crate) use postfix::{
     can_replay_assignment_target,

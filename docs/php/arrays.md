@@ -218,12 +218,66 @@ an element aliasing a local variable would be a pointer to a stack slot the
 array can outlive. Assign the value and copy back afterwards, or alias an
 existing element with `$b =& $a[0]`.
 
+The same rule rejects an append by reference, `$a[] = &$x` (including
+`$a['k'][] = &$x`), with a compile-time error that names it (`Appending a
+reference ... is not supported`): the new element would have to alias `$x`'s
+storage.
+
 ## Multi-dimensional arrays
 ```php
 <?php
 $matrix = [[1, 2], [3, 4]];
 echo $matrix[0][1];    // 2
 ```
+
+### Appending inside a nested write
+
+An append dimension (`[]`) can sit anywhere in a write target, as in PHP. Each
+`[]` creates a new element at the end of its array, and the rest of the target
+writes into that element:
+
+```php
+<?php
+$body = [];
+$body['personalizations'][]['to'][]['email'] = 'a@example.com';
+$body['personalizations'][0]['to'][]['email'] = 'b@example.com';
+echo json_encode($body);
+// {"personalizations":[{"to":[{"email":"a@example.com"},{"email":"b@example.com"}]}]}
+
+$m = [];
+$m[][] = 1;             // [[1]]
+```
+
+The dimensions are evaluated first, then the value, then the write, and the
+value sees the array as it was before the new element was added
+(`$a = [1]; $a[][] = count($a);` stores `1`). A copy taken before the write is
+left unchanged.
+
+### Append as an expression
+
+An append is an assignment expression like any other, so its value is the
+assigned value:
+
+```php
+<?php
+$a = [];
+$x = ($a[] = 5);        // $x is 5, $a is [5]
+$y = $a[] = $b[] = 9;   // both arrays get 9
+echo ($a['log'][] = 'ok');
+```
+
+### Appending to `$this` and to call results
+
+Inside a class that implements `ArrayAccess`, `$this[] = $value` calls
+`$this->offsetSet(null, $value)`, exactly like `$object[] = $value` on a
+variable. An append onto a call result evaluates the call and then appends to
+its value: an `ArrayAccess` object receives `offsetSet(null, $value)`, and an
+array result is a temporary copy, so the write is discarded as in PHP
+(`values()[] = 2;` calls `values()` and changes nothing).
+
+Reading an append dimension (`echo $a[];`) is rejected with PHP's
+`Cannot use [] for reading`, and so is a compound operator on one
+(`$a[] .= 'x'`).
 
 ## Spread in array literals
 

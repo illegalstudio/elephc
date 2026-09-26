@@ -675,6 +675,47 @@ fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
     );
 }
 
+// --- Append lvalues (issue #845) ---
+
+/// Verifies `$a[] = &$x` names the unsupported construct in statement position, in value
+/// position, and after a mid-chain append, instead of "Unexpected token: Ampersand".
+#[test]
+fn test_error_reference_append_is_named() {
+    expect_error(
+        "<?php $b = []; $y = 1; $b[] = &$y;",
+        "Appending a reference (`$a[] = &$x`) is not supported",
+    );
+    expect_error(
+        "<?php $b = []; $y = 1; $x = ($b[] = &$y);",
+        "Appending a reference (`$a[] = &$x`) is not supported",
+    );
+    expect_error(
+        "<?php $b = []; $y = 1; $b['k'][]['v'] = &$y;",
+        "Appending a reference (`$a[] = &$x`) is not supported",
+    );
+}
+
+/// Verifies an append dimension used as a READ reports PHP's "Cannot use [] for reading".
+#[test]
+fn test_error_append_dimension_read() {
+    expect_error("<?php $a = [1]; echo $a[];", "Cannot use [] for reading");
+    expect_error("<?php $a = [1]; $x = $a[][0];", "Cannot use [] for reading");
+}
+
+/// Verifies a compound operator on an append target stays rejected, matching PHP's fatal
+/// "Cannot use [] for reading", in both statement and expression position.
+#[test]
+fn test_error_compound_assignment_to_append_target() {
+    expect_error("<?php $a = []; $a[]['k'] .= 'x';", "Invalid assignment target");
+    expect_error("<?php $a = []; $x = ($a[] += 1);", "Invalid assignment target");
+}
+
+/// Verifies a temporary expression cannot receive an append, as in PHP.
+#[test]
+fn test_error_append_to_temporary_expression() {
+    expect_error("<?php $x = ((1 + 2)[] = 3);", "Invalid assignment target");
+}
+
 /// Verifies a `(object)` cast with no operand is rejected rather than silently accepted.
 ///
 /// `(object)` is a PREFIX operator over the three-token `( identifier )` window, so a missing

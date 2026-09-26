@@ -72,14 +72,46 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
-    ctx.emit_void(
-        op,
-        vec![array_value.value, value.value],
-        None,
-        op.default_effects(),
-        Some(span),
-    );
+    let operands = if op == Op::RuntimeCall {
+        object_append_operands(ctx, array_value, value)
+    } else {
+        vec![array_value.value, value.value]
+    };
+    ctx.emit_void(op, operands, None, op.default_effects(), Some(span));
     release_persisted_string_operand(ctx, value, span);
+}
+
+/// Returns the runtime-call operands for `$receiver[] = $value` on a non-array receiver.
+///
+/// PHP turns an append on an `ArrayAccess` object into `offsetSet(null, $value)`. The runtime
+/// call dispatches on its operand count, and a two-operand write means the SPL `append` family
+/// (`ArrayObject::append`, `SplDoublyLinkedList::push`) that only the runtime-backed containers
+/// declare. Every other receiver (a user class, the `ArrayAccess` interface, or a union of
+/// `ArrayAccess` objects) gets an explicit null key, so the write reaches `offsetSet`.
+pub(in crate::ir_lower) fn object_append_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    value: LoweredValue,
+) -> Vec<crate::ir::ValueId> {
+    let receiver_ty = ctx.builder.value_php_type(receiver.value).codegen_repr();
+    let keeps_append_method = match &receiver_ty {
+        PhpType::Object(class_name) => {
+            let normalized = class_name.trim_start_matches('\\');
+            matches!(normalized, "SplDoublyLinkedList" | "SplStack" | "SplQueue")
+                || ctx.classes.get(normalized).is_some_and(|class_info| {
+                    class_info
+                        .methods
+                        .contains_key(&crate::names::php_symbol_key("append"))
+                })
+        }
+        PhpType::Union(_) => false,
+        _ => true,
+    };
+    if keeps_append_method {
+        return vec![receiver.value, value.value];
+    }
+    let null_key = ctx.builder.emit_const_null();
+    vec![receiver.value, null_key, value.value]
 }
 
 /// Prepares an indexed-array local for an offset assignment.

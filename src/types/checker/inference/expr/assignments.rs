@@ -46,7 +46,7 @@ impl Checker {
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
         for stmt in prelude {
-            self.check_assignment_like_stmt(stmt, env)?;
+            self.check_assignment_prelude_stmt(stmt, env)?;
         }
 
         if let ExprKind::Variable(name) = &target.kind {
@@ -117,6 +117,31 @@ impl Checker {
             _ => value,
         };
         self.infer_type(result_expr, env)
+    }
+
+    /// Type-checks one parser-generated prelude statement of an assignment expression.
+    ///
+    /// Preludes hold the stabilizing temporaries of a complex target and, for an append
+    /// expression (`($a['k'][]['x'] = $v)`), the append writes themselves, which the parser
+    /// groups in `Synthetic` statements (nested appends included). Those groups are walked here
+    /// in order; every other statement is an assignment-like write.
+    fn check_assignment_prelude_stmt(
+        &mut self,
+        stmt: &Stmt,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        match &stmt.kind {
+            StmtKind::Synthetic(stmts) => {
+                if self.check_empty_indexed_nested_append(stmts, env)? {
+                    return Ok(());
+                }
+                for stmt in stmts {
+                    self.check_assignment_prelude_stmt(stmt, env)?;
+                }
+                Ok(())
+            }
+            _ => self.check_assignment_like_stmt(stmt, env),
+        }
     }
 
     /// Type-checks `$object->{$property} = $value` assignment expressions.

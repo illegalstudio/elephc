@@ -100,6 +100,35 @@ fn parse_expr_bp_inner(
                     None => break,
                 }
             }
+            // `$a[] = $v` / `$a['k'][]['x'] = $v` in EXPRESSION position. An append dimension
+            // is only meaningful as a write target, so the whole target and its `=` are consumed
+            // here and desugared to an assignment whose prelude performs the append and whose
+            // value is the assigned value.
+            Token::LBracket
+                if matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::RBracket)) =>
+            {
+                let span = tokens[*pos].1.span;
+                *pos += 2;
+                let dims = crate::parser::stmt::parse_append_dimensions(tokens, pos)?;
+                let Some((op, _, r_bp)) = tokens.get(*pos).and_then(|(token, _)| assignment_bp(token))
+                else {
+                    return Err(CompileError::new(span, "Cannot use [] for reading"));
+                };
+                if op != AssignmentOperator::Assign {
+                    return Err(CompileError::new(span, "Invalid assignment target"));
+                }
+                let assign_span = tokens[*pos].1.span;
+                *pos += 1;
+                if let Some((Token::Ampersand, metadata)) = tokens.get(*pos) {
+                    return Err(CompileError::new(
+                        metadata.span,
+                        crate::parser::stmt::REFERENCE_APPEND_UNSUPPORTED,
+                    ));
+                }
+                let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+                let span = assign_span.merge(rhs.span);
+                lhs = crate::parser::stmt::lower_append_chain_expr(lhs, dims, rhs, span)?;
+            }
             Token::LBracket => {
                 let span = tokens[*pos].1.span;
                 *pos += 1;
