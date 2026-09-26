@@ -25,6 +25,23 @@ pub(super) fn reflection_parameter_default_value(
         return Ok(Some(value));
     }
     match &default.kind {
+        // `ConstRef` is a GLOBAL constant. It folds the same way the scoped forms do, and it
+        // has to: the constant NAME alone left `isDefaultValueConstant()` true while
+        // `isDefaultValueAvailable()` stayed false and `getDefaultValue()` threw — a state PHP
+        // never produces (#1080).
+        //
+        // Unlike the scoped forms it does NOT propagate a fold failure. `reflection_constant_value`
+        // is fallible, and `ReflectionConstantValue` carries no array, so `const ITEMS = [1, 2];
+        // function f($items = ITEMS) {}` failed the whole compile once global constants reached
+        // it. Every other unsupported default here answers `Ok(None)` and keeps the program
+        // building; this one now does too. That is still short of PHP, which reports the array —
+        // folding it needs an array variant and is filed — but a program that compiled before
+        // this branch compiles after it.
+        ExprKind::ConstRef(_) => Ok(
+            reflection_constant_value(ctx, current_class, current_info, default, 0)
+                .ok()
+                .and_then(reflection_parameter_default_from_constant_value),
+        ),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
@@ -43,6 +60,7 @@ pub(super) fn reflection_object_parameter_default_value(
     let ExprKind::NewObject { class_name, args } = &default.kind else {
         return Ok(None);
     };
+    let written_args = args.len();
     let Some(args) = reflection_object_parameter_default_args(
         ctx,
         current_class,
@@ -56,6 +74,7 @@ pub(super) fn reflection_object_parameter_default_value(
     Ok(Some(ReflectionParameterDefaultValue::Object {
         class_name: class_name.as_str().to_string(),
         args,
+        written_args,
     }))
 }
 
@@ -129,6 +148,15 @@ pub(super) fn reflection_parameter_default_non_object_value(
         return Ok(Some(value));
     }
     match &default.kind {
+        // A global constant inside an object default's arguments must not fail the build either,
+        // for the reason `reflection_parameter_default_value` gives at the top level: an array
+        // constant cannot fold, and `new Box(ITEMS)` compiled before global constants reached
+        // this helper. The object default then has no value, as it had before.
+        ExprKind::ConstRef(_) => Ok(
+            reflection_constant_value(ctx, current_class, current_info, default, 0)
+                .ok()
+                .and_then(reflection_parameter_default_from_constant_value),
+        ),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
@@ -261,6 +289,14 @@ pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Opti
             reflection_static_receiver_label(receiver),
             name
         )),
+        // A GLOBAL constant is a name too, and PHP reports it the same way: a parameter declared
+        // `int $n = LIMIT` answers `LIMIT` from `getDefaultValueConstantName()` and prints
+        // `= LIMIT` in a dump, exactly as a class constant does. Only the scoped form was
+        // recognized here, so the global one had neither a name nor a folded value and dropped out
+        // of both (#1080).
+        ExprKind::ConstRef(name) => {
+            Some(name.as_str().trim_start_matches('\\').to_string())
+        }
         _ => None,
     }
 }
