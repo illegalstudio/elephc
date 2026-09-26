@@ -102,6 +102,16 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(parity_function_first_class_callable_dispatch)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# This debug-range check lowers and emits the same program for all five supported targets.
+# It takes about 37s on local x86_64 and exceeded the 60s cap on a loaded ARM64 runner.
+[[profile.default.overrides]]
+filter = 'test(native_debug_ranges_stay_in_their_function_sections_on_all_targets)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(native_debug_ranges_stay_in_their_function_sections_on_all_targets)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # This single-compile fixture force-loads the full PDO surface and static archive. Its first
 # cold run reached the 60s boundary on Linux x86_64 and macOS, while the isolated retries
 # passed, so keep the global budget unchanged and allow this exact link to finish once.

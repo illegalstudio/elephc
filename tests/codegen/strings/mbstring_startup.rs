@@ -29,7 +29,7 @@ restore_error_handler();
     let expected = "2:mb_send_mail(): Unsupported charset \"X-NOPE\" - will be regarded as ascii\n\
 2:mb_send_mail(): Unsupported transfer encoding \"X-NOPE\" - will be regarded as 8bit\n\
 sent\n";
-    let settings = ["sendmail_path=/bin/true"];
+    let settings = ["sendmail_path=/usr/bin/true"];
     assert_eq!(run(&format!("<?php {body}"), &settings, None).0, expected);
     assert_eq!(run("<?php eval((string)getenv('MB_STARTUP_CODE'));", &settings, Some(body)).0, expected);
 }
