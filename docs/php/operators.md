@@ -155,6 +155,8 @@ Word-form logical precedence matches PHP: `and` binds tighter than `xor`, and `x
 
 Word-form logical operators are case-insensitive (`AND`, `Or`, and `xOr` are accepted). Assignment expressions bind tighter than `and`, `xor`, and `or`, matching PHP: `$x = true and false` is parsed as `($x = true) and false`.
 
+A logical expression can stand on its own as a statement, evaluated for its side effects. The usual guards are `$valid || throw new InvalidArgumentException("…");` and `$enabled && $count = 5;`.
+
 ## Error Control
 
 PHP's error-control operator `@` suppresses runtime warnings for exactly one expression.
@@ -414,6 +416,8 @@ $label = $name ?: "anonymous";
 ```
 
 The short ternary / Elvis form `expr ?: fallback` returns the original left-hand value when it is truthy, otherwise it evaluates and returns the fallback. The left-hand expression is evaluated once.
+
+A ternary whose result is discarded is a valid statement that runs only the selected arm: `$ascending ? sort($items) : rsort($items);`.
 
 ## Pipe (PHP 8.5)
 

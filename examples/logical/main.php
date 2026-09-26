@@ -67,3 +67,13 @@ echo "Scores after conditional write: " . $scores[0] . ", " . $scores[1] . "\n";
 $nickname = "";
 $display_name = $nickname ?: "anonymous";
 echo "Display name: " . $display_name . "\n";
+
+// Logical and ternary expressions also stand alone as statements, for their side effects.
+$ready = count($scores) > 0;
+$ready || throw new RuntimeException("no scores");
+$bonus = 0;
+$ready && $bonus = 10;
+$ascending = $bonus > 5;
+$ordered = [3, 1, 2];
+$ascending ? sort($ordered) : rsort($ordered);
+echo "Guarded bonus: " . $bonus . ", ordered: " . implode(",", $ordered) . "\n";
