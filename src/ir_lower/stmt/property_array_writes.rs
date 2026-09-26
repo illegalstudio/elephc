@@ -219,6 +219,64 @@ pub(super) fn lower_property_array_assign(
     );
 }
 
+/// Lowers `unset($object->prop[$key])` once the receiver and the key have been evaluated.
+///
+/// PHP evaluates the receiver, then the key, and only then fetches the property for the write,
+/// so a key expression that itself mutates the property is seen by the removal. The caller has
+/// already lowered both operands in that order; the property is fetched here, last.
+///
+/// Both storage shapes that reach this function go through `PropGetForWrite`, which splits the
+/// property's container under the `ensure_unique` convention, publishes the unique container
+/// into the slot, and hands it back BORROWED from the property:
+///
+/// - A declared PHP `array` property keeps a boxed packed-or-hash cell; `OffsetUnset` promotes
+///   the separated cell to hash storage before removing the key, exactly as the declared-array
+///   local path does, so surviving keys keep their numbering.
+/// - An associative property holds a raw hash; `HashUnset` removes the key from the separated
+///   table, which is already unique, so the backend's own split is a no-op.
+///
+/// Nothing owned is in flight across the removal. That matters because `__rt_hash_unset`
+/// releases the removed value last, and that release can run a destructor which throws or
+/// writes the property again. An acquired copy of the property value, as the element WRITE
+/// path uses, would leak on the throw (the unwinder cannot see it) and, stored back with
+/// `PropSet`, would discard the destructor's write. A `$copy = $o->items` taken earlier still
+/// keeps its own container, because the separation happens before the removal.
+///
+/// A packed indexed `array<T>` property never reaches this function: removing a key leaves a
+/// hole, so the storage would have to become a hash, and a property slot's representation is
+/// shared by every reader of the class. The caller refuses that shape instead.
+pub(crate) fn lower_property_array_unset(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    property_ty: &PhpType,
+    index: LoweredValue,
+    span: Span,
+) {
+    let data = ctx.intern_string(property);
+    let (container_ty, remove) = if property_ty.is_php_array() {
+        (PhpType::php_array(), Op::OffsetUnset)
+    } else {
+        (property_ty.clone(), Op::HashUnset)
+    };
+    let container = ctx.emit_value(
+        Op::PropGetForWrite,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        container_ty,
+        Op::PropGetForWrite.default_effects(),
+        Some(span),
+    );
+    ctx.builder.set_value_ownership(container.value, Ownership::Borrowed);
+    ctx.emit_void(
+        remove,
+        vec![container.value, index.value],
+        None,
+        remove.default_effects(),
+        Some(span),
+    );
+}
+
 /// Separates a declared PHP array property before mutating its packed-or-hash boxed payload.
 /// `PropGetForWrite` publishes the detached cell and returns a borrow owned by the property.
 fn lower_php_array_property_write(

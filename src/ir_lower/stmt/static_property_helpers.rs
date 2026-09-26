@@ -69,7 +69,7 @@ pub(super) fn receiver_name(receiver: &StaticReceiver) -> String {
 }
 
 /// Resolves the declared PHP type of a static property for statement lowering.
-pub(super) fn static_property_type(
+pub(crate) fn static_property_type(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,

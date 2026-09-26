@@ -123508,7 +123508,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/types.rs",
       "codegen_function": "lower_unset_builtin",
-      "codegen_line": 141,
+      "codegen_line": 146,
       "notes": [
         "Rejects `unset()` calls that were not converted into direct EIR unbind operations.",
         "Reaching this lowering means `crate::ir_lower::expr` could not turn the target",
@@ -123523,7 +123523,11 @@
         "renumbering, so a packed list has to become a hash \u2014 and a callee cannot retype the",
         "caller's slot, which still reads `array<T>`. The associative form has no such problem",
         "and lowers directly (issue #677), so the message names the difference rather than",
-        "leaving \"array/hash elements\" looking like a blanket promise."
+        "leaving \"array/hash elements\" looking like a blanket promise.",
+        "Property array elements lower directly for a declared `array` property, an associative",
+        "property and a declared `array` static property (issue #750). The two property shapes that",
+        "are refused on purpose, a packed-list property and an untyped static array, are reported by",
+        "EIR lowering with a source span before this fallback is reached."
       ],
       "runtime_helpers": [],
       "sig_arm": null,

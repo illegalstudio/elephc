@@ -141,6 +141,33 @@ $list = dropIndexed($list, 1);
 print_r($list);   // [0 => 10, 2 => 30] — PHP's holes, no renumbering
 ```
 
+An element of an array held in a **property** is removed the same way:
+`unset($this->data[$key])`, `unset($order->lines[$key])` and `unset(self::$cache[$key])` all
+work, with the same no-renumbering, copy-on-write and missing-key rules. PHP's order is kept too:
+the receiver and the key are evaluated before the property is fetched, and a destructor run by
+the removed value sees (and may write) the property after the key is gone.
+
+```php
+<?php
+class Registry {
+    private array $handlers = ["a" => "x", "b" => "y"];
+    public static array $cache = ["k" => 1];
+    public function forget(string $name): void { unset($this->handlers[$name]); }
+    public function names(): array { return array_keys($this->handlers); }
+}
+$r = new Registry();
+$r->forget("a");
+unset(Registry::$cache["k"]);
+print_r($r->names());          // [0 => "b"]
+echo count(Registry::$cache);  // 0
+```
+
+This covers a property declared `array` (instance or static) and an untyped instance property
+whose keys are strings. An **untyped** property whose default is a list (`public $list = [1, 2];`)
+keeps packed list storage that every method of the class reads, and a removal would have to turn
+it into a hash, so `unset($this->list[$i])` reports a compile error at its line; the same goes for
+an element of an untyped static array. Declaring the property `array` is the fix in both cases.
+
 ## Array union
 
 `+` between arrays follows PHP union semantics: keys from the left operand win, and only keys that are missing from the left are copied from the right.
