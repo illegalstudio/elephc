@@ -132,6 +132,10 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     span: Span,
     key_already_diagnosed: bool,
 ) {
+    if string_offset_writes::local_is_string_offset_target(ctx, array) {
+        string_offset_writes::lower_string_offset_assign(ctx, array, index, value, span);
+        return;
+    }
     let array_value = load_array_local_for_write(ctx, array, span);
     let op = array_set_op(array_value.ir_type);
     if op == Op::RuntimeCall && matches!(

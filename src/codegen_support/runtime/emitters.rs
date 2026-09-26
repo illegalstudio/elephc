@@ -84,6 +84,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_ucwords(emitter);
     strings::emit_str_ireplace(emitter);
     strings::emit_substr_replace(emitter);
+    strings::emit_str_offset_set(emitter);
     strings::emit_substr_count(emitter);
     strings::emit_str_pad(emitter);
     strings::emit_str_split(emitter);

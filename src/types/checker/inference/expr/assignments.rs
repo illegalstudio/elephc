@@ -45,8 +45,26 @@ impl Checker {
         span: Span,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        let string_offset_write = string_offset_write_target(target, env);
+        if let Some((array, index)) = string_offset_write {
+            refuse_string_offset_read_modify_write(array, index, prelude, span)?;
+        }
         for stmt in prelude {
             self.check_assignment_like_stmt(stmt, env)?;
+        }
+        if let Some((array, index)) = string_offset_write {
+            // PHP's `($s[$i] = $v)` evaluates to the one-byte string it stored, never to `$v`
+            // itself, so the expression is a `string` whatever the value's type.
+            let stmt = Stmt::new(
+                StmtKind::ArrayAssign {
+                    array: array.to_string(),
+                    index: index.clone(),
+                    value: value.clone(),
+                },
+                span,
+            );
+            self.check_assignment_like_stmt(&stmt, env)?;
+            return Ok(PhpType::Str);
         }
 
         if let ExprKind::Variable(name) = &target.kind {
@@ -168,4 +186,47 @@ impl Checker {
         }
         Ok(())
     }
+}
+
+/// Returns the local name and index when `target` is `$name[$index]` on a local typed `string`.
+fn string_offset_write_target<'e>(target: &'e Expr, env: &TypeEnv) -> Option<(&'e str, &'e Expr)> {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return None;
+    };
+    let ExprKind::Variable(name) = &array.kind else {
+        return None;
+    };
+    matches!(env.get(name), Some(PhpType::Str)).then_some((name.as_str(), index.as_ref()))
+}
+
+/// Refuses the read-modify-write forms PHP rejects on a string offset.
+///
+/// The parser desugars them into a prelude that reads the target first: `$s[0]++` / `--$s[0]`
+/// capture the old byte with `$old = $s[0]`, and the expression form of `$s[0] .= "x"` binds
+/// `$tmp = $s[0] . "x"`. PHP throws `Error` for both before touching the string, so they can
+/// never succeed and are refused here with PHP's wording.
+fn refuse_string_offset_read_modify_write(
+    array: &str,
+    index: &Expr,
+    prelude: &[Stmt],
+    span: Span,
+) -> Result<(), CompileError> {
+    let is_target = |expr: &Expr| {
+        crate::types::checker::stmt_check::expr_is_string_offset_target(expr, array, index)
+    };
+    for stmt in prelude {
+        let StmtKind::Assign { value, .. } = &stmt.kind else {
+            continue;
+        };
+        if is_target(value) {
+            return Err(CompileError::new(span, "Cannot increment/decrement string offsets"));
+        }
+        if matches!(&value.kind, ExprKind::BinaryOp { left, .. } if is_target(left)) {
+            return Err(CompileError::new(
+                span,
+                "Cannot use assign-op operators with string offsets",
+            ));
+        }
+    }
+    Ok(())
 }

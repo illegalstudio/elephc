@@ -255,6 +255,22 @@ pub(crate) fn summarize_callable_return_alias<'a>(
     returned
 }
 
+/// Returns whether `name` currently holds the value of a parameter declared `string`.
+///
+/// Either the local still has its bare `Str` parameter slot, or its provenance names only
+/// `string` parameters. An element write into such a local is a string offset write.
+fn holds_string_parameter_value(name: &str, state: &AliasState<'_>) -> bool {
+    if state.has_str_slot(name) {
+        return true;
+    }
+    matches!(
+        state.locals.get(name),
+        Some(ReturnArgAlias::Parameters(parameters))
+            if !parameters.is_empty()
+                && parameters.iter().all(|index| state.is_string_parameter_index(*index))
+    )
+}
+
 /// Applies statement provenance effects and accumulates every reachable return path.
 fn analyze_body(
     body: &[Stmt],
@@ -450,10 +466,18 @@ fn analyze_stmt(
         } => {
             apply_expr_effects(index, state);
             apply_expr_effects(value, state);
-            state
-                .locals
-                .entry(array.clone())
-                .or_insert(ReturnArgAlias::Unknown);
+            if holds_string_parameter_value(array, state) {
+                // A string offset write (`$s[$i] = $v`) never mutates the string it read: it
+                // builds the updated string as new storage and stores that into the local. A
+                // local that held a `string` parameter's value therefore owns fresh storage
+                // afterwards, and returning it must let the caller release its reference.
+                state.locals.insert(array.clone(), ReturnArgAlias::None);
+            } else {
+                state
+                    .locals
+                    .entry(array.clone())
+                    .or_insert(ReturnArgAlias::Unknown);
+            }
         }
         StmtKind::ArrayPush { array, value } => {
             apply_expr_effects(value, state);
@@ -1063,6 +1087,25 @@ mod tests {
         assert_eq!(
             summaries.function("choose"),
             Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
+        );
+    }
+
+    /// Verifies a string offset write makes a `string` parameter (or a local copy of one) fresh.
+    ///
+    /// `$w[0] = "X"` builds a new string, so returning `$w` no longer hands back the caller's
+    /// argument; claiming the passthrough leaked one string per call. An array parameter keeps
+    /// its previous provenance.
+    #[test]
+    fn string_offset_write_makes_a_string_parameter_fresh() {
+        let program = parse(
+            "<?php function up(string $w): string { $w[0] = 'X'; return $w; } function copy(string $w): string { $x = $w; $x[0] = 'X'; return $x; } function arr(array $a): array { $a[0] = 1; return $a; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("up"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("copy"), Some(&ReturnArgAlias::None));
+        assert_eq!(
+            summaries.function("arr"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
         );
     }
 

@@ -16,6 +16,8 @@
 //!   of dropping the write.
 //! - Canonical null and legacy null-container payloads autovivify through the
 //!   shared cell helper before any container header is dereferenced.
+//! - A string payload (tag 1) takes PHP's string offset write through `__rt_str_offset_set`
+//!   and gets the updated string as a new payload; a string key throws `TypeError`.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -79,6 +81,8 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_set_object");                    // route runtime-managed ArrayAccess objects to offsetSet
     emitter.instruction("cmp x9, #8");                                          // is the target a canonical Mixed null?
     emitter.instruction("b.eq __rt_mixed_array_set_autovivify");                // PHP keyed writes autovivify null into an array
+    emitter.instruction("cmp x9, #1");                                          // is the Mixed payload a string?
+    emitter.instruction("b.eq __rt_mixed_array_set_string");                    // a string takes PHP's string offset write
     emitter.instruction("b __rt_mixed_array_set_drop");                         // non-array Mixed payloads cannot be mutated here
     emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the indexed-array pointer from the Mixed payload
@@ -287,6 +291,8 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame before the tail-call
     emitter.instruction("b __rt_throw_object_not_array");                       // never returns
 
+    emit_string_payload_set_aarch64(emitter);
+
     emitter.label("__rt_mixed_array_set_drop");
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the unused boxed value
     emitter.instruction("bl __rt_decref_mixed");                                // release the boxed value when the write cannot be applied
@@ -331,6 +337,8 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_set_object");                      // route runtime-managed ArrayAccess objects to offsetSet
     emitter.instruction("cmp r10, 8");                                          // is the target a canonical Mixed null?
     emitter.instruction("je __rt_mixed_array_set_autovivify");                  // PHP keyed writes autovivify null into an array
+    emitter.instruction("cmp r10, 1");                                          // is the Mixed payload a string?
+    emitter.instruction("je __rt_mixed_array_set_string");                      // a string takes PHP's string offset write
     emitter.instruction("jmp __rt_mixed_array_set_drop");                       // non-array Mixed payloads cannot be mutated here
     emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the indexed-array pointer from the Mixed payload
@@ -532,6 +540,8 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before the tail-call
     emitter.instruction("jmp __rt_throw_object_not_array");                     // never returns
 
+    emit_string_payload_set_x86_64(emitter);
+
     emitter.label("__rt_mixed_array_set_drop");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the unused boxed value
     emitter.instruction("call __rt_decref_mixed");                              // release the boxed value when the write cannot be applied
@@ -539,4 +549,132 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to generated code
+}
+
+const STRING_OFFSET_TYPE_ERROR_MSG_LEN: usize =
+    "Cannot access offset of type string on string".len();
+
+/// Emits the ARM64 string-payload arm of `__rt_mixed_array_set`: PHP's `$s[$i] = $v` when `$s`
+/// is a boxed Mixed cell holding a string (a `mixed` parameter, a `global`, or a string local
+/// whose `++` gave it boxed storage).
+///
+/// Runs inside the setter's 80-byte frame: `[sp, #0]` cell, `[sp, #8]`/`[sp, #16]` key words,
+/// `[sp, #24]` boxed value; `[sp, #32..#56]` are free on this path. The value is cast to a
+/// string, `__rt_str_offset_set` builds the updated string, and the persisted result replaces
+/// the cell's string payload, which the cell owns exclusively (as `__rt_mixed_free_deep`
+/// assumes). The value box is consumed like every other arm. A string key has no integer
+/// offset and throws PHP's `TypeError`.
+fn emit_string_payload_set_aarch64(emitter: &mut Emitter) {
+    emitter.label("__rt_mixed_array_set_string");
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
+    emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
+    emitter.instruction("b.ne __rt_mixed_array_set_string_key_error");          // a string offset must be an integer
+    emitter.instruction("ldr x0, [sp, #24]");                                   // pass the boxed value to the string cast
+    emitter.instruction("bl __rt_mixed_cast_string");                           // x1/x2 = the value as a string
+    emitter.instruction("stp x1, x2, [sp, #32]");                               // keep the cast value for the write and its release
+    emitter.instruction("cbnz x2, __rt_mixed_array_set_string_write");          // a non-empty value cannot throw below
+    emitter.instruction("mov x0, x1");                                          // release an empty cast value before the helper may throw
+    emitter.instruction("bl __rt_heap_free_safe");                              // no-op for scratch, frees a persisted copy
+    emitter.instruction("str xzr, [sp, #32]");                                  // nothing is left to release after the write
+    emitter.label("__rt_mixed_array_set_string_write");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed value
+    emitter.instruction("bl __rt_decref_mixed");                                // consume it now, before the helper may throw
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
+    emitter.instruction("ldr x1, [x10, #8]");                                   // subject string pointer
+    emitter.instruction("ldr x2, [x10, #16]");                                  // subject string length
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the integer offset
+    emitter.instruction("ldp x3, x4, [sp, #32]");                               // the value string
+    emitter.instruction("bl __rt_str_offset_set");                              // x1/x2 = the updated string (scratch or heap)
+    emitter.instruction("stp x1, x2, [sp, #48]");                               // keep the helper result across persistence
+    emitter.instruction("bl __rt_str_persist");                                 // x1/x2 = an owned copy for the cell
+    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the helper result pointer
+    emitter.instruction("stp x1, x2, [sp, #48]");                               // keep the owned payload
+    emitter.instruction("cmp x1, x3");                                          // did persistence keep the helper block?
+    emitter.instruction("b.eq __rt_mixed_array_set_string_owned");              // then there is no temporary to release
+    emitter.instruction("mov x0, x3");                                          // release a heap-backed helper result that persist copied
+    emitter.instruction("bl __rt_heap_free_safe");                              // no-op for concat scratch
+    emitter.label("__rt_mixed_array_set_string_owned");
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
+    emitter.instruction("ldr x0, [x10, #8]");                                   // the string payload being replaced
+    emitter.instruction("bl __rt_heap_free_safe");                              // the cell owns its string payload exclusively
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
+    emitter.instruction("ldp x1, x2, [sp, #48]");                               // reload the owned updated string
+    emitter.instruction("str x1, [x10, #8]");                                   // publish the new string pointer
+    emitter.instruction("str x2, [x10, #16]");                                  // publish the new string length
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the cast value string
+    emitter.instruction("bl __rt_heap_free_safe");                              // release it (no-op for scratch)
+    emitter.instruction("b __rt_mixed_array_set_done");                         // the value was already consumed
+
+    emitter.label("__rt_mixed_array_set_string_key_error");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed value
+    emitter.instruction("bl __rt_decref_mixed");                                // release it before leaving through the TypeError
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the helper frame before throwing
+    crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_aarch64(
+        emitter,
+        "_spl_type_error_class_id",
+        "_string_offset_type_error_msg",
+        STRING_OFFSET_TYPE_ERROR_MSG_LEN,
+    );
+}
+
+/// Emits the x86_64 string-payload arm of `__rt_mixed_array_set`; see the ARM64 variant.
+///
+/// Runs inside the setter's 64-byte frame: `[rbp - 8]` cell, `[rbp - 16]`/`[rbp - 24]` key
+/// words, `[rbp - 32]` boxed value; `[rbp - 40..-64]` are free on this path.
+fn emit_string_payload_set_x86_64(emitter: &mut Emitter) {
+    emitter.label("__rt_mixed_array_set_string");
+    emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // does key_hi carry the integer-key sentinel?
+    emitter.instruction("jne __rt_mixed_array_set_string_key_error");           // a string offset must be an integer
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the boxed value to the string cast
+    emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = the value as a string
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // keep the cast value pointer
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // keep the cast value length
+    emitter.instruction("test rdx, rdx");                                       // is the cast value empty?
+    emitter.instruction("jnz __rt_mixed_array_set_string_write");               // a non-empty value cannot throw below
+    emitter.instruction("call __rt_heap_free_safe");                            // release an empty cast value before the helper may throw
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // nothing is left to release after the write
+    emitter.label("__rt_mixed_array_set_string_write");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed value
+    emitter.instruction("call __rt_decref_mixed");                              // consume it now, before the helper may throw
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
+    emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // subject string pointer
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // subject string length
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // the integer offset
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // the value string pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // the value string length
+    emitter.instruction("call __rt_str_offset_set");                            // rax/rdx = the updated string (scratch or heap)
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // keep the helper result across persistence
+    emitter.instruction("call __rt_str_persist");                               // rax/rdx = an owned copy for the cell
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // reload the helper result pointer
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // keep the owned payload pointer
+    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // keep the owned payload length
+    emitter.instruction("cmp rax, r10");                                        // did persistence keep the helper block?
+    emitter.instruction("je __rt_mixed_array_set_string_owned");                // then there is no temporary to release
+    emitter.instruction("mov rax, r10");                                        // release a heap-backed helper result that persist copied
+    emitter.instruction("call __rt_heap_free_safe");                            // no-op for concat scratch
+    emitter.label("__rt_mixed_array_set_string_owned");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
+    emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // the string payload being replaced
+    emitter.instruction("call __rt_heap_free_safe");                            // the cell owns its string payload exclusively
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the owned updated string pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the new string pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the owned updated string length
+    emitter.instruction("mov QWORD PTR [r10 + 16], rax");                       // publish the new string length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the cast value string
+    emitter.instruction("call __rt_heap_free_safe");                            // release it (no-op for scratch)
+    emitter.instruction("jmp __rt_mixed_array_set_done");                       // the value was already consumed
+
+    emitter.label("__rt_mixed_array_set_string_key_error");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed value
+    emitter.instruction("call __rt_decref_mixed");                              // release it before leaving through the TypeError
+    emitter.instruction("mov rsp, rbp");                                        // release the helper frame before throwing
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_x86_64(
+        emitter,
+        "_spl_type_error_class_id",
+        "_string_offset_type_error_msg",
+        STRING_OFFSET_TYPE_ERROR_MSG_LEN,
+    );
 }

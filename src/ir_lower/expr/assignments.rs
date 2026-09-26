@@ -109,6 +109,13 @@ pub(super) fn lower_assignment_expr(
         if let Some(sig) = fiber_start_sig {
             ctx.bind_fiber_start_sig(name, sig);
         }
+    } else if let Some((name, index)) = string_offset_assignment_target(ctx, target) {
+        // PHP's `($s[$i] = $v)` evaluates to the byte it stored, not to `$v`, so the string
+        // write produces its own result instead of replaying the right-hand side. The checker
+        // refuses the compound and increment forms, so only a plain `=` reaches here.
+        return crate::ir_lower::stmt::lower_string_offset_assign_expr(
+            ctx, name, index, value, expr.span,
+        );
     } else {
         lower_non_local_assignment_write_with_diagnosed_key(ctx, target, value, expr.span, key_already_diagnosed);
     }
@@ -116,6 +123,22 @@ pub(super) fn lower_assignment_expr(
         return lower_expr(ctx, result_target);
     }
     result
+}
+
+/// Returns the local name and index when an assignment target is `$name[$index]` on a string
+/// local, i.e. a PHP string offset write.
+fn string_offset_assignment_target<'e>(
+    ctx: &LoweringContext<'_, '_>,
+    target: &'e Expr,
+) -> Option<(&'e str, &'e Expr)> {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return None;
+    };
+    let ExprKind::Variable(name) = &array.kind else {
+        return None;
+    };
+    crate::ir_lower::stmt::local_is_string_offset_target(ctx, name)
+        .then_some((name.as_str(), index.as_ref()))
 }
 
 /// Lowers a non-local `??=` assignment expression with lazy RHS evaluation.

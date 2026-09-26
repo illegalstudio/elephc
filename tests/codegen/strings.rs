@@ -31,6 +31,8 @@ mod openssl;
 mod parse_url;
 #[path = "strings/offset_warnings.rs"]
 mod offset_warnings;
+#[path = "strings/offset_writes.rs"]
+mod offset_writes;
 
 /// Verifies `mb_strlen()` counts valid UTF-8 across ASCII, multibyte, and empty strings.
 #[test]

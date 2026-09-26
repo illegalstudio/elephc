@@ -60,6 +60,7 @@ mod nested_append;
 mod return_coercions;
 mod repr_fixpoint;
 mod static_property_helpers;
+mod string_offset_writes;
 
 use statement_basics::*;
 use local_assignments::*;
@@ -96,6 +97,9 @@ pub(super) use array_write_core::{
 };
 pub(crate) use array_write_core::{
     compound_array_write_value_reads_target, lower_array_assign_with_diagnosed_key,
+};
+pub(in crate::ir_lower) use string_offset_writes::{
+    local_is_string_offset_target, lower_string_offset_assign_expr,
 };
 pub(super) use array_write_storage::{
     finish_indexed_array_local_write, load_array_local_for_write, prepare_indexed_array_local_write,

@@ -3718,7 +3718,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 target.result_ownership(),
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh
             ),
-            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::UnaryString(_))) => true,
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::UnaryString(_)
+                | crate::ir::RuntimeCallTarget::StringOffsetSet,
+            )) => true,
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ArrayUnpackToHash)) => true,
             Some(Immediate::Data(name_id) | Immediate::ProfiledData { data: name_id, .. })
                 if inst.op == Op::LanguageConstructCall => self
