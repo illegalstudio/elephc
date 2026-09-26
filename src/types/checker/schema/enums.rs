@@ -245,7 +245,20 @@ pub(crate) fn build_enum_info(
         span,
         checker,
         next_class_id,
-    )
+    )?;
+    // PHP keeps cases and constants in one table, in declaration order: `case B; const X;
+    // case A;` reflects as B, X, A. The parser keeps them in two lists, so their source spans
+    // are what interleaves them back.
+    let mut declared: Vec<(crate::span::Span, String)> = cases
+        .iter()
+        .map(|case| (case.span, case.name.clone()))
+        .chain(user_constants.iter().map(|constant| (constant.span, constant.name.clone())))
+        .collect();
+    declared.sort_by_key(|(span, _)| (span.line, span.col));
+    if let Some(class_info) = checker.classes.get_mut(name) {
+        class_info.constant_order = declared.into_iter().map(|(_, name)| name).collect();
+    }
+    Ok(())
 }
 
 /// Inserts validated enum metadata and its parallel final readonly class metadata.
@@ -469,6 +482,7 @@ pub(crate) fn insert_enum_metadata(
             clone_override_property_storage: false,
             scope_dynamic_property_storage: false,
             constants,
+            constant_order: user_constants.iter().map(|constant| constant.name.clone()).collect(),
             constant_deprecations: user_constants
                 .iter()
                 .filter_map(|constant| {

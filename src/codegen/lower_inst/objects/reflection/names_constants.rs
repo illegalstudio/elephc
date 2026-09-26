@@ -123,7 +123,7 @@ pub(super) fn reflection_interface_constant_names(
     };
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for constant in info.constants.keys() {
+    for constant in declared_then_remaining(&info.constant_order, info.constants.keys()) {
         push_unique_constant_name(constant, &mut names, &mut seen);
     }
     names
