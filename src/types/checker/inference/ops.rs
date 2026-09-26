@@ -1076,24 +1076,39 @@ impl Checker {
         span: Span,
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
-        if let CallableTarget::Function(name) = target {
-            if crate::name_resolver::is_builtin_function(name.as_str()) {
-                let builtin = php_symbol_key(name.as_str());
-                if builtin == "clone" {
-                    // Clone's callable signature owns its normal argument validation, while this
-                    // side channel records the property destination its dedicated lowering needs.
-                    crate::types::checker::clone_override_storage::record_callable_clone_override_destination(
-                        self, args, env,
-                    )?;
-                    return Ok(None);
-                }
-                // A builtin's checker hook is authoritative for argument storage. Its catalogue
-                // signature may intentionally expose broad `mixed` parameters to reflection,
-                // which must not by itself authorize local-to-Mixed reference-cell promotion.
-                return self.check_builtin(&builtin, args, span, env);
-            }
+        let CallableTarget::Function(name) = target else {
+            return Ok(None);
+        };
+        let builtin = php_symbol_key(name.as_str());
+        if crate::name_resolver::is_builtin_function(name.as_str()) && builtin == "clone" {
+            // Clone's callable signature owns normal argument validation, while this side channel
+            // records the property destination its dedicated lowering needs.
+            crate::types::checker::clone_override_storage::record_callable_clone_override_destination(
+                self, args, env,
+            )?;
+            return Ok(None);
         }
-        Ok(None)
+        if builtin == "preg_replace_callback" {
+            return crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
+                self, args, span, env,
+            )
+            .map(Some);
+        }
+        // An EXTERN function shadowing a builtin name is resolved as an extern call by lowering,
+        // which never reads this map; answering from the registry would only make the checker
+        // disagree with the call that is actually emitted.
+        if self.canonical_extern_function_name_folded(name.as_str()).is_some()
+            || crate::builtins::registry::lookup(name.as_str()).is_none()
+        {
+            return Ok(None);
+        }
+        // Ask the builtin contract at this first-class call site so argument-dependent results
+        // such as array_slice preserve their checked storage layout.
+        let Ok(Some(result)) = self.check_builtin(name.as_str(), args, span, env) else {
+            return Ok(None);
+        };
+        self.first_class_builtin_call_types.insert(span, result.clone());
+        Ok(Some(result))
     }
 
     /// Resolves a callable-array receiver expression to a static class receiver.

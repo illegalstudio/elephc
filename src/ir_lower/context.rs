@@ -277,6 +277,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
+    pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
     /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
@@ -403,6 +404,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
+        first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
@@ -466,6 +468,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             throw_access_sites,
             builtin_call_types,
             boxed_reference_promotion_sites,
+            first_class_builtin_call_types,
             loop_storage_types,
             string_incdec_locals,
             bind_kill_sites,
