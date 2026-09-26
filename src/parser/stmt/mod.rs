@@ -38,6 +38,7 @@ pub(crate) use assign::{
 pub(crate) use blocks::{expect_semicolon, expect_token};
 pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};
 pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
+pub(crate) use namespace_use::token_as_import_name;
 pub(crate) use recovery::recover_to_statement_boundary;
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.

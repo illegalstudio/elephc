@@ -271,7 +271,7 @@ fn parse_group_use_items(
 /// identifier — the lexer emits a dedicated token. Accepting them here keeps such use
 /// declarations parseable; aliases resolve through the normal constant import table because
 /// the same names are seeded in the checker/prescan constant maps.
-fn token_as_import_name(token: &Token, metadata: &crate::lexer::TokenMetadata) -> Option<String> {
+pub(crate) fn token_as_import_name(token: &Token, metadata: &crate::lexer::TokenMetadata) -> Option<String> {
     match token {
         Token::PhpIntMax
         | Token::PhpIntMin

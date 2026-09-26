@@ -40,6 +40,18 @@ pub(super) fn parse_prefix(
 
     let span = tokens[*pos].1.span;
 
+    // `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`...: the lexer turns these predefined constants into
+    // dedicated tokens, so the name parser never sees an identifier after the `\` (#1307). The
+    // fully qualified spelling names the same global constant, so it parses as the bare token.
+    if tokens[*pos].0 == Token::Backslash {
+        if let Some((next, metadata)) = tokens.get(*pos + 1) {
+            if crate::parser::stmt::token_as_import_name(next, metadata).is_some() {
+                *pos += 1;
+                return parse_prefix(tokens, pos);
+            }
+        }
+    }
+
     match &tokens[*pos].0 {
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
