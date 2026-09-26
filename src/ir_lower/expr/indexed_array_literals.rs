@@ -343,10 +343,7 @@ pub(super) fn assoc_array_literal_type_from_entries(
         let next = match entry {
             ArrayEntry::Spread(inner) => {
                 match infer_expr_type_syntactic(inner).codegen_repr() {
-                    // Indexed sources pass through ArrayToHash before HashSpread; that
-                    // conversion stores their values as boxed Mixed cells, so the destination
-                    // hash must use the same value layout even when the source is homogeneous.
-                    PhpType::Array(_) => PhpType::Mixed,
+                    PhpType::Array(elem) => elem.codegen_repr(),
                     PhpType::AssocArray { value, .. } => value.codegen_repr(),
                     _ => PhpType::Mixed,
                 }
@@ -385,51 +382,19 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     let spread_source = if source_is_hash {
         source
     } else {
-        // `Op::ArrayToHash` CONSUMES its source: the conversion it lowers to routes an indexed
-        // array through `__rt_array_hash_union` and then `__rt_decref_array`s the input. That is
-        // right where the promotion replaces a local's own value, and wrong here, where the source
-        // is whatever the spread names -- usually a borrowed load of somebody else's array. A
-        // spread must not consume what it spreads:
+        // `Op::ArrayToHash` CONSUMES its operand: its promote path abandons the source indexed
+        // array for a freshly built hash and decrefs it (`lower_array_to_hash`). A spread source
+        // is usually a borrowed LOCAL, so handing it over unowned releases the caller's only
+        // reference -- `[...$idx, ...$assoc]` left `$idx` reading `array(0) {}` while its
+        // elements were still intact, and reusing it crashed. Acquiring first is the same ledger
+        // `lower_array_set_mixed_key` documents: the promote path consumes the `+1`, and the
+        // local keeps the reference it started with.
         //
-        //     $idx = [3, 4];
-        //     $a = [...$idx, "c" => 8];
-        //     count($idx);        // 0 -- the array was freed under the caller (issue #1049)
-        //
-        // and reaching this twice on one source freed it a second time. Retaining first gives the
-        // conversion a reference of its own to consume.
-        // Only a source read out of storage that KEEPS ITS OWN REFERENCE needs one: the slot goes
-        // on owning what it holds, so the conversion must be given a separate reference to consume.
-        // A source that already owns the only reference there is -- a literal, a call result, or a
-        // hidden temp a ternary moved out of -- must not be acquired again, or that reference
-        // leaks.
-        //
-        // The two halves of that question are the op and the local's KIND. A `LoadLocal` is not
-        // enough by itself: `take_owned_temp` loads a hidden `OwnedTemp` slot and clears it without
-        // releasing, so `[...($c ? [1, 2] : [3, 4]), "c" => 8]` hands over the only reference and
-        // acquiring leaked one array per evaluation. A static property is the mirror: it is read
-        // with no retain and the symbol keeps owning what it holds, so omitting it freed the
-        // class's array -- `count(C::$items)` after `[...C::$items, "c" => 8]` answered 0.
-        //
-        // `value_is_owning_temporary` cannot make this call: it answers TRUE for a plain
-        // `load_local` of an array by design, as a PROVISIONAL owner whose release the builder
-        // prunes later if the slot stays concrete. That machinery exists to make a release safe,
-        // not an acquire.
-        let source_is_borrowing_storage_load = matches!(
-            ctx.builder.value_defining_op(source.value),
-            Some(
-                Op::LoadLocal
-                    | Op::LoadStaticLocal
-                    | Op::LoadGlobal
-                    | Op::LoadRefCell
-                    | Op::LoadStaticProperty
-                    | Op::LoadReflectionStaticProperty
-            )
-        ) && !ctx.value_is_owned_temp_load(source.value);
-        let owned_source = if source_is_borrowing_storage_load {
-            crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span))
-        } else {
-            source
-        };
+        // The acquire stays unconditional; an OWNING TEMPORARY source is balanced by releasing it
+        // after the spread instead (below). Skipping the acquire for a temporary is the wrong half
+        // of the ledger -- the promotion's decref then consumes the only reference a BORROWED
+        // local has, which segfaults -- so the two cases are separated at the release, not here.
+        let owned_source = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
         let promoted = ctx.emit_value(
             Op::ArrayToHash,
             vec![owned_source.value],
@@ -456,9 +421,15 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     if ctx.value_is_owning_temporary(spread_source) {
         crate::ir_lower::ownership::release_if_owned(ctx, spread_source, Some(span));
     }
-    // Indexed sources are consumed by ArrayToHash itself, so only the promoted hash is released
-    // here. Releasing the original source again double-decrements owning temporaries after a
-    // spread followed by another insertion.
+    // The promoted hash is a DIFFERENT value from the one the caller handed us, so releasing it
+    // above says nothing about the original array. An owning temporary source -- a call result, a
+    // nested literal -- has no other owner once the promotion has consumed the reference the
+    // acquire added, so it is released here, exactly as the indexed sibling releases its own
+    // source. Without this, `[...f(), "k" => 1]` leaked one array per evaluation while the
+    // borrowed-local form stayed clean.
+    if spread_source.value != source.value && ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
 }
 
 /// Lowers an indexed-array spread by appending each source element to the destination.

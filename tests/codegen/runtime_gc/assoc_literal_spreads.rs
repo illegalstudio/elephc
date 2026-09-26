@@ -133,3 +133,47 @@ echo $total, "\n";
     );
     assert_clean(out, "200\n");
 }
+
+/// A spread source that a later store widens to `mixed` is unboxed with a retain of its own,
+/// and that retain is released once the promotion has consumed its copy (#1331).
+#[test]
+fn test_widened_local_spread_source_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+// #1331: a spread source that a later store widens to Mixed.
+function widened(int $n): int {
+    $idx = [3, 4];
+    $a = [...$idx, "c" => 8];
+    if ($n > 1000) { $idx = "wide"; }
+    return count($a);
+}
+$t = 0;
+for ($i = 0; $i < 30; $i++) { $t += widened($i); }
+echo $t, "\n";
+"#,
+    );
+    assert_clean(out, "90\n");
+}
+
+/// A typed array property spread through a BORROWED receiver -- a by-reference parameter, a
+/// `global`, a closure capture -- stays owned by its object (#1332).
+#[test]
+fn test_property_spread_through_a_borrowed_receiver_keeps_the_property() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+// #1332: a typed array property read through a borrowed receiver.
+class Box { public array $items = [1, 2]; }
+function viaRef(Box &$b): string { $a = [...$b->items, "c" => 8]; return count($a) . "/" . count($b->items); }
+function viaGlobal(): string { global $gb; $a = [...$gb->items, "c" => 8]; return count($a) . "/" . count($gb->items); }
+$box = new Box();
+$gb = new Box();
+for ($i = 0; $i < 3; $i++) {
+    echo viaRef($box), " ", count($box->items), " ";
+    echo viaGlobal(), " ", count($gb->items), " ";
+    $f = function () use ($box) { $a = [...$box->items, "c" => 8]; return count($a); };
+    echo $f(), " ", count($box->items), "\n";
+}
+"#,
+    );
+    assert_clean(out, "3/2 2 3/2 2 3 2\n3/2 2 3/2 2 3 2\n3/2 2 3/2 2 3 2\n");
+}

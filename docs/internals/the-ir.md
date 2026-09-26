@@ -760,11 +760,12 @@ the parser's static cursor could overwrite a key contributed by the spread.
 Spreading a hash copies its values in insertion order, preserving string keys and renumbering
 integer keys according to PHP unpacking. Spreading an indexed array first emits `ArrayToHash`,
 which consumes the array reference it receives and boxes each slot as `Mixed`; `HashSpread` then
-copies that promoted hash into the destination. Lowering acquires a reference first when the
-source is borrowed from a local, global, reference cell, or static property, but transfers an
-owned temporary directly. Only the promoted hash is released after `HashSpread`, since
-`ArrayToHash` already consumed the indexed source. This keeps COW owners intact and avoids both
-double releases and leaked temporary arrays.
+copies that promoted hash into the destination. Lowering always acquires a reference for the
+promotion to consume, so a borrowed source (a local, a global, a property, a static) keeps the
+reference it started with. The promoted hash is released after `HashSpread`, and an owning
+temporary source (a call result, a nested literal) is released too, since nothing else owns it
+once the promotion has consumed the acquired reference. This keeps COW owners intact and avoids
+both double releases and leaked temporary arrays.
 
 `ArrayCloneShallow` also carries the one aliasing case a by-reference builtin cannot
 resolve at runtime: a `$replacement` that IS the receiver. `array_splice($a, 1, 1, $a)`

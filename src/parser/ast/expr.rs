@@ -140,9 +140,6 @@ pub enum ExprKind {
         args: Vec<Expr>,
     },
     ArrayLiteral(Vec<Expr>),
-    /// Key/value pairs. A SPREAD has no key, so it is carried as a pair whose value — and key —
-    /// is `ExprKind::Spread`; a consumer that types or lowers a pair must check the value for that
-    /// first, and must never evaluate the key of such a pair.
     ArrayLiteralAssoc(Vec<(Expr, Expr)>),
     /// An array literal that MIXES a spread with explicit keys, which neither of the two
     /// nodes above can hold: `ArrayLiteral` has no place for a key and `ArrayLiteralAssoc`
