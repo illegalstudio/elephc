@@ -2,7 +2,7 @@
 title: "mysqli_free_result()"
 description: "Releases the memory a result set holds."
 sidebar:
-  order: 128
+  order: 130
 ---
 
 ## mysqli_free_result()

@@ -2,7 +2,7 @@
 title: "date_interval_create_from_date_string()"
 description: "Creates a DateInterval from a relative date string such as \"2 days\"."
 sidebar:
-  order: 201
+  order: 203
 ---
 
 ## date_interval_create_from_date_string()

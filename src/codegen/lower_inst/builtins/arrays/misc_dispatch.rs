@@ -310,7 +310,40 @@ pub(super) fn lower_array_edge_key(
     store_if_result(ctx, inst)
 }
 
-/// Verifies an operand is array-like: `array_is_list` / `array_key_first` / `array_key_last` accept
+/// Lowers PHP 8.4 `array_first()` through the shared edge-value helper with selector `0`.
+pub(crate) fn lower_array_first(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_array_edge_value(ctx, inst, "array_first", 0)
+}
+
+/// Lowers PHP 8.4 `array_last()` through the shared edge-value helper with selector `1`.
+pub(crate) fn lower_array_last(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_array_edge_value(ctx, inst, "array_last", 1)
+}
+
+/// Loads the array operand plus a first/last selector, then calls `__rt_array_edge_value`.
+///
+/// `which` is `0` for the first value and `1` for the last. The runtime helper boxes the selected
+/// element into a fresh mixed cell (or a boxed null for empty/non-array inputs) through a tail
+/// call, leaving the boxed pointer in the integer result register. The operand is only borrowed.
+fn lower_array_edge_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    which: i64,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, name, 1)?;
+    let array = expect_operand(inst, 0)?;
+    require_array_like_operand(ctx.value_php_type(array)?, name)?;
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    ctx.load_value_to_reg(array, arg0)?;
+    abi::emit_load_int_immediate(ctx.emitter, arg1, which);
+    abi::emit_call_label(ctx.emitter, "__rt_array_edge_value");
+    store_if_result(ctx, inst)
+}
+
+/// Verifies an operand is array-like: `array_is_list` / `array_key_first` / `array_key_last` /
+/// `array_first` / `array_last` accept
 /// any indexed array, associative hash, or boxed mixed value, matching their uniform runtime helpers.
 pub(super) fn require_array_like_operand(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {

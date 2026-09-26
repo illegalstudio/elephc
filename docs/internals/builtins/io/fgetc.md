@@ -2,7 +2,7 @@
 title: "fgetc() - internals"
 description: "Compiler internals for fgetc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 314
+  order: 316
 ---
 
 ## `fgetc()` - internals

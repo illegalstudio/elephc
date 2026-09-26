@@ -2,7 +2,7 @@
 title: "mysqli_fetch_assoc()"
 description: "Returns the next row as an associative array."
 sidebar:
-  order: 117
+  order: 119
 ---
 
 ## mysqli_fetch_assoc()

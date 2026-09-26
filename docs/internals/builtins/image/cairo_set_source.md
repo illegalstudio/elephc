@@ -2,7 +2,7 @@
 title: "cairo_set_source() - internals"
 description: "Compiler internals for cairo_set_source(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 439
+  order: 441
 ---
 
 ## `cairo_set_source()` - internals

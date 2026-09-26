@@ -2,7 +2,7 @@
 title: "array_sum() - internals"
 description: "Compiler internals for array_sum(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 40
+  order: 42
 ---
 
 ## `array_sum()` - internals

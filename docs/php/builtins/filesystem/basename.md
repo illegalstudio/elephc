@@ -2,7 +2,7 @@
 title: "basename()"
 description: "Returns the trailing name component of a path."
 sidebar:
-  order: 254
+  order: 256
 ---
 
 ## basename()

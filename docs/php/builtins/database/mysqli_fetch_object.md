@@ -2,7 +2,7 @@
 title: "mysqli_fetch_object()"
 description: "Returns the next row as an object."
 sidebar:
-  order: 123
+  order: 125
 ---
 
 ## mysqli_fetch_object()

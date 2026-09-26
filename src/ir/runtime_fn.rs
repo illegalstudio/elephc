@@ -96,6 +96,8 @@ pub enum RuntimeFnId {
     ArrayFillKeys,
     ArrayFilter,
     ArrayFind,
+    /// Boxes the first value of an array in insertion order for `array_first()`.
+    ArrayFirst,
     ArrayFlip,
     ArrayIntersect,
     ArrayIntersectAssoc,
@@ -105,6 +107,8 @@ pub enum RuntimeFnId {
     ArrayKeyFirst,
     ArrayKeyLast,
     ArrayKeys,
+    /// Boxes the last value of an array in insertion order for `array_last()`.
+    ArrayLast,
     ArrayMap,
     ArrayMerge,
     ArrayMergeRecursive,
@@ -1251,6 +1255,13 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            // `array_first()` / `array_last()` read one edge element and box it into a fresh
+            // Mixed cell (retaining a container payload inside the box). No user code runs and
+            // nothing is written, but the result depends on the array's current contents, so
+            // the call must never be treated as pure and merged with an earlier read.
+            RuntimeFnId::ArrayFirst | RuntimeFnId::ArrayLast => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
             // Re-boxing a property slot allocates the Mixed cell it hands back.
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
@@ -1956,6 +1967,11 @@ impl RuntimeFnId {
                 // the box is independently owned and never aliases the receiving array.
                 | RuntimeFnId::ArrayPtrKey
                 | RuntimeFnId::ArrayPtrValue
+                // `array_first()` / `array_last()` box their answer through the same
+                // `__rt_mixed_from_value` / `__rt_array_get_mixed_key` paths, so the cell is
+                // independently owned and never aliases the source array.
+                | RuntimeFnId::ArrayFirst
+                | RuntimeFnId::ArrayLast
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::ArrayReduce
                 | RuntimeFnId::ArrayReplace
@@ -2186,6 +2202,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayFillKeys => "array_fill_keys",
             RuntimeFnId::ArrayFilter => "array_filter",
             RuntimeFnId::ArrayFind => "array_find",
+            RuntimeFnId::ArrayFirst => "array_first",
             RuntimeFnId::ArrayCountValues => "array_count_values",
             RuntimeFnId::ArrayFlip => "array_flip",
             RuntimeFnId::ArrayIntersect => "array_intersect",
@@ -2196,6 +2213,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeyFirst => "array_key_first",
             RuntimeFnId::ArrayKeyLast => "array_key_last",
             RuntimeFnId::ArrayKeys => "array_keys",
+            RuntimeFnId::ArrayLast => "array_last",
             RuntimeFnId::ArrayMap => "array_map",
             RuntimeFnId::ArrayMerge => "array_merge",
             RuntimeFnId::ArrayMergeRecursive => "array_merge_recursive",

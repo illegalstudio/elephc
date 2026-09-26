@@ -2,7 +2,7 @@
 title: "mysqli_release_savepoint()"
 description: "Removes a named savepoint from the open transaction."
 sidebar:
-  order: 151
+  order: 153
 ---
 
 ## mysqli_release_savepoint()

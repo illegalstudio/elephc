@@ -26,6 +26,7 @@ mod array_diff;
 mod array_diff_refcounted;
 mod array_diff_key;
 mod array_edge_key;
+mod array_edge_value;
 mod array_ensure_unique;
 mod array_take_boxed;
 mod array_fill;
@@ -237,6 +238,8 @@ pub use array_diff_key::emit_array_diff_key;
 /// Emit array difference by key helper.
 pub use array_edge_key::emit_array_edge_key;
 /// Emit array first/last key helper (array_key_first / array_key_last).
+pub use array_edge_value::emit_array_edge_value;
+/// Emit array first/last value helper (array_first / array_last).
 pub use array_internal_pointer::emit_array_ptr_key;
 /// Emit the internal-array-pointer key boxing helper (key()).
 pub use array_internal_pointer::emit_array_ptr_seek;

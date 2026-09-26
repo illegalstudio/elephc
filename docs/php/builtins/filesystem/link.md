@@ -2,7 +2,7 @@
 title: "link()"
 description: "Creates a hard link."
 sidebar:
-  order: 287
+  order: 289
 ---
 
 ## link()

@@ -2,7 +2,7 @@
 title: "mysqli_insert_id() - internals"
 description: "Compiler internals for mysqli_insert_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 138
+  order: 140
 ---
 
 ## `mysqli_insert_id()` - internals

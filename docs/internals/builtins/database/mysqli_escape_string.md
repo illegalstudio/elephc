@@ -2,7 +2,7 @@
 title: "mysqli_escape_string() - internals"
 description: "Compiler internals for mysqli_escape_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 112
+  order: 114
 ---
 
 ## `mysqli_escape_string()` - internals

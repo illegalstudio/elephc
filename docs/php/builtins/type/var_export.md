@@ -2,7 +2,7 @@
 title: "var_export()"
 description: "Renders a value as parsable PHP code, printed or returned."
 sidebar:
-  order: 910
+  order: 912
 ---
 
 ## var_export()

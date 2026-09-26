@@ -2,7 +2,7 @@
 title: "openssl_cipher_iv_length() - internals"
 description: "Compiler internals for openssl_cipher_iv_length(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 832
+  order: 834
 ---
 
 ## `openssl_cipher_iv_length()` - internals

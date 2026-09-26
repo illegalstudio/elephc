@@ -2,7 +2,7 @@
 title: "mysqli_affected_rows()"
 description: "Returns how many rows the last write affected."
 sidebar:
-  order: 99
+  order: 101
 ---
 
 ## mysqli_affected_rows()

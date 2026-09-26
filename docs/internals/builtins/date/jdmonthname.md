@@ -2,7 +2,7 @@
 title: "jdmonthname() - internals"
 description: "Compiler internals for jdmonthname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 229
+  order: 231
 ---
 
 ## `jdmonthname()` - internals

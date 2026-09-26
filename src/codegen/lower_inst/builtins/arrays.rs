@@ -114,7 +114,8 @@ pub(crate) use misc_dispatch::{
     lower_rsort, lower_asort, lower_arsort, lower_ksort,
     lower_krsort, lower_natsort, lower_natcasesort, lower_shuffle,
     lower_usort, lower_uksort, lower_uasort, lower_array_key_exists,
-    lower_array_is_list, lower_array_key_first, lower_array_key_last, lower_array_replace,
+    lower_array_is_list, lower_array_key_first, lower_array_key_last, lower_array_first,
+    lower_array_last, lower_array_replace,
     lower_array_replace_recursive, lower_array_diff_assoc, lower_array_intersect_assoc, lower_array_merge_recursive,
 };
 pub(crate) use callback_builtins::{

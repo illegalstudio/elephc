@@ -2,7 +2,7 @@
 title: "cairo_new_sub_path() - internals"
 description: "Compiler internals for cairo_new_sub_path(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 421
+  order: 423
 ---
 
 ## `cairo_new_sub_path()` - internals

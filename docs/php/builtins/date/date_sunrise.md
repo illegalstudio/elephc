@@ -2,7 +2,7 @@
 title: "date_sunrise()"
 description: "Returns the sunrise time for a day and location. Deprecated since PHP 8.1."
 sidebar:
-  order: 210
+  order: 212
 ---
 
 ## date_sunrise()

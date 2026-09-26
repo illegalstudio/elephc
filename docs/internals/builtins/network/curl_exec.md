@@ -2,7 +2,7 @@
 title: "curl_exec() - internals"
 description: "Compiler internals for curl_exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 699
+  order: 701
 ---
 
 ## `curl_exec()` - internals

@@ -2,7 +2,7 @@
 title: "opcache_get_status()"
 description: "Returns OPcache memory, statistics, and optionally the cached scripts."
 sidebar:
-  order: 638
+  order: 640
 ---
 
 ## opcache_get_status()

@@ -2,7 +2,7 @@
 title: "frenchtojd() - internals"
 description: "Compiler internals for frenchtojd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 219
+  order: 221
 ---
 
 ## `frenchtojd()` - internals

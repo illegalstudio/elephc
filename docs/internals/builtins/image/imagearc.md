@@ -2,7 +2,7 @@
 title: "imagearc() - internals"
 description: "Compiler internals for imagearc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 460
+  order: 462
 ---
 
 ## `imagearc()` - internals

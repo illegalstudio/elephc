@@ -2,7 +2,7 @@
 title: "reset() - internals"
 description: "Compiler internals for reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 64
+  order: 66
 ---
 
 ## `reset()` - internals

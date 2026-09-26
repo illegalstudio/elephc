@@ -2,7 +2,7 @@
 title: "array_search() - internals"
 description: "Compiler internals for array_search(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 36
+  order: 38
 ---
 
 ## `array_search()` - internals

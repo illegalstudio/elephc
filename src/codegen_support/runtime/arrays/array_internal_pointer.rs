@@ -31,13 +31,14 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Emits the AArch64 inline normalization prologue shared by all three helpers.
+/// Emits the AArch64 inline normalization prologue shared by all three helpers and by
+/// `__rt_array_edge_value` (`array_first` / `array_last`).
 ///
 /// Unwraps boxed Mixed cells until a bare container remains, then leaves the container
 /// pointer in `x0`, its live element count in `x11`, and its heap kind in `x12`, or
 /// branches to `invalid` when the input is not a live array or hash. Only `x9`-`x12` are
 /// touched, so the caller's `x1`/`x2` argument registers survive.
-fn emit_normalize_aarch64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
+pub(super) fn emit_normalize_aarch64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
     emitter.label(&format!("{}_norm", prefix));
     emitter.instruction(&format!("cbz x0, {}", invalid));                       // a null container is never positionable
     crate::codegen_support::abi::emit_load_int_immediate(
@@ -70,13 +71,14 @@ fn emit_normalize_aarch64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
     emitter.instruction("ldr x11, [x0, #0]");                                   // x11 = live element count from header word 0
 }
 
-/// Emits the x86_64 inline normalization prologue shared by all three helpers.
+/// Emits the x86_64 inline normalization prologue shared by all three helpers and by
+/// `__rt_array_edge_value` (`array_first` / `array_last`).
 ///
 /// Unwraps boxed Mixed cells until a bare container remains, then leaves the container
 /// pointer in `rdi` and its live element count in `r11`, or branches to `invalid`. Only
 /// `rax`, `r10` and `r11` are touched, so the caller's `rsi`/`rdx` argument registers
 /// survive; callers that need the heap kind reload the header byte after the check.
-fn emit_normalize_x86_64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
+pub(super) fn emit_normalize_x86_64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
     emitter.label(&format!("{}_norm", prefix));
     emitter.instruction("test rdi, rdi");                                       // is the container pointer null?
     emitter.instruction(&format!("je {}", invalid));                            // a null container is never positionable

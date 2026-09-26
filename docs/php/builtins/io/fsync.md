@@ -2,7 +2,7 @@
 title: "fsync()"
 description: "Synchronizes changes to the file (including meta-data)."
 sidebar:
-  order: 329
+  order: 331
 ---
 
 ## fsync()

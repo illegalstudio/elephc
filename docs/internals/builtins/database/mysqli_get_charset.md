@@ -2,7 +2,7 @@
 title: "mysqli_get_charset() - internals"
 description: "Compiler internals for mysqli_get_charset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 129
+  order: 131
 ---
 
 ## `mysqli_get_charset()` - internals

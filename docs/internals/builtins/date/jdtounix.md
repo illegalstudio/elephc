@@ -2,7 +2,7 @@
 title: "jdtounix() - internals"
 description: "Compiler internals for jdtounix(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 234
+  order: 236
 ---
 
 ## `jdtounix()` - internals

@@ -2,7 +2,7 @@
 title: "get_class_methods()"
 description: "Returns visible PHP method names, excluding generated property-hook accessors. AOT supports direct calls, literal call_user_func calls, first-class callables, and argument unpacking, with an object, a class-name string, or a boxed value whose runtime tag is an object or a string; any other tag throws TypeError. Runtime-selected callable targets are unsupported."
 sidebar:
-  order: 86
+  order: 88
 ---
 
 ## get_class_methods()

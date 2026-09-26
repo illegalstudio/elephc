@@ -2,7 +2,7 @@
 title: "array_reverse()"
 description: "Returns an array with the elements in reverse order."
 sidebar:
-  order: 35
+  order: 37
 ---
 
 ## array_reverse()

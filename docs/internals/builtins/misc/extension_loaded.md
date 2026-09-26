@@ -2,7 +2,7 @@
 title: "extension_loaded() - internals"
 description: "Compiler internals for extension_loaded(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 611
+  order: 613
 ---
 
 ## `extension_loaded()` - internals

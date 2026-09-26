@@ -2,7 +2,7 @@
 title: "cairo_curve_to() - internals"
 description: "Compiler internals for cairo_curve_to(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 403
+  order: 405
 ---
 
 ## `cairo_curve_to()` - internals

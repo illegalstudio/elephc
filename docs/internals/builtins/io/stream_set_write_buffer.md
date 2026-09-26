@@ -2,7 +2,7 @@
 title: "stream_set_write_buffer() - internals"
 description: "Compiler internals for stream_set_write_buffer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 384
+  order: 386
 ---
 
 ## `stream_set_write_buffer()` - internals

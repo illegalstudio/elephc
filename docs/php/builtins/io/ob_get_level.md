@@ -2,7 +2,7 @@
 title: "ob_get_level()"
 description: "Returns the nesting level of the output buffering mechanism."
 sidebar:
-  order: 349
+  order: 351
 ---
 
 ## ob_get_level()

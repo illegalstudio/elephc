@@ -2,7 +2,7 @@
 title: "mysqli_prepare()"
 description: "Prepares a statement for execution."
 sidebar:
-  order: 146
+  order: 148
 ---
 
 ## mysqli_prepare()

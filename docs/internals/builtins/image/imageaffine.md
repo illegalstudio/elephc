@@ -2,7 +2,7 @@
 title: "imageaffine() - internals"
 description: "Compiler internals for imageaffine(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 456
+  order: 458
 ---
 
 ## `imageaffine()` - internals

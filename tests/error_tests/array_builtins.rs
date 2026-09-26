@@ -840,6 +840,42 @@ fn test_error_array_key_last_non_array() {
     );
 }
 
+/// Verifies that array_first() with no arguments reports an arity error.
+#[test]
+fn test_error_array_first_wrong_args() {
+    expect_error(
+        "<?php array_first();",
+        "array_first() takes exactly 1 argument",
+    );
+}
+
+/// Verifies that array_last() with two arguments reports an arity error.
+#[test]
+fn test_error_array_last_wrong_args() {
+    expect_error(
+        "<?php array_last([1], [2]);",
+        "array_last() takes exactly 1 argument",
+    );
+}
+
+/// Verifies that array_first() rejects a non-array argument.
+#[test]
+fn test_error_array_first_non_array() {
+    expect_error(
+        "<?php array_first(5);",
+        "array_first() argument must be array",
+    );
+}
+
+/// Verifies that array_last() rejects a non-array argument.
+#[test]
+fn test_error_array_last_non_array() {
+    expect_error(
+        "<?php array_last(\"x\");",
+        "array_last() argument must be array",
+    );
+}
+
 /// Verifies that array_replace() with a single argument reports an arity error.
 #[test]
 fn test_error_array_replace_wrong_args() {

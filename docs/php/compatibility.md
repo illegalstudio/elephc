@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **917 / 2169** (42%), classes **142 / 329** (43%), constants **1105 / 3180** (35%).
+Overall coverage: functions **919 / 2169** (42%), classes **142 / 329** (43%), constants **1105 / 3180** (35%).
 
 ## Coverage by PHP module
 
@@ -70,7 +70,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | — |
 | `sqlite3` | — | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 382 / 545 · 70% | 2 / 6 · 33% | 163 / 400 · 41% |
+| `standard` | 384 / 545 · 70% | 2 / 6 · 33% | 163 / 400 · 41% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | — |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | — |
@@ -96,7 +96,7 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
 - `session` functions: 23 / 0
-- `standard` functions: 382 / 342
+- `standard` functions: 384 / 342
 - `standard` constants: 163 / 142
 - `zend opcache` functions: 8 / 0
 

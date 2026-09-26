@@ -2,7 +2,7 @@
 title: "stripslashes() - internals"
 description: "Compiler internals for stripslashes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 859
+  order: 861
 ---
 
 ## `stripslashes()` - internals

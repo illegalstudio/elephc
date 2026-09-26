@@ -2,7 +2,7 @@
 title: "base64_encode() - internals"
 description: "Compiler internals for base64_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 785
+  order: 787
 ---
 
 ## `base64_encode()` - internals

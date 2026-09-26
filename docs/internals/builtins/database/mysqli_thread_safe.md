@@ -2,7 +2,7 @@
 title: "mysqli_thread_safe() - internals"
 description: "Compiler internals for mysqli_thread_safe(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 180
+  order: 182
 ---
 
 ## `mysqli_thread_safe()` - internals

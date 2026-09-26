@@ -2,7 +2,7 @@
 title: "array_key_last() - internals"
 description: "Compiler internals for array_key_last(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 21
+  order: 22
 ---
 
 ## `array_key_last()` - internals

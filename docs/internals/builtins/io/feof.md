@@ -2,7 +2,7 @@
 title: "feof() - internals"
 description: "Compiler internals for feof(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 312
+  order: 314
 ---
 
 ## `feof()` - internals

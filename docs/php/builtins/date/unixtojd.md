@@ -2,7 +2,7 @@
 title: "unixtojd()"
 description: "Converts a Unix timestamp into a Julian Day count."
 sidebar:
-  order: 253
+  order: 255
 ---
 
 ## unixtojd()

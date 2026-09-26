@@ -2,7 +2,7 @@
 title: "array_reduce() - internals"
 description: "Compiler internals for array_reduce(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 32
+  order: 34
 ---
 
 ## `array_reduce()` - internals

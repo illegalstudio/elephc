@@ -2,7 +2,7 @@
 title: "json_last_error()"
 description: "Returns the last error (if any) occurred during the last JSON encoding/decoding."
 sidebar:
-  order: 543
+  order: 545
 ---
 
 ## json_last_error()

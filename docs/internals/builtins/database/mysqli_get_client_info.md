@@ -2,7 +2,7 @@
 title: "mysqli_get_client_info() - internals"
 description: "Compiler internals for mysqli_get_client_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 130
+  order: 132
 ---
 
 ## `mysqli_get_client_info()` - internals

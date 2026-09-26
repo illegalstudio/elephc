@@ -2,7 +2,7 @@
 title: "usort() - internals"
 description: "Compiler internals for usort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 71
+  order: 73
 ---
 
 ## `usort()` - internals

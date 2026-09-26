@@ -2,7 +2,7 @@
 title: "mysqli_error_list()"
 description: "Returns every error of the last call on a connection."
 sidebar:
-  order: 111
+  order: 113
 ---
 
 ## mysqli_error_list()

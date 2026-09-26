@@ -2,7 +2,7 @@
 title: "natcasesort() - internals"
 description: "Compiler internals for natcasesort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 59
+  order: 61
 ---
 
 ## `natcasesort()` - internals

@@ -2,7 +2,7 @@
 title: "date_interval_create_from_date_string() - internals"
 description: "Compiler internals for date_interval_create_from_date_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 201
+  order: 203
 ---
 
 ## `date_interval_create_from_date_string()` - internals

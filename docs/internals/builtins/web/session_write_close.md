@@ -2,7 +2,7 @@
 title: "session_write_close() - internals"
 description: "Compiler internals for session_write_close(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 937
+  order: 939
 ---
 
 ## `session_write_close()` - internals

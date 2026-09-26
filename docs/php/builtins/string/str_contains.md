@@ -2,7 +2,7 @@
 title: "str_contains()"
 description: "Determines if a string contains a given substring."
 sidebar:
-  order: 847
+  order: 849
 ---
 
 ## str_contains()

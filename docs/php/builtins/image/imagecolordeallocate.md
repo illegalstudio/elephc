@@ -2,7 +2,7 @@
 title: "imagecolordeallocate()"
 description: "Frees a palette entry allocated earlier."
 sidebar:
-  order: 470
+  order: 472
 ---
 
 ## imagecolordeallocate()

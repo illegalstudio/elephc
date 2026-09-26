@@ -2,7 +2,7 @@
 title: "method_exists()"
 description: "Checks whether a class method exists."
 sidebar:
-  order: 96
+  order: 98
 ---
 
 ## method_exists()

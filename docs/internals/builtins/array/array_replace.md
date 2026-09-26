@@ -2,7 +2,7 @@
 title: "array_replace() - internals"
 description: "Compiler internals for array_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 33
+  order: 35
 ---
 
 ## `array_replace()` - internals
