@@ -35,11 +35,12 @@ unset($source);
 /// Eval-created ReflectionParameter public names add no retained string beyond eval metadata.
 #[test]
 fn test_eval_reflection_parameter_public_name_releases_string_owner() {
+    // The baseline declares the same eval function and builds no Reflection object at all. An
+    // AOT-built ReflectionParameter is not a stable baseline: it leaks its materialized parameter
+    // metadata (#1352), so the shape of that leak moved the old `baseline + 5` relation whenever
+    // the AOT object gained a property, while the eval path this test guards did not change.
     let baseline = compile_and_run_with_heap_debug(r#"<?php
 eval('function eval_parameter_owner_target(string $argument) {}');
-$parameter = new ReflectionParameter('strlen', 'string');
-if ($parameter->name !== 'string') { echo 'bad'; }
-unset($parameter);
 echo 'baseline';
 "#);
     assert!(baseline.success, "stdout={:?}\nstderr={}", baseline.stdout, baseline.stderr);
@@ -54,11 +55,13 @@ echo 'done';
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "done");
-    // The eval-created reflection owner retains five fixed metadata blocks beyond the AOT object;
-    // the public-name slot must not retain another string allocation after the object is unset.
+    // Eighteen blocks stay live: the thirteen of parameter metadata every ReflectionParameter
+    // construction currently leaks (#1352), and the eval-created owner's five fixed metadata
+    // blocks. The public-name slot must not retain another string after the object is unset,
+    // which would make it nineteen. When #1352 is fixed, the thirteen go away.
     assert_eq!(
         eval_operand_owner_live_blocks(&out.stderr),
-        baseline_live_blocks + 5,
+        baseline_live_blocks + 18,
         "discarded ReflectionParameter objects must release their public-name string: {}",
         out.stderr,
     );
