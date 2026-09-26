@@ -124,6 +124,10 @@ impl Span {
     }
 
     /// Creates a default-source span from one-based start and exclusive end positions.
+    ///
+    /// Test-only: the lexer builds extents with `with_end_from`, which keeps the start token's
+    /// source identity; a bare default-source extent is only useful for constructing fixtures.
+    #[cfg(test)]
     pub fn with_end(line: u32, col: u32, end_line: u32, end_col: u32) -> Self {
         Self {
             line,

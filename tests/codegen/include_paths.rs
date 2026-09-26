@@ -447,3 +447,30 @@ fn test_included_line_wider_than_16_bit_columns_compiles() {
     );
     assert_eq!(out, "2 abab\n3 xyzxyz\n");
 }
+
+/// A diagnostic reported past column 65535 of an included line names the real column (#1292).
+///
+/// The column survives the interned span encoding: an undefined call that starts at column
+/// 70006 is reported there, not at a truncated or wrapped value.
+#[test]
+fn test_included_line_diagnostic_past_16_bit_columns_reports_the_real_column() {
+    let dir = make_cli_test_dir("elephc_wide_column_diagnostic");
+    std::fs::write(
+        dir.join("row.php"),
+        format!("<?php{}undefined_wide_fn();\n", " ".repeat(70_000)),
+    )
+    .expect("failed to write the wide included line");
+    std::fs::write(dir.join("main.php"), "<?php\ninclude __DIR__ . '/row.php';\n")
+        .expect("failed to write the including file");
+
+    let output = elephc_cli_command(&dir)
+        .arg("main.php")
+        .output()
+        .expect("failed to run elephc");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "the undefined call must be refused: {stderr}");
+    assert!(
+        stderr.contains(":70006]: Undefined function: undefined_wide_fn"),
+        "the diagnostic must name column 70006: {stderr}"
+    );
+}
