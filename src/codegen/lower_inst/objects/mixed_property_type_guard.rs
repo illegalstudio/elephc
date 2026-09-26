@@ -410,8 +410,8 @@ fn emit_numeric_string_check(emitter: &mut Emitter, accepted_label: &str) {
             emitter.instruction(&format!("cbnz {}, {}", flag_reg, accepted_label)); // PHP accepts a fully numeric string for this property
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", flag_reg, flag_reg)); // set flags from the numeric-string verdict
-            emitter.instruction(&format!("jne {}", accepted_label)); // PHP accepts a fully numeric string for this property
+            emitter.instruction(&format!("test {}, {}", flag_reg, flag_reg));   // set flags from the numeric-string verdict
+            emitter.instruction(&format!("jne {}", accepted_label));            // PHP accepts a fully numeric string for this property
         }
     }
 }
@@ -470,7 +470,7 @@ fn emit_classify_numeric_string_and_box(emitter: &mut Emitter, refuse_label: &st
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("test {}, {}", status_reg, status_reg)); // set flags from the whole-string numeric status
-            emitter.instruction(&format!("jne {}", refuse_label)); // only a whole-string numeric spelling reaches an int|float member
+            emitter.instruction(&format!("jne {}", refuse_label));              // only a whole-string numeric spelling reaches an int|float member
         }
     }
 
@@ -503,11 +503,11 @@ fn emit_accept_object_classes(emitter: &mut Emitter, class_ids: &[u64], accepted
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction(&format!("cmp {}, {}", class_reg, expected_reg)); // compare the runtime class id with an accepted class
-                emitter.instruction(&format!("b.eq {}", accepted_label)); // the object satisfies the declared property class
+                emitter.instruction(&format!("b.eq {}", accepted_label));       // the object satisfies the declared property class
             }
             Arch::X86_64 => {
                 emitter.instruction(&format!("cmp {}, {}", class_reg, expected_reg)); // compare the runtime class id with an accepted class
-                emitter.instruction(&format!("je {}", accepted_label)); // the object satisfies the declared property class
+                emitter.instruction(&format!("je {}", accepted_label));         // the object satisfies the declared property class
             }
         }
     }
@@ -612,16 +612,16 @@ fn emit_truncation_is_exact_jump(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", value_offset);
-            ctx.emitter.instruction("scvtf d1, x9"); // reconstruct the truncated value for an exactness check
-            ctx.emitter.instruction("fcmp d0, d1"); // detect fractional precision loss
+            ctx.emitter.instruction("scvtf d1, x9");                            // reconstruct the truncated value for an exactness check
+            ctx.emitter.instruction("fcmp d0, d1");                             // detect fractional precision loss
             ctx.emitter
                 .instruction(&format!("b.eq {}", exact_label)); // integral values need no deprecation
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", value_offset);
-            ctx.emitter.instruction("cvtsi2sd xmm1, r10"); // reconstruct the truncated value for an exactness check
-            ctx.emitter.instruction("ucomisd xmm0, xmm1"); // detect fractional precision loss
-            ctx.emitter.instruction(&format!("je {}", exact_label)); // integral values need no deprecation
+            ctx.emitter.instruction("cvtsi2sd xmm1, r10");                      // reconstruct the truncated value for an exactness check
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // detect fractional precision loss
+            ctx.emitter.instruction(&format!("je {}", exact_label));            // integral values need no deprecation
         }
     }
 }

@@ -32,10 +32,12 @@ Physical source (.php or .lfc)
   -> image-prelude      inject the image (GD/Exif/Imagick) prelude when used
   -> hash-prelude       inject the incremental HashContext/hash_* prelude when used
   -> curl-prelude       inject the curl prelude when used
+  -> xml-prelude        inject the XML/XMLWriter prelude when used
   -> web-prelude        inject the web runtime prelude with --web
   -> version-prelude    inject requested PHP version/SAPI surface functions
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
+  -> object-cast-prelude inject stdClass declarations when object casts need them
   -> func-args          desugar func_num_args/get_args/get_arg to a hidden variadic
   -> opcache-manifest-bake complete and bake the post-autoload OPcache script manifest
   -> opt-fold           seed CLI superglobals + AST constant folding
@@ -75,8 +77,9 @@ Physical source (.php or .lfc)
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   mysqli, timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
-  OPcache, image processing, incremental hash contexts, curl, and the PHP
-  version/SAPI surface are injected only when referenced. The web runtime
+  OPcache, image processing, incremental hash contexts, curl, XML/XMLWriter,
+  object-cast `stdClass`, and the PHP version/SAPI surface are injected only
+  when referenced. The web runtime
   prelude is injected
   with `--web`, and namespace/`use` rules rewrite references to fully-qualified
   names. Autoloading is wired in around these steps.
@@ -118,7 +121,8 @@ behind a flag.
 - **ir-opt** — the [EIR optimization passes](optimization.md#eir-optimization-passes)
   run a fixed-point driver over each function: identity arithmetic folding,
   local peephole rewrites, immutable-local load classification, checked-integer
-  sinking, constant folding, common-subexpression elimination,
+  sinking, boxed checked-numeric chain fusion, constant folding,
+  common-subexpression elimination,
   loop-invariant code motion, CFG-aware dead-instruction elimination, dead-store
   elimination, and branch simplification. In
   debug/test builds the function is re-validated after every pass. This phase

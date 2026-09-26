@@ -67,6 +67,7 @@ Things that have a value:
 | `YieldFrom(Expr)` | `yield from inner()` | Contextual `yield from` delegation. The lexer leaves `from` as an identifier and the parser recognizes it only immediately after `yield`. |
 | `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
+| `ArrayLiteralMixed(Vec<ArrayEntry>)` | `[...$left, "key" => $value]` | Mixed spread and explicit keyed entries, preserved in source order |
 | `Match { subject, arms, default }` | `match($x) { 1, 2 => "low", 3 => "high" }` | Match expression (returns a value). `arms` is `Vec<(Vec<Expr>, Expr)>`, so each arm can have multiple comma-separated patterns before `=>`, and `default` is optional (`Option<Box<Expr>>`) |
 | `ArrayAccess { array, index }` | `$arr[0]`, `$str[-1]` | Same AST node is used for indexed arrays, associative-array lookups, and string indexing |
 | `Ternary { condition, then_expr, else_expr }` | `$a ? $b : $c` | |

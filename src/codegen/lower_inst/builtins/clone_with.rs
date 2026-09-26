@@ -742,10 +742,10 @@ fn emit_clone_hook_class_dispatch(
     for (candidate, label) in candidates.iter().zip(labels.iter()) {
         abi::emit_load_int_immediate(ctx.emitter, compare_reg, candidate.class_id as i64);
         ctx.emitter
-            .instruction(&format!("cmp {class_id_reg}, {compare_reg}"));
+            .instruction(&format!("cmp {class_id_reg}, {compare_reg}")); // compare the clone's class with this hook candidate
         match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),
-            Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),
+            Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")), // dispatch to the matching clone hook
+            Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),    // dispatch to the matching clone hook
         }
     }
     abi::emit_jump(ctx.emitter, no_hook);
@@ -868,10 +868,10 @@ pub(super) fn emit_branch_if_reg_equals_immediate(
 ) {
     let scratch = abi::secondary_scratch_reg(ctx.emitter).to_string();
     abi::emit_load_int_immediate(ctx.emitter, &scratch, value);
-    ctx.emitter.instruction(&format!("cmp {reg}, {scratch}"));
+    ctx.emitter.instruction(&format!("cmp {reg}, {scratch}"));                  // compare the runtime class id with the allowed scope id
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),     // accept the matching invocation scope
+        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),        // accept the matching invocation scope
     }
 }
 
@@ -936,10 +936,10 @@ pub(super) fn value_is_empty_array_literal(ctx: &FunctionContext<'_>, value: Val
 /// Branches to `label` when the register holds zero.
 fn emit_branch_if_zero(ctx: &mut FunctionContext<'_>, reg: &str, label: &str) {
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {reg}, {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {reg}, {label}")), // take the requested path when the value is zero
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {reg}, {reg}"));
-            ctx.emitter.instruction(&format!("jz {label}"));
+            ctx.emitter.instruction(&format!("test {reg}, {reg}"));             // set flags from the value being checked
+            ctx.emitter.instruction(&format!("jz {label}"));                    // take the requested path when the value is zero
         }
     }
 }
@@ -947,20 +947,20 @@ fn emit_branch_if_zero(ctx: &mut FunctionContext<'_>, reg: &str, label: &str) {
 /// Branches to `label` when the register holds a non-zero value.
 fn emit_branch_if_nonzero(ctx: &mut FunctionContext<'_>, reg: &str, label: &str) {
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {reg}, {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {reg}, {label}")), // take the requested path when the value is nonzero
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {reg}, {reg}"));
-            ctx.emitter.instruction(&format!("jnz {label}"));
+            ctx.emitter.instruction(&format!("test {reg}, {reg}"));             // set flags from the value being checked
+            ctx.emitter.instruction(&format!("jnz {label}"));                   // take the requested path when the value is nonzero
         }
     }
 }
 
 /// Branches to `label` when an unboxed runtime tag register holds the object tag.
 fn emit_branch_if_tag_is_object(ctx: &mut FunctionContext<'_>, tag_reg: &str, label: &str) {
-    ctx.emitter.instruction(&format!("cmp {tag_reg}, 6"));
+    ctx.emitter.instruction(&format!("cmp {tag_reg}, 6"));                      // compare the runtime tag with the object tag
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),     // take the object-specific path
+        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),        // take the object-specific path
     }
 }
 

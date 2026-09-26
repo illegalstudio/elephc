@@ -111,10 +111,9 @@ impl Checker {
     /// PHP's only documented flag is `ReflectionAttribute::IS_INSTANCEOF`, which widens the
     /// `$name` filter to subclasses and implemented interfaces. Deciding that needs a subclass
     /// test on the ATTRIBUTE's own class name, which the synthesized body only has as a runtime
-    /// string — and every name-keyed hierarchy query refuses one in AOT mode: `is_subclass_of()`
-    /// answers `false` for a string first operand (`static_relation_holds` requires
-    /// `PhpType::Object`), and `class_parents()`, `class_implements()` and `class_exists()` reject
-    /// a non-literal name outright (#1113).
+    /// string, and no name-keyed hierarchy query accepts it in AOT mode: `is_subclass_of()`
+    /// accepts literal class names but answers `false` for a runtime-only name, while
+    /// `class_parents()`, `class_implements()` and `class_exists()` reject non-literal names (#1113).
     ///
     /// Honouring the flag by exact name instead would return a SUBSET of what PHP returns, with
     /// no diagnostic. Before the `$name` filter existed this call was a compile error anyway

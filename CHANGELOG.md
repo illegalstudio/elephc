@@ -5,6 +5,10 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-09-23
+- Added broader PHP compatibility across Core builtins and `eval()`, object casts, class constants, control-flow and declaration syntax, property defaults, arrays, IPv6, and filesystem APIs; also hardened compiler artifacts, archives, and web request handling.
+- Fixed compiler and runtime correctness across compilation and linking, inheritance and reflection, type inference, dynamic and by-reference calls, array mutation and ownership, numeric and string edge cases, curl, and supported-target behavior.
+
 ## [0.27.0] - 2026-09-11
 - Added PHP's `pcntl` extension to native compilation and `eval()`: `pcntl_fork()`, child waits and status decoding, `pcntl_exec()`, priorities, Linux CPU affinity and namespaces, Darwin QoS, `posix_setpgid()` and `posix_setsid()`, plus PHP-compatible signal registration, dispatch, masks, alarms, async signals, siginfo and synchronous waits on macOS AArch64, Linux AArch64 and Linux x86_64. Elephc's `pcntl_daemon()` is available outside `--strict-php`; PCNTL is refused on iOS targets and in hosted `cdylib`/`staticlib` exports.
 - Added PHP's `xml` and `xmlwriter` extensions to native compilation and `eval()`: 22 `xml_*` functions with `XMLParser`, 42 `xmlwriter_*` functions with `XMLWriter` and 28 `XML_*` constants, on libxml2 2.15.3 from the managed native catalog. Run `elephc native add libxml2` once per project, or force the bridge with `--with-xml`; external DTD subsets and external parsed entities are never fetched.
@@ -719,7 +723,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.1...HEAD
+[0.27.1]: https://github.com/illegalstudio/elephc/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/illegalstudio/elephc/compare/v0.26.6...v0.27.0
 [0.26.6]: https://github.com/illegalstudio/elephc/compare/v0.26.5...v0.26.6
 [0.26.5]: https://github.com/illegalstudio/elephc/compare/v0.26.4...v0.26.5

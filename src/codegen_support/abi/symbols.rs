@@ -456,7 +456,7 @@ pub fn emit_load_symbol_to_result(emitter: &mut Emitter, symbol: &str, ty: &PhpT
                 crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter),
                 symbol,
                 8,
-            ); // load the tagged scalar tag from symbol storage
+            );                                                                  // load the tagged scalar tag from symbol storage
         }
         _ => {
             emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
@@ -554,7 +554,7 @@ pub fn emit_store_result_to_symbol(
                 crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter),
                 symbol,
                 8,
-            ); // store the tagged scalar tag into symbol storage
+            );                                                                  // store the tagged scalar tag into symbol storage
         }
         _ => {
             emit_store_reg_to_symbol(emitter, int_result_reg(emitter), symbol, 0);

@@ -42,9 +42,14 @@ This page explains where every value lives in memory at runtime.
 │   globals, static storage)   │  _heap_small_bins, _heap_debug_enabled,
 │                              │  _buffer_registry_free/_next,
 │                              │  _gc_allocs/_frees/_live/_peak,
-│                              │  _gc_collecting/_gc_release_suppressed,
+│                              │  _gc_* lifecycle, timing, and pin state,
 │                              │  _exc_handler_top, _exc_call_frame_top,
-│                              │  _exc_value, _rt_diag_suppression,
+│                              │  _exc_value, _php_*_handler_*,
+│                              │  _magic_set_guard_head,
+│                              │  _rt_diag_suppression, _rt_diag_pending_*,
+│                              │  _php_diagnostic_*,
+│                              │  _rt_unmanaged_ref_borrow_top,
+│                              │  _resource_inventory_head/_tail,
 │                              │  _json_last_error, _json_active_*,
 │                              │  _json_indent_depth, _json_validate_*,
 │                              │  _json_decode_assoc, _json_error_*,
@@ -984,13 +989,15 @@ Converting a boxed `Mixed` value into a concrete scalar, string, or object prope
 | print_r capture | `_print_r_buf` = 64KB; `_print_r_mode`, `_print_r_off` = 8 bytes each | `print_r($value, true)` renders into the capture buffer; oversized captures truncate at 64KB instead of overflowing adjacent data |
 | Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
 | Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |
-| Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn` = 8 bytes each | Late-bound magician callbacks for eval-registered output handlers and eval dynamic-object destructors |
+| Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn`, `_elephc_eval_closure_bind_fn`, `_elephc_eval_wrap_callback_fn`, `_elephc_eval_object_gc_child_fn`, `_elephc_eval_object_release_fn`, `_elephc_eval_array_reference_retire_fn`, `_elephc_eval_object_clone_fn` = 8 bytes each | Late-bound Magician callbacks for eval-managed handlers, closures, callbacks, objects, references, and cloning |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
-| Heap metadata | `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_gc_*` flags/counters = 104 bytes total | Fixed-size bookkeeping, not user-visible |
+| Heap and GC metadata | `_heap_off`, `_heap_free_list`, `_heap_debug_enabled`, `_heap_max`, and each `_gc_*` flag, counter, pointer, or timer = 8 bytes each; `_heap_small_bins` = 32 bytes | Fixed-size allocator, cycle-collector, destructor, pin, and timing bookkeeping |
 | Buffer descriptors | `_buffer_registry` = 196656 bytes (4097 descriptors × 48 bytes), `_buffer_registry_free` = 8 bytes, `_buffer_registry_next` = 8 bytes | Up to 4096 live buffers; freed descriptors are recycled with a new generation, while exhaustion aborts with `Fatal error: buffer registry exhausted` (an invalid requested size aborts earlier with `Fatal error: buffer_new() length is negative or exceeds the maximum buffer size`) |
-| Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value` = 24 bytes total | Fixed-size setjmp/longjmp handler and thrown-value bookkeeping |
-| Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame` = 32 bytes total | Fixed-size current-fiber and main-frame resume bookkeeping |
-| Runtime diagnostics | `_rt_diag_suppression` = 8 bytes total | Fixed-size warning-suppression depth used by `@` and exception unwinding |
+| Exception and user-handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, and every `_php_error_handler_*` / `_php_exception_handler_*` slot = 8 bytes each | Active exception state and current user handlers; nested handler registrations use heap-backed linked stacks |
+| Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`, `_fiber_main_saved_magic_set_guard` = 40 bytes total | Current-fiber and main-frame resume bookkeeping, including the magic-set recursion guard |
+| Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_ptr`, `_rt_diag_pending_len`, `_php_diagnostic_file`, `_php_diagnostic_file_len`, `_php_diagnostic_line` = 8 bytes each | Warning suppression plus deferred diagnostic message and source-location state |
+| Resource inventory | `_resource_inventory_head`, `_resource_inventory_tail` = 16 bytes total | Heap-backed history used by `get_resources()`, including closed incarnations after descriptor reuse |
+| Unmanaged reference-borrow state | `_rt_unmanaged_ref_borrow_top` = 8 bytes | Active boxed array-walk borrow chain used to reject escaping unmanaged element references |
 | JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column` = 104 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations |
 | Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_unser_count` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each; `_unser_depth`, `_unser_allowed_mode`, `_unser_allowed_list`, `_unser_allowed_list_mixed`, `_unser_active`, `_unser_context` = 8 bytes each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry, plus the decode depth limit, `allowed_classes` policy/list, active flag, and reentrancy snapshot; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) and reentrant decodes restore the outer context |
 | Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |

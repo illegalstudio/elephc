@@ -363,7 +363,7 @@ Encoding rules for objects:
 | Function | Signature | Notes |
 |---|---|---|
 | `serialize()` | `serialize($value): string` | Produces PHP's `serialize()` wire format, byte-for-byte: `N;` (null), `b:0;`/`b:1;` (bool), `i:<int>;` (int), `d:<float>;` (float, shortest round-trip at `serialize_precision = -1`, with `INF`/`-INF`/`NAN` for non-finite values), `s:<bytelen>:"<raw>";` (string, raw bytes with the exact byte length and no escaping), `a:<count>:{<key><value>...}` (indexed and associative arrays, nested, with int keys as `i:K;` and string keys as `s:N:"...";`, in insertion order), and `O:<len>:"<Class>":<count>:{...}` (objects). |
-| `unserialize()` | `unserialize($data, $options = []): mixed` | Parses the `serialize()` wire format back into a boxed `Mixed` value. Scalars, arrays, and objects round-trip exactly. Malformed or unsupported input returns `false`, matching PHP's failure indicator. The `$options` argument is accepted for signature compatibility and currently ignored. |
+| `unserialize()` | `unserialize($data, $options = []): mixed` | Parses the `serialize()` wire format back into a boxed `Mixed` value. Scalars, arrays, and objects round-trip exactly. Malformed or unsupported input returns `false`, matching PHP's failure indicator. `$options['allowed_classes']` accepts `true`, `false`, or an array of class names; disallowed objects become `__PHP_Incomplete_Class` instances. Invalid option shapes raise the matching catchable `TypeError`. |
 
 `serialize()`/`unserialize()` round-trip the scalar, array, and object subset exactly,
 and the produced bytes are interchangeable with the PHP interpreter. They share the same

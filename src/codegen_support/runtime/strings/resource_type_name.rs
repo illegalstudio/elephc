@@ -75,10 +75,10 @@ pub fn emit_resource_type_name(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, x9");                                          // recognize PHP's implicit default stream context
     emitter.instruction("b.eq __rt_resource_type_name_context");                // the reserved context has its own type label
     emitter.instruction("tbnz x0, #63, __rt_resource_type_name_closed");        // a negative payload is the -id sentinel an explicit close stamped
-    emitter.instruction("cmp x3, #9");                                         // stream-filter resources carry subtype 9 in their Mixed cell
+    emitter.instruction("cmp x3, #9");                                          // stream-filter resources carry subtype 9 in their Mixed cell
     emitter.instruction("b.eq __rt_resource_type_name_filter");                 // preserve PHP's distinct stream filter resource name
     abi::emit_symbol_address(emitter, "x1", "_resource_type_stream");
-    abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_STREAM_LEN);      // an open resource reports the type it was created with
+    abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_STREAM_LEN);       // an open resource reports the type it was created with
     emitter.instruction("ret");                                                 // return the open type name without touching any other register
 
     emitter.label("__rt_resource_type_name_closed");

@@ -155,10 +155,12 @@ PHP source (.php)
 │ EIR passes  │  src/ir_passes/
 │             │  Module-level fixed-point pipeline: a cross-function
 │             │  small-function inliner interleaved with the per-function
-│             │  pass driver (identity folding, peephole rewrites, constant
-│             │  folding, common-subexpression elimination, loop-invariant
-│             │  code motion, dead-instruction elimination, dead-store
-│             │  elimination, branch simplification) plus dominance and loop
+│             │  pass driver (identity folding, peephole rewrites, immutable
+│             │  local classification, checked-integer sinking, boxed numeric-
+│             │  chain fusion, constant folding, common-subexpression
+│             │  elimination, loop-invariant code motion, dead-instruction
+│             │  elimination, dead-store elimination, branch simplification)
+│             │  plus dominance and loop
 │             │  analysis and linear-scan register allocation (liveness,
 │             │  intervals, pools) before codegen.
 └──────┬──────┘
@@ -405,7 +407,7 @@ src/
 │   ├── runtime_callable_invoker.rs Runtime callable-descriptor invocation lowering
 │   ├── function_variants.rs   Include-loaded function-variant dispatcher emission
 │   ├── literal_defaults.rs    Literal property defaults → backend-native values
-│   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: callables, class constants, constructors, methods, properties, ref args, reflection (+ owners), static properties (9 files)
+│   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: callables, class constants, constructors, methods, properties, ref args, reflection (+ owners), static properties (12 files)
 │   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, the boxed-mixed __toString ladder, their common helper-frame plumbing, and the module-wide state that dedupes callable descriptors and owns the label counter (4 files)
 │   ├── fibers.rs              Fiber-aware EIR codegen integration
 │   └── web.rs                 `--web` program-entry lowering
@@ -462,7 +464,7 @@ src/
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Runtime module boundary; re-exports the emission entry points
-│       ├── data/              Fixed, user-program, and instanceof runtime data tables (4 files)
+│       ├── data/              Fixed, user-program, and instanceof runtime data tables (5 files)
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
@@ -472,22 +474,22 @@ src/
 │       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, and conversion helpers (97 top-level files + iconv/ target-neutral bridge helpers, 4 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (175 files + hash_sort/ target split, 2 files)
-│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (5 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, and conversion helpers (100 top-level files + 4 nested bridge helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (194 top-level files + 3 nested target/debug helpers)
+│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (121 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (122 files)
 │       ├── buffers/           Generation-safe handle resolution, allocation/free, length, bounds/size/use-after-free diagnostics (8 files incl. mod.rs)
 │       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls (3 files incl. target assembly)
 │       ├── curl/              Easy, multi, share, callback, multipart, error, and version bridge adapters (14 files)
-│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, and builtin adapters (23 files)
+│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, and builtin adapters (29 files)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
-│       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (7 files)
+│       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (16 files)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (43 top-level files + 38 files under 6 subdirectories)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (46 top-level files + 43 nested files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
-│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (15 files)
+│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (16 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
@@ -618,9 +620,10 @@ The runtime data emission in `src/codegen_support/runtime/data/` is split into `
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata and heap-debug toggle |
 | Buffer registry | `_buffer_registry`, `_buffer_registry_free`, `_buffer_registry_next` | Static generation-safe descriptors, recycled-slot free-list head, and next never-issued descriptor index |
-| Runtime diagnostics | `_rt_diag_suppression`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible warning state/text plus fatal error messages and heap-debug summary/failure strings |
-| GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_collecting`, `_gc_release_suppressed` | Allocation/free/live-byte counters plus targeted-cycle-collector coordination flags |
-| Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
+| Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_*`, `_php_diagnostic_*`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible and deferred warning state/text plus source locations, fatal messages, and heap-debug summary/failure strings |
+| GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_enabled`, `_gc_collecting`, `_gc_freeing_unreachable`, `_gc_pin_head`, `_gc_pending_throw`, `_gc_release_suppressed`, `_gc_runs`, `_gc_collected`, `_gc_application_started`, `_gc_*_started`, `_gc_*_time`, `_gc_destructor_depth` | Allocation/free/live-byte counters, collector lifecycle and timing state, pinned roots, and deferred throws |
+| Exception and handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, `_php_error_handler_*`, `_php_exception_handler_*`, `_class_parent_ids` | Active exception and cleanup stacks, current user handlers with heap-backed restore stacks, magic-set recursion guard, and parent links used for catch matching |
+| Reference and resource tracking | `_rt_unmanaged_ref_borrow_top`, `_resource_inventory_head`, `_resource_inventory_tail` | Active unmanaged array-element borrow plus the heap-backed resource-incarnation inventory used by `get_resources()` |
 | Include-once guards | `_include_once_<hash>` | Per-resolved-file loaded flags used by `include_once` / `require_once` runtime guards |
 | Include-loaded function variants | `_fn_variant_active_<function>` | Active hidden implementation pointer for a function loaded through an include point |
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags`, `_principal_lookup_buf`, `_etc_passwd_path`, `_etc_group_path`, `_principal_lookup_read_mode` | Syscall-oriented C-string scratch buffers, EOF bookkeeping, and passwd/group lookup state for `chown()` / `chgrp()` name resolution |

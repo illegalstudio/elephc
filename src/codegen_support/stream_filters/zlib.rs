@@ -328,7 +328,7 @@ pub(crate) fn emit_x86_64(
         // owned-heap kind word with the x86_64 heap marker
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));
+    ));                                                                         // materialize the owned z_stream heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the z_stream block as owned heap state
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the z_stream pointer
 

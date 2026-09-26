@@ -31,7 +31,7 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x2, #0");                              // no bytes at all is EOF, tested BEFORE any stripping
-            ctx.emitter.instruction(&format!("b.le {}", false_label));
+            ctx.emitter.instruction(&format!("b.le {}", false_label));          // box false when the read produced no bytes
             ctx.emitter.instruction("sub x9, x2, #1");                          // offset of the last byte read
             ctx.emitter.instruction("ldrb w10, [x1, x9]");                      // load it to see whether it terminates the line
             ctx.emitter.instruction("cmp w10, #10");                            // 10 = '\n'
@@ -40,17 +40,17 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
             ctx.emitter.label(&keep_label);
             ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false path after boxing the line
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("mov x1, #0");                              // false carries no payload
-            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("mov x2, #0");                              // false has no high payload word
             ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rdx, 0");                              // no bytes at all is EOF, tested BEFORE any stripping
-            ctx.emitter.instruction(&format!("jle {}", false_label));
+            ctx.emitter.instruction(&format!("jle {}", false_label));           // box false when the read produced no bytes
             ctx.emitter.instruction("lea r10, [rdx - 1]");                      // offset of the last byte read
             ctx.emitter.instruction("mov cl, BYTE PTR [rax + r10]");            // load it to see whether it terminates the line
             ctx.emitter.instruction("cmp cl, 10");                              // 10 = '\n'
@@ -61,10 +61,10 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
             ctx.emitter.instruction("mov rsi, rdx");                            // Mixed high payload = its length
             ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false path after boxing the line
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // false carries no payload
-            ctx.emitter.instruction("xor esi, esi");
+            ctx.emitter.instruction("xor esi, esi");                            // false has no high payload word
             ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = boolean false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
