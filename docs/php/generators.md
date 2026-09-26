@@ -431,6 +431,35 @@ function items() {
 }
 ```
 
+## What makes a function a generator
+
+The `yield` token, and nothing else. PHP decides this **syntactically, at
+declaration**: a body that contains `yield` or `yield from` anywhere is a
+generator, even when no `yield` can ever run, and a body without one is not,
+whatever it declares.
+
+```php
+function inner(): Generator { yield 1; yield 2; }
+
+function factory(): Generator { return inner(); }   // NOT a generator
+foreach (factory() as $v) { echo $v; }              // 12 — inner's values
+
+function empty(): iterable { while (false) { yield 1; } }   // IS a generator
+foreach (empty() as $v) { echo $v; }                        // nothing, and it terminates
+var_dump(empty()->valid());                                 // false
+```
+
+`factory()` declares the same return type as a real generator and holds no
+token, so calling it runs the body to completion and hands back the object
+`inner()` produced. `empty()` declares `iterable` and holds a token no
+execution can reach, so calling it returns an empty `Generator`: `valid()` is
+`false`, `current()` is `null`, and a `foreach` over it makes no passes.
+
+Two consequences follow. Constant folding never removes a body's last `yield`,
+because that would change what the function is rather than only what it does.
+And a declared `Generator` return type is never taken as evidence on its own,
+because a factory declares exactly that.
+
 ### Generators whose `yield` is unreachable
 
 A declaration containing `yield` is a generator even when the `yield` can never

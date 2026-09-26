@@ -200,24 +200,32 @@ Current pruning coverage includes:
 ### A pass must not delete a body's last `yield`
 
 PHP decides generator-ness **syntactically, at declaration**. The checker records
-that on `FunctionSig::is_generator` from the source body, before any pass runs, and
-lowering reads the bit. A body that held a `yield` is still a generator when no
-`yield` can run, so `function g(): iterable { while (false) { yield 1; } }` returns
-an empty `Generator`.
+that on `FunctionSig::is_generator` from the source body, before any later pass
+runs, and lowering reads the bit. A declared `: Generator` return is not a
+substitute: `function factory(): Generator { return inner(); }` declares the type
+without containing `yield`, and it is an ordinary function (issue #1086). A body
+that held a `yield` is still a generator when no `yield` can run, so
+`function g(): iterable { while (false) { yield 1; } }` returns an empty
+`Generator`.
 
 The bit does not replace the token in the body. Generator source and the body-scan
 fallback still look for a `yield`, and a pass that removes every one of them changes
 the body the coroutine is lowered from. When constant folding took the dead branch
 with the token, the function returned a boxed `null`, `valid()` answered `true`
-forever, and `foreach` never terminated (issues #673 and #1085).
+forever, and `foreach` never terminated (issues #673 and #1085). Pre-check target
+folding is earlier still: it runs before the checker records the bit, so deleting
+the last `yield` there would make the declaration look ordinary.
 
 `optimize::generator_bodies::rewrite_preserving_yield` keeps the original body when
 a rewrite would leave it with no `yield` at all. Only a body whose yields are all
 removed gives up that pass. The walk is paid by every body; the clone only by
 bodies that contain a yield.
 
-Two passes delete a yield for different reasons, so each has its own call:
+The rewrites that delete a yield do it for different reasons, so each has its own call:
 
+- **Pre-check target folding** (`fold_callable_body`) can fold a target-availability
+  condition such as `PHP_OS_FAMILY === "Windows"` and take a `yield` with that
+  branch, before `is_generator` exists.
 - **Pass 3, pruning** (which Pass 4 runs again over the same bodies) folds a
   condition it can read as a literal — `while (false)`, `if (false)`. Named
   functions and methods reach the guard through `prune_function_body()`, closures

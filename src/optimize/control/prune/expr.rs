@@ -9,7 +9,7 @@
 //! - Loop exits, empty bodies, and effectful conditions must be handled before removing structural statements.
 
 use super::super::*;
-use super::statements::{prune_block, prune_stmt};
+use super::statements::prune_stmt;
 
 /// Recursively rewrites an expression tree, pruning constant subexpressions while
 /// preserving side effects. Applies to all expression variants including literals,

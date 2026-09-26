@@ -2,15 +2,21 @@
 //! Keeps a declaration that PHP calls a generator looking like one through the AST passes.
 //!
 //! Called from:
-//! - `crate::optimize::propagate`, `crate::optimize::control::prune`, and
+//! - `crate::optimize::target_guards::fold_callable_body` (pre-check target folding),
+//!   `crate::optimize::propagate`, `crate::optimize::control::prune`, and
 //!   `crate::optimize::control::dce`, at every site that rewrites a function, method, or
 //!   closure body.
 //!
 //! Key details:
 //! - PHP decides whether a declaration is a GENERATOR syntactically, before any folding. The
-//!   checker records that on `FunctionSig::is_generator` and lowering reads the bit. Propagation
-//!   and pruning still stop at a block's first terminator, so an unreachable `yield` is dropped
-//!   and the body the coroutine lowers from no longer matches that bit (issue #673).
+//!   checker records that on `FunctionSig::is_generator` and lowering reads the bit. A declared
+//!   `: Generator` return is not that bit: a factory declares one without containing `yield`
+//!   (issue #1086).
+//! - Pre-check target folding runs before the checker records the bit, so a fold that deletes
+//!   the last `yield` would make the declaration look like an ordinary function.
+//! - Propagation and pruning still stop at a block's first terminator, so an unreachable
+//!   `yield` is dropped and the body the coroutine lowers from no longer matches that bit
+//!   (issue #673).
 //! - Dead-code elimination deletes a yield for a different reason: an `elseif` chain survives
 //!   pruning with this guard engaged and the body restored, then DCE collapses the chain and
 //!   takes the token with it (issue #1085). DCE is wrapped for that reason.
