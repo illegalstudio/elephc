@@ -352,6 +352,42 @@ echo count($r->getAttributes(...$args)), "\n";
     );
 }
 
+/// A spread of an array LITERAL is readable at compile time, positionally or by name, so it is
+/// neither refused nor waved through: `...[Other::class]` and a literal zero flag filter like
+/// the written arguments do. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_get_attributes_reads_a_literal_spread() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute] class Marker {}
+#[Attribute] class Other {}
+
+#[Marker, Other, Marker]
+class C {}
+
+$r = new ReflectionClass('C');
+echo count($r->getAttributes(...[Other::class])), "|";
+echo count($r->getAttributes(...[Marker::class, 0])), "|";
+echo count($r->getAttributes(...['name' => Marker::class, 'flags' => 0])), "\n";
+"#,
+    );
+    assert_eq!(out, "1|2|2\n");
+}
+
+/// A literal spread carrying `IS_INSTANCEOF` is refused at compile time exactly like the written
+/// `getAttributes(Marker::class, 2)`, instead of compiling and throwing at run time.
+#[test]
+fn test_get_attributes_rejects_the_flag_through_a_literal_spread() {
+    let err = compile_expect_type_error(
+        r#"<?php
+#[Attribute] class Marker {}
+#[Marker] class C {}
+echo count((new ReflectionClass('C'))->getAttributes(...[Marker::class, ReflectionAttribute::IS_INSTANCEOF])), "\n";
+"#,
+    );
+    assert!(err.contains("the $flags argument is not supported yet"), "unexpected diagnostic: {}", err);
+}
+
 /// A `mixed` receiver dispatches on the runtime class id over every class declaring the method,
 /// so a Reflection owner is among the candidates and the flag has to be refused there too.
 /// Measured before this: `1` where PHP answers `2`.

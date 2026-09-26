@@ -64,7 +64,15 @@ fn get_attributes_filter_arguments(
         return (None, FilterFlags::Invalid);
     };
     if plan.has_spread_args() {
-        return (None, FilterFlags::Hidden);
+        // The planner passes a spread through without resolving slots, so a spread of an array
+        // LITERAL is read here: its elements are the arguments, by position or by name. Treating
+        // `...[Other::class]` as able to carry `$flags` refused valid PHP, while
+        // `...[Marker::class, 2]` must still be read as a non-zero flag. Only a spread of a
+        // runtime array is really hidden.
+        return match args {
+            [Expr { kind: ExprKind::Spread(inner), .. }] => literal_spread_filter_arguments(inner),
+            _ => (None, FilterFlags::Hidden),
+        };
     }
     let normalized = plan.normalized_args();
     (
@@ -75,6 +83,35 @@ fn get_attributes_filter_arguments(
             .map(FilterFlags::Given)
             .unwrap_or(FilterFlags::Absent),
     )
+}
+
+/// Reads `$name` and `$flags` from the sole argument `...<array literal>`; any other spread
+/// source cannot be read at compile time and hides both.
+fn literal_spread_filter_arguments(spread: &Expr) -> (Option<Expr>, FilterFlags) {
+    let slot = |position: usize, name: &str| -> Option<Option<Expr>> {
+        match &spread.kind {
+            ExprKind::ArrayLiteral(items) => Some(items.get(position).cloned()),
+            ExprKind::ArrayLiteralAssoc(pairs) => {
+                let mut found = None;
+                for (key, value) in pairs {
+                    let matches = match &key.kind {
+                        ExprKind::StringLiteral(key) => key == name,
+                        ExprKind::IntLiteral(key) => *key == position as i64,
+                        _ => return None,
+                    };
+                    if matches {
+                        found = Some(value.clone());
+                    }
+                }
+                Some(found)
+            }
+            _ => None,
+        }
+    };
+    let (Some(name), Some(flags)) = (slot(0, "name"), slot(1, "flags")) else {
+        return (None, FilterFlags::Hidden);
+    };
+    (name, flags.map_or(FilterFlags::Absent, FilterFlags::Given))
 }
 
 impl Checker {
