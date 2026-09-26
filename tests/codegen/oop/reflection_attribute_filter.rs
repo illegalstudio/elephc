@@ -374,6 +374,24 @@ echo count($r->getAttributes(...['name' => Marker::class, 'flags' => 0])), "\n";
     assert_eq!(out, "1|2|2\n");
 }
 
+/// A runtime array wrapped in a literal (`...[...$args]`) is no more readable than `...$args`:
+/// the literal's element index is no longer the argument index, and the flag it carries is only
+/// known at run time, so it is refused like the bare spread.
+#[test]
+fn test_get_attributes_rejects_a_runtime_array_nested_in_a_literal_spread() {
+    let err = compile_expect_type_error(
+        r#"<?php
+#[Attribute] class Base {}
+#[Attribute] class Derived extends Base {}
+#[Derived] #[Base] class Target {}
+$r = new ReflectionClass(Target::class);
+$args = [Base::class, ReflectionAttribute::IS_INSTANCEOF];
+echo count($r->getAttributes(...[...$args])), "\n";
+"#,
+    );
+    assert!(err.contains("cannot be read through a spread"), "unexpected diagnostic: {}", err);
+}
+
 /// A literal spread carrying `IS_INSTANCEOF` is refused at compile time exactly like the written
 /// `getAttributes(Marker::class, 2)`, instead of compiling and throwing at run time.
 #[test]

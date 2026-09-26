@@ -85,33 +85,24 @@ fn get_attributes_filter_arguments(
     )
 }
 
-/// Reads `$name` and `$flags` from the sole argument `...<array literal>`; any other spread
+/// Reads `$name` and `$flags` from the sole argument `...[<plain values>]`; any other spread
 /// source cannot be read at compile time and hides both.
+///
+/// Only an indexed literal without nested spreads is read: its element index IS the argument
+/// index. A nested spread (`...[...$args]`) breaks that, and can carry a runtime flag, so it hides
+/// both. An associative literal never reaches here with all-literal keys, because the call planner
+/// expands those into named arguments first; any other one stays hidden.
 fn literal_spread_filter_arguments(spread: &Expr) -> (Option<Expr>, FilterFlags) {
-    let slot = |position: usize, name: &str| -> Option<Option<Expr>> {
-        match &spread.kind {
-            ExprKind::ArrayLiteral(items) => Some(items.get(position).cloned()),
-            ExprKind::ArrayLiteralAssoc(pairs) => {
-                let mut found = None;
-                for (key, value) in pairs {
-                    let matches = match &key.kind {
-                        ExprKind::StringLiteral(key) => key == name,
-                        ExprKind::IntLiteral(key) => *key == position as i64,
-                        _ => return None,
-                    };
-                    if matches {
-                        found = Some(value.clone());
-                    }
-                }
-                Some(found)
-            }
-            _ => None,
-        }
-    };
-    let (Some(name), Some(flags)) = (slot(0, "name"), slot(1, "flags")) else {
+    let ExprKind::ArrayLiteral(items) = &spread.kind else {
         return (None, FilterFlags::Hidden);
     };
-    (name, flags.map_or(FilterFlags::Absent, FilterFlags::Given))
+    if items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) {
+        return (None, FilterFlags::Hidden);
+    }
+    (
+        items.first().cloned(),
+        items.get(1).cloned().map_or(FilterFlags::Absent, FilterFlags::Given),
+    )
 }
 
 impl Checker {
