@@ -282,7 +282,20 @@ fn merge_array_branch_types(acc: &PhpType, next: &PhpType) -> Option<PhpType> {
 /// so a hit was read back through a string representation. When the two arms have
 /// no common type, `Mixed` is the honest answer: it keeps the value boxed with its
 /// tag, and both arms survive.
-fn merge_null_coalesce_result_type(value: PhpType, default: PhpType) -> PhpType {
+///
+/// Object operands merge the way the two branches of a ternary do: `?Contract ?? new
+/// Implementation()` is a `Contract`, since one side already accepts the other, and two
+/// unrelated implementations stay a union of both rather than widening to `mixed` (#822).
+fn merge_null_coalesce_result_type(checker: &Checker, value: PhpType, default: PhpType) -> PhpType {
+    if object_union_match_arm_type(&value) && object_union_match_arm_type(&default) {
+        return merge_object_union_match_arm_types(checker, value, default);
+    }
+    merge_null_coalesce_value_types(value, default)
+}
+
+/// Joins `??` operands that are not both objects: arrays elementwise, everything else through
+/// [`null_coalesce_merge_type`].
+fn merge_null_coalesce_value_types(value: PhpType, default: PhpType) -> PhpType {
     merge_array_branch_types(&value, &default)
         .unwrap_or_else(|| null_coalesce_merge_type(&value, &default))
 }
@@ -414,7 +427,7 @@ mod tests {
     /// left element type win through the syntactic fallback.
     #[test]
     fn test_merge_null_coalesce_result_type_widens_array_elements() {
-        let merged = merge_null_coalesce_result_type(
+        let merged = merge_null_coalesce_value_types(
             PhpType::Array(Box::new(PhpType::Int)),
             PhpType::Array(Box::new(PhpType::Str)),
         );

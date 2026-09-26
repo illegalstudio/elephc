@@ -133,6 +133,7 @@ impl Checker {
                     value_ty
                 };
                 Ok(merge_null_coalesce_result_type(
+                    self,
                     non_null_value,
                     default_ty,
                 ))
