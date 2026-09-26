@@ -1073,3 +1073,75 @@ echo count($h);
         out.stderr
     );
 }
+
+/// A spread reindexes its integer keys from the destination's next free key, so it hits the
+/// same saturated key as an append once `PHP_INT_MAX` is taken, and throws the same `Error`.
+/// String keys never need the counter. Regression for #1315.
+#[test]
+fn test_spread_after_php_int_max_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$src = [1 => 'v'];
+try {
+    $a = [PHP_INT_MAX => 'max', ...$src];
+    var_export(array_keys($a));
+} catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try {
+    $b = ['k' => 1, PHP_INT_MAX => 'm', ...[str_repeat('s', 2), 'y']];
+    var_export(array_keys($b));
+} catch (Error $e) { echo $e->getMessage(), "\n"; }
+$c = [PHP_INT_MAX => 'max', ...['x' => 1]];
+echo count($c), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Error: Cannot add element to the array as the next element is already occupied\n",
+            "Cannot add element to the array as the next element is already occupied\n",
+            "2\n",
+        )
+    );
+}
+
+/// Appending and spreading can now throw, so a store made before them in a `try` must still
+/// be visible to the `catch` that runs instead of the rest of the block.
+#[test]
+fn test_catch_sees_stores_made_before_a_refused_append_or_spread() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $n): string {
+    $h = ['a' => 1, PHP_INT_MAX => 2];
+    $x = 'start';
+    try {
+        $x = 'before' . $n;
+        $h[] = 3;
+        $x = 'after';
+    } catch (Error $e) {
+        return $x . '|' . count($h);
+    }
+    return $x;
+}
+echo f($argc), "\n";
+function g(int $n): string {
+    $x = 'start';
+    try {
+        $x = 'mid' . $n;
+        $a = [PHP_INT_MAX - 1 => 'p', ...[str_repeat('q', $n), 'r']];
+        $x = 'end' . count($a);
+    } catch (Error $e) {
+        return $x . ':' . $e->getMessage();
+    }
+    return $x;
+}
+echo g($argc), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "before1|2\n",
+            "mid1:Cannot add element to the array as the next element is already occupied\n",
+        )
+    );
+}

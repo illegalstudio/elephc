@@ -1319,7 +1319,10 @@ impl Op {
             // the hash removal can reallocate the table.
             HashUnset | PropUnset | DynamicPropUnset | OffsetUnset => E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
+            // An automatic key past `PHP_INT_MAX` is taken, so an append to a hash raises
+            // `Error` the way PHP does, and a catch handler can observe what ran before it.
+            HashAppend => E::WRITES_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
+            ArraySet | HashSet | DescriptorArgSet | ArrayPush
             | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // `PropSet` and `DynamicPropSet` now carry the SAME conservative contract, because
@@ -1335,7 +1338,8 @@ impl Op {
             PropSet | DynamicPropSet => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_FATAL
                 | E::REFCOUNT_OP,
-            MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW
+                | E::MAY_FATAL | E::REFCOUNT_OP,
             // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
             // checks its load factor and may grow/rehash the table before it even knows whether
             // the key is already present.
@@ -1351,7 +1355,8 @@ impl Op {
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
-            HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
+            // Reindexing a spread's integer keys past `PHP_INT_MAX` raises `Error`, as appending does.
+            HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
             MethodCall | NullsafeMethodCall => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT
             }
