@@ -38,3 +38,7 @@ try {
 } catch (Exception $e) {
     echo "|caught\n";
 }
+
+// empty() asks offsetExists() first; offsetGet(), which would throw here, only runs when the
+// offset exists.
+echo empty($box["q"]) ? "|empty\n" : "|set\n";

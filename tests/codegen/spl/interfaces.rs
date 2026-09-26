@@ -536,7 +536,7 @@ fn test_array_access_exception_side_effect_order_example() {
     let out = compile_and_run(include_str!(
         "../../../examples/array-access-exception-order/main.php"
     ));
-    assert_eq!(out, "KG|caught\n");
+    assert_eq!(out, "KG|caught\nE|empty\n");
 }
 
 /// Verifies subscript operations work when an `ArrayAccess` implementer is passed
