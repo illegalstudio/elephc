@@ -510,6 +510,8 @@ enum GenParamKind {
     Float,
     /// Two integer registers: string pointer followed by length.
     Str,
+    /// Two integer registers: tagged-scalar payload followed by its runtime tag.
+    TaggedScalar,
     /// An already-boxed Mixed cell pointer forwarded as-is.
     Mixed,
 }
@@ -519,6 +521,7 @@ fn gen_param_kind(ty: &PhpType) -> GenParamKind {
     match ty {
         PhpType::Float => GenParamKind::Float,
         PhpType::Str => GenParamKind::Str,
+        PhpType::TaggedScalar => GenParamKind::TaggedScalar,
         PhpType::Mixed | PhpType::Union(_) => GenParamKind::Mixed,
         _ => GenParamKind::IntLike,
     }
@@ -642,6 +645,18 @@ fn emit_generator_constructor(
                     abi::load_at_offset(emitter, "rax", slot);
                     abi::load_at_offset(emitter, "rdx", slot - 8);
                     crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+                }
+            },
+            GenParamKind::TaggedScalar => match target.arch {
+                Arch::AArch64 => {
+                    abi::load_at_offset(emitter, "x0", slot);
+                    abi::load_at_offset(emitter, "x1", slot - 8);
+                    crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
+                }
+                Arch::X86_64 => {
+                    abi::load_at_offset(emitter, "rax", slot);
+                    abi::load_at_offset(emitter, "rdx", slot - 8);
+                    crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
                 }
             },
             GenParamKind::IntLike => {
@@ -807,6 +822,14 @@ fn emit_generator_callback(
                 abi::store_at_offset(emitter, "rdi", slot);
                 abi::store_at_offset(emitter, "rdx", slot - 8);
             }
+            (GenParamKind::TaggedScalar, Arch::AArch64) => {
+                abi::store_at_offset(emitter, "x1", slot); // preserve the payload word
+                abi::store_at_offset(emitter, "x0", slot - 8); // preserve the Mixed runtime tag
+            }
+            (GenParamKind::TaggedScalar, Arch::X86_64) => {
+                abi::store_at_offset(emitter, "rdi", slot); // preserve the payload word
+                abi::store_at_offset(emitter, "rax", slot - 8); // preserve the Mixed runtime tag
+            }
             (_, Arch::AArch64) => abi::store_at_offset(emitter, "x1", slot),
             (_, Arch::X86_64) => abi::store_at_offset(emitter, "rdi", slot),
         }
@@ -829,14 +852,14 @@ fn emit_generator_callback(
                 abi::load_at_offset(emitter, freg, slot);
                 abi::emit_push_float_reg(emitter, freg); // stage the float parameter on the temporary call stack
             }
-            GenParamKind::Str => {
+            GenParamKind::Str | GenParamKind::TaggedScalar => {
                 let (lo, hi) = match target.arch {
                     Arch::AArch64 => ("x9", "x10"),
                     Arch::X86_64 => ("r10", "r11"),
                 };
                 abi::load_at_offset(emitter, lo, slot);
                 abi::load_at_offset(emitter, hi, slot - 8);
-                abi::emit_push_reg_pair(emitter, lo, hi); // stage the string pointer/length pair on the temporary call stack
+                abi::emit_push_reg_pair(emitter, lo, hi); // stage the two-word string/tagged-scalar argument
             }
             GenParamKind::IntLike | GenParamKind::Mixed => {
                 let reg = match target.arch {

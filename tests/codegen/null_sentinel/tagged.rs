@@ -7,11 +7,12 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Every fixture is compiled with `compile_and_run_tagged` (forces `NullRepr::Tagged`);
-//!   expected outputs are PHP 8.4 cross-checked. The legacy sentinel default is covered by
-//!   the rest of the suite and must keep passing unchanged.
+//! - Fixtures use `NullRepr::Tagged`; most go through `compile_and_run_tagged`, while exception
+//!   ownership checks also enable heap debugging. Expected outputs are PHP cross-checked.
+//!   The legacy sentinel default is covered by the rest of the suite and must keep passing.
 
 use super::*;
+use std::fs;
 
 /// The integer PHP_INT_MAX-1 (== the legacy null sentinel bit pattern) must echo as itself
 /// under the tagged representation.
@@ -330,4 +331,282 @@ echo json_encode($n), "|", json_encode($n), "|", $n;
     );
 
     assert_eq!(out, "42|42|42");
+}
+
+/// A tagged nullable int reaching a `mixed` PARAMETER must be boxed by the call ABI.
+///
+/// It was not. `emit_box_current_value_as_mixed` matched on the DECLARED type, where
+/// `PhpType::Union(_)` means "already a boxed Mixed" — true of every nullable union except this
+/// one, which is the unboxed two-word `{payload, tag}` pair. Nothing was emitted, the callee read
+/// the raw payload as a Mixed pointer, and the caller's own `__rt_decref_mixed` ran on the
+/// integer: `var_export()` on a `?int` segfaulted whether it held `5` or `null` (#1040).
+#[test]
+fn test_tagged_nullable_int_boxes_for_a_mixed_parameter() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class N { public ?int $n = 5; }
+class M { public ?int $n = null; }
+
+function nint(int $i): ?int { return $i >= 0 ? 5 : null; }
+function take(mixed $v): string { return is_null($v) ? "null" : "set:" . $v; }
+
+echo take(nint(1)), "|", take(nint(-1)), "\n";
+echo var_export((new N())->n, true), "|", var_export((new M())->n, true), "\n";
+echo var_export(nint(1), true), "\n";
+"#,
+    );
+    assert_eq!(out, "set:5|null\n5|NULL\n5\n");
+}
+
+/// The same value reaching a `mixed` parameter of a METHOD, and through a method's return.
+#[test]
+fn test_tagged_nullable_int_boxes_for_a_mixed_method_parameter() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class Box {
+    public ?int $n = 5;
+    public function get(): ?int { return $this->n; }
+    public function take(mixed $v): string { return is_null($v) ? "null" : "set:" . $v; }
+}
+
+$b = new Box();
+echo $b->take($b->get()), "|", $b->take($b->n), "\n";
+echo var_export($b->get(), true), "\n";
+"#,
+    );
+    assert_eq!(out, "set:5|set:5\n5\n");
+}
+
+/// A static property and a `int|null` spelled without `?` take the same path.
+#[test]
+fn test_tagged_nullable_int_boxes_from_every_storage() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class S { public static ?int $n = 7; }
+class U { public int|null $n = 9; }
+
+function take(mixed $v): string { return is_null($v) ? "null" : "set:" . $v; }
+
+echo take(S::$n), "|", take((new U())->n), "\n";
+echo var_export(S::$n, true), "|", var_export((new U())->n, true), "\n";
+"#,
+    );
+    assert_eq!(out, "set:7|set:9\n7|9\n");
+}
+
+/// The other nullable scalars were never broken — they are already boxed Mixed — and must stay
+/// that way, which is what makes `int|null` the single exception worth the arm.
+#[test]
+fn test_other_nullable_scalars_still_reach_a_mixed_parameter() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function nstr(int $i): ?string { return $i >= 0 ? "x" : null; }
+function nflt(int $i): ?float { return $i >= 0 ? 1.5 : null; }
+function nbool(int $i): ?bool { return $i >= 0 ? true : null; }
+
+echo var_export(nstr(1), true), "|", var_export(nflt(1), true), "|", var_export(nbool(1), true), "\n";
+"#,
+    );
+    assert_eq!(out, "'x'|1.5|true\n");
+}
+
+/// A builtin whose result type its own check hook derives from the ARGUMENT must not be disturbed.
+///
+/// An earlier cut boxed at the EIR argument boundary instead of in the ABI. `abs($n)` is typed
+/// `int` because the checker saw `int|null`; handing the runtime a boxed Mixed made it return a
+/// boxed Mixed, which the caller then read as a raw integer — `abs(5)` answered `4330504864`.
+/// Fixing the ABI rather than the argument leaves every such hook's answer intact.
+#[test]
+fn test_tagged_nullable_int_still_reaches_builtins_unboxed() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function nint(int $i): ?int { return $i >= 0 ? 5 : null; }
+
+$n = nint(1);
+echo abs($n), "|", intdiv($n, 1), "|", max($n, 1), "|", sprintf("%d", $n), "|", strval($n), "\n";
+echo gettype($n), "|", is_int($n) ? "y" : "n", "|", $n, "\n";
+"#,
+    );
+    assert_eq!(out, "5|5|5|5|5\ninteger|y|5\n");
+}
+
+/// The other ways a value reaches a `mixed` parameter: a variadic, a closure, a first-class
+/// callable, `call_user_func`, and a `mixed` property write. All were already correct — the call
+/// ABI is shared — and this pins them so the shared fix cannot regress one of them quietly.
+#[test]
+fn test_tagged_nullable_int_reaches_every_mixed_call_shape() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function nint(int $i): ?int { return $i >= 0 ? 5 : null; }
+function variadic(mixed ...$vs): string { return implode(",", array_map(fn($x) => var_export($x, true), $vs)); }
+function plain(mixed $v): string { return var_export($v, true); }
+
+class Holder { public mixed $slot = null; }
+
+$n = nint(1);
+$c = function (mixed $v): string { return var_export($v, true); };
+$f = plain(...);
+$h = new Holder();
+$h->slot = $n;
+
+echo "variadic:", variadic($n, $n), "\n";
+echo "closure:", $c($n), "\n";
+echo "fcc:", $f($n), "\n";
+echo "cuf:", call_user_func('plain', $n), "\n";
+echo "prop:", var_export($h->slot, true), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "variadic:5,5\nclosure:5\nfcc:5\ncuf:5\nprop:5\n"
+    );
+}
+
+/// A generator taking a `?int` keeps it across the frame, including when a second parameter
+/// follows it — the two-word pair must not eat the next parameter's register.
+#[test]
+fn test_tagged_nullable_int_survives_a_generator_parameter() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function gen(?int $n) { yield $n; yield 7; }
+function gen2(?int $n, string $tail) { yield $n; yield $tail; }
+
+foreach (gen(5) as $v) { echo var_export($v, true), "|"; }
+echo "\n";
+foreach (gen2(5, "x") as $v) { echo var_export($v, true), "|"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "5|7|\n5|'x'|\n");
+}
+
+/// Compiles a tagged-null fixture with heap debug enabled for exception-unwind ownership checks.
+fn compile_and_run_tagged_with_heap_debug(source: &str) -> crate::support::ProgramOutput {
+    let dir = make_cli_test_dir("elephc_tagged_heap_debug");
+    let (user_asm, runtime_asm, requirements) = compile_source_to_asm_with_defines_repr(
+        source,
+        &dir,
+        &std::collections::HashSet::new(),
+        8_388_608,
+        false,
+        true,
+        elephc::codegen::NullRepr::Tagged,
+    );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(dir);
+    output
+}
+
+/// A caught throw releases a tagged nullable-int box passed to a mixed parameter.
+///
+/// The box is a caller-owned temporary and its call-operand owner is published before the callee
+/// can throw. Same-frame catch cleanup must retire that owner even though normal post-call cleanup
+/// is skipped (regression probe for #1122's reported leak).
+#[test]
+fn test_tagged_mixed_argument_box_is_released_when_the_callee_throws() {
+    let out = compile_and_run_tagged_with_heap_debug(
+        r#"<?php
+function throwsAfterReadingMixed(mixed $value): void {
+    echo $value;
+    throw new RuntimeException("stop");
+}
+function catchRepeated(?int $value): int {
+    $caught = 0;
+    for ($i = 0; $i < 32; $i++) {
+        try { throwsAfterReadingMixed($value); }
+        catch (RuntimeException $error) { $caught++; }
+    }
+    return $caught;
+}
+echo "|", catchRepeated(7);
+"#,
+    );
+
+    assert!(out.success, "program failed: stdout={:?} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("|{}32", "7".repeat(32)));
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+
+/// A tagged scalar reaching an untyped (`mixed`) parameter must arrive boxed, not raw.
+///
+/// `null|int` is the one union `codegen_repr` does NOT store as a boxed cell: it becomes a
+/// `TaggedScalar`, a payload register plus a tag register. The boxing emitter used to treat
+/// every union as already boxed and emit nothing, so the callee received the raw payload word
+/// and read it as a Mixed cell address -- the parameter then came back as neither the value nor
+/// null (issue #1046).
+#[test]
+fn test_tagged_scalar_argument_reaches_a_mixed_parameter_boxed() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function p($v) { var_dump($v); }
+$e = [];
+p(count($e) > 0 ? $e[0] : 7);
+p(count($e) > 0 ? 1 : null);
+"#,
+    );
+    assert_eq!(out, "int(7)\nNULL\n");
+}
+
+/// The same boxing is what makes an empty spread keep a parameter's INTEGER default.
+///
+/// An empty spread lowers each parameter to `count($e) > n ? $e[n] : <default>`, and over an
+/// `array<never>` those two arms are `null` and `int` -- exactly the tagged-scalar union above.
+/// A string default was never affected because `null|string` is a boxed cell already, which is
+/// why the issue's own table shows `x/y` surviving the call that loses `0/0`.
+#[test]
+fn test_empty_spread_keeps_integer_parameter_defaults() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function f($a = 0, $b = 0) { echo "f:$a/$b|"; }
+function g($a = 'x', $b = 'y') { echo "g:$a/$b|"; }
+function h($a = 0, $b = 'y') { echo "h:$a/$b"; }
+$e = [];
+f(...$e);
+g(...$e);
+h(...$e);
+"#,
+    );
+    assert_eq!(out, "f:0/0|g:x/y|h:0/y");
+}
+
+/// The constructor and dynamic-callable forms of the same call take the same path.
+///
+/// The issue reported four: a statically named function, `new P(...)`, `new $c(...)` and
+/// `$g(...)`. They share the per-parameter default ternary, so one boxing fix covers them all,
+/// and pinning each one keeps a later change from repairing only the direct call. The trailing
+/// non-empty spread is the control: it was already correct, because a one-element array gives
+/// the first parameter a plain `int` with no null arm to merge with.
+#[test]
+fn test_empty_spread_keeps_integer_defaults_through_every_call_form() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function f($a = 0, $b = 0) { echo "f:$a/$b|"; }
+class P { public function __construct($a = 0, $b = 0) { echo "P:$a/$b|"; } }
+class M { public function m($a = 0, $b = 0) { echo "M:$a/$b|"; } }
+$e = [];
+$c = "P";
+$g = "f";
+f(...$e);
+new P(...$e);
+new $c(...$e);
+$g(...$e);
+$o = new M();
+$o->m(...$e);
+new $c(...[1]);
+"#,
+    );
+    assert_eq!(out, "f:0/0|P:0/0|P:0/0|f:0/0|M:0/0|P:1/0|");
 }

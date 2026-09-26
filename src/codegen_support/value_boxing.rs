@@ -80,8 +80,20 @@ pub(crate) fn emit_box_runtime_payload_as_mixed(
 }
 
 /// Boxes the current expression result in the ABI result registers into a runtime Mixed cell.
+///
+/// The match is on the REPRESENTATION, not on the declared type, and that is the whole fix: a
+/// declared union is usually already a boxed Mixed and needs nothing, but `int|null` is not —
+/// with the default tagged null representation it is an unboxed two-word `{payload, tag}` pair.
+/// Matching the DECLARED `PhpType::Union(_)` caught it before `PhpType::TaggedScalar` could and
+/// emitted NOTHING, so the callee read the raw payload as a Mixed pointer and the caller's own
+/// `__rt_decref_mixed` ran on the integer: `var_export($nullableInt)` segfaulted (#1040).
+///
+/// `codegen_repr()` never returns a `Union`, so that half of the first arm is now unreachable. It
+/// is kept because the arm states the contract — "already boxed, nothing to do" — and a future
+/// representation could map a union to itself; the comment says so rather than letting the next
+/// reader infer a live branch, which is how the original bug hid.
 pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
-    match ty {
+    match &ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {}
         PhpType::Iterable => emit_box_dynamic_container_as_mixed(emitter, 4),
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {

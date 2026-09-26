@@ -186,6 +186,15 @@ property slot stores the payload at its slot offset and the runtime tag at `offs
 and its literal default must be written as that same `{payload, tag}` pair rather than as
 a pointer to a boxed Mixed cell.
 
+**A tagged scalar reaching a `mixed` parameter must be boxed, and the decision is made on the
+REPRESENTATION rather than the declared type.** `int|null` is the one union
+`PhpType::codegen_repr()` does not map to `Mixed`, so a helper that matches
+`PhpType::Mixed | PhpType::Union(_)` as "already boxed" silently covers it too and emits nothing.
+The callee then reads the raw payload word as a Mixed pointer, and the caller's own
+`__rt_decref_mixed` runs on it — measured as a segfault on `var_export($nullableInt)` whether the
+value held an integer or null (#1040). The same shape is worth checking at any other match arm
+that treats a union as boxed.
+
 ### Pointer values
 
 Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<T>` value have the same runtime representation; the type tag only exists in the checker. Null pointers use address `0x0`, and dereference helpers explicitly trap on null via `__rt_ptr_check_nonnull`.
