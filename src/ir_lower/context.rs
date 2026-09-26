@@ -1924,6 +1924,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// `__rt_mixed_unbox` + retain whose release cancelled only that retain and never freed the
     /// BOX. Retiring the slot at its final storage type frees the box and the payload it pins,
     /// in and out of loops alike, which is why no loop or widenability guard is needed here.
+    ///
+    /// A PHP local's untracked storage is not final outside loops either: an `if` join whose
+    /// arms disagree on a scalar representation boxes the local on every merge edge
+    /// (`stmt::conditionals::scalar_divergence_join`), widening the slot to `Mixed` AFTER stores
+    /// that were lowered against a scalar slot. The backend then boxes those earlier stores too,
+    /// so `$v = null; if ($c) { $v = $n; }` overwrote the boxed `null` with a boxed int and leaked
+    /// the first cell once per call (issue #771). Every overwrite of an initialized PHP local
+    /// therefore gets the deferred op, and the prune erases it wherever the slot stayed scalar.
+    /// The op cannot run user code at the point it is emitted: an untracked slot holds a scalar
+    /// on every path that reaches here, so at most the box of a scalar is freed — which is also
+    /// why `instruction_has_opaque_user_code_boundary` keeps callable facts across it.
     fn release_stored_local_value_before_overwrite(
         &mut self,
         name: &str,
@@ -1941,10 +1952,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let tracked = Ownership::php_type_needs_lifetime_tracking(&storage_type);
         let eval_may_have_reloaded_slot = self.eval_barrier_active
             && self.builder.local_kind(slot) == LocalKind::PhpLocal;
-        if !tracked && self.loop_stack.is_empty() && !eval_may_have_reloaded_slot {
+        let join_may_box_slot = self.builder.local_kind(slot) == LocalKind::PhpLocal;
+        if !tracked
+            && self.loop_stack.is_empty()
+            && !eval_may_have_reloaded_slot
+            && !join_may_box_slot
+        {
             // Outside loops no back-edge can execute a later widening store before
-            // this one, and no eval reload can have populated it, so the untracked
-            // storage type is final for this path.
+            // this one, and no eval reload can have populated it. A temp is never
+            // boxed by an `if` join, so its untracked storage type is final here.
             return;
         }
         self.emit_void(

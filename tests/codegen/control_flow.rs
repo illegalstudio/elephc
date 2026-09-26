@@ -30,3 +30,5 @@ mod match_expressions;
 mod closures;
 #[path = "control_flow/guarded_reassignment.rs"]
 mod guarded_reassignment;
+#[path = "control_flow/branch_join_locals.rs"]
+mod branch_join_locals;

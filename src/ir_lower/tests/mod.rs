@@ -43,6 +43,7 @@ mod boxed_array_aggregates;
 mod boxed_array_multisort;
 mod builtin_datetime_methods;
 mod instanceof_operand_owners;
+mod if_join_divergent_locals;
 mod iter_start_origin;
 mod iterator_cleanup;
 mod iterator_aggregate_owners;

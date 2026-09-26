@@ -192,16 +192,18 @@ fn finish_if_type_join(
         return;
     }
 
-    let joined = join_arm_types(ctx, &arms);
+    let (joined, edge_boxed) = join_arm_types(ctx, &arms);
     let joined_callables = join_arm_static_callables(&arms);
     let saved_types = ctx.local_types_snapshot();
     for arm in &arms {
         ctx.restore_local_types(arm.types.clone());
         let hash_conversions = arm_hash_conversions(arm, &joined);
         let conversions = arm_conversions(arm, &joined);
+        let mixed_conversions = arm_mixed_conversions(arm, &edge_boxed);
         ctx.builder.position_at_end(arm.tail);
         widen_arm_containers_to_hash(ctx, &hash_conversions, span);
         widen_indexed_arrays_to_mixed(ctx, &conversions, span);
+        box_arm_locals_as_mixed(ctx, &mixed_conversions, span);
         ctx.builder.terminate(Terminator::Br {
             target: merge,
             args: Vec::new(),
@@ -238,14 +240,22 @@ fn join_arm_static_callables(
 }
 
 /// Computes the common post-merge type facts that every reachable arm can represent safely.
-fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv {
+///
+/// Returns the joined facts together with the locals whose arms must each box their value on the
+/// merge edge (see [`scalar_divergence_join`]): those are joined to `Mixed` while their frame slot
+/// is not yet boxed storage, so the join alone would not make the slot hold a `Mixed` cell.
+fn join_arm_types(
+    ctx: &LoweringContext<'_, '_>,
+    arms: &[IfArmExit],
+) -> (TypeEnv, HashSet<String>) {
     let Some(first) = arms.first() else {
-        return TypeEnv::new();
+        return (TypeEnv::new(), HashSet::new());
     };
     let mut names = first.types.keys().cloned().collect::<Vec<_>>();
     names.sort();
 
     let mut joined = TypeEnv::new();
+    let mut edge_boxed = HashSet::new();
     'names: for name in names {
         let mut arm_types = Vec::with_capacity(arms.len());
         for arm in arms {
@@ -285,10 +295,18 @@ fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv 
             continue;
         }
 
-        for arm_type in arm_types {
-            let PhpType::Array(_) = arm_type else {
-                continue 'names;
-            };
+        if !arm_types.iter().all(|ty| matches!(ty, PhpType::Array(_))) {
+            match scalar_divergence_join(ctx, &name, arms, &arm_types) {
+                ScalarDivergenceJoin::Keep => {}
+                ScalarDivergenceJoin::Boxed => {
+                    joined.insert(name, PhpType::Mixed);
+                }
+                ScalarDivergenceJoin::BoxOnEdges => {
+                    joined.insert(name.clone(), PhpType::Mixed);
+                    edge_boxed.insert(name);
+                }
+            }
+            continue;
         }
         if !arms
             .iter()
@@ -298,7 +316,108 @@ fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv 
         }
         joined.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
     }
-    joined
+    (joined, edge_boxed)
+}
+
+/// How an `if` merge reconciles a local whose arms disagree on a non-container representation.
+enum ScalarDivergenceJoin {
+    /// Leave the merge with the last lowered arm's fact, as before this join existed.
+    Keep,
+    /// Join to `Mixed`: the frame slot is already boxed storage, so every arm's value is a cell.
+    Boxed,
+    /// Join to `Mixed` and box each arm's value on its merge edge first.
+    BoxOnEdges,
+}
+
+/// Decides the merge of a local whose arms end with different, not-all-array representations.
+///
+/// `$m = null; if ($c) { $m = "s"; } return $m;` ends one arm with `$m` typed `string` and the
+/// other with it typed `null`. The slot the two share was widened by the arm's store, so it can
+/// hold both, but the logical type after the merge used to be whichever arm was lowered LAST —
+/// here the `null` fall-through — and every read below the `if` then loaded the slot as `null`
+/// and returned `NULL` for the string (issue #771). Named functions only escaped it because DCE's
+/// tail-sinking copies a trailing `return $m;` into both arms; a closure body, the top-level
+/// program, or any code that does not end the function right after the `if` read the stale fact.
+///
+/// The only type every arm can be read back through is `Mixed`, which is also what the checker's
+/// own union for the name lowers to (`PhpType::codegen_repr`). When the slot is already boxed
+/// storage — the usual case, since `widened_local_storage_type` widens `string`-over-`null`,
+/// `float`-over-`int` and the like to `Mixed` — each arm's value already sits in a cell and only
+/// the fact changes. The storage rules that do NOT widen to `Mixed` are the lossy ones for this
+/// purpose: `int`/`bool`/`null` share one scalar word, and a nullable pointer slot holds `null` as
+/// a zero pointer, so neither can tell the arms apart after the merge. Those are boxed on each
+/// merge edge, which widens the slot to `Mixed` through the ordinary retaining store.
+///
+/// Arms that agree on the representation KIND (two object classes, say) keep the previous
+/// behaviour: their storage is one shape and their difference is a class fact, not a value loss.
+/// So do locals whose storage is not an ordinary frame slot (reference-bound, program-global,
+/// static) and locals some arm leaves uninitialized, which have no single slot value to box.
+fn scalar_divergence_join(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    arms: &[IfArmExit],
+    arm_types: &[PhpType],
+) -> ScalarDivergenceJoin {
+    let Some(first) = arm_types.first() else {
+        return ScalarDivergenceJoin::Keep;
+    };
+    if arm_types
+        .iter()
+        .all(|ty| std::mem::discriminant(ty) == std::mem::discriminant(first))
+    {
+        return ScalarDivergenceJoin::Keep;
+    }
+    if arm_types
+        .iter()
+        .all(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }))
+    {
+        return ScalarDivergenceJoin::Keep;
+    }
+    let is_plain_frame_local = matches!(
+        ctx.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal),
+        LocalKind::PhpLocal
+    ) && !ctx.is_ref_bound_local(name)
+        && !ctx.local_uses_global_storage(name);
+    let Some(slot) = ctx.local_slots.get(name).copied() else {
+        return ScalarDivergenceJoin::Keep;
+    };
+    if !is_plain_frame_local || !arms.iter().all(|arm| arm.initialized.contains(&slot)) {
+        return ScalarDivergenceJoin::Keep;
+    }
+    if ctx.builder.local_php_type(slot).codegen_repr() == PhpType::Mixed {
+        ScalarDivergenceJoin::Boxed
+    } else {
+        ScalarDivergenceJoin::BoxOnEdges
+    }
+}
+
+/// Returns the edge-boxed locals this arm still holds unboxed, in a deterministic order.
+fn arm_mixed_conversions(arm: &IfArmExit, edge_boxed: &HashSet<String>) -> Vec<String> {
+    let mut names = edge_boxed
+        .iter()
+        .filter(|name| {
+            arm.types
+                .get(name.as_str())
+                .is_some_and(|ty| ty.codegen_repr() != PhpType::Mixed)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+/// Re-stores one arm's scalar-divergent locals as boxed `Mixed` cells before the merge.
+///
+/// The load reads the arm's own view of the slot, the box takes its own reference or copy of
+/// the payload, and the retaining store widens the slot to `Mixed` and retires the previous
+/// occupant — the same materialization `apply_loop_storage_contracts` uses for a `Mixed`
+/// loop contract.
+fn box_arm_locals_as_mixed(ctx: &mut LoweringContext<'_, '_>, names: &[String], span: Span) {
+    for name in names {
+        let source = ctx.load_local(name, Some(span));
+        let boxed = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span));
+        ctx.store_local(name, boxed, PhpType::Mixed, Some(span));
+    }
 }
 
 /// Returns indexed-array locals whose current arm needs boxing before entering the merge.
