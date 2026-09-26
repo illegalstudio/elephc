@@ -2923,9 +2923,14 @@ fn interface_method_table_symbol(
     }
 }
 
-/// Resolves one source-ABI instance entry through its physical implementing class.
-/// Returns whether PHP forbids serializing instances of a class: the Reflection family, which
-/// php-src marks `ZEND_ACC_NOT_SERIALIZABLE`, and any class that extends one of them.
+/// Returns whether PHP forbids serializing instances of a class: the Reflection family and the
+/// other internal classes php-src marks `ZEND_ACC_NOT_SERIALIZABLE` (`Generator`, `Fiber`,
+/// `SplFileInfo`, `WeakReference`, `WeakMap`, each measured on 8.5.10), and any class that
+/// extends one of them, such as `SplFileObject`.
+///
+/// The comparison is exact-case on purpose: class names and `parent` links here are the
+/// resolver's canonical spellings (declared case), so `extends reflectionclass` arrives as
+/// `ReflectionClass`. A class registered without name resolution must use PHP's spelling.
 fn class_serialization_denied(class_name: &str, classes: &HashMap<String, ClassInfo>) -> bool {
     let mut current = class_name.trim_start_matches('\\');
     for _ in 0..=classes.len() {
@@ -2953,6 +2958,11 @@ fn class_serialization_denied(class_name: &str, classes: &HashMap<String, ClassI
                 | "ReflectionType"
                 | "ReflectionUnionType"
                 | "ReflectionZendExtension"
+                | "Generator"
+                | "Fiber"
+                | "SplFileInfo"
+                | "WeakReference"
+                | "WeakMap"
         ) {
             return true;
         }
@@ -2964,6 +2974,7 @@ fn class_serialization_denied(class_name: &str, classes: &HashMap<String, ClassI
     false
 }
 
+/// Resolves one source-ABI instance entry through its physical implementing class.
 fn source_instance_method_entry(
     class_info: &ClassInfo,
     method_name: &str,

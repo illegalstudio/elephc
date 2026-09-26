@@ -1186,6 +1186,35 @@ echo "after\n";
     );
 }
 
+/// The same denial covers the other internal classes PHP marks not serializable that elephc
+/// models as objects: `Generator`, `Fiber`, and `SplFileInfo` with its subclasses. Expected
+/// output measured on PHP 8.5.10.
+#[test]
+fn test_serialize_denies_generators_fibers_and_file_info() {
+    let out = compile_and_run(
+        r#"<?php
+function gen() { yield 1; }
+$cases = [
+    'generator' => gen(),
+    'fiber' => new Fiber(fn() => 1),
+    'splfileinfo' => new SplFileInfo(__FILE__),
+    'splfileobject' => new SplFileObject(__FILE__),
+];
+foreach ($cases as $label => $value) {
+    try { echo $label, ": ", serialize($value), "\n"; }
+    catch (Exception $e) { echo get_class($e), " ", $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "generator: Exception Serialization of 'Generator' is not allowed\n\
+         fiber: Exception Serialization of 'Fiber' is not allowed\n\
+         splfileinfo: Exception Serialization of 'SplFileInfo' is not allowed\n\
+         splfileobject: Exception Serialization of 'SplFileObject' is not allowed\n"
+    );
+}
+
 /// Verifies an array cast of a runtime `mixed` value preserves PHP semantics
 /// for scalar, null, and already-array payload tags.
 #[test]
