@@ -127,9 +127,13 @@ fn lower_array_push_into_hash(
         crate::codegen::lower_inst::hashes::append_one_value_to_hash(ctx, array, value, inst)?;
         // An insert can split the table for copy-on-write or grow it, so the pointer the
         // receiver must publish is the helper's RESULT, not the one this side started with.
-        // Recording it per value is what makes the next insert address the new table.
+        // Recording it per value is what makes the next insert address the new table. The
+        // insert already released or dropped the block it replaced, so the receiver KEEPS the
+        // new pointer rather than retiring the old one a second time -- the same publication
+        // `$hash[] = $v` uses (#1341: a request superglobal read with `LoadGlobal` lost the
+        // table a copy still shared).
         ctx.store_result_value(array)?;
-        receiver.store_back_value(ctx, array)?;
+        receiver.store_back_container_writeback(ctx, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     // Read the count back from the table rather than from the last insert's return register:
