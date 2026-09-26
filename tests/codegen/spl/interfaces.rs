@@ -670,3 +670,103 @@ echo choose_box(false)["k"];
     );
     assert_eq!(out, "LR");
 }
+
+/// `empty($obj[$k])` on an `ArrayAccess` receiver asks `offsetExists` first and reads
+/// `offsetGet` only when it said yes, with the receiver and the offset evaluated once, as for a
+/// call result. Regression for #749, where `empty()` went straight to `offsetGet`.
+#[test]
+fn test_empty_on_array_access_consults_offset_exists_first() {
+    let out = compile_and_run(
+        r#"<?php
+class C implements ArrayAccess {
+    private array $data = ['k' => 1, 'z' => 0, 's' => '', 'a' => [1]];
+    public function offsetExists(mixed $o): bool { echo "exists($o)\n"; return $o !== 'missing'; }
+    public function offsetGet(mixed $o): mixed { echo "get($o)\n"; return $this->data[$o] ?? null; }
+    public function offsetSet(mixed $o, mixed $v): void {}
+    public function offsetUnset(mixed $o): void {}
+}
+function make(): C { echo "make\n"; return new C(); }
+function key_of(string $k): string { echo "key\n"; return $k; }
+$c = new C();
+var_dump(empty($c['k']));
+var_dump(empty($c['z']));
+var_dump(empty($c['s']));
+var_dump(empty($c['a']));
+var_dump(empty($c['missing']));
+var_dump(isset($c['j']));
+var_dump(empty(make()[key_of('k')]));
+var_dump(!empty($c['k']));
+if (empty($c['missing'])) { echo "branch empty\n"; }
+$arr = ['x' => 0];
+var_dump(empty($arr['x']), empty($arr['nope']));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "exists(k)\n",
+            "get(k)\n",
+            "bool(false)\n",
+            "exists(z)\n",
+            "get(z)\n",
+            "bool(true)\n",
+            "exists(s)\n",
+            "get(s)\n",
+            "bool(true)\n",
+            "exists(a)\n",
+            "get(a)\n",
+            "bool(false)\n",
+            "exists(missing)\n",
+            "bool(true)\n",
+            "exists(j)\n",
+            "bool(true)\n",
+            "make\n",
+            "key\n",
+            "exists(k)\n",
+            "get(k)\n",
+            "bool(false)\n",
+            "exists(k)\n",
+            "get(k)\n",
+            "bool(true)\n",
+            "exists(missing)\n",
+            "branch empty\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+/// The value `empty()` reads through `offsetGet` is released once tested, for a variable
+/// receiver and for a call result.
+#[test]
+fn test_empty_on_array_access_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public function __construct(private array $data) {}
+    public function offsetExists(mixed $o): bool { return isset($this->data[$o]); }
+    public function offsetGet(mixed $o): mixed { return $this->data[$o]; }
+    public function offsetSet(mixed $o, mixed $v): void {}
+    public function offsetUnset(mixed $o): void {}
+}
+function bag(): Bag { return new Bag(['a' => str_repeat('x', 3), 'z' => '']); }
+function rows(): array { return ['r' => 'v']; }
+$b = bag();
+$n = 0;
+for ($i = 0; $i < 40; $i++) {
+    $k = $i % 2 ? 'a' : 'z' . '';
+    if (empty($b[$k])) { $n++; }
+    if (empty(bag()[$k . ''])) { $n++; }
+    if (!empty(rows()['r'])) { $n++; }
+    if (empty(rows()['missing'])) { $n++; }
+}
+echo $n, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "120\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
