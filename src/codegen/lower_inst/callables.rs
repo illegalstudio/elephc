@@ -460,11 +460,11 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             ctx.emitter.instruction(&format!("b.eq {}", string_label));         // resolve the callable name through the descriptor table
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // classify a two-element callable array
-                ctx.emitter.instruction(&format!("b.eq {}", array_label));      // resolve an instance/static method descriptor
+                abi::emit_branch_if_equal_wide(ctx.emitter, array_label);       // resolve an instance/static method descriptor across large string dispatch tables
             }
             if let Some(object_label) = &object_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_OBJECT)); // classify an invokable object
-                ctx.emitter.instruction(&format!("b.eq {}", object_label));     // bind the public __invoke descriptor
+                abi::emit_branch_if_equal_wide(ctx.emitter, object_label);      // bind the public __invoke descriptor across large generated dispatch blocks
             }
         }
         Arch::X86_64 => {

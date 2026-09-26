@@ -32,6 +32,19 @@ fn test_emit_branch_helpers_use_long_range_aarch64_sequence() {
     );
 }
 
+/// Verifies equality dispatch uses the wide unconditional transfer on AArch64 and a direct
+/// conditional branch on x86_64 after the caller has emitted its comparison.
+#[test]
+fn test_emit_branch_if_equal_wide() {
+    let mut aarch64 = test_emitter();
+    emit_branch_if_equal_wide(&mut aarch64, "equal_label");
+    assert_eq!(aarch64.output(), "    b.ne 1f\n    b equal_label\n1:\n");
+
+    let mut x86_64 = test_emitter_x86();
+    emit_branch_if_equal_wide(&mut x86_64, "equal_label");
+    assert_eq!(x86_64.output(), "    je equal_label\n");
+}
+
 /// Tests frame setup and teardown for a small frame (64 bytes).
 /// Verifies that the prologue allocates 64 bytes, saves FP/LR at sp+#48,
 /// sets up x29 as the frame pointer, and that restore/return undo this correctly

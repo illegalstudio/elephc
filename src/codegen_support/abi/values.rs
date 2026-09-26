@@ -258,6 +258,21 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Branches to the target when the previous compare was equal, using the wider unconditional
+/// AArch64 branch range instead of the ±1 MiB conditional-branch range.
+pub fn emit_branch_if_equal_wide(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction("b.ne 1f");                                     // skip the transfer when the previous compare was unequal
+            emitter.instruction(&format!("b {label}"));                        // take the equal edge with the wider branch range
+            emitter.label("1");                                                // resume after the conditional transfer
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("je {label}"));                       // x86_64 conditional branches already cover the generated function size
+        }
+    }
+}
+
 /// Unconditionally jumps to `label` for control flow transfer.
 ///
 /// AArch64 uses `b label`. x86_64 uses `jmp label`.
