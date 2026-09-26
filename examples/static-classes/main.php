@@ -54,3 +54,11 @@ class Specialized extends Base {
 echo "Specialized's parent is: " . Specialized::parent_name() . "\n";
 $b = Specialized::make_base();
 echo "Constructed base, kind=" . $b->kind . "\n";
+
+// Class-name strings are valid subjects too: `is_subclass_of` accepts them by default,
+// while `is_a` opts in with its third argument.
+echo "Class-name relations: ";
+echo is_subclass_of(Specialized::class, Base::class) ? "yes" : "no";
+echo ", ";
+echo is_a(Specialized::class, Base::class, true) ? "yes" : "no";
+echo "\n";

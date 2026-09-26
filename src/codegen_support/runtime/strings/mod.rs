@@ -9,6 +9,7 @@
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
 
 mod itoa;
+mod offset_warning;
 mod concat;
 mod concat_scratch;
 mod ftoa;
@@ -110,6 +111,7 @@ mod resource_write_stdout;
 mod parse_url;
 
 pub use itoa::emit_itoa;
+pub use offset_warning::emit_string_offset_warning;
 /// Emit integer-to-string conversion helper.
 pub use concat::emit_concat;
 /// Emit string concatenation helper.

@@ -40,3 +40,12 @@ pub fn tokenize_with_mode(
 ) -> Result<Vec<SpannedToken>, CompileError> {
     scan::scan_tokens(source, mode)
 }
+
+/// Tokenizes an included physical file with a source identity carried by every span.
+pub(crate) fn tokenize_with_mode_and_source_id(
+    source: &str,
+    mode: SourceMode,
+    source_id: u32,
+) -> Result<Vec<SpannedToken>, CompileError> {
+    scan::scan_tokens_in_source(source, mode, source_id)
+}

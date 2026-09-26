@@ -564,7 +564,7 @@ pub(crate) fn array_literal_type_for_ir(
     }
     if items.iter().any(|item| {
         matches!(&item.kind, ExprKind::Spread(inner) if matches!(
-            array_literal_element_type_for_ir(ctx, inner).codegen_repr(),
+            array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr(),
             PhpType::AssocArray { .. } | PhpType::Mixed
         ))
     }) {
@@ -590,7 +590,7 @@ pub(super) fn array_literal_element_type_for_ir(
     }
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
-        ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
+        ExprKind::Spread(inner) => match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
             // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
             // bare-`array`-returning method) contributes no element constraint, so widen its
             // Void/Never element to Mixed rather than collapsing the outer literal to
@@ -623,6 +623,13 @@ pub(super) fn array_literal_element_type_for_ir(
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
             }
+            // A builtin is in neither map, and the syntactic fallback below answers `Int` for
+            // every name outside its hand-written allowlist -- which stamps the literal
+            // `array<int>` and makes lowering cast the element to match (#1096). The checker
+            // already asked the registry contract about this very call.
+            if let Some(resolved) = builtin_call_result_type_for_ir(ctx, item.span) {
+                return resolved;
+            }
             ir_array_storage_type(infer_expr_type_syntactic(item))
         }
         // Calls must use declared EIR return metadata rather than the syntactic `Int` fallback,
@@ -649,6 +656,40 @@ pub(super) fn array_literal_element_type_for_ir(
     }
 }
 
+/// Returns the full storage type of a spread source, rather than the element type contributed
+/// by a call when it appears as an ordinary literal value.
+///
+/// Desugared argument-introspection calls can synthesize `array_slice()` nodes that share the
+/// source call's span. The builtin element-type helper therefore sees the checker's type for
+/// `func_get_args()` at that span and mistakes the spread container for an element. Resolve the
+/// builtin's own contract without a checker span here so static spread classification agrees
+/// with the runtime value lowered below.
+fn array_literal_spread_source_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    source: &Expr,
+) -> PhpType {
+    if let ExprKind::FunctionCall { name, args } = &source.kind {
+        let canonical = name.as_str();
+        if let Some(sig) = ctx.functions.get(canonical) {
+            return ir_array_storage_type(eir_user_function_return_type(sig));
+        }
+        if let Some(sig) = ctx.extern_functions.get(canonical) {
+            return ir_array_storage_type(sig.return_type.clone());
+        }
+        if let Some(result) = super::function_calls::resolve_registry_builtin_result_type(
+            ctx,
+            canonical,
+            args,
+            &[],
+            Span::dummy(),
+            None,
+        ) {
+            return ir_array_storage_type(result);
+        }
+    }
+    array_literal_element_type_for_ir(ctx, source)
+}
+
 /// Returns the EIR array storage type for a resolved element type, or `None` when the type
 /// cannot be an array element. A `Void`/`Never` method return (a value-less call whose result
 /// is nonetheless collected into a literal) has no array-element representation — stamping it
@@ -659,6 +700,54 @@ pub(super) fn materializable_array_element_type(return_type: PhpType) -> Option<
     match stored.codegen_repr() {
         PhpType::Void | PhpType::Never => None,
         _ => Some(stored),
+    }
+}
+
+/// Returns the array-element storage type for a builtin call the checker already resolved.
+///
+/// `infer_expr_type_syntactic` answers a builtin call from a hand-written allowlist of names and
+/// falls back to `Int` for every name it does not list, so an array-returning or bool-returning
+/// builtin outside that list stamped its literal `array<int>` and lowering converted the element
+/// to match: `(int)` of a non-empty array is `1`, and so is `(int)true` (issue #1096).
+/// A user function is looked up in `ctx.functions` before this point and a builtin is in neither
+/// that map nor `ctx.extern_functions`, which is why only builtins ever reached the fallback.
+///
+/// The key is the call's OWN span, which is the node lowering is looking at, so unlike
+/// `call_user_func()` there is no way for a different callee to be recorded under it. A
+/// synthesized node (line 0) is left to the fallback rather than risk sharing a key with an
+/// unrelated prelude call.
+///
+/// # Why a non-scalar result is stamped `Mixed` rather than taken verbatim
+///
+/// This map holds the CHECKER's type. The value the call actually produces is typed by
+/// `resolve_registry_builtin_result_type`, which overrides the checker for a `Declared` or
+/// `Shared` result contract and re-derives its own for a `Checked` one whose runtime target
+/// rejects the checked type against the operands it was really given. The two disagree, and not
+/// rarely: `array_map()`'s hook answers `array<int>` for a callback declared `: int` while its
+/// EIR result is a boxed `Mixed` cell.
+///
+/// A stamp that disagrees is only harmless when the push CONVERTS, and
+/// `coerce_array_literal_element_to_storage_type` converts exactly the scalar stamps —
+/// `Int`, `Bool`, `Float`, `Str`. A heap stamp is stored as-is, so an `array<array<int>>` stamp
+/// over a boxed `Mixed` value reads the box's header as an array: `[array_map(fn(int $x): int =>
+/// $x * 2, [1, 2, 3])][0][1]` printed a pointer.
+///
+/// So a scalar result is taken precisely and anything else is stamped `Mixed`, which is the one
+/// element type that is right whatever the call's own contract answers: a concrete value is boxed
+/// into it on the way in, and a `Mixed` value is stored as-is. It is also what a literal mixing a
+/// builtin call with a plain element already merged to, which is why `[array_slice(...), [9, 9]]`
+/// was correct all along while `[array_slice(...)]` alone was not.
+pub(super) fn builtin_call_result_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    span: Span,
+) -> Option<PhpType> {
+    if span.line == 0 {
+        return None;
+    }
+    let checked = ctx.builtin_call_types.get(&span).cloned()?;
+    match materializable_array_element_type(checked)? {
+        scalar @ (PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str) => Some(scalar),
+        _ => Some(PhpType::Mixed),
     }
 }
 

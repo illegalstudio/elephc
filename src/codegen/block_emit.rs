@@ -1269,7 +1269,7 @@ fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId
     if span.line > 0 {
         let mut marker = format!("@src line={} col={}", span.line, span.col);
         if span.has_extent() {
-            let _ = write!(marker, " end={}:{}", span.end_line, span.end_col);
+            let _ = write!(marker, " end={}:{}", span.end_line, span.end_column());
         }
         let _ = write!(marker, " op={}", inst.op.name());
         if let Some(origin) = inst.origin {

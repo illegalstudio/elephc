@@ -510,7 +510,7 @@ fn lower_mixed_packed_array_element_key_sort(
 
     let parent = ctx.load_local(parent_name, Some(array.span));
     let key = lower_expr(ctx, index);
-    let key = super::super::coerce_to_int_at_span(ctx, key, Some(index.span));
+    let key = super::super::coerce_array_key_to_int_at_span(ctx, key, Some(index.span), false);
     let cell_op = if element_repr == PhpType::Mixed {
         Op::ArrayGet
     } else {

@@ -197,51 +197,41 @@ Current pruning coverage includes:
   - `??`
   - short-circuit `&&` / `||`
 
-### A prune must not delete a body's last `yield`
+### A pass must not delete a body's last `yield`
 
-PHP decides generator-ness **syntactically, at declaration**: a function body that
-holds a `yield` token is a generator even when no `yield` can ever run. So
-`function g(): iterable { while (false) { yield 1; } }` is a generator, and calling
-it returns an empty `Generator` rather than `null`.
+PHP decides generator-ness **syntactically, at declaration**. The checker records
+that on `FunctionSig::is_generator` from the source body, before any pass runs, and
+lowering reads the bit. A body that held a `yield` is still a generator when no
+`yield` can run, so `function g(): iterable { while (false) { yield 1; } }` returns
+an empty `Generator`.
 
-Every other statement this pass removes is invisible to the program's meaning. A
-`yield` is not: deleting the token changes what the function IS. When the fold
-took the dead branch with it, the function silently became an ordinary one — it
-returned a boxed `null` where its caller expected a `Generator`, `valid()`
-answered `true` forever and `foreach` never terminated. Both readers of the
-property downstream (`generator_body_return_type` and
-`attach_generator_source_if_needed` in `src/ir_lower/function.rs`) look for the
-token, so once it is gone nothing downstream can recover it.
+The bit does not replace the token in the body. Generator source and the body-scan
+fallback still look for a `yield`, and a pass that removes every one of them changes
+the body the coroutine is lowered from. When constant folding took the dead branch
+with the token, the function returned a boxed `null`, `valid()` answered `true`
+forever, and `foreach` never terminated (issues #673 and #1085).
 
-`optimize::body_preserving_yields()` holds the line at the only boundary where the
-question is asked, the function body: a body that contains a yield before a pass
-must still contain one after it, or the unpruned body is kept instead. Only bodies
-whose yields are ALL folded away give up that pass, and nothing else in such a
-body is worth optimizing anyway.
+`optimize::generator_bodies::rewrite_preserving_yield` keeps the original body when
+a rewrite would leave it with no `yield` at all. Only a body whose yields are all
+removed gives up that pass. The walk is paid by every body; the clone only by
+bodies that contain a yield.
 
-Two passes need it, and they delete a yield for different reasons, so neither
-guard covers the other:
+Two passes delete a yield for different reasons, so each has its own call:
 
 - **Pass 3, pruning** (which Pass 4 runs again over the same bodies) folds a
-  condition it can read as a literal — `while (false)`, `if (false)`, a constant
-  `elseif` chain. Named functions and methods reach the guard through
-  `prune_function_body()`, closures through the `Closure` arm of `prune_expr()`.
-- **Pass 5, dead-code elimination** rewrites an `if` chain as a whole, using facts
-  the prune does not have. `if (false) { ... } elseif (false) { yield 1; }` leaves
-  the prune with its guard engaged and the body restored; DCE then collapses the
-  chain and takes the token with it. DCE also folds branches it can prove dead from
-  the PATH rather than from a literal, which the prune cannot reach at all, so the
-  guard belongs here whether or not any fixture exercises that particular form
-  today.
+  condition it can read as a literal — `while (false)`, `if (false)`. Named
+  functions and methods reach the guard through `prune_function_body()`, closures
+  through the `Closure` arm of `prune_expr()`.
+- **Pass 5, dead-code elimination** rewrites an `if` chain as a whole.
+  `if (false) { ... } elseif (false) { yield 1; }` leaves pruning with the guard
+  engaged and the body restored; DCE then collapses the chain and takes the token
+  with it. Named functions reach the guard in `dce_stmt_in_source_mode`, methods
+  through `dce_method()` and `dce_method_without_context()`.
 
-The same rule applies to any future pass that can drop statements. It is not
-enough to check for a yield AFTER a pass — `prune_function_body()`'s own
-trailing-`return` guard did exactly that and was defeated the same way.
-
-**Known gap.** A `yield` after an unconditional `return` in the same block
-(`function g(): iterable { return; yield 1; }`) is lost before the optimizer ever
-runs: the statement never reaches the AST, identically under `-O0`. That shape
-still compiles to a non-generator.
+Checking for a yield after a pass is not enough: `prune_function_body()`'s own
+trailing-`return` guard did exactly that and was defeated the same way. A `yield`
+after `return` in the same block is kept by the same helper on the propagation
+boundary, which stops rewriting at the first terminator.
 
 ## Pass 4: Control-flow normalization
 
@@ -276,6 +266,52 @@ The second generation of the pass (control-flow normalization v2) adds shell can
 - leading `if (g) { break; } [else { E }]` guards folded into the loop test: `while (c) { if (g) break; rest }` becomes `while (c && !g) { rest }` (`while (true)` / `for (;;)` become plain `while (!g)`), with the guard's `else` body leading the remaining body; the fold repeats while the body still starts with such a guard, and `for` loops with an update clause receive the same test without changing shape
 - an endless loop that ends in `if (g) { break; }` rotated into `do { body } while (!g)`, refused when the body carries a `continue` targeting that loop (it skips the guard today but would reach the rotated test); nested loops and `switch` bodies raise the `continue` level the check looks for
 - trailing terminators that transfer exactly where falling off the block would are dropped: a `continue` ending a loop body, the `break` ending the body that runs last in a `switch` (the `default` body when it is written last, else the last case; a `default` written between cases keeps its `break`, since EIR lowering places it at its source position), and a bare `return;` ending a function or method body. The walk follows only the tail path — the last statement, then recursively the last statement of each `if` / `ifdef` / `try` branch — and never enters loops, `switch` bodies, or `finally` blocks; a shell whose branch was emptied is re-pruned so it collapses like fresh input. By-reference-returning functions and generators keep their `return;`, and a `break`-only last case is kept when a `default` follows it
+
+### A generator must still look like one
+
+Constant propagation, pruning, and dead-code elimination rewrite callable bodies through
+`optimize::generator_bodies::rewrite_preserving_yield`, which keeps the original body when a
+rewrite would leave it with NO `yield` at all. Pruning's call sites are described under Pass 3;
+dead-code elimination uses the same helper because it runs later and can delete a yield the
+prune guard has just restored.
+
+Generator-ness itself is not re-derived from the body afterwards. The checker records it on
+`FunctionSig::is_generator` from the SOURCE body, before any pass runs, and lowering reads that
+bit.
+
+PHP decides whether a declaration is a **generator** syntactically, before any folding, and the
+type checker does the same — it types `g()` as `Generator` from the `yield` it can see. These
+passes run *after* checking, and both the propagation and pruning walks stop at a block's first
+terminator, so an unreachable `yield` was deleted. The two classifications then disagreed: the
+caller still drove a `Generator` while EIR lowering saw an ordinary function, and the driving
+`foreach` spun forever on a boxed null (issue #673).
+
+Both of PHP's ways to spell an immediately-complete generator hit it, and they are destroyed by
+different passes:
+
+```php
+function g() { if (false) { yield 1; } return; }   // constant-branch pruning
+function g() { return; yield; }                     // the stop-at-terminator rule
+```
+
+Keeping the un-rewritten body is the conservative answer: the retained `yield` is unreachable by
+construction, so the cost is one unexecuted statement in a body that is now lowered as the
+coroutine it is — and only a body whose every `yield` is dead pays it.
+
+It is also whole-body: one dead `yield` blocks propagation, pruning, and dead-code elimination
+in that callable. A surgical "keep one yield, apply the rest" would be tighter (issue #1325).
+
+Dead-code elimination is wrapped by the same helper. `is_generator` keeps the classification
+when a pass deletes the token, which is what stopped the #673 hang, but the body the coroutine
+lowers from still has to contain a `yield`. DCE runs after pruning and collapses shapes the
+prune guard has just put back: a constant `elseif` chain is the case that still deleted the
+last `yield` with the pruning guard alone (issue #1085). Reverting that pass's whole body is
+the same trade propagation and pruning already make, and only a callable whose every `yield`
+is dead pays it.
+
+The invariant is both halves. Generator-ness is decided once, syntactically, at check time, and
+a pass that rewrites a callable body must not delete its last `yield`.
+
 ### Example
 
 ```php

@@ -842,6 +842,7 @@ for ($i = 0; $i < 32; $i++) {
     $d = array_slice(["x" => [1, 2], "y" => [3, 4]], 1, 1);
     $e = array_slice([5 => 1, 9 => 2, 12 => 3], 1, 2);
 }
+
 echo count($a), count($b), count($c), count($d), count($e), "\n";
 "#,
     );
@@ -1002,4 +1003,27 @@ foreach (g([7, 8]) as $k => $v) { echo $k, "=", $v, ","; }
 "#,
     );
     assert_eq!(out, "0=7,1=8,k=1,");
+}
+
+/// Included files can have calls at the same coordinates but different checked result types.
+#[test]
+fn test_array_slice_builtin_types_do_not_collide_across_included_files() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire __DIR__ . '/int.php';\nrequire __DIR__ . '/bool.php';\n$a = first_values();\n$b = second_values();\necho $a[0][0], $a[0][1], '|', $b[0][0] ? 't' : 'f', $b[0][1] ? 't' : 'f';\n",
+            ),
+            (
+                "int.php",
+                "<?php\nfunction first_values(): array {\n    $values = [1, 2, 3];\n    return [array_slice($values, 0, 2)];\n}\n",
+            ),
+            (
+                "bool.php",
+                "<?php\nfunction second_values(): array {\n    $values = [true, false, true];\n    return [array_slice($values, 0, 2)];\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "12|tf");
 }

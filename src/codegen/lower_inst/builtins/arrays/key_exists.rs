@@ -151,7 +151,7 @@ fn lower_indexed_array_key_exists(
 ) -> Result<()> {
     match ctx.value_php_type(key)?.codegen_repr() {
         PhpType::Int | PhpType::Bool => lower_indexed_array_key_exists_int(ctx, inst, key, array),
-        PhpType::Str | PhpType::Mixed | PhpType::Union(_) | PhpType::Void | PhpType::Never => {
+        PhpType::Float | PhpType::Str | PhpType::Mixed | PhpType::Union(_) | PhpType::Void | PhpType::Never => {
             lower_indexed_array_key_exists_mixed_key(ctx, inst, key, array)
         }
         other => Err(CodegenIrError::unsupported(format!(
@@ -248,7 +248,8 @@ fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: ValueId) -> 
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "d0")?;
-            abi::emit_php_float_to_int(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+            ctx.emitter.instruction("mov x1, x0");                              // use the diagnosed PHP integer as the lookup key
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
@@ -283,7 +284,8 @@ fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: ValueId) -> R
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "xmm0")?;
-            abi::emit_php_float_to_int(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+            ctx.emitter.instruction("mov rsi, rax");                            // use the diagnosed PHP integer as the lookup key
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
         }
@@ -310,6 +312,7 @@ fn materialize_mixed_hash_key_aarch64(
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
+    let float_key = ctx.next_label("mixed_hash_key_float");
     let scalar_key = ctx.next_label("mixed_hash_key_scalar");
     let done = ctx.next_label("mixed_hash_key_done");
     ctx.load_value_to_reg(key, "x0")?;
@@ -322,7 +325,14 @@ fn materialize_mixed_hash_key_aarch64(
     ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp x0, #3");                                      // boolean mixed keys normalize like integer keys
     ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep boolean keys as integer keys
+    ctx.emitter.instruction("cmp x0, #2");                                      // float mixed keys need PHP conversion diagnostics
+    ctx.emitter.instruction(&format!("b.eq {}", float_key));                    // convert float keys before probing the hash
     ctx.emitter.instruction("mov x1, #0");                                      // unsupported mixed key tags fall back to integer key zero
+    ctx.emitter.instruction(&format!("b {}", scalar_key));                      // skip float conversion for other keys
+    ctx.emitter.label(&float_key);
+    ctx.emitter.instruction("fmov d0, x1");                                     // load the original float key payload
+    abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+    ctx.emitter.instruction("mov x1, x0");                                      // publish the diagnosed PHP integer key
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov x2, #-1");                                     // key_hi sentinel marks scalar mixed keys as integers
     ctx.emitter.instruction(&format!("b {}", done));                            // skip string-key normalization after scalar selection
@@ -344,6 +354,7 @@ fn materialize_mixed_hash_key_x86_64(
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
+    let float_key = ctx.next_label("mixed_hash_key_float");
     let scalar_key = ctx.next_label("mixed_hash_key_scalar");
     let done = ctx.next_label("mixed_hash_key_done");
     ctx.load_value_to_reg(key, "rax")?;
@@ -356,9 +367,17 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp rax, 3");                                      // boolean mixed keys normalize like integer keys
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep boolean keys as integer hash keys
+    ctx.emitter.instruction("cmp rax, 2");                                      // float mixed keys need PHP conversion diagnostics
+    ctx.emitter.instruction(&format!("je {}", float_key));                      // convert float keys before probing the hash
     ctx.emitter.instruction("xor esi, esi");                                    // unsupported mixed key tags fall back to integer key zero
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks fallback mixed keys as integers
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
+    ctx.emitter.label(&float_key);
+    ctx.emitter.instruction("movq xmm0, rdi");                                  // load the original float key payload
+    abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+    ctx.emitter.instruction("mov rsi, rax");                                    // publish the diagnosed PHP integer key
+    ctx.emitter.instruction("mov rdx, -1");                                     // mark the normalized key as an integer
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the string-key normalizer
     ctx.emitter.label(&null_key);
     let (empty_label, empty_len) = ctx.data.add_string(b"");
     abi::emit_symbol_address(ctx.emitter, "rax", &empty_label);                 // null normalizes to the empty string "" hash key pointer

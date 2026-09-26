@@ -10,8 +10,11 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
-use crate::parser::stmt::{can_replay_assignment_target, lower_postfix_incdec_assignment};
+use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::stmt::{
+    can_replay_assignment_target, lower_postfix_incdec_assignment,
+    update_index_needs_snapshot,
+};
 use crate::span::Span;
 
 /// Desugars `++$place` / `$place++` into a read-modify-write an expression can carry.
@@ -47,11 +50,44 @@ pub(super) fn desugar_lvalue_incdec(
     // measures the target's parts against.
     let probe = target.clone();
     let target = lowerer.stabilize_non_local_target(target, &probe);
+    let target = lowerer.snapshot_update_dimension(target);
     if !can_replay_assignment_target(&target) {
         return None;
     }
-    let write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
     let mut prelude = lowerer.finish();
+    if let ExprKind::ArrayAccess { array, .. } = &target.kind {
+        if matches!(&array.kind, ExprKind::Variable(_)) {
+            let old_name = crate::names::generated_local_name(&format!(
+                "__elephc_incdec_old_{}_{}", span.line, span.col
+            ));
+            let new_name = crate::names::generated_local_name(&format!(
+                "__elephc_incdec_new_{}_{}", span.line, span.col
+            ));
+            prelude.push(Stmt::new(StmtKind::Assign {
+                name: old_name.clone(),
+                value: target.clone(),
+            }, span));
+            let old_value = Expr::new(ExprKind::Variable(old_name.clone()), span);
+            let next_value = Expr::new(ExprKind::BinaryOp {
+                left: Box::new(old_value),
+                op: if increment { BinOp::Add } else { BinOp::Sub },
+                right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+            }, span);
+            prelude.push(Stmt::new(StmtKind::Assign {
+                name: new_name.clone(),
+                value: next_value,
+            }, span));
+            let result_name = if prefix { new_name.clone() } else { old_name };
+            return Some(Expr::new(ExprKind::Assignment {
+                target: Box::new(target),
+                value: Box::new(Expr::new(ExprKind::Variable(new_name), span)),
+                result_target: Some(Box::new(Expr::new(ExprKind::Variable(result_name), span))),
+                prelude,
+                conditional_value_temp: None,
+            }, span));
+        }
+    }
+    let write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
     let value = if prefix {
         // `++$p` evaluates to the NEW value, which re-reading the target after the write gives.
         prelude.push(write);
@@ -156,6 +192,27 @@ impl AssignmentExpressionLowerer {
     /// mutate. Returns a replacement expression with temporaries substituted.
     pub(super) fn stabilize_non_local_target(&mut self, target: Expr, rhs: &Expr) -> Expr {
         self.stabilize_assignment_target(target, rhs)
+    }
+
+    /// Captures a variable-rooted array index for both halves of an update.
+    pub(super) fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
+        let span = target.span;
+        match target.kind {
+            ExprKind::ArrayAccess { array, index }
+                if matches!(&array.kind, ExprKind::Variable(_)) =>
+            {
+                let index = if update_index_needs_snapshot(&index) {
+                    self.bind_temp(*index)
+                } else {
+                    *index
+                };
+                Expr::new(ExprKind::ArrayAccess {
+                    array,
+                    index: Box::new(index),
+                }, span)
+            }
+            kind => Expr::new(kind, span),
+        }
     }
 
     /// Binds a value expression for use in an assignment context. If the value

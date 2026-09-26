@@ -393,6 +393,7 @@ mod tests {
             declared_params: vec![true; 3],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         }
     }
 

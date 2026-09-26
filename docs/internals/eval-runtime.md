@@ -65,6 +65,18 @@ shapes, `try`/`throw`, unsupported control flow, and unsupported static calls.
 Eligibility is intentionally conservative: a fragment falls back rather than
 being partially compiled with different observable behavior.
 
+## Runtime-created throwables
+
+An `eval()` declaration can introduce a class that the compiler cannot resolve
+at compile time. A later AOT `throw` of an instance of that class therefore
+defers the `Throwable` check to runtime. The emitted path validates the boxed
+`Mixed` value against the runtime `Throwable` interface before unwinding. For
+a valid throwable it moves the object owner out of the `Mixed` box into the
+active exception slot and releases the box; for an invalid value it releases
+the box before raising the catchable `TypeError`. This ownership transfer is
+shared by statement-form and expression-form throws. A runnable program is
+`examples/eval-throw/`.
+
 `src/ir_lower/program.rs` repeats the final bridge-requirement check against the
 completed EIR module. This accounts for actual local-slot types and supported
 static function/method targets before setting `RuntimeFeatures::eval_bridge`.

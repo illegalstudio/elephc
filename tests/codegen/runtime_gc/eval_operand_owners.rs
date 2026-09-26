@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Runtime-unknown source keeps execution in Magician instead of literal AOT lowering.
-//! - Heap assertions include normal returns, string results and exception escape.
+//! - Heap assertions include normal returns, string results, exception escape,
+//!   and Mixed throw success and failure paths.
 
 use crate::support::*;
 
@@ -29,6 +30,123 @@ unset($source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "missing:1:owned:17:3:stable|".repeat(3), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Eval-created ReflectionParameter public names add no retained string beyond eval metadata.
+#[test]
+fn test_eval_reflection_parameter_public_name_releases_string_owner() {
+    let baseline = compile_and_run_with_heap_debug(r#"<?php
+eval('function eval_parameter_owner_target(string $argument) {}');
+$parameter = new ReflectionParameter('strlen', 'string');
+if ($parameter->name !== 'string') { echo 'bad'; }
+unset($parameter);
+echo 'baseline';
+"#);
+    assert!(baseline.success, "stdout={:?}\nstderr={}", baseline.stdout, baseline.stderr);
+    assert_eq!(baseline.stdout, "baseline");
+    let baseline_live_blocks = eval_operand_owner_live_blocks(&baseline.stderr);
+
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('function eval_parameter_owner_target(string $argument) {} $parameter = new ReflectionParameter("eval_parameter_owner_target", "argument"); return $parameter;');
+if ($parameter->name !== 'argument') { echo 'bad'; }
+unset($parameter);
+echo 'done';
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "done");
+    // The eval-created reflection owner retains five fixed metadata blocks beyond the AOT object;
+    // the public-name slot must not retain another string allocation after the object is unset.
+    assert_eq!(
+        eval_operand_owner_live_blocks(&out.stderr),
+        baseline_live_blocks + 5,
+        "discarded ReflectionParameter objects must release their public-name string: {}",
+        out.stderr,
+    );
+}
+
+/// Extracts the runtime heap's retained allocation count, accepting eval-registered class and reflection metadata in the baseline.
+fn eval_operand_owner_live_blocks(stderr: &str) -> usize {
+    let summary = stderr
+        .lines()
+        .find(|line| line.contains("HEAP DEBUG: leak summary:"))
+        .expect("heap-debug exit summary");
+    if summary.ends_with("clean") {
+        return 0;
+    }
+    summary
+        .split_once("live_blocks=")
+        .and_then(|(_, count)| count.split_whitespace().next())
+        .and_then(|count| count.parse().ok())
+        .expect("heap-debug live block count")
+}
+
+/// Mixed Throwable boxes do not add leaks beyond eval-registered metadata.
+#[test]
+fn test_eval_declared_mixed_throw_transfers_boxed_owners() {
+    let baseline = compile_and_run_with_heap_debug(r#"<?php
+eval('class EvalMixedThrowOwner extends RuntimeException {}');
+for ($i = 0; $i < 3; $i++) {
+    $through_local = new EvalMixedThrowOwner('local-' . $i);
+    $expression = new EvalMixedThrowOwner('expression-' . $i);
+    unset($through_local, $expression);
+}
+echo 'baseline';
+"#);
+    assert!(baseline.success, "stdout={:?}\nstderr={}", baseline.stdout, baseline.stderr);
+    assert_eq!(baseline.stdout, "baseline");
+    let baseline_live_blocks = eval_operand_owner_live_blocks(&baseline.stderr);
+
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class EvalMixedThrowOwner extends RuntimeException {}');
+for ($i = 0; $i < 3; $i++) {
+    $through_local = new EvalMixedThrowOwner('local-' . $i);
+    try { throw $through_local; } catch (Exception $error) { echo $error->getMessage(), '|'; }
+    try { $unused = true ? throw new EvalMixedThrowOwner('expression-' . $i) : null; } catch (Exception $error) { echo $error->getMessage(), '|'; }
+    unset($through_local, $error, $unused);
+}
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "local-0|expression-0|local-1|expression-1|local-2|expression-2|");
+    assert_eq!(
+        eval_operand_owner_live_blocks(&out.stderr),
+        baseline_live_blocks,
+        "throwing a Mixed Throwable must not leak its box: {}",
+        out.stderr,
+    );
+}
+
+/// Invalid Mixed throws release scalar and non-Throwable object boxes before TypeError.
+#[test]
+fn test_eval_mixed_throw_failure_releases_scalar_and_plain_object_boxes() {
+    let baseline = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    eval('$scalar = 42; $plain_object = new stdClass();');
+    unset($scalar, $plain_object);
+}
+echo 'baseline';
+"#);
+    assert!(baseline.success, "stdout={:?}\nstderr={}", baseline.stdout, baseline.stderr);
+    assert_eq!(baseline.stdout, "baseline");
+    let baseline_live_blocks = eval_operand_owner_live_blocks(&baseline.stderr);
+
+    let out = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    eval('$scalar = 42; $plain_object = new stdClass();');
+    try { throw $scalar; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    try { throw $plain_object; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    try { $unused = true ? throw $scalar : null; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    try { $unused = true ? throw $plain_object : null; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    unset($scalar, $plain_object, $error, $unused);
+}
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Can only throw objects|".repeat(12));
+    assert_eq!(
+        eval_operand_owner_live_blocks(&out.stderr),
+        baseline_live_blocks,
+        "a failed Mixed throw must release its box: {}",
+        out.stderr,
+    );
 }
 
 /// Reversing borrowed, temporary and nested eval strings allocates only the returned value.

@@ -1390,11 +1390,12 @@ fn emit_integer_key_from_result(ctx: &mut FunctionContext<'_>) {
 fn emit_float_key_from_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_php_float_to_int(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+            ctx.emitter.instruction("mov x1, x0");                              // publish the diagnosed PHP integer key
             ctx.emitter.instruction("mov x2, #-1");                             // key_hi sentinel marks an integer key
         }
         Arch::X86_64 => {
-            abi::emit_php_float_to_int(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
             ctx.emitter.instruction("mov rdx, -1");                             // key_hi sentinel marks an integer key
         }
     }
@@ -1439,7 +1440,8 @@ fn emit_mixed_key_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
             ctx.emitter.label(&float_label);
             ctx.emitter.instruction("fmov d0, x1");                             // reinterpret the unboxed float payload bits for casting
-            abi::emit_php_float_to_int(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+            ctx.emitter.instruction("mov x1, x0");                              // publish the diagnosed PHP integer key
             ctx.emitter.instruction("mov x2, #-1");                             // mark the converted float payload as an integer key
             ctx.emitter.instruction(&format!("b {}", done_label));              // finish normalized mixed-key handling
 
@@ -1479,7 +1481,7 @@ fn emit_mixed_key_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
             ctx.emitter.label(&float_label);
             ctx.emitter.instruction("movq xmm0, rdi");                          // reinterpret the unboxed float payload bits for casting
-            abi::emit_php_float_to_int(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
             ctx.emitter.instruction("mov rdx, -1");                             // mark the converted float payload as an integer key
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // finish normalized mixed-key handling
 

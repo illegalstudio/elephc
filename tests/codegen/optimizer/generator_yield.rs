@@ -20,8 +20,8 @@ use crate::support::*;
 // FINITE result rather than only a value — a regression shows up as a hung test, so the
 // `valid()` forms are included alongside the `foreach` ones to fail fast instead of hanging.
 //
-// `src/optimize/control/prune/statements.rs::prune_body_preserving_yields` is what holds the
-// property: a prune that would lose a body's last yield is not performed.
+// `optimize::generator_bodies::rewrite_preserving_yield` is what holds the property: a prune
+// or dead-code pass that would lose a body's last yield is not performed.
 
 /// A `yield` inside `while (false)` is dead, and the function is still a generator.
 #[test]

@@ -432,6 +432,18 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 - `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Objects are registered before property hydration, so self-references resolve correctly; unknown class names materialize as `__PHP_Incomplete_Class` and preserve their original wire name. Remaining gaps: the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`.
 - Reading a variable after a straight-line `unset()` of it is a compile error (`Undefined variable: $a`), in both modes, where PHP warns and evaluates the read as `null`. See [Local retyping](#local-retyping) above for the full unset/retype/mixed-storage mechanism and the `isset()`/`empty()`/`??` probes that stay legal on the unbound name.
 - `defined('Class::CONST')` follows PHP visibility for public, protected, and private members, including lexical `self::`/`parent::`, runtime-called-class `static::`, and constants imported into classes through traits; invalid relative scopes raise a catchable `Error`. The trait name itself is not a valid constant receiver. Eval-mode class-constant names remain unresolved, and dynamic and first-class-callable `defined()` names are still rejected at compile time.
+- `is_a()` and `is_subclass_of()` take a class NAME as well as an object, including an interface
+  name, and follow PHP's two different `$allow_string` defaults (`is_subclass_of` accepts a name
+  unless told otherwise, `is_a` only when told to). The flag itself may be computed at runtime and
+  need not be a `bool`: coercive mode admits any scalar there, and an `int`, `string` or `float`
+  is converted with PHP's own truthiness, so `"0"` is false while `"0.0"` and `" "` are true.
+  The name must be a compile-time **literal**: a
+  name only known at runtime still answers `false` rather than walking the hierarchy, because the
+  emitted program has no name-keyed class table to consult. The same restriction is louder in
+  `class_parents()`, `class_implements()` and `class_exists()`, which reject a non-literal name at
+  compile time instead of answering. One gap of its own: an enum does not carry its implicit
+  `UnitEnum`/`BackedEnum` interfaces, so `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP
+  says `true`, and `class_implements()` on an enum answers empty.
 
 ### Filesystem functions not implemented
 

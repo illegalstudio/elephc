@@ -76,7 +76,10 @@ elephc example.php
 See [`examples/eval/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval)
 for the broad feature showcase and
 [`examples/eval-globals/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval-globals)
-for global-scope synchronization. Dynamic regex opt-in is shown in
+for global-scope synchronization. Throwing a class declared by an earlier
+`eval()` is shown in
+[`examples/eval-throw/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval-throw).
+Dynamic regex opt-in is shown in
 [`examples/eval_regex/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval_regex).
 The implementation boundary is documented in
 [Eval Runtime Architecture](../internals/eval-runtime.md).

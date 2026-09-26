@@ -135,6 +135,14 @@ impl Checker {
         false
     }
 
+    /// Returns true when a name is unresolved after eval made the runtime class set open.
+    /// Such an object needs the runtime throw check instead of a closed-world diagnostic.
+    pub(crate) fn object_type_may_be_eval_declared(&self, type_name: &str) -> bool {
+        self.eval_barrier_active
+            && !self.classes.contains_key(type_name)
+            && !self.interfaces.contains_key(type_name)
+    }
+
     /// Returns true if `type_name` (a class or interface) implements `Throwable`,
     /// checking both direct implementation and interface extension chains.
     pub(crate) fn object_type_implements_throwable(&self, type_name: &str) -> bool {

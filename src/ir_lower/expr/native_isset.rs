@@ -82,7 +82,7 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
             let mut index_value = lower_expr(ctx, index);
             let index_ty = isset_index_expr_key_type(ctx, index, index_value.value);
             if index_ty == PhpType::Int {
-                index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+                index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
                 ctx.emit_value(
                     Op::ArrayIsset,
                     vec![array_value.value, index_value.value],

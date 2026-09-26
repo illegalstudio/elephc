@@ -124,15 +124,69 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
 /// Lowers a throw value by publishing it to the runtime exception slot and unwinding.
 pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let ty = ctx.load_value_to_result(value)?;
-    if !matches!(ty.codegen_repr(), PhpType::Object(_)) {
-        return Err(CodegenIrError::unsupported(format!(
-            "throw for PHP type {:?}",
-            ty
-        )));
+    if matches!(ty.codegen_repr(), PhpType::Object(_)) {
+        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
+        abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+        return Ok(());
     }
-    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
-    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
-    Ok(())
+    if matches!(ty.codegen_repr(), PhpType::Mixed) {
+        // After eval, an unknown class instance is represented as Mixed. PHP validates the
+        // runtime object against Throwable before entering the unwinder.
+        let throwable_interface_id = ctx
+            .module
+            .interface_infos
+            .get("Throwable")
+            .map(|interface| interface.interface_id)
+            .ok_or_else(|| CodegenIrError::unsupported("Throwable interface metadata is unavailable for mixed throw"))?;
+        let invalid_label = ctx.next_label("throw_mixed_invalid");
+        let done_label = ctx.next_label("throw_mixed_done");
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.comment("-- validate the Mixed throw tag and class --");
+                ctx.emitter.instruction("cmp x0, #6");                          // only Mixed's object tag can be checked for Throwable membership
+                ctx.emitter.instruction(&format!("b.ne {invalid_label}"));      // scalars and other boxed values raise a runtime TypeError
+                ctx.emitter.instruction("ldr x0, [x1]");                        // pass the runtime class id to the interface checker
+                abi::emit_load_int_immediate(ctx.emitter, "x1", throwable_interface_id as i64);
+                abi::emit_load_int_immediate(ctx.emitter, "x2", 1);            // request interface matching for Throwable
+            }
+            Arch::X86_64 => {
+                ctx.emitter.comment("-- validate the Mixed throw tag and class --");
+                ctx.emitter.instruction("cmp rax, 6");                          // only Mixed's object tag can be checked for Throwable membership
+                ctx.emitter.instruction(&format!("jne {invalid_label}"));       // scalars and other boxed values raise a runtime TypeError
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");            // pass the runtime class id to the interface checker
+                abi::emit_load_int_immediate(ctx.emitter, "rsi", throwable_interface_id as i64);
+                abi::emit_load_int_immediate(ctx.emitter, "rdx", 1);           // request interface matching for Throwable
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_class_implements_interface");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.comment("-- transfer the boxed Throwable to the exception slot --");
+                ctx.emitter.instruction(&format!("cbz x0, {invalid_label}"));   // reject object tags whose runtime class does not implement Throwable
+            }
+            Arch::X86_64 => {
+                ctx.emitter.comment("-- transfer the boxed Throwable to the exception slot --");
+                ctx.emitter.instruction("test rax, rax");                       // did the runtime class implement Throwable?
+                ctx.emitter.instruction(&format!("jz {invalid_label}"));        // reject ordinary objects at runtime
+            }
+        }
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
+        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
+        abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&invalid_label);
+        ctx.emitter.comment("-- release an invalid thrown box before raising TypeError --");
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        super::lower_inst::emit_type_error(ctx, "Can only throw objects");
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
+
+    Err(CodegenIrError::unsupported(format!("throw for PHP type {:?}", ty)))
 }
 
 /// Lowers an unconditional branch and copies any target block parameters.

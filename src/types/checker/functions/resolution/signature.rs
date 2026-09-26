@@ -115,6 +115,7 @@ impl Checker {
             by_ref_return: decl.by_ref_return,
             ref_params: decl.ref_params.clone(),
             deprecation: None,
+            is_generator: false,
             declared_params: decl
                 .param_types
                 .iter()
@@ -304,6 +305,10 @@ impl Checker {
             deprecation: crate::types::checker::schema::validation::extract_deprecation(
                 &decl.attributes,
             ),
+            // The syntactic fact, taken from the SOURCE body before any pass has run. `decl.body`
+            // here is the declaration as parsed, so an unreachable `yield` still counts -- which
+            // is PHP's rule, and the thing lowering must not try to re-derive later.
+            is_generator: contains_yield,
         };
         self.functions.insert(name.to_string(), sig);
         if return_type == PhpType::Callable {

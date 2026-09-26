@@ -96,6 +96,42 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let key_already_diagnosed = compound_array_write_value_reads_target(array, index, value, span);
+    lower_array_assign_with_diagnosed_key(ctx, array, index, value, span, key_already_diagnosed);
+}
+
+/// Detects a desugared compound write whose value already read the same array dimension.
+pub(crate) fn compound_array_write_value_reads_target(
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    assignment_span: Span,
+) -> bool {
+    if value.span != assignment_span {
+        return false;
+    }
+    let read = match &value.kind {
+        ExprKind::BinaryOp { left, .. } => left.as_ref(),
+        ExprKind::NullCoalesce { value, .. } => value.as_ref(),
+        _ => return false,
+    };
+    matches!(
+        &read.kind,
+        ExprKind::ArrayAccess { array: receiver, index: read_index }
+            if matches!(&receiver.kind, ExprKind::Variable(name) if name == array)
+                && read_index.as_ref() == index
+    )
+}
+
+/// Lowers an array write after an earlier read of the same source-level dimension.
+pub(crate) fn lower_array_assign_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
     let array_value = load_array_local_for_write(ctx, array, span);
     let op = array_set_op(array_value.ir_type);
     if op == Op::RuntimeCall && matches!(
@@ -124,11 +160,15 @@ pub(super) fn lower_array_assign(
         && index_is_boxed_mixed_key(index_value.ir_type)
         && !index_is_foreach_int_key(ctx, index)
     {
-        lower_mixed_key_array_set(ctx, array, array_value, index_value, value_value, span);
+        lower_mixed_key_array_set(
+            ctx, array, array_value, index_value, value_value, span, key_already_diagnosed,
+        );
         return;
     }
     if op == Op::ArraySet {
-        index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+        index_value = coerce_array_key_to_int_at_span(
+            ctx, index_value, Some(index.span), key_already_diagnosed,
+        );
         let array_ty = ctx.builder.value_php_type(array_value.value);
         value_value = coerce_indexed_array_set_value(ctx, &array_ty, value_value, Some(value.span));
     }
@@ -162,7 +202,7 @@ pub(super) fn lower_array_assign(
     ctx.emit_void(
         op,
         vec![array_value.value, index_value.value, value_value.value],
-        None,
+        (op == Op::HashSet && key_already_diagnosed).then_some(Immediate::Bool(true)),
         op.default_effects(),
         Some(span),
     );
@@ -275,12 +315,13 @@ pub(super) fn lower_mixed_key_array_set(
     index: LoweredValue,
     value: LoweredValue,
     span: Span,
+    key_already_diagnosed: bool,
 ) {
     let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
     let result = ctx.emit_value(
         Op::ArraySetMixedKey,
         vec![array_value.value, index.value, value.value],
-        None,
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
         mixed_array_ty.clone(),
         Op::ArraySetMixedKey.default_effects(),
         Some(span),

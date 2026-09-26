@@ -19,6 +19,7 @@ pub(super) fn lower_assignment_expr(
     conditional_value_temp: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
+    let key_already_diagnosed = compound_array_key_diagnosed_in_prelude(target, value, prelude, expr.span);
     for stmt in prelude {
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
@@ -109,7 +110,7 @@ pub(super) fn lower_assignment_expr(
             ctx.bind_fiber_start_sig(name, sig);
         }
     } else {
-        lower_non_local_assignment_write(ctx, target, value, expr.span);
+        lower_non_local_assignment_write_with_diagnosed_key(ctx, target, value, expr.span, key_already_diagnosed);
     }
     if let Some(result_target) = result_target {
         return lower_expr(ctx, result_target);
@@ -171,7 +172,7 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
     // load — the merge's — per execution.
     ctx.with_borrowed_write_operand(|ctx| {
-        lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
+        lower_non_local_assignment_write_with_diagnosed_key(ctx, target, &temp_value, expr.span, true);
     });
     branch_to(ctx, merge);
 
@@ -190,15 +191,88 @@ pub(super) fn lower_non_local_assignment_write(
     value: &Expr,
     span: Span,
 ) {
+    lower_non_local_assignment_write_with_diagnosed_key(ctx, target, value, span, false);
+}
+
+/// Writes an assignment target whose key may already have been diagnosed by its read half.
+fn lower_non_local_assignment_write_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
     if let ExprKind::DynamicPropertyAccess { object, property } = &target.kind {
         lower_dynamic_property_assign(ctx, object, property, value, span);
         return;
+    }
+    if key_already_diagnosed {
+        if let ExprKind::ArrayAccess { array, index } = &target.kind {
+            if let ExprKind::Variable(name) = &array.kind {
+                crate::ir_lower::stmt::lower_array_assign_with_diagnosed_key(
+                    ctx, name, index, value, span, true,
+                );
+                return;
+            }
+        }
     }
     let Some(kind) = non_local_assignment_stmt_kind(target, value) else {
         lower_expr(ctx, value);
         return;
     };
     crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(kind, span));
+}
+
+/// Finds a compound array read bound to the value temp before its write half runs.
+fn compound_array_key_diagnosed_in_prelude(
+    target: &Expr,
+    value: &Expr,
+    prelude: &[Stmt],
+    span: Span,
+) -> bool {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return false;
+    };
+    let ExprKind::Variable(array_name) = &array.kind else {
+        return false;
+    };
+    let ExprKind::Variable(value_name) = &value.kind else {
+        return false;
+    };
+    if prelude.iter().any(|stmt| {
+        if let StmtKind::Assign { name, value: read_value } = &stmt.kind {
+            name == value_name
+                && crate::ir_lower::stmt::compound_array_write_value_reads_target(
+                    array_name, index, read_value, span,
+                )
+        } else {
+            false
+        }
+    }) {
+        return true;
+    }
+    // Increment and decrement first capture the old dimension, then calculate a new value.
+    prelude.iter().any(|stmt| {
+        let StmtKind::Assign { name: old_name, value: read_value } = &stmt.kind else {
+            return false;
+        };
+        if read_value != target {
+            return false;
+        }
+        prelude.iter().any(|next| {
+            matches!(
+                &next.kind,
+                StmtKind::Assign {
+                    name,
+                    value: Expr {
+                        kind: ExprKind::BinaryOp { left, .. },
+                        ..
+                    }
+                } if name == value_name
+                    && matches!(&left.kind, ExprKind::Variable(read_name) if read_name == old_name)
+            )
+        })
+    })
 }
 
 /// Builds the statement form that already owns lowering for non-local writes.

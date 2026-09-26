@@ -1033,17 +1033,8 @@ echo probe($argc);"#,
     assert_eq!(out, "a1|1");
 }
 
-/// A retype in one file must not re-bind an unrelated assignment at the same line and column of
-/// another file.
-///
-/// `Span` carries line/col and nothing about which FILE they name, and include resolution splices
-/// every included file's statements into one program without rebasing line numbers. Line 4
-/// column 1 of `main.php` and of `lib.php` are therefore the SAME `Span`, and lowering consults
-/// the retype decisions at EVERY `StmtKind::Assign`. Here `$x = "s";` (main, line 4) is a real
-/// retype and `$w = "b" . $argc;` (lib, line 4) is not: measured before the decisions were keyed
-/// by span AND local name, the library's conditional assignment abandoned `$w`'s binding, so the
-/// `echo` after the `if` read a fresh slot the untaken branch never wrote and the program printed
-/// `|s` where PHP prints `a1|s`.
+/// Equal coordinates in different physical files keep their local-binding decisions separate.
+/// The local names differ here as well, so this guards the basic cross-file case.
 #[test]
 fn test_retype_does_not_reach_a_same_position_assignment_in_another_file() {
     let out = compile_and_run_files(
@@ -1062,142 +1053,72 @@ fn test_retype_does_not_reach_a_same_position_assignment_in_another_file() {
     assert_eq!(out, "a1|s");
 }
 
-/// The residual same-NAME same-position collision is a hard compile error, never a wrong answer.
-///
-/// `main.php` line 4 column 1 retypes `$q`; `lib.php` line 4 column 1 assigns `$q` inside an `if`.
-/// The two spans are equal and the names are equal, so the `(span, name)` key cannot tell them
-/// apart and lowering would re-bind the library's conditional assignment as well: measured as
-/// printing `|s` where PHP prints `a1|5`, in a program that was a plain compile error before this
-/// feature existed. Giving `Span` file identity is the real fix and is out of scope; until then
-/// the checker refuses the ambiguous decision outright, so the checker and lowering agree on which
-/// programs are accepted and no program silently changes meaning.
+/// Equal local names and coordinates in separate files use separate source identities.
 #[test]
-fn test_same_name_same_position_collision_is_a_compile_error() {
-    let error = compile_files_error_message(
+fn test_same_name_same_position_in_different_files_keeps_bindings_distinct() {
+    let out = compile_and_run_files(
         &[
-            (
-                "main.php",
-                "<?php\nrequire 'lib.php';\necho \"|\";\n$q = 5;\necho $q;\n",
-            ),
-            (
-                "lib.php",
-                "<?php\n$q = \"a\" . $argc;\nif ($argc > 5) {\n$q = \"b\" . $argc;\n}\necho $q;\n",
-            ),
+            ("main.php", "<?php\nrequire 'lib.php';\necho \"|\";\n$q = 5;\necho $q;\n"),
+            ("lib.php", "<?php\n$q = \"a\" . $argc;\nif ($argc > 5) {\n$q = \"b\" . $argc;\n}\necho $q;\n"),
         ],
         "main.php",
-    )
-    .expect("an ambiguous (span, name) local-binding decision must not compile");
-    assert!(
-        error.contains("Cannot re-bind $q here"),
-        "expected the ambiguity diagnostic, got: {error}"
     );
-    assert!(
-        error.contains("line 4 column 1"),
-        "the diagnostic must name the shared position, got: {error}"
-    );
+    assert_eq!(out, "a1|5");
 }
 
-/// Reference detachment decisions also reject identical unset positions in different files.
+/// Reference-detach decisions remain local to their physical source file.
 #[test]
-fn test_reference_detach_same_name_same_position_collision_is_a_compile_error() {
-    let error = compile_files_error_message(
+fn test_reference_detach_same_name_same_position_in_different_files_keeps_bindings_distinct() {
+    let out = compile_and_run_files(
         &[
             ("main.php", "<?php\nrequire 'lib.php';\n$text = 'main' . $argc;\n$read = function() use (&$text): string { return $text; };\nunset($text);\necho $read();\n"),
             ("lib.php", "<?php\n$text = 'lib' . $argc;\n$read = function() use (&$text): string { return $text; };\necho $read();\nunset($text);\n"),
         ],
         "main.php",
-    ).expect("ambiguous reference detachment must not compile");
-    assert!(error.contains("Cannot re-bind $text here"), "{error}");
-    assert!(error.contains("line 5 column 7"), "{error}");
+    );
+    assert_eq!(out, "lib1main1");
 }
 
-/// A non-detachable body cannot silently erase another file's reference detach authorization.
+/// A later include's function-local detach does not collide with a root-file closure binding.
 #[test]
-fn test_reference_detach_collision_with_typed_binding_is_a_compile_error() {
+fn test_reference_detach_in_included_function_keeps_its_source_identity() {
     let error = compile_files_error_message(
         &[
             ("main.php", "<?php\nrequire 'lib.php';\n$text = 'main' . $argc;\n$read = function() use (&$text): string { return $text; };\nunset($text);\nprobeDetachCollision($argc);\necho $read();\n"),
             ("lib.php", "<?php\nfunction probeDetachCollision(int $seed): void {\nstring $text = 'lib' . $seed;\n$read = function() use (&$text): string { return $text; };\nunset($text);\necho $read();\n}\n"),
         ],
         "main.php",
-    ).expect("removed reference detach keys must still reject ambiguous source positions");
-    assert!(error.contains("Cannot re-bind $text here"), "{error}");
-    assert!(error.contains("line 5 column 7"), "{error}");
+    );
+    assert!(error.is_none(), "different physical sources must not share a detach key: {error:?}");
 }
 
-/// A collision that STRIPS another body's mixed-storage decisions is caught too, not just one
-/// that leaves two live keys behind.
-///
-/// `lib.php`'s function marks `$a` as branch-divergent and records its two store sites at lines
-/// 4 and 6, column 1. `main.php` has two ordinary top-level `$a = …;` statements at the very same
-/// positions, and the final top-level scan RE-DECIDES every assignment it sees — dropping any
-/// decision already filed under that `(span, name)`. Measured before retired keys were checked:
-/// both store sites were removed, `mixed_storage_local_names()` lost `$a` (so constant
-/// propagation was no longer blocked for it), the checker still typed the local `Mixed`, and the
-/// compiler PANICKED with `strlen cannot lower checked operand type Int` on valid PHP.
+/// Same-name mixed-storage decisions at equal coordinates in different files remain independent.
 #[test]
-fn test_stripped_mixed_storage_decisions_are_a_compile_error() {
-    let error = compile_files_error_message(
+fn test_mixed_storage_decisions_in_different_files_are_not_stripped() {
+    let out = compile_and_run_files(
         &[
-            (
-                "main.php",
-                "<?php\nrequire 'lib.php';\n\n$a = 42;\necho \"|\";\n$a = 99;\necho $a;\n",
-            ),
-            (
-                "lib.php",
-                "<?php\nfunction f($n) {\n    if ($n > 1) {\n$a = 42;\n    } else {\n$a = \"hello\";\n    }\n    echo strlen($a), \"|\";\n}\nf($argc);\n",
-            ),
+            ("main.php", "<?php\nrequire 'lib.php';\n\n$a = 42;\necho \"|\";\n$a = 99;\necho $a;\n"),
+            ("lib.php", "<?php\nfunction f($n) {\n    if ($n > 1) {\n$a = 42;\n    } else {\n$a = \"hello\";\n    }\n    echo strlen($a), \"|\";\n}\nf($argc);\n"),
         ],
         "main.php",
-    )
-    .expect("a collision that strips a mixed-storage decision must not compile");
-    assert!(
-        error.contains("Cannot re-bind $a here"),
-        "expected the ambiguity diagnostic, got: {error}"
     );
+    assert_eq!(out, "5||99");
 }
 
-/// The PARTIAL-strip variant of the fixture above: only the FIRST store site collides.
-///
-/// It compiled before, and printed the right answer — but only by widening luck: lowering saw one
-/// of the two recorded store sites, so the local's slot was never pre-declared boxed at its first
-/// store. The surviving site kept the NAME in `mixed_storage_local_names()`, which is why this one
-/// did not panic like the fixture above. One matched key naming two nodes is the hazard R5 rejects
-/// whether or not this particular program survived it.
+/// A partial same-coordinate match across files cannot retire another source's mixed-storage key.
 #[test]
-fn test_partially_stripped_mixed_storage_decisions_are_a_compile_error() {
+fn test_partial_mixed_storage_decisions_in_different_files_stay_independent() {
     let error = compile_files_error_message(
         &[
             ("main.php", "<?php\nrequire 'lib.php';\n\n$a = 5;\necho $a, \"|\";\n"),
-            (
-                "lib.php",
-                "<?php\nfunction f($n) {\n    $q = 2;\n$a = 123456789;\n    for ($i = 1; $i < $n; $i++) {\n$a = \"s\";\n    }\n    var_dump($a);\n    return $q;\n}\nf($argc);\n",
-            ),
+            ("lib.php", "<?php\nfunction f($n) {\n    $q = 2;\n$a = 123456789;\n    for ($i = 1; $i < $n; $i++) {\n$a = \"s\";\n    }\n    var_dump($a);\n    return $q;\n}\nf($argc);\n"),
         ],
         "main.php",
-    )
-    .expect("a collision that strips one of two mixed-storage decisions must not compile");
-    assert!(
-        error.contains("Cannot re-bind $a here"),
-        "expected the ambiguity diagnostic, got: {error}"
     );
-    assert!(
-        error.contains("line 4 column 1"),
-        "the diagnostic must name the shared position, got: {error}"
-    );
+    assert!(error.is_none(), "included mixed-storage decisions must stay source-local: {error:?}");
 }
 
-/// The KILL and RETYPE maps keep their existing behaviour: a stripped decision there degrades to
-/// the pre-feature lowering path, which is correct, so it is not promoted to an error.
-///
-/// Here `lib.php` line 3 column 1 is a real retype of `$q` and `main.php` line 3 column 1 is an
-/// ordinary compatible assignment to `$q`; the top-level walk re-decides the shared key and drops
-/// the library's retype. Lowering then falls back to widening the old slot instead of minting a
-/// fresh one — exactly what the program did before retype sites were lowered at all — and prints
-/// PHP's answer. Rejecting it for uniformity would turn a correct program into a compile error,
-/// which is why the retired-key check covers the mixed-storage map alone: losing a MIXED decision
-/// changes what the CHECKER typed (the name leaves `mixed_storage_local_names()` while the local
-/// stays `Mixed`), and that disagreement is what panics the compiler.
+/// Compatible rebinds in two source files keep their own binding decisions and still compile.
 #[test]
 fn test_stripped_retype_decision_still_compiles_and_runs() {
     let out = compile_and_run_files(
@@ -1210,16 +1131,12 @@ fn test_stripped_retype_decision_still_compiles_and_runs() {
     assert_eq!(out, "5|2");
 }
 
-/// The counter has to walk TRAIT bodies: a trait's methods are checked and lowered exactly like a
-/// class's, so a decision recorded inside one is consulted inside one.
-///
-/// Measured before the declaration arms were made exhaustive: the trait body was not counted, the
-/// collision went undetected, and the program compiled with one warning and printed `|5` instead
-/// of `a1|5`. Replacing `trait T` with `class C` in the identical pair DID error, which is what
-/// isolated the cause to the uncounted region.
+/// Equal coordinates in the root file and an included trait remain distinct source locations.
+/// A span now carries the physical source identity, so the trait method's `$q` must not be
+/// mistaken for a second node at the top-level assignment's span.
 #[test]
-fn test_collision_inside_a_trait_body_is_a_compile_error() {
-    let error = compile_files_error_message(
+fn test_same_coordinates_included_trait_body_do_not_collide_with_main() {
+    let out = compile_and_run_files(
         &[
             (
                 "main.php",
@@ -1231,76 +1148,43 @@ fn test_collision_inside_a_trait_body_is_a_compile_error() {
             ),
         ],
         "main.php",
-    )
-    .expect("a collision inside a trait body must not compile");
-    assert!(
-        error.contains("Cannot re-bind $q here"),
-        "expected the ambiguity diagnostic, got: {error}"
     );
+    assert_eq!(out, "|5");
 }
 
-/// The same for ENUM method bodies, which the declaration arm also used to skip.
+/// Equal coordinates in an included enum method and the root file stay distinct.
 #[test]
-fn test_collision_inside_an_enum_method_is_a_compile_error() {
-    let error = compile_files_error_message(
+fn test_same_coordinates_included_enum_method_do_not_collide_with_main() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n$q = \"a\" . $argc;\n$q = 5;\necho \"|\", $q;\n"),
+            ("lib.php", "<?php\nenum E: int {\npublic function go(int $n): string {\n$q = \"b\" . $n;\nreturn $q;\n}\ncase A = 1;\n}\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "|5");
+}
+
+/// Repeated inclusion instances receive distinct source identities and retain both executions.
+#[test]
+fn test_double_require_of_a_retyping_file_keeps_each_instance_distinct() {
+    let out = compile_and_run_files(
         &[
             (
                 "main.php",
-                "<?php\nrequire 'lib.php';\n$q = \"a\" . $argc;\n$q = 5;\necho \"|\", $q;\n",
+                "<?php\nrequire 'lib.php';\nrequire 'lib.php';\n",
             ),
-            (
-                "lib.php",
-                "<?php\nenum E: int {\npublic function go(int $n): string {\n$q = \"b\" . $n;\nreturn $q;\n}\ncase A = 1;\n}\n",
-            ),
-        ],
-        "main.php",
-    )
-    .expect("a collision inside an enum method must not compile");
-    assert!(
-        error.contains("Cannot re-bind $q here"),
-        "expected the ambiguity diagnostic, got: {error}"
-    );
-}
-
-/// Including one file TWICE with `require` splices its statements in twice, so a retype at its top
-/// level genuinely has two sites and is rejected.
-///
-/// The rejection is conservative rather than necessary — PHP runs this, printing `|5|5` — but
-/// allowing it would mean firing a decision at splices the checker never approved (only the LAST
-/// splice's binding state produced it). What the diagnostic must not do is blame "two files"
-/// alone: it names duplicate inclusion as a cause too. It deliberately stops there and does NOT
-/// offer `require_once` as the fix, because `_once` does not rescue this program — see
-/// `test_single_require_of_a_retyping_file_still_compiles` for why.
-#[test]
-fn test_double_require_of_a_retyping_file_reports_duplicate_inclusion() {
-    let error = compile_files_error_message(
-        &[
-            ("main.php", "<?php\nrequire 'lib.php';\nrequire 'lib.php';\n"),
             (
                 "lib.php",
                 "<?php\n$q = \"a\" . $argc;\n$q = 5;\necho \"|\", $q;\n",
             ),
         ],
         "main.php",
-    )
-    .expect("a file spliced twice gives its retype two sites, which must not compile");
-    assert!(
-        error.contains("Cannot re-bind $q here"),
-        "expected the ambiguity diagnostic, got: {error}"
     );
-    assert!(
-        error.contains("included more than once"),
-        "the diagnostic must name duplicate inclusion as a cause, got: {error}"
-    );
+    assert_eq!(out, "|5|5");
 }
 
-/// Control: including the SAME file once compiles and runs, so the rejection above is about the
-/// double splice and not about the file's contents.
-///
-/// `require_once` is deliberately not the control. It splices once, but wraps the body in an
-/// include-once GUARD, which puts the retype at conditional depth and makes it the pre-existing
-/// hard `cannot reassign` error instead — so `_once` does not rescue this program, and the
-/// diagnostic does not claim it does.
+/// A single require executes the same retyping file once and retains its output.
 #[test]
 fn test_single_require_of_a_retyping_file_still_compiles() {
     let out = compile_and_run_files(
@@ -2186,12 +2070,11 @@ fn test_two_different_names_retyped_at_one_position_both_take_effect() {
     assert_eq!(out, "400005|s");
 }
 
-/// Control: the same-NAME collision keeps its current outcome — the hard ambiguity error, not a
-/// silently merged pair of decisions. A set of names per span must not turn two genuinely
-/// indistinguishable sites into two accepted ones.
+/// Equal names and source coordinates in separate files stay independent even after another
+/// same-position retype decision has been recorded for a different local.
 #[test]
-fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
-    let error = compile_files_error_message(
+fn test_same_name_multi_name_spans_across_files_keep_bindings_distinct() {
+    let out = compile_and_run_files(
         &[
             (
                 "main.php",
@@ -2203,12 +2086,8 @@ fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
             ),
         ],
         "main.php",
-    )
-    .expect("a same-name (span, name) collision must still be rejected");
-    assert!(
-        error.contains("Cannot re-bind $q here"),
-        "expected the ambiguity diagnostic, got: {error}"
     );
+    assert_eq!(out, "a1|5");
 }
 
 /// `unset` then READ, where the only `global` naming the local sits in a CLOSURE body: an honest

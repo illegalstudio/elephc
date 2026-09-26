@@ -34,7 +34,7 @@ pub(crate) fn dce_method(method: ClassMethod, class_name: &str, parent_name: Opt
     ClassMethod {
         body: with_class_effect_context(Some(context), || {
             with_function_scope(|| {
-                crate::optimize::body_preserving_yields(method.body, |body| {
+                crate::optimize::generator_bodies::rewrite_preserving_yield(method.body, |body| {
                     dce_block_with_guards(body, guards)
                 })
             })
@@ -51,7 +51,7 @@ pub(crate) fn dce_method_without_context(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         body: with_class_effect_context(None, || {
             with_function_scope(|| {
-                crate::optimize::body_preserving_yields(method.body, |body| {
+                crate::optimize::generator_bodies::rewrite_preserving_yield(method.body, |body| {
                     dce_block_with_guards(body, guards)
                 })
             })

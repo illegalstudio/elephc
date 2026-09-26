@@ -274,6 +274,7 @@ impl Checker {
                 .collect(),
             variadic: decl.variadic.clone(),
             deprecation: None,
+            is_generator: false,
         };
         let plan = self.plan_named_call_args(
             &normalization_sig,

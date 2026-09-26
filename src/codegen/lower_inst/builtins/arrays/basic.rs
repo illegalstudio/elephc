@@ -128,9 +128,23 @@ pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
             )
         })?,
     };
-    let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
     let result_elem_ty =
         result_array_element_type("array_chunk", &inst.result_php_type.codegen_repr())?;
+    // An associative receiver walks its own entries rather than indexing a dense payload, so it
+    // takes the hash helper for BOTH modes; the flag only picks which key each entry lands under.
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        lower_hash_chunk_call(ctx, array, length, preserve_keys)?;
+        crate::codegen::emit_array_value_type_stamp(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &result_elem_ty,
+        );
+        return store_if_result(ctx, inst);
+    }
+    let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
     let result_inner_elem_ty = if preserve_keys {
         array_chunk_result_inner_hash_value_type(&result_elem_ty)?
     } else {

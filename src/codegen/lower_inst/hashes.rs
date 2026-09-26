@@ -138,6 +138,7 @@ pub(super) fn lower_hash_get(
                 &result_ty,
                 warn_on_missing,
                 false,
+                false,
             )
         }
         Arch::X86_64 => {
@@ -149,6 +150,7 @@ pub(super) fn lower_hash_get(
                 &value_ty,
                 &result_ty,
                 warn_on_missing,
+                false,
                 false,
             )
         }
@@ -181,6 +183,7 @@ pub(super) fn lower_hash_get_for_write(
     let value_ty = assoc_value_type(&ctx.value_php_type(hash)?, inst)?;
     require_hash_get_result(&value_ty, inst)?;
     let result_ty = inst.result_php_type.codegen_repr();
+    let key_already_diagnosed = matches!(inst.immediate, Some(Immediate::Bool(true)));
     if matches!(result_ty, PhpType::Mixed) {
         return match ctx.emitter.target.arch {
             Arch::AArch64 => lower_hash_get_aarch64(
@@ -192,6 +195,7 @@ pub(super) fn lower_hash_get_for_write(
                 &result_ty,
                 true,
                 true,
+                key_already_diagnosed,
             ),
             Arch::X86_64 => lower_hash_get_x86_64(
                 ctx,
@@ -202,6 +206,7 @@ pub(super) fn lower_hash_get_for_write(
                 &result_ty,
                 true,
                 true,
+                key_already_diagnosed,
             ),
         };
     }
@@ -210,8 +215,8 @@ pub(super) fn lower_hash_get_for_write(
     })?;
     super::arrays::separate_get_for_write_receiver(ctx, hash, "__rt_hash_ensure_unique")?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_hash_get_for_write_aarch64(ctx, inst, hash, key, &result_ty, helper),
-        Arch::X86_64 => lower_hash_get_for_write_x86_64(ctx, inst, hash, key, &result_ty, helper),
+        Arch::AArch64 => lower_hash_get_for_write_aarch64(ctx, inst, hash, key, &result_ty, helper, key_already_diagnosed),
+        Arch::X86_64 => lower_hash_get_for_write_x86_64(ctx, inst, hash, key, &result_ty, helper, key_already_diagnosed),
     }
 }
 
@@ -229,8 +234,13 @@ fn lower_hash_get_for_write_aarch64(
     key: ValueId,
     result_ty: &PhpType,
     helper: &str,
+    key_already_diagnosed: bool,
 ) -> Result<()> {
-    materialize_hash_key_aarch64(ctx, key)?;
+    if key_already_diagnosed {
+        materialize_hash_key_aarch64_after_first(ctx, key)?;
+    } else {
+        materialize_hash_key_aarch64(ctx, key)?;
+    }
     ctx.load_value_to_reg(hash, "x0")?;
     let miss = ctx.next_label("hash_get_fw_miss");
     let null_receiver = ctx.next_label("hash_get_fw_null_recv");
@@ -271,8 +281,13 @@ fn lower_hash_get_for_write_x86_64(
     key: ValueId,
     result_ty: &PhpType,
     helper: &str,
+    key_already_diagnosed: bool,
 ) -> Result<()> {
-    materialize_hash_key_x86_64(ctx, key)?;
+    if key_already_diagnosed {
+        materialize_hash_key_x86_64_after_first(ctx, key)?;
+    } else {
+        materialize_hash_key_x86_64(ctx, key)?;
+    }
     ctx.load_value_to_reg(hash, "rdi")?;
     let miss = ctx.next_label("hash_get_fw_miss");
     let null_receiver = ctx.next_label("hash_get_fw_null_recv");
@@ -316,9 +331,14 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     receiver.prepare_consuming_storeback(ctx, hash)?;
+    let normalization = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        HashKeyNormalization::PhpAlreadyDiagnosed
+    } else {
+        HashKeyNormalization::Php
+    };
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_hash_set_aarch64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
-        Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
+        Arch::AArch64 => lower_hash_set_aarch64_with(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
+        Arch::X86_64 => lower_hash_set_x86_64_with(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
     }
     ctx.store_result_value(hash)?;
     receiver.store_back_container_writeback(ctx, hash)?;
@@ -334,6 +354,8 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 pub(super) enum HashKeyNormalization {
     /// `__rt_hash_normalize_key` decides: a numeric string becomes an integer key.
     Php,
+    /// Normalize again without repeating a float diagnostic already emitted by this access.
+    PhpAlreadyDiagnosed,
     /// A string key stays a string key, byte for byte.
     RawString,
 }
@@ -613,8 +635,13 @@ fn lower_hash_get_aarch64(
     result_ty: &PhpType,
     warn_on_missing: bool,
     for_write: bool,
+    key_already_diagnosed: bool,
 ) -> Result<()> {
-    materialize_hash_key_aarch64(ctx, key)?;
+    if key_already_diagnosed {
+        materialize_hash_key_aarch64_after_first(ctx, key)?;
+    } else {
+        materialize_hash_key_aarch64(ctx, key)?;
+    }
     ctx.load_value_to_reg(hash, "x0")?;
     let miss = ctx.next_label("hash_get_miss");
     let null_receiver = ctx.next_label("hash_get_null_recv");
@@ -659,8 +686,13 @@ fn lower_hash_get_x86_64(
     result_ty: &PhpType,
     warn_on_missing: bool,
     for_write: bool,
+    key_already_diagnosed: bool,
 ) -> Result<()> {
-    materialize_hash_key_x86_64(ctx, key)?;
+    if key_already_diagnosed {
+        materialize_hash_key_x86_64_after_first(ctx, key)?;
+    } else {
+        materialize_hash_key_x86_64(ctx, key)?;
+    }
     ctx.load_value_to_reg(hash, "rdi")?;
     let miss = ctx.next_label("hash_get_miss");
     let null_receiver = ctx.next_label("hash_get_null_recv");
@@ -890,6 +922,11 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
     materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::Php)
 }
 
+/// Rebuilds an AArch64 hash key after the same access has diagnosed its float conversion.
+pub(super) fn materialize_hash_key_aarch64_after_first(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)
+}
+
 /// Materializes an EIR value as a hash key for AArch64 under a chosen key normalization.
 pub(super) fn materialize_hash_key_aarch64_with(
     ctx: &mut FunctionContext<'_>,
@@ -899,7 +936,7 @@ pub(super) fn materialize_hash_key_aarch64_with(
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "x1", "x2")?;
-            if normalization == HashKeyNormalization::Php {
+            if normalization != HashKeyNormalization::RawString {
                 abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
             }
             Ok(())
@@ -925,7 +962,13 @@ pub(super) fn materialize_hash_key_aarch64_with(
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "d0")?;
-            abi::emit_php_float_to_int(ctx.emitter, "x1");
+            if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
+                abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
+                ctx.emitter.instruction("mov x0, x9");                          // recover the previously diagnosed PHP integer key
+            } else {
+                abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+            }
+            ctx.emitter.instruction("mov x1, x0");                              // use the diagnosed PHP integer as the hash key
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
@@ -950,6 +993,11 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
     materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::Php)
 }
 
+/// Rebuilds an x86_64 hash key after the same access has diagnosed its float conversion.
+pub(super) fn materialize_hash_key_x86_64_after_first(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)
+}
+
 /// Materializes an EIR value as a hash key for x86_64 under a chosen key normalization.
 pub(super) fn materialize_hash_key_x86_64_with(
     ctx: &mut FunctionContext<'_>,
@@ -959,7 +1007,7 @@ pub(super) fn materialize_hash_key_x86_64_with(
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "rax", "rdx")?;
-            if normalization == HashKeyNormalization::Php {
+            if normalization != HashKeyNormalization::RawString {
                 abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
             }
             ctx.emitter.instruction("mov rsi, rax");                            // move the string-or-integer key low word into the hash ABI register
@@ -986,7 +1034,13 @@ pub(super) fn materialize_hash_key_x86_64_with(
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "xmm0")?;
-            abi::emit_php_float_to_int(ctx.emitter, "rsi");
+            if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
+                abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
+                ctx.emitter.instruction("mov rax, r11");                        // recover the previously diagnosed PHP integer key
+            } else {
+                abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+            }
+            ctx.emitter.instruction("mov rsi, rax");                            // use the diagnosed PHP integer as the hash key
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
         }
@@ -1013,7 +1067,7 @@ pub(super) fn emit_undefined_hash_key_warning_aarch64(
 ) -> Result<()> {
     let integer_label = ctx.next_label("hash_warn_integer_key");
     let done_label = ctx.next_label("hash_warn_key_done");
-    materialize_hash_key_aarch64(ctx, key)?;
+    materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)?;
     ctx.emitter.instruction("cmn x2, #1");                                      // integer hash keys carry key_hi = -1
     ctx.emitter.instruction(&format!("b.eq {}", integer_label));                // select the decimal undefined-key warning
     abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_str");
@@ -1032,7 +1086,7 @@ pub(super) fn emit_undefined_hash_key_warning_x86_64(
 ) -> Result<()> {
     let integer_label = ctx.next_label("hash_warn_integer_key");
     let done_label = ctx.next_label("hash_warn_key_done");
-    materialize_hash_key_x86_64(ctx, key)?;
+    materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)?;
     ctx.emitter.instruction("cmp rdx, -1");                                     // integer hash keys carry key_hi = -1
     ctx.emitter.instruction(&format!("je {}", integer_label));                  // select the decimal undefined-key warning
     ctx.emitter.instruction("mov rdi, rsi");                                    // pass the missing string key pointer to the warning helper
@@ -1073,7 +1127,13 @@ fn materialize_mixed_hash_key_aarch64(
     ctx.emitter.instruction(&format!("b {}", scalar_key));                      // the float arm sits between here and the scalar path
     ctx.emitter.label(&float_key);
     ctx.emitter.instruction("fmov d0, x1");                                     // move the raw IEEE-754 payload bits into an FP register
-    ctx.emitter.instruction("fcvtzs x1, d0");                                   // truncate toward zero: PHP casts a float array key to int
+    if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
+        abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
+        ctx.emitter.instruction("mov x0, x9");                                  // recover the normalized PHP integer key without another warning
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+    }
+    ctx.emitter.instruction("mov x1, x0");                                      // use the diagnosed PHP integer key
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov x2, #-1");                                     // key_hi sentinel marks scalar mixed keys as integers
     ctx.emitter.instruction(&format!("b {}", done));                            // skip string-key normalization after scalar selection
@@ -1081,7 +1141,7 @@ fn materialize_mixed_hash_key_aarch64(
     emit_empty_string_hash_key_aarch64(ctx);                                   // null normalizes to the empty string "" hash key
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the string-key normalization path
     ctx.emitter.label(&string_key);
-    if normalization == HashKeyNormalization::Php {
+    if normalization != HashKeyNormalization::RawString {
         abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
     }
     ctx.emitter.label(&done);
@@ -1116,7 +1176,13 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
     ctx.emitter.label(&float_key);
     ctx.emitter.instruction("movq xmm0, rdi");                                  // move the raw IEEE-754 payload bits into an FP register
-    ctx.emitter.instruction("cvttsd2si rsi, xmm0");                             // truncate toward zero: PHP casts a float array key to int
+    if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
+        abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
+        ctx.emitter.instruction("mov rax, r11");                                // recover the normalized PHP integer key without another warning
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+    }
+    ctx.emitter.instruction("mov rsi, rax");                                    // use the diagnosed PHP integer key
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks the truncated float as an integer key
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after the float conversion
     ctx.emitter.label(&null_key);
@@ -1128,7 +1194,7 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after scalar selection
     ctx.emitter.label(&string_key);
     ctx.emitter.instruction("mov rax, rdi");                                    // move the unboxed string pointer into the hash key low word
-    if normalization == HashKeyNormalization::Php {
+    if normalization != HashKeyNormalization::RawString {
         abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
     }
     ctx.emitter.instruction("mov rsi, rax");                                    // move key_lo into the hash-set ABI register
@@ -1704,7 +1770,7 @@ fn emit_hash_get_mixed_for_write_aarch64(
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     abi::emit_push_reg(ctx.emitter, "x0");
     abi::emit_push_reg(ctx.emitter, "x0");
-    materialize_hash_key_aarch64(ctx, key)?;
+    materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     ctx.load_value_to_reg(hash, "x0")?;
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
@@ -1738,7 +1804,7 @@ fn emit_hash_get_mixed_for_write_x86_64(
     abi::emit_pop_reg(ctx.emitter, "rax");
     abi::emit_push_reg(ctx.emitter, "rax");
     abi::emit_push_reg(ctx.emitter, "rax");
-    materialize_hash_key_x86_64(ctx, key)?;
+    materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::PhpAlreadyDiagnosed)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     ctx.load_value_to_reg(hash, "rdi")?;
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");

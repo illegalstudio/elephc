@@ -20,7 +20,8 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    array_access_element_result_type, coerce_container_to_mixed_payload, coerce_to_int_at_span,
+    array_access_element_result_type, coerce_array_key_to_int_at_span,
+    coerce_container_to_mixed_payload, coerce_to_int_at_span,
     index_expr_key_type, lower_array_access_from_lowered_receiver,
     lower_by_ref_foreach_element_source, lower_by_ref_foreach_property_source,
     lower_callable_array_for_assignment,
@@ -92,6 +93,9 @@ pub(super) use instance_property_writes::contextualize_property_array_value;
 pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;
 pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
+};
+pub(crate) use array_write_core::{
+    compound_array_write_value_reads_target, lower_array_assign_with_diagnosed_key,
 };
 pub(super) use array_write_storage::{
     finish_indexed_array_local_write, load_array_local_for_write, prepare_indexed_array_local_write,

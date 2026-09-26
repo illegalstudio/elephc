@@ -281,6 +281,13 @@ fn validate_instruction_effects(
 ) -> Result<(), ValidationError> {
     let expected = if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
+    } else if inst.op == Op::FToI
+        && matches!(
+            inst.immediate,
+            Some(Immediate::Bool(true) | Immediate::FloatKeyDiagnostic)
+        )
+    {
+        Op::FToI.default_effects() | Effects::MAY_WARN
     } else if matches!(inst.op, Op::PropSet | Op::PropUnset)
         && matches!(inst.immediate, Some(Immediate::PropertyRef { .. }))
     {
@@ -533,7 +540,7 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
-            matches!(imm, Imm::CastTarget(_))
+            matches!(imm, Imm::CastTarget(_) | Imm::StringOffsetCast)
         }),
         TypePredicate => require_immediate(inst_id, inst, "type predicate", |imm| {
             matches!(imm, Imm::TypePredicate(_))
@@ -550,6 +557,27 @@ fn validate_instruction_immediate(
         IterEnd => require_immediate(inst_id, inst, "iterator-state local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
+        StrCharAt => {
+            if matches!(inst.immediate, None | Some(Imm::Bool(_))) {
+                Ok(())
+            } else {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            }
+        }
+        FToI => {
+            if matches!(inst.immediate, None | Some(Imm::Bool(true) | Imm::FloatKeyDiagnostic)) {
+                Ok(())
+            } else {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            }
+        }
+        HashGetForWrite | HashSet | ArraySetMixedKey => {
+            if matches!(inst.immediate, None | Some(Imm::Bool(true))) {
+                Ok(())
+            } else {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            }
+        }
         Nop => {
             if matches!(inst.immediate, None | Some(Imm::Data(_))) {
                 Ok(())
@@ -767,9 +795,10 @@ fn validate_opcode_rules(
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
-        // The hash counterpart of the fetch-for-write read, emitted from the same single site.
-        // Its key stays in whatever form `hash_get` accepts (string or integer) rather than being
-        // int-coerced, because the hash lookup normalizes the key itself.
+        // The hash counterpart of the fetch-for-write read. A nested write can also emit it
+        // after ArrayFetchForWrite, with a true immediate to suppress a repeated float-key
+        // diagnostic. The key stays in whatever form `hash_get` accepts because lookup
+        // normalizes it itself.
         HashGetForWrite => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)")

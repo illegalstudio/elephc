@@ -83,6 +83,7 @@ fn dummy_check_result() -> CheckResult {
             declared_params: vec![true],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         },
     );
 
@@ -141,6 +142,7 @@ fn dummy_check_result() -> CheckResult {
         builtin_call_types: HashMap::new(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
+        first_class_builtin_call_types: HashMap::new(),
         loop_storage_types: HashMap::new(),
         string_incdec_locals: Default::default(),
         local_bind_kill_sites: Default::default(),
@@ -164,6 +166,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         declared_params: Vec::new(),
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     let mut methods = HashMap::new();
     methods.insert("m".to_string(), method_sig.clone());

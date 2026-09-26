@@ -266,6 +266,7 @@ pub(super) fn function_sig_from_extern_for_descriptor(sig: &ExternFunctionSig) -
         declared_params: vec![true; sig.params.len()],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     }
 }
 

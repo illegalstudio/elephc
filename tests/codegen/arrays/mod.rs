@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for associative arrays, indexed, associative-array helper builtins, nested arrays, array callbacks, list/key-edge builtins, the internal array pointer family, the hash key/value sorts that relink iteration order, runtime allocation-size guards, the maximum-size bounds reference PHP reports as a catchable `ValueError`, mutating builtins whose by-reference argument is a by-reference parameter or a property, static property, or container element, array builtin parameters widened to match reference PHP's parameter lists, the storage type stamped on array literals returned directly from a closure, and when an element write reads its index relative to the right-hand side.
+//! - Submodules group focused fixtures for associative arrays, indexed, associative-array helper builtins, nested arrays, array callbacks, list/key-edge builtins, the internal array pointer family, the hash key/value sorts that relink iteration order, runtime allocation-size guards, the maximum-size bounds reference PHP reports as a catchable `ValueError`, mutating builtins whose by-reference argument is a by-reference parameter or a property, static property, or container element, array builtin parameters widened to match reference PHP's parameter lists, the storage type stamped on array literals returned directly from a closure, when an element write reads its index relative to the right-hand side, and the element type an array literal stamps on a builtin call.
 
 mod allocation_guards;
 mod fill_boxed_integers;
@@ -21,6 +21,7 @@ mod internal_pointer;
 mod key_sort;
 mod key_sort_flags;
 mod assoc_helpers;
+mod assoc_chunk;
 mod nested;
 mod callbacks;
 mod boxed_filter;
@@ -37,3 +38,5 @@ mod assoc_set_ops;
 mod assoc_spread;
 mod widened_signatures;
 mod write_evaluation_order;
+mod float_key_diagnostics;
+mod literal_element_types;

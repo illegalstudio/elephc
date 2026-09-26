@@ -58,20 +58,20 @@ fn foreach_destructuring_value_local_is_marked() {
     );
 }
 
-/// A postfix increment on an l-value in EXPRESSION position captures the old value in a marked
-/// local and stores the operator's value in a second one.
+/// A postfix increment on an array element in expression position captures the old value in
+/// one marked local and stores the new value in another.
 ///
 /// Statement position never reaches this desugaring, so the snippet has to consume the value.
 #[test]
 fn postfix_incdec_expression_locals_are_marked() {
     let source = "<?php $x = $items[0]++;";
-    assert_marked_local_with_stem(source, "__elephc_incdec_");
+    assert_marked_local_with_stem(source, "__elephc_incdec_old_");
     let candidates = synthesized_name_candidates(source);
     assert!(
         candidates
             .iter()
-            .any(|name| name.starts_with("__elephc_incdec_result_")),
-        "expected the result temporary too, saw {candidates:?}"
+            .any(|name| name.starts_with("__elephc_incdec_new_")),
+        "expected the new-value temporary too, saw {candidates:?}"
     );
 }
 

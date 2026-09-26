@@ -300,7 +300,16 @@ fn concrete_throwable_method(name: &str, return_type: TypeExpr, value: Expr) -> 
         visibility: Visibility::Public,
         is_static: false,
         is_abstract: false,
-        is_final: false,
+        is_final: matches!(
+            name,
+            "getMessage"
+                | "getCode"
+                | "getFile"
+                | "getLine"
+                | "getTrace"
+                | "getTraceAsString"
+                | "getPrevious"
+        ),
         has_body: true,
         params: Vec::new(),
         param_attributes: Vec::new(),
