@@ -14,7 +14,7 @@
 //!   a single unreleased block per iteration is several hundred blocks by the last one.
 //! - Expected stdout values are real `LC_ALL=C php` 8.5 output for the same fixtures.
 
-use crate::support::compile_and_run_with_heap_debug;
+use crate::support::compile_and_run_with_heap_debug_tagged;
 
 /// Asserts the program printed `expected` and left a clean heap under heap debug.
 fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
@@ -33,7 +33,7 @@ fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
 /// argument-temporary cleanup does not cover it.
 #[test]
 fn test_tagged_scalar_argument_boxing_leaves_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
+    let out = compile_and_run_with_heap_debug_tagged(
         r#"<?php
 function p($v) { return is_int($v) ? 1 : 0; }
 $e = [];
@@ -53,7 +53,7 @@ echo $t;
 /// release keyed off the payload rather than the cell would balance one and not the other.
 #[test]
 fn test_tagged_scalar_null_argument_boxing_leaves_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
+    let out = compile_and_run_with_heap_debug_tagged(
         r#"<?php
 function p($v) { return $v === null ? 1 : 0; }
 $e = [];
@@ -73,7 +73,7 @@ echo $t;
 /// iteration; this pins that both cells are released, not just the first.
 #[test]
 fn test_empty_spread_default_boxing_leaves_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
+    let out = compile_and_run_with_heap_debug_tagged(
         r#"<?php
 function f($a = 0, $b = 0) { return $a + $b; }
 $e = [];
@@ -94,7 +94,7 @@ echo $t;
 /// enough iterations that a per-call cell leak is observable.
 #[test]
 fn test_tagged_scalar_method_argument_boxing_leaves_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
+    let out = compile_and_run_with_heap_debug_tagged(
         r#"<?php
 class Sink {
     public function take($value) { return is_int($value) ? 1 : 0; }
