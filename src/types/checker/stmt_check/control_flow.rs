@@ -1038,7 +1038,7 @@ impl Checker {
     }
 
     /// Evaluates a side-effect-free integer expression used for SPL flag constants.
-    fn eval_static_int_expr(&self, expr: &Expr) -> Option<i64> {
+    pub(in crate::types::checker) fn eval_static_int_expr(&self, expr: &Expr) -> Option<i64> {
         match &expr.kind {
             ExprKind::IntLiteral(value) => Some(*value),
             ExprKind::Negate(inner) => self.eval_static_int_expr(inner).map(|value| -value),
