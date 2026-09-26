@@ -538,10 +538,86 @@ fn test_asymmetric_visibility_protected_set_subclass_write() {
     assert_eq!(out, "derived");
 }
 
+/// Verifies PHP 8.4 asymmetric visibility on promoted constructor properties (issue #823): the
+/// declaring class writes a `private(set)` / `protected private(set)` property, a subclass writes
+/// a `protected(set)` one, `readonly` combines with a `(set)` modifier, and outside code reads.
+/// Expected output copied from PHP 8.5.
+#[test]
+fn test_promoted_asymmetric_visibility_writes_and_reads() {
+    let out = compile_and_run(
+        "<?php
+        final class Subject { public function __construct(private(set) string $value) {} }
+        class Point {
+            public function __construct(
+                public private(set) int $x,
+                public protected(set) int $y,
+                protected private(set) string $tag = \"p\",
+                public private(set) readonly int $id = 7,
+                protected(set) readonly string $label = \"lbl\",
+            ) {}
+            public function move(int $dx): void { $this->x = $this->x + $dx; }
+            public function tag(): string { return $this->tag; }
+            public function retag(string $t): void { $this->tag = $t; }
+        }
+        class Point3 extends Point {
+            public function shiftY(int $dy): void { $this->y = $this->y + $dy; }
+        }
+        $s = new Subject(\"hello\");
+        echo $s->value, \"\\n\";
+        $p = new Point3(1, 2);
+        $p->move(10);
+        $p->shiftY(5);
+        $p->retag(\"q\");
+        echo $p->x, \" \", $p->y, \" \", $p->tag(), \" \", $p->id, \" \", $p->label, \"\\n\";
+        ",
+    );
+    assert_eq!(out, "hello\n11 7 q 7 lbl\n");
+}
+
+/// Verifies that Reflection reports the same asymmetric-visibility flags for a promoted
+/// constructor property as PHP does for the declared equivalent. Expected output copied from
+/// PHP 8.5.
+#[test]
+fn test_promoted_asymmetric_visibility_reflection_flags() {
+    let out = compile_and_run(
+        "<?php
+        class Point {
+            public function __construct(
+                public private(set) int $x,
+                public protected(set) int $y,
+                protected private(set) string $tag = \"p\",
+                public private(set) readonly int $id = 7,
+            ) {}
+        }
+        function show(string $name, ReflectionProperty $r): void {
+            echo $name, \": privateSet=\", var_export($r->isPrivateSet(), true),
+                \" protectedSet=\", var_export($r->isProtectedSet(), true),
+                \" promoted=\", var_export($r->isPromoted(), true),
+                \" modifiers=\", $r->getModifiers(), \"\\n\";
+        }
+        show(\"x\", new ReflectionProperty(Point::class, \"x\"));
+        show(\"y\", new ReflectionProperty(Point::class, \"y\"));
+        show(\"tag\", new ReflectionProperty(Point::class, \"tag\"));
+        show(\"id\", new ReflectionProperty(Point::class, \"id\"));
+        ",
+    );
+    assert_eq!(
+        out,
+        "x: privateSet=true protectedSet=false promoted=true modifiers=4129\n\
+         y: privateSet=false protectedSet=true promoted=true modifiers=2049\n\
+         tag: privateSet=true protectedSet=false promoted=true modifiers=4130\n\
+         id: privateSet=true protectedSet=false promoted=true modifiers=4257\n"
+    );
+}
+
 /// Compiles and runs the checked-in `examples/asymmetric-visibility/main.php` fixture, which
-/// models an account whose balance is publicly readable but only privately writable.
+/// models an account whose balance is publicly readable but only privately writable, plus a
+/// transfer whose promoted constructor properties carry the same asymmetric visibility.
 #[test]
 fn test_example_asymmetric_visibility_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/asymmetric-visibility/main.php"));
-    assert_eq!(out, "balance: 120\ninsufficient funds\nbalance: 120\n");
+    assert_eq!(
+        out,
+        "balance: 120\ninsufficient funds\nbalance: 120\ntransfer TX-1: 35\n"
+    );
 }

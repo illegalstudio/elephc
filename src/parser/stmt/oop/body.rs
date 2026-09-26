@@ -558,8 +558,9 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> MemberMod
 
 /// Consumes a `(set)` marker at `*pos` (an `LParen`, the `set` identifier, and an `RParen`),
 /// returning `true` when one was present. Leaves `*pos` unchanged otherwise. `set` is matched
-/// case-insensitively, mirroring PHP's case-insensitive modifier keywords.
-fn consume_set_marker(tokens: &[SpannedToken], pos: &mut usize) -> bool {
+/// case-insensitively, mirroring PHP's case-insensitive modifier keywords. Shared with the
+/// promoted constructor parameter modifier parser so both declaration forms read `(set)` alike.
+pub(super) fn consume_set_marker(tokens: &[SpannedToken], pos: &mut usize) -> bool {
     let is_set_ident = matches!(
         tokens.get(*pos + 1).map(|(t, _)| t),
         Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("set")
