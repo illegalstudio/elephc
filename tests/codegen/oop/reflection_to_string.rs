@@ -561,35 +561,50 @@ echo (new ReflectionFunction('f'))->getParameters()[0], "\n";
     assert_eq!(out, "Parameter #0 [ <optional> Box $box = new \\Box(ITEMS) ]\n");
 }
 
-/// Verifies the compiler's own hidden variadic never reaches the dump.
+/// Verifies the compiler's own hidden parameters reach neither the dump nor the API.
 ///
-/// Every callable carries a synthesized `mixed ...$__elephc_func_args` so `func_get_args()` can
-/// read surplus positional arguments. It is an ABI slot, not a PHP parameter. Printing it made
-/// the compiled dump read `Parameters [3]` with a
-/// `Parameter #2 [ <optional> array ...$__elephc_func_args#gen ]` PHP never emits, and made the
-/// compiled and eval dumps disagree about the same method.
+/// A scope that calls `func_get_args()` or `func_num_args()` carries a synthesized
+/// `mixed ...$__elephc_func_args` (and an `$__elephc_func_argc` before it) so it can read surplus
+/// positional arguments. They are ABI slots, not PHP parameters. Leaving them in the reflected
+/// members made `getNumberOfParameters()` count them, `isVariadic()` answer true for a fixed
+/// signature, `getParameters()` end with `__elephc_func_args#gen`, and a real variadic after an
+/// optional parameter sit at position 2 instead of 1. `withRest` is that last shape. Expected
+/// output is PHP 8.5.10's without its `@@` lines.
 #[test]
-fn test_the_hidden_func_args_variadic_is_not_printed() {
+fn test_the_hidden_func_args_parameters_are_not_reflected() {
     let out = compile_and_run(
         r#"<?php
 class Demo {
-    public function plain(int $a, string $b = "x"): bool { return true; }
+    public function plain(int $a, string $b = "x"): bool { return func_num_args() > 0; }
 }
-function freePlain(int $a): bool { return true; }
-echo (string) new ReflectionMethod('Demo', 'plain');
-echo (string) new ReflectionFunction('freePlain');
+function freePlain(int $a): int { return count(func_get_args()); }
+function withRest(int $x = 0, ...$rest) { return func_num_args(); }
+foreach ([new ReflectionMethod('Demo', 'plain'), new ReflectionFunction('freePlain'), new ReflectionFunction('withRest')] as $r) {
+    echo $r->getNumberOfParameters(), " ", count($r->getParameters()), " ";
+    echo $r->isVariadic() ? "variadic" : "fixed", " ";
+    $ps = $r->getParameters(); $last = $ps[count($ps) - 1];
+    echo $last->getName(), " ", $last->getPosition(), "\n";
+    echo $r;
+}
 "#,
     );
 
     assert_eq!(
         out,
-        "Method [ <user> public method plain ] {\n\n  \
+        "2 2 fixed b 1\n\
+         Method [ <user> public method plain ] {\n\n  \
          - Parameters [2] {\n    \
          Parameter #0 [ <required> int $a ]\n    \
          Parameter #1 [ <optional> string $b = 'x' ]\n  }\n  - Return [ bool ]\n}\n\
+         1 1 fixed a 0\n\
          Function [ <user> function freePlain ] {\n\n  \
          - Parameters [1] {\n    \
-         Parameter #0 [ <required> int $a ]\n  }\n  - Return [ bool ]\n}\n"
+         Parameter #0 [ <required> int $a ]\n  }\n  - Return [ int ]\n}\n\
+         2 2 variadic rest 1\n\
+         Function [ <user> function withRest ] {\n\n  \
+         - Parameters [2] {\n    \
+         Parameter #0 [ <optional> int $x = 0 ]\n    \
+         Parameter #1 [ <optional> ...$rest ]\n  }\n}\n"
     );
 }
 

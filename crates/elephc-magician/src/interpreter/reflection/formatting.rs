@@ -248,7 +248,9 @@ pub(super) fn eval_reflection_method_summary_to_string(
 /// Formats one reflected function or method similarly to PHP's `__toString()` output.
 ///
 /// PHP prints a blank line before `- Parameters` even when it omits the `@@ <file>` line, as it
-/// does for every internal callable; the compiled renderer prints the same line.
+/// does for every internal callable; the compiled renderer prints the same line. Unlike that
+/// renderer, this one still prints the block for a callable with no parameters and no return
+/// type, where PHP prints an empty body (#1117).
 pub(super) fn eval_reflection_function_method_to_string(
     target: &EvalReflectionFunctionMethodTarget,
 ) -> String {
