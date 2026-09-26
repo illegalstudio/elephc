@@ -369,7 +369,10 @@ pub(super) fn lower_dynamic_constructor_thunks(
     let mut arg_counts = BTreeSet::new();
     for function in all_lowered_functions(module) {
         for inst in &function.instructions {
-            if inst.op != Op::DynamicObjectNewMixed {
+            // `new $class(...)` lowers to DynamicObjectNewMixed; `new static(...)` and a named
+            // dynamic `new` lower to DynamicObjectNew. Both pick a constructor at run time, so
+            // both need padding thunks for the defaults the call site omits (#797).
+            if !matches!(inst.op, Op::DynamicObjectNewMixed | Op::DynamicObjectNew) {
                 continue;
             }
             // A runtime argument container carries its arguments dynamically; there is no static
