@@ -538,3 +538,75 @@ echo "|", catchRepeated(7);
         out.stderr
     );
 }
+
+
+/// A tagged scalar reaching an untyped (`mixed`) parameter must arrive boxed, not raw.
+///
+/// `null|int` is the one union `codegen_repr` does NOT store as a boxed cell: it becomes a
+/// `TaggedScalar`, a payload register plus a tag register. The boxing emitter used to treat
+/// every union as already boxed and emit nothing, so the callee received the raw payload word
+/// and read it as a Mixed cell address -- the parameter then came back as neither the value nor
+/// null (issue #1046).
+#[test]
+fn test_tagged_scalar_argument_reaches_a_mixed_parameter_boxed() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function p($v) { var_dump($v); }
+$e = [];
+p(count($e) > 0 ? $e[0] : 7);
+p(count($e) > 0 ? 1 : null);
+"#,
+    );
+    assert_eq!(out, "int(7)\nNULL\n");
+}
+
+/// The same boxing is what makes an empty spread keep a parameter's INTEGER default.
+///
+/// An empty spread lowers each parameter to `count($e) > n ? $e[n] : <default>`, and over an
+/// `array<never>` those two arms are `null` and `int` -- exactly the tagged-scalar union above.
+/// A string default was never affected because `null|string` is a boxed cell already, which is
+/// why the issue's own table shows `x/y` surviving the call that loses `0/0`.
+#[test]
+fn test_empty_spread_keeps_integer_parameter_defaults() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function f($a = 0, $b = 0) { echo "f:$a/$b|"; }
+function g($a = 'x', $b = 'y') { echo "g:$a/$b|"; }
+function h($a = 0, $b = 'y') { echo "h:$a/$b"; }
+$e = [];
+f(...$e);
+g(...$e);
+h(...$e);
+"#,
+    );
+    assert_eq!(out, "f:0/0|g:x/y|h:0/y");
+}
+
+/// The constructor and dynamic-callable forms of the same call take the same path.
+///
+/// The issue reported four: a statically named function, `new P(...)`, `new $c(...)` and
+/// `$g(...)`. They share the per-parameter default ternary, so one boxing fix covers them all,
+/// and pinning each one keeps a later change from repairing only the direct call. The trailing
+/// non-empty spread is the control: it was already correct, because a one-element array gives
+/// the first parameter a plain `int` with no null arm to merge with.
+#[test]
+fn test_empty_spread_keeps_integer_defaults_through_every_call_form() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function f($a = 0, $b = 0) { echo "f:$a/$b|"; }
+class P { public function __construct($a = 0, $b = 0) { echo "P:$a/$b|"; } }
+class M { public function m($a = 0, $b = 0) { echo "M:$a/$b|"; } }
+$e = [];
+$c = "P";
+$g = "f";
+f(...$e);
+new P(...$e);
+new $c(...$e);
+$g(...$e);
+$o = new M();
+$o->m(...$e);
+new $c(...[1]);
+"#,
+    );
+    assert_eq!(out, "f:0/0|P:0/0|P:0/0|f:0/0|M:0/0|P:1/0|");
+}
