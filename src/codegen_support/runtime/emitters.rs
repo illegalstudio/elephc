@@ -50,6 +50,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_looks_like_int_for_coercion(emitter);
     strings::emit_str_to_int(emitter);
     strings::emit_str_to_int_base(emitter);
+    strings::emit_num_run_class(emitter);
+    strings::emit_str_numeric_ex(emitter);
+    strings::emit_str_smart_cmp(emitter);
     strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
