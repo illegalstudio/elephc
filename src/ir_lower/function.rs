@@ -186,7 +186,7 @@ pub(crate) fn lower_user_function(
     // `Generator` object itself. The public signature stays `Generator` for
     // callers; only the EIR body return type becomes Mixed so `return $x`
     // lowers to a plain boxed Mixed return instead of a Generator coercion.
-    let body_return_type = generator_body_return_type(body, &eir_signature.return_type);
+    let body_return_type = generator_body_return_type(body, &eir_signature.return_type, signature.is_generator);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&body_return_type),
@@ -206,7 +206,12 @@ pub(crate) fn lower_user_function(
         .get(name)
         .cloned()
         .unwrap_or_else(|| collect_attribute_args(attributes));
-    attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
+    attach_generator_source_if_needed(
+        &mut function,
+        body,
+        eir_signature.params.len(),
+        signature.is_generator,
+    );
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -279,7 +284,7 @@ pub(crate) fn lower_class_method(
     let name = format!("{}::{}", class_name, method_name);
     // Generator methods lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
-    let method_body_return_type = generator_body_return_type(body, &signature.return_type);
+    let method_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
     let mut function = Function::new(
         name.clone(),
         return_ir_type(&method_body_return_type),
@@ -324,7 +329,12 @@ pub(crate) fn lower_class_method(
         body_params.insert(0, ("this".to_string(), this_type));
     }
     function.params.extend(function_params(&signature));
-    attach_generator_source_if_needed(&mut function, body, body_params.len());
+    attach_generator_source_if_needed(
+        &mut function,
+        body,
+        body_params.len(),
+        signature.is_generator,
+    );
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -424,6 +434,7 @@ pub(crate) fn lower_eval_aot_function(
         declared_params: Vec::new(),
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     let mut function = Function::new(
         name.to_string(),
@@ -536,6 +547,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         ],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     let mut function = Function::new(
         name.to_string(),
@@ -669,6 +681,7 @@ pub(crate) fn lower_property_init_thunk(
         declared_params: vec![false],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     function.source_signature = Some(source_signature(&function_name, &sig));
     function.signature = Some(eir_runtime_metadata_signature(&sig));
@@ -1030,6 +1043,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         declared_params: vec![false; params.len()],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     function.source_signature = Some(source_signature(&function_name, &sig));
     function.signature = Some(eir_runtime_metadata_signature(&sig));
@@ -1126,6 +1140,7 @@ pub(crate) fn lower_clone_override_function(
         declared_params: vec![false; params.len()],
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     if module
         .functions
@@ -1309,6 +1324,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+        is_generator: false,
         };
         function.source_signature = Some(source_signature(&function_name, &signature));
         function.signature = Some(eir_runtime_metadata_signature(&signature));
@@ -1502,7 +1518,7 @@ fn lower_closure_function_with_signature(
 ) -> FunctionSig {
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
-    let closure_body_return_type = generator_body_return_type(body, &signature.return_type);
+    let closure_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&closure_body_return_type),
@@ -1518,7 +1534,12 @@ fn lower_closure_function_with_signature(
     function.params.extend(closure_capture_params(captures));
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
-    attach_generator_source_if_needed(&mut function, body, signature.params.len());
+    attach_generator_source_if_needed(
+        &mut function,
+        body,
+        signature.params.len(),
+        signature.is_generator,
+    );
     let env = env_with_closure_captures(&signature, captures, parent.web);
     let lowered_params = params_with_closure_captures(&signature, captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
@@ -1798,10 +1819,22 @@ fn attach_generator_source_if_needed(
     function: &mut Function,
     body: &[Stmt],
     visible_param_count: usize,
+    is_generator: bool,
 ) {
-    if !crate::types::checker::yield_validation::body_contains_yield(body)
-        && !is_generator_return_type(&function.return_php_type)
-    {
+    // `is_generator` is the bit the CHECKER recorded from the source body, before any pass ran.
+    // It is the only sound answer here, for two separate reasons:
+    //
+    // - Scanning `body` alone answers `false` once a pass has pruned the last `yield`, which is
+    //   what made a folded generator compile to a plain function returning null and hang its
+    //   `foreach` (issue #673).
+    // - Falling back to `return_type == Generator`, as this did, conflates a generator with a
+    //   FACTORY: `function f(): Generator { return inner(); }` declares and returns a Generator
+    //   without being one. That made its `return` lower to `Generator::getReturn()` and its
+    //   `foreach` yield nothing (issue #1086).
+    //
+    // The body scan stays as a second chance for callables whose signature this path cannot
+    // reach, but it can only ever ADD generator-ness, never withhold it.
+    if !is_generator && !crate::types::checker::yield_validation::body_contains_yield(body) {
         return;
     }
     function.flags.is_generator = true;
@@ -1811,21 +1844,21 @@ fn attach_generator_source_if_needed(
     });
 }
 
-/// Returns true when checked function metadata already identifies a generator return.
-fn is_generator_return_type(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Object(name) if name.trim_start_matches('\\') == "Generator")
-}
-
 /// Returns the EIR return type to lower a function body with.
 ///
-/// For a generator (body contains `yield`, or the declared return type is
-/// `Generator`) the compiled body is a coroutine whose `return` produces the
-/// value later read by `Generator::getReturn()`, so the body return type is
-/// `Mixed`. For every other function it is the declared signature return type.
-fn generator_body_return_type(body: &[Stmt], signature_return: &PhpType) -> PhpType {
-    if crate::types::checker::yield_validation::body_contains_yield(body)
-        || is_generator_return_type(signature_return)
-    {
+/// For a generator the compiled body is a coroutine whose `return` produces the value later
+/// read by `Generator::getReturn()`, so the body return type is `Mixed`. For every other
+/// function it is the declared signature return type.
+///
+/// `is_generator` is the bit the checker recorded from the SOURCE body; the body scan beside it
+/// can only add generator-ness, never withhold it. A declared `: Generator` return is
+/// deliberately NOT consulted, because a factory declares one without being one.
+fn generator_body_return_type(
+    body: &[Stmt],
+    signature_return: &PhpType,
+    is_generator: bool,
+) -> PhpType {
+    if is_generator || crate::types::checker::yield_validation::body_contains_yield(body) {
         PhpType::Mixed
     } else {
         signature_return.clone()
@@ -2197,7 +2230,8 @@ fn closure_signature_from_ast(
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
-    if crate::types::checker::yield_validation::body_contains_yield(body) {
+    signature.is_generator = crate::types::checker::yield_validation::body_contains_yield(body);
+    if signature.is_generator {
         signature.return_type = PhpType::Object("Generator".to_string());
         return signature;
     }
@@ -2721,6 +2755,7 @@ fn signature_from_ast_with_variadic(
         declared_params: params.iter().map(|(_, ty, _, _)| ty.is_some()).collect(),
         variadic: variadic.map(str::to_string),
         deprecation: None,
+        is_generator: false,
     };
     append_variadic_param_slot(&mut signature, variadic_by_ref);
     signature

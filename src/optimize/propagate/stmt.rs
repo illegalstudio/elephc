@@ -397,7 +397,10 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                     variadic_type,
                     return_type,
                     body: with_function_scope_mode(by_ref_return, || {
-                        propagate_block(body, HashMap::new()).0
+                        crate::optimize::generator_bodies::rewrite_preserving_yield(
+                            body,
+                            |body| propagate_block(body, HashMap::new()).0,
+                        )
                     }),
                 },
                 span,

@@ -3477,6 +3477,7 @@ mod boxed_result_mask_tests {
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+            is_generator: false,
         }
     }
 
@@ -3626,6 +3627,7 @@ mod tests {
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+            is_generator: false,
         }
     }
 
@@ -3681,6 +3683,7 @@ mod tests {
             defaults: Vec::new(), return_type: PhpType::Int, declared_return: true,
             by_ref_return: false, ref_params: Vec::new(), declared_params: Vec::new(),
             variadic: None, deprecation: None,
+            is_generator: false,
         };
         for (index, (name, hooked, backed)) in [
             ("virtual", true, false), ("backed", true, true), ("plain", false, true),

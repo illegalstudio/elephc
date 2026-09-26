@@ -26,6 +26,8 @@ mod effect_analysis;
 mod effects;
 mod exception_flow;
 mod fold;
+/// Keeps a declaration PHP calls a generator recognizable as one through the AST passes.
+mod generator_bodies;
 mod namespace_fallbacks;
 mod propagate;
 mod target_guards;

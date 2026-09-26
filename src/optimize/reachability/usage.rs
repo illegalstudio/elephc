@@ -269,6 +269,7 @@ impl CallSignatureIndex {
                 declared_params: vec![true; signature.params.len()],
                 variadic: None,
                 deprecation: None,
+                is_generator: false,
                 declared_return: true,
             });
         }

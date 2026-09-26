@@ -99,6 +99,7 @@ impl Checker {
                         declared_params: vec![true; sig.params.len()],
                         variadic: None,
                         deprecation: None,
+                        is_generator: false,
                     });
                 }
                 if crate::name_resolver::is_builtin_function(function_name) {

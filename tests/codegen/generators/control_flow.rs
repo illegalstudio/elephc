@@ -274,3 +274,104 @@ foreach (fib(10) as $v) { echo $v; echo " "; }
     );
     assert_eq!(out, "0 1 1 2 3 5 8 13 21 34 ");
 }
+
+
+/// A FACTORY declaring `: Generator` is not a generator function.
+///
+/// PHP decides generator-ness syntactically: a body containing `yield` is a generator, and a
+/// body that merely declares and RETURNS a `Generator` is an ordinary function. Inferring it
+/// from `return_type == Generator` instead conflates the two — the factory's public symbol
+/// became a generator constructor, its `return inner()` lowered to `Generator::getReturn()`,
+/// and the `foreach` over it saw nothing. Raised in review on the #673 fix (issue #1086).
+///
+/// The three shapes here are the ones that must disagree with each other: a factory with no
+/// yield at all, a factory whose returned generator is built inline, and a real generator that
+/// also declares `: Generator` and must stay one.
+#[test]
+fn test_generator_factory_is_not_itself_a_generator() {
+    let out = compile_and_run(
+        r#"<?php
+function inner() { yield 1; yield 2; }
+function factory(): Generator { return inner(); }
+function declaredGenerator(): Generator { yield 8; yield 9; }
+
+class Build {
+    public function make(): Generator { return inner(); }
+    public static function makeStatic(): Generator { return inner(); }
+}
+
+$f = "";
+foreach (factory() as $v) { $f .= $v . ","; }
+$d = "";
+foreach (declaredGenerator() as $v) { $d .= $v . ","; }
+$m = "";
+$b = new Build();
+foreach ($b->make() as $v) { $m .= $v . ","; }
+$s = "";
+foreach (Build::makeStatic() as $v) { $s .= $v . ","; }
+$c = "";
+$closure = function (): Generator { return inner(); };
+foreach ($closure() as $v) { $c .= $v . ","; }
+echo "factory=", $f, " declared=", $d, " method=", $m, " static=", $s, " closure=", $c;
+"#,
+    );
+    assert_eq!(
+        out,
+        "factory=1,2, declared=8,9, method=1,2, static=1,2, closure=1,2,"
+    );
+}
+
+/// The remaining ways to spell a generator whose every `yield` is dead.
+///
+/// Raised as #1085 after the #673 fix: the original fixture covered `if (false)`, `return;
+/// yield;` and `return 7; yield`, leaving `while (false)`, a dead `switch` arm, a dead
+/// `yield from` and trait methods untested. They are the same mechanism rather than new logic,
+/// but each reaches it through a different pass, so each is a place the classification could
+/// have been lost.
+///
+/// All of them are generators that complete immediately: PHP iterates nothing and `getReturn()`
+/// answers whatever the body returned. `traitLive` is the control — a trait method that really
+/// yields must still yield.
+#[test]
+fn test_every_dead_yield_shape_stays_a_generator() {
+    let out = compile_and_run(
+        r#"<?php
+function whileFalse() { while (false) { yield 1; } return; }
+function deadSwitch() { switch (0) { case 1: yield 1; break; } return; }
+function deadYieldFrom() { if (false) { yield from [1, 2]; } return; }
+function deadWithReturnValue() { if (false) { yield 1; } return 7; }
+
+trait Yielder {
+    public function traitDead() { if (false) { yield 1; } return; }
+    public function traitLive() { yield 5; }
+}
+class Holder { use Yielder; }
+
+function show(string $label, $gen) {
+    $vals = [];
+    foreach ($gen as $v) { $vals[] = $v; }
+    echo $label, "=[", implode(",", $vals), "] ret=";
+    var_dump($gen->getReturn());
+}
+
+show("whileFalse", whileFalse());
+show("deadSwitch", deadSwitch());
+show("deadYieldFrom", deadYieldFrom());
+show("deadWithReturnValue", deadWithReturnValue());
+$h = new Holder();
+show("traitDead", $h->traitDead());
+show("traitLive", $h->traitLive());
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "whileFalse=[] ret=NULL\n",
+            "deadSwitch=[] ret=NULL\n",
+            "deadYieldFrom=[] ret=NULL\n",
+            "deadWithReturnValue=[] ret=int(7)\n",
+            "traitDead=[] ret=NULL\n",
+            "traitLive=[5] ret=NULL\n",
+        )
+    );
+}
