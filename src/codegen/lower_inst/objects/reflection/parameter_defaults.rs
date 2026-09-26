@@ -25,7 +25,9 @@ pub(super) fn reflection_parameter_default_value(
         return Ok(Some(value));
     }
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
+        ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
         }
@@ -129,7 +131,9 @@ pub(super) fn reflection_parameter_default_non_object_value(
         return Ok(Some(value));
     }
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
+        ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
         }
@@ -213,12 +217,21 @@ pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefau
     match &key.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
-        ExprKind::FloatLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value as i64)),
+        ExprKind::FloatLiteral(value) => {
+            // PHP 8.5 casts NAN and the infinities to the key 0; Rust `as` saturates
+            // infinities to ±i64::MAX, so only finite floats take the truncating cast.
+            let key = if value.is_finite() { *value as i64 } else { 0 };
+            Some(ReflectionDefaultArrayKey::Int(key))
+        }
         ExprKind::StringLiteral(value) => reflection_default_string_array_key(value),
         ExprKind::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value.checked_neg().map(ReflectionDefaultArrayKey::Int),
-            ExprKind::FloatLiteral(value) => Some(ReflectionDefaultArrayKey::Int((-*value) as i64)),
+            ExprKind::FloatLiteral(value) => {
+                let negated = -*value;
+                let key = if negated.is_finite() { negated as i64 } else { 0 };
+                Some(ReflectionDefaultArrayKey::Int(key))
+            }
             _ => None,
         },
         _ => None,
@@ -250,12 +263,28 @@ pub(super) fn reflection_parameter_default_from_constant_value(
         ReflectionConstantValue::Str(value) => Some(ReflectionParameterDefaultValue::Str(value)),
         ReflectionConstantValue::Null => Some(ReflectionParameterDefaultValue::Null),
         ReflectionConstantValue::EnumCase { .. } => None,
+        ReflectionConstantValue::Array(elements) => elements
+            .into_iter()
+            .map(reflection_parameter_default_from_constant_value)
+            .collect::<Option<Vec<_>>>()
+            .map(ReflectionParameterDefaultValue::Array),
+        ReflectionConstantValue::AssocArray(entries) => entries
+            .into_iter()
+            .map(|entry| {
+                Some(ReflectionDefaultAssocEntry {
+                    key: entry.key,
+                    value: reflection_parameter_default_from_constant_value(entry.value)?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(ReflectionParameterDefaultValue::AssocArray),
     }
 }
 
-/// Returns PHP's constant-name metadata for parameter defaults that name a class constant.
+/// Returns PHP's constant-name metadata for parameter defaults that name a constant.
 pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Option<String> {
     match &default.kind {
+        ExprKind::ConstRef(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
         ExprKind::ScopedConstantAccess { receiver, name } => Some(format!(
             "{}::{}",
             reflection_static_receiver_label(receiver),

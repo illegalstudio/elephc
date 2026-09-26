@@ -847,7 +847,9 @@ fn emit_hash_append_key_scan_aarch64(ctx: &mut FunctionContext<'_>) {
     let loop_label = ctx.next_label("hash_append_key_loop");
     let update_label = ctx.next_label("hash_append_key_update");
     let next_label = ctx.next_label("hash_append_key_next");
-    let done_label = ctx.next_label("hash_append_key_done");
+    let done_label = ctx.next_label("hash_append_key_scan_done");
+    let append_done_label = ctx.next_label("hash_append_key_done");
+    let legacy_restart_label = ctx.next_label("hash_append_key_legacy_restart");
 
     ctx.emitter.instruction("ldr x10, [x0, #8]");                               // load hash capacity from the header
     ctx.emitter.instruction("mov x9, #0");                                      // start scanning at hash slot zero
@@ -866,18 +868,29 @@ fn emit_hash_append_key_scan_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("ldr x15, [x14, #16]");                             // load key_hi to distinguish integer from string keys
     ctx.emitter.instruction("cmn x15, #1");                                     // integer keys use key_hi = -1
     ctx.emitter.instruction(&format!("b.ne {}", next_label));                   // skip string-keyed entries
-    ctx.emitter.instruction("ldr x15, [x14, #8]");                              // load the integer key low word
-    ctx.emitter.instruction("add x15, x15, #1");                                // candidate append key is existing integer key plus one
-    ctx.emitter.instruction(&format!("cbz x12, {}", update_label));             // first integer key always seeds the append key
-    ctx.emitter.instruction("cmp x15, x11");                                    // compare the candidate with the best key so far
-    ctx.emitter.instruction(&format!("b.le {}", next_label));                   // keep the existing best key when it is larger
+    ctx.emitter.instruction("ldr x15, [x14, #8]");                              // load the stored integer key
+    ctx.emitter.instruction(&format!("cbz x12, {}", update_label));             // first integer key always seeds the maximum
+    ctx.emitter.instruction("cmp x15, x11");                                    // compare this key with the largest key so far
+    ctx.emitter.instruction(&format!("b.le {}", next_label));                   // keep the existing maximum when it is larger
     ctx.emitter.label(&update_label);
-    ctx.emitter.instruction("mov x11, x15");                                    // keep the largest observed integer key plus one
+    ctx.emitter.instruction("mov x11, x15");                                    // keep the largest observed integer key
     ctx.emitter.instruction("mov x12, #1");                                     // remember that at least one integer key was found
     ctx.emitter.label(&next_label);
     ctx.emitter.instruction("add x9, x9, #1");                                  // advance to the next hash slot
     ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning hash slots
     ctx.emitter.label(&done_label);
+    ctx.emitter.instruction(&format!("cbz x12, {}", append_done_label));        // a hash without integer keys appends at zero
+    if crate::codegen_support::compile_php_version().version_id() < 80300 {
+        ctx.emitter.instruction("cmp x11, #0");                                 // PHP 8.0-8.2 restarts at zero only when the maximum itself is negative
+        ctx.emitter.instruction(&format!("b.lt {}", legacy_restart_label));     // test before increment so PHP_INT_MAX can wrap to PHP_INT_MIN
+    }
+    ctx.emitter.instruction("add x11, x11, #1");                                // increment the maximum once, matching the runtime append helper
+    ctx.emitter.instruction(&format!("b {}", append_done_label));               // finish with the computed append key
+    if crate::codegen_support::compile_php_version().version_id() < 80300 {
+        ctx.emitter.label(&legacy_restart_label);
+        ctx.emitter.instruction("mov x11, #0");                                 // pre-8.3 negative maxima restart at key zero
+    }
+    ctx.emitter.label(&append_done_label);
 }
 
 /// Computes the next PHP integer append key for the hash pointer in `rdi`.
@@ -885,7 +898,9 @@ fn emit_hash_append_key_scan_x86_64(ctx: &mut FunctionContext<'_>) {
     let loop_label = ctx.next_label("hash_append_key_loop");
     let update_label = ctx.next_label("hash_append_key_update");
     let next_label = ctx.next_label("hash_append_key_next");
-    let done_label = ctx.next_label("hash_append_key_done");
+    let done_label = ctx.next_label("hash_append_key_scan_done");
+    let append_done_label = ctx.next_label("hash_append_key_done");
+    let legacy_restart_label = ctx.next_label("hash_append_key_legacy_restart");
 
     ctx.emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                    // load hash capacity from the header
     ctx.emitter.instruction("xor r9, r9");                                      // start scanning at hash slot zero
@@ -902,19 +917,31 @@ fn emit_hash_append_key_scan_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("mov rdx, QWORD PTR [rax + 16]");                   // load key_hi to distinguish integer from string keys
     ctx.emitter.instruction("cmp rdx, -1");                                     // integer keys use key_hi = -1
     ctx.emitter.instruction(&format!("jne {}", next_label));                    // skip string-keyed entries
-    ctx.emitter.instruction("mov rcx, QWORD PTR [rax + 8]");                    // load the integer key low word
-    ctx.emitter.instruction("add rcx, 1");                                      // candidate append key is existing integer key plus one
-    ctx.emitter.instruction("test r8, r8");                                     // has any integer key already seeded the append key?
-    ctx.emitter.instruction(&format!("jz {}", update_label));                   // first integer key always seeds the append key
-    ctx.emitter.instruction("cmp rcx, r11");                                    // compare the candidate with the best key so far
-    ctx.emitter.instruction(&format!("jle {}", next_label));                    // keep the existing best key when it is larger
+    ctx.emitter.instruction("mov rcx, QWORD PTR [rax + 8]");                    // load the stored integer key
+    ctx.emitter.instruction("test r8, r8");                                     // has any integer key already seeded the maximum?
+    ctx.emitter.instruction(&format!("jz {}", update_label));                   // first integer key always seeds the maximum
+    ctx.emitter.instruction("cmp rcx, r11");                                    // compare this key with the largest key so far
+    ctx.emitter.instruction(&format!("jle {}", next_label));                    // keep the existing maximum when it is larger
     ctx.emitter.label(&update_label);
-    ctx.emitter.instruction("mov r11, rcx");                                    // keep the largest observed integer key plus one
+    ctx.emitter.instruction("mov r11, rcx");                                    // keep the largest observed integer key
     ctx.emitter.instruction("mov r8, 1");                                       // remember that at least one integer key was found
     ctx.emitter.label(&next_label);
     ctx.emitter.instruction("add r9, 1");                                       // advance to the next hash slot
     ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning hash slots
     ctx.emitter.label(&done_label);
+    ctx.emitter.instruction("test r8, r8");                                     // did the scan observe any integer keys?
+    ctx.emitter.instruction(&format!("jz {}", append_done_label));              // a hash without integer keys appends at zero
+    if crate::codegen_support::compile_php_version().version_id() < 80300 {
+        ctx.emitter.instruction("test r11, r11");                               // PHP 8.0-8.2 restarts at zero only when the maximum itself is negative
+        ctx.emitter.instruction(&format!("js {}", legacy_restart_label));       // test before increment so PHP_INT_MAX can wrap to PHP_INT_MIN
+    }
+    ctx.emitter.instruction("add r11, 1");                                      // increment the maximum once, matching the runtime append helper
+    ctx.emitter.instruction(&format!("jmp {}", append_done_label));             // finish with the computed append key
+    if crate::codegen_support::compile_php_version().version_id() < 80300 {
+        ctx.emitter.label(&legacy_restart_label);
+        ctx.emitter.instruction("xor r11, r11");                                // pre-8.3 negative maxima restart at key zero
+    }
+    ctx.emitter.label(&append_done_label);
 }
 
 /// Materializes an EIR value as a PHP-normalized hash key for AArch64.

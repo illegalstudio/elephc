@@ -255,10 +255,257 @@ pub(super) fn reflection_constant_value(
             name,
             depth + 1,
         ),
+        ExprKind::ConstRef(name) => {
+            reflection_global_constant_value(ctx, name, expr.span, depth)
+        }
+        ExprKind::ArrayLiteral(elements) => {
+            // A bare list may carry spread elements, which the parser leaves as `...source`
+            // expressions; normalize to the entry list and share the entry fold.
+            let entries: Vec<crate::parser::ast::ArrayEntry> = elements
+                .iter()
+                .map(|element| match &element.kind {
+                    ExprKind::Spread(_) => {
+                        crate::parser::ast::ArrayEntry::Spread(element.clone())
+                    }
+                    _ => crate::parser::ast::ArrayEntry::Value(element.clone()),
+                })
+                .collect();
+            reflection_constant_array_entries_fold(
+                ctx,
+                current_class,
+                current_info,
+                &entries,
+                depth,
+            )
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            let entries: Vec<crate::parser::ast::ArrayEntry> = pairs
+                .iter()
+                .map(|(key, value)| {
+                    crate::parser::ast::ArrayEntry::Keyed(key.clone(), value.clone())
+                })
+                .collect();
+            reflection_constant_array_entries_fold(
+                ctx,
+                current_class,
+                current_info,
+                &entries,
+                depth,
+            )
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            reflection_constant_array_entries_fold(
+                ctx,
+                current_class,
+                current_info,
+                entries,
+                depth,
+            )
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "ReflectionClass constant metadata expression {:?}",
             other
         ))),
+    }
+}
+
+/// Folds one constant array literal's entries in PHP evaluation order into a list or hash
+/// constant value.
+///
+/// Bare elements claim the next free integer slot, explicit keys normalize with PHP's key
+/// rules, and a spread's integer keys renumber into a contiguous block starting after the
+/// destination's highest integer key (0 when it has none) while its string keys are kept in
+/// place. Duplicate keys collapse the way PHP's hash does (first position, last value wins).
+/// The result is a packed `Array` only when the final keys are exactly `0..n-1` in order.
+fn reflection_constant_array_entries_fold(
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
+    entries: &[crate::parser::ast::ArrayEntry],
+    depth: usize,
+) -> Result<ReflectionConstantValue> {
+    let mut values: Vec<ReflectionConstantAssocEntry> = Vec::with_capacity(entries.len());
+    // The highest integer key seen so far; `None` means no integer key yet, so the next
+    // free slot is 0. PHP advances from the maximum (even a negative one), not from the
+    // lowest free slot.
+    let mut max_int: Option<i64> = None;
+    for entry in entries {
+        match entry {
+            crate::parser::ast::ArrayEntry::Value(expr) => {
+                let value = reflection_constant_value(
+                    ctx,
+                    current_class,
+                    current_info,
+                    expr,
+                    depth + 1,
+                )?;
+                let key = next_reflection_constant_int_key(
+                    max_int,
+                    crate::codegen::compile_php_version(),
+                )?;
+                max_int = Some(key);
+                values.push(ReflectionConstantAssocEntry {
+                    key: ReflectionDefaultArrayKey::Int(key),
+                    value,
+                });
+            }
+            crate::parser::ast::ArrayEntry::Keyed(key_expr, value_expr) => {
+                let key = reflection_constant_array_key_expr(
+                    ctx,
+                    current_class,
+                    current_info,
+                    key_expr,
+                    depth + 1,
+                )?;
+                let value = reflection_constant_value(
+                    ctx,
+                    current_class,
+                    current_info,
+                    value_expr,
+                    depth + 1,
+                )?;
+                if let ReflectionDefaultArrayKey::Int(candidate) = &key {
+                    let candidate = *candidate;
+                    max_int = Some(std::cmp::max(max_int.unwrap_or(candidate), candidate));
+                }
+                reflection_constant_insert_entry(&mut values, key, value);
+            }
+            crate::parser::ast::ArrayEntry::Spread(entry_expr) => {
+                // The parser stores the whole `...source` expression, so the source
+                // node itself is one level down.
+                let source = if let ExprKind::Spread(inner) = &entry_expr.kind {
+                    &**inner
+                } else {
+                    entry_expr
+                };
+                let source_value = reflection_constant_value(
+                    ctx,
+                    current_class,
+                    current_info,
+                    source,
+                    depth + 1,
+                )?;
+                let source_entries = match source_value {
+                    ReflectionConstantValue::Array(items) => items
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            (ReflectionDefaultArrayKey::Int(index as i64), value)
+                        })
+                        .collect::<Vec<_>>(),
+                    ReflectionConstantValue::AssocArray(source_entries) => source_entries
+                        .into_iter()
+                        .map(|entry| (entry.key, entry.value))
+                        .collect(),
+                    other => {
+                        return Err(CodegenIrError::unsupported(format!(
+                            "ReflectionClass constant metadata spread of a non-array constant ({})",
+                            reflection_constant_value_kind(&other)
+                        )))
+                    }
+                };
+                // PHP renumbers spread integer keys into a contiguous block starting
+                // after the destination's highest integer key (0 when it has none);
+                // string keys are kept in place. The start is computed lazily so a spread
+                // whose keys need no slot (all strings, or empty) cannot trigger a spurious
+                // overflow when the destination's highest key is i64::MAX.
+                let mut start: Option<i64> = None;
+                let mut slot: i64 = 0;
+                for (key, value) in source_entries {
+                    let key = match key {
+                        ReflectionDefaultArrayKey::Int(_) => {
+                            if start.is_none() {
+                                start = Some(next_reflection_constant_int_key(
+                                    max_int,
+                                    crate::codegen::compile_php_version(),
+                                )?);
+                            }
+                            let key = start
+                                .unwrap()
+                                .checked_add(slot)
+                                .ok_or_else(|| {
+                                    CodegenIrError::unsupported(
+                                        "ReflectionClass constant metadata integer key overflow",
+                                    )
+                                })?;
+                            slot += 1;
+                            max_int = Some(std::cmp::max(max_int.unwrap_or(key), key));
+                            ReflectionDefaultArrayKey::Int(key)
+                        }
+                        ReflectionDefaultArrayKey::Str(name) => {
+                            ReflectionDefaultArrayKey::Str(name)
+                        }
+                    };
+                    reflection_constant_insert_entry(&mut values, key, value);
+                }
+            }
+        }
+    }
+    // PHP treats an array whose keys are exactly 0..n-1 in order as a list; the packed
+    // `Array` shape keeps the metadata consistent with the parser's `ArrayLiteral`.
+    let is_list = values
+        .iter()
+        .enumerate()
+        .all(|(index, entry)| {
+            matches!(&entry.key, ReflectionDefaultArrayKey::Int(key) if *key == index as i64)
+        });
+    if is_list {
+        Ok(ReflectionConstantValue::Array(
+            values
+                .into_iter()
+                .map(|entry| entry.value)
+                .collect(),
+        ))
+    } else {
+        Ok(ReflectionConstantValue::AssocArray(values))
+    }
+}
+
+/// Returns the next free integer slot — `max + 1` for some highest key, `0` when the
+/// destination holds no integer key yet — or a compile error on overflow.
+fn next_reflection_constant_int_key(
+    max_int: Option<i64>,
+    php_version: crate::php_version::PhpVersion,
+) -> Result<i64> {
+    match max_int {
+        None => Ok(0),
+        Some(max_int) if max_int < 0 && php_version < crate::php_version::PhpVersion::Php83 => {
+            Ok(0)
+        }
+        Some(max_int) => max_int
+            .checked_add(1)
+            .ok_or_else(|| {
+                CodegenIrError::unsupported(
+                    "ReflectionClass constant metadata integer key overflow",
+                )
+            }),
+    }
+}
+
+/// Inserts one folded constant-array entry, collapsing duplicate keys the way PHP's hash
+/// does (first insertion position, last value wins).
+fn reflection_constant_insert_entry(
+    values: &mut Vec<ReflectionConstantAssocEntry>,
+    key: ReflectionDefaultArrayKey,
+    value: ReflectionConstantValue,
+) {
+    let duplicate = values.iter().position(|existing| {
+        match (&existing.key, &key) {
+            (
+                ReflectionDefaultArrayKey::Int(existing),
+                ReflectionDefaultArrayKey::Int(candidate),
+            ) => existing == candidate,
+            (
+                ReflectionDefaultArrayKey::Str(existing),
+                ReflectionDefaultArrayKey::Str(candidate),
+            ) => existing == candidate,
+            _ => false,
+        }
+    });
+    if let Some(index) = duplicate {
+        values[index].value = value;
+    } else {
+        values.push(ReflectionConstantAssocEntry { key, value });
     }
 }
 
@@ -419,6 +666,74 @@ pub(super) fn reflection_scoped_constant_value(
     )))
 }
 
+/// Resolves and evaluates one global constant reference for static Reflection metadata.
+///
+/// The stored table carries no span of its own, so the synthesized expression takes
+/// `span` — the reference site. Nested expressions inside the stored kind keep their
+/// definition-site spans; only failures attributed to the top-level expression point at
+/// the reference.
+pub(super) fn reflection_global_constant_value(
+    ctx: &FunctionContext<'_>,
+    name: &crate::names::Name,
+    span: crate::span::Span,
+    depth: usize,
+) -> Result<ReflectionConstantValue> {
+    let expr_kind = ctx
+        .module
+        .global_constants
+        .get(name.as_str())
+        .or_else(|| ctx.module.global_constants.get(name.as_str().trim_start_matches('\\')))
+        .map(|(expr_kind, _)| expr_kind.clone())
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "ReflectionClass constant metadata for global constant {}",
+                name.as_str().trim_start_matches('\\')
+            ))
+        })?;
+    let expr = crate::parser::ast::Expr::new(expr_kind, span);
+    reflection_constant_value(ctx, "", None, &expr, depth + 1)
+}
+
+/// Normalizes one evaluated constant expression into a PHP array key form.
+pub(super) fn reflection_constant_array_key_expr(
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
+    key: &Expr,
+    depth: usize,
+) -> Result<ReflectionDefaultArrayKey> {
+    if let Some(key) = reflection_default_array_key(key) {
+        return Ok(key);
+    }
+    let value = reflection_constant_value(ctx, current_class, current_info, key, depth)?;
+    reflection_constant_array_key(&value).ok_or_else(|| {
+        CodegenIrError::unsupported(
+            "ReflectionClass constant metadata array key that is not a scalar",
+        )
+    })
+}
+
+/// Returns the PHP array key form of one evaluated constant value.
+pub(super) fn reflection_constant_array_key(
+    value: &ReflectionConstantValue,
+) -> Option<ReflectionDefaultArrayKey> {
+    match value {
+        ReflectionConstantValue::Int(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
+        ReflectionConstantValue::Bool(value) => {
+            Some(ReflectionDefaultArrayKey::Int(i64::from(*value)))
+        }
+        ReflectionConstantValue::Float(value) => {
+            // PHP 8.5 casts NAN and the infinities to 0; Rust `as` saturates infinities
+            // to ±i64::MAX, so only finite floats take the ordinary truncating cast.
+            let key = if value.is_finite() { *value as i64 } else { 0 };
+            Some(ReflectionDefaultArrayKey::Int(key))
+        }
+        ReflectionConstantValue::Str(value) => reflection_default_string_array_key(value),
+        ReflectionConstantValue::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
+        _ => None,
+    }
+}
+
 /// Returns an interface constant expression, including inherited parent interfaces.
 pub(super) fn reflection_interface_constant_expr(
     ctx: &FunctionContext<'_>,
@@ -470,6 +785,8 @@ pub(super) fn reflection_constant_value_kind(value: &ReflectionConstantValue) ->
         ReflectionConstantValue::Str(_) => "string",
         ReflectionConstantValue::Null => "null",
         ReflectionConstantValue::EnumCase { .. } => "enum-case",
+        ReflectionConstantValue::Array(_) => "array",
+        ReflectionConstantValue::AssocArray(_) => "assoc-array",
     }
 }
 
@@ -521,4 +838,3 @@ pub(super) fn reflection_enum_case_backing_value(case: &EnumCaseInfo) -> Option<
         EnumCaseValue::Str(value) => Some(ReflectionConstantValue::Str(value.clone())),
     }
 }
-

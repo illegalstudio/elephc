@@ -20,7 +20,9 @@ where
     S: EirStaticCallSupport,
 {
     match &expr.kind {
-        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
+        ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayLiteralMixed(_) => {
             expr_is_eir_static_array_literal_source_safe(expr, support, facts, scope_reads)
         }
         ExprKind::Variable(name) => facts.is_array_local(name),
@@ -45,6 +47,61 @@ where
         ExprKind::ArrayLiteralAssoc(pairs) => {
             expr_is_eir_static_assoc_array_source_safe(pairs, support, facts, scope_reads)
         }
+        ExprKind::ArrayLiteralMixed(entries) => entries.iter().all(|entry| match entry {
+            ArrayEntry::Spread(_) => false,
+            ArrayEntry::Keyed(key, value) => {
+                expr_is_eir_static_array_key_safe(key, support, facts, scope_reads)
+                    && expr_is_eir_constant_array_value_safe(value)
+            }
+            ArrayEntry::Value(value) => expr_is_eir_constant_array_value_safe(value),
+        }),
+        _ => false,
+    }
+}
+
+/// Returns true when a mixed-literal value is constant and has no scope or runtime effects.
+///
+/// Mixed literals retain implicit keys until lowering applies the selected PHP profile, so the
+/// eval AOT path accepts only values whose evaluation does not need scope-read or effect analysis.
+pub(super) fn expr_is_eir_constant_array_value_safe(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => true,
+        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner) => {
+            expr_is_eir_constant_array_value_safe(inner)
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().all(expr_is_eir_constant_array_value_safe),
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs.iter().all(|(key, value)| {
+            expr_is_eir_constant_array_key(key) && expr_is_eir_constant_array_value_safe(value)
+        }),
+        ExprKind::ArrayLiteralMixed(entries) => entries.iter().all(|entry| match entry {
+            ArrayEntry::Spread(_) => false,
+            ArrayEntry::Keyed(key, value) => {
+                expr_is_eir_constant_array_key(key)
+                    && expr_is_eir_constant_array_value_safe(value)
+            }
+            ArrayEntry::Value(value) => expr_is_eir_constant_array_value_safe(value),
+        }),
+        _ => false,
+    }
+}
+
+/// Returns true for constant keys that need no caller scope or effect analysis.
+fn expr_is_eir_constant_array_key(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::IntLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::Null => true,
+        ExprKind::FloatLiteral(_) => static_integral_float_array_key_value(expr).is_some(),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(_) => static_integer_array_key_value(expr).is_some(),
+            ExprKind::FloatLiteral(_) => static_integral_float_array_key_value(expr).is_some(),
+            _ => false,
+        },
         _ => false,
     }
 }

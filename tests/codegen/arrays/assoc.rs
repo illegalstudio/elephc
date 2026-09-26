@@ -1027,3 +1027,31 @@ fn test_array_slice_builtin_types_do_not_collide_across_included_files() {
     );
     assert_eq!(out, "12|tf");
 }
+
+/// PHP 8.0-8.2 append keys must agree between specialized and runtime-selected hash paths.
+///
+/// A literal receiver reaches the specialized `lower_hash_append` scan, while an untyped
+/// parameter reaches `__rt_hash_append`. With PHP_INT_MAX as the largest key, increment wraps to
+/// PHP_INT_MIN in these profiles; checking the wrapped candidate for negativity incorrectly
+/// restarts only the specialized path at key zero.
+#[test]
+fn test_legacy_hash_append_wraps_php_int_max_consistently_across_lowering_paths() {
+    let out = compile_and_run_with_php_version(
+        r#"<?php
+function append_dynamic($array) { $array[] = "dynamic"; return $array; }
+$specialized = [PHP_INT_MAX => "max"];
+$specialized[] = "specialized";
+$runtime = append_dynamic([PHP_INT_MAX => "max"]);
+foreach (["specialized" => $specialized, "runtime" => $runtime] as $name => $array) {
+    echo $name, ":";
+    foreach ($array as $key => $value) { echo $key, "=", $value, ","; }
+    echo "|";
+}
+"#,
+        elephc::php_version::PhpVersion::Php82,
+    );
+    assert_eq!(
+        out,
+        "specialized:9223372036854775807=max,-9223372036854775808=specialized,|runtime:9223372036854775807=max,-9223372036854775808=dynamic,|"
+    );
+}

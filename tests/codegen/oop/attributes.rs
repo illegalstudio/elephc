@@ -1699,6 +1699,66 @@ echo $backed->hasConstant("Ready") ? "Q" : "q";
     assert_eq!(out, "MPSx:ChTwDPAz:IJKLC:RUK:ELNvGFr:BNYQ");
 }
 
+/// Verifies that reflection constant metadata folds array constants with PHP's key rules:
+/// duplicate keys collapse (first position, last value), spread integer keys renumber from
+/// the highest key (negative or not), NAN/INF keys cast to 0, and lists normalize to the
+/// packed shape (regression for #1230).
+#[test]
+fn test_reflection_constant_folder_php_key_rules() {
+    let out = compile_and_run_capture(
+        r#"<?php
+const A = [1, 2];
+const B = [3];
+const DUP = [1 => "a", 1 => "b"];
+const S = [0, ...DUP];
+const NSTR = ["2" => "a", "b"];
+const NEG = [-5 => "a", "b"];
+const NEGSPREAD = [-5 => 1, ...["a" => 2, 0 => 3]];
+const EXPL = [0 => "a", "b"];
+const NANINF = [INF => 1, NAN => 2];
+const SPREADONLY = [1, ...[5, 6]];
+function gA($x = A) {}
+function gB($x = B) {}
+function gS($x = S) {}
+function gNSTR($x = NSTR) {}
+function gNEG($x = NEG) {}
+function gNEGSPREAD($x = NEGSPREAD) {}
+function gEXPL($x = EXPL) {}
+function gNANINF($x = NANINF) {}
+function gSPREADONLY($x = SPREADONLY) {}
+// One literal constructor call per name: the AOT checker requires string literals for
+// reflection owner constructors (dynamic-name lookup is a separate, later gap).
+$p = new ReflectionParameter("gA", 0);
+echo "A:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gB", 0);
+echo "B:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gS", 0);
+echo "S:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gNSTR", 0);
+echo "NSTR:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gNEG", 0);
+echo "NEG:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gNEGSPREAD", 0);
+echo "NEGSPREAD:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gEXPL", 0);
+echo "EXPL:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gNANINF", 0);
+echo "NANINF:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+$p = new ReflectionParameter("gSPREADONLY", 0);
+echo "SPREADONLY:", json_encode($p->getDefaultValue()), " list=", array_is_list($p->getDefaultValue()) ? 1 : 0, "\n";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "A:[1,2] list=1\nB:[3] list=1\nS:[0,\"b\"] list=1\nNSTR:{\"2\":\"a\",\"3\":\"b\"} list=0\nNEG:{\"-5\":\"a\",\"-4\":\"b\"} list=0\nNEGSPREAD:{\"-5\":1,\"a\":2,\"-4\":3} list=0\nEXPL:[\"a\",\"b\"] list=1\nNANINF:[2] list=1\nSPREADONLY:[1,5,6] list=1\n"
+    );
+}
+
 /// Verifies that `ReflectionClass::getConstant()` and `getConstants()` expose
 /// class, parent, interface, trait, private, and enum-case constants.
 #[test]
@@ -3346,6 +3406,143 @@ echo $inherited->getDefaultValue();
         out.stdout,
         "self:D:C:self::LABEL:L|parent:D:C:parent::BASE:B|named:D:C:ReflectDefaultConstTarget::LABEL:L|class:D:c:null:ReflectDefaultConstTarget|literal:D:c:null:7|direct:C:parent::BASE:B|interface:self::LABEL:I|inherited:self::LABEL:L"
     );
+}
+
+/// Verifies that parameters defaulted to array-valued constants, global or class,
+/// reflect the default the way PHP does (regression for #1230).
+#[test]
+fn test_reflection_parameter_array_valued_constant_defaults() {
+    let out = compile_and_run_capture(
+        r#"<?php
+const ARR = [1, 2, 3];
+const ASSOC = ["a" => 1, "1" => 2];
+const SCALAR = 7;
+const NESTED = [1, ["deep"], "s", null, ["m" => true]];
+
+class ConstHolder {
+    public const LIST = [10, 20];
+    public const MAP = ["k" => 5];
+    public const SCALAR = 9;
+}
+
+function withGlobalArray($x = ARR) { return 0; }
+function withGlobalAssoc($x = ASSOC) { return 0; }
+function withGlobalScalar($x = SCALAR) { return 0; }
+function withNested($x = NESTED) { return 0; }
+function withClassList($x = ConstHolder::LIST) { return 0; }
+function withClassMap($x = ConstHolder::MAP) { return 0; }
+function withClassScalar($x = ConstHolder::SCALAR) { return 0; }
+
+$p = new ReflectionParameter("withGlobalArray", 0);
+echo "ga: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withGlobalAssoc", 0);
+echo "go: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withGlobalScalar", 0);
+echo "gs: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withNested", 0);
+echo "ne: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withClassList", 0);
+echo "cl: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withClassMap", 0);
+echo "cm: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+$p = new ReflectionParameter("withClassScalar", 0);
+echo "cs: ", $p->isDefaultValueAvailable() ? "y" : "n", " ", $p->isDefaultValueConstant() ? $p->getDefaultValueConstantName() : "-", " ", json_encode($p->getDefaultValue()), "\n";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ga: y ARR [1,2,3]\ngo: y ASSOC {\"a\":1,\"1\":2}\ngs: y SCALAR 7\nne: y NESTED [1,[\"deep\"],\"s\",null,{\"m\":true}]\ncl: y ConstHolder::LIST [10,20]\ncm: y ConstHolder::MAP {\"k\":5}\ncs: y ConstHolder::SCALAR 9\n"
+    );
+}
+
+/// Verifies that `ReflectionClass::getConstant()`, `getConstants()`, and
+/// `ReflectionClassConstant::getValue()` reflect array-valued constants,
+/// renumbering mixed-spread integer keys the way PHP does (regression for #1230).
+#[test]
+fn test_reflection_constant_apis_return_array_values() {
+    let out = compile_and_run_capture(
+        r#"<?php
+const OTHER = ["b" => 7, 1 => 8];
+class ReflectArrayConstHolder {
+    public const LIST = [1, 2, 3];
+    public const MAP = ["a" => 1, "1" => 2];
+    public const NESTED = [1, ["deep"], "s", null, ["m" => true]];
+    public const MIXED = ["first" => 1, ...OTHER, 9];
+    public const SCALAR = 7;
+}
+$ref = new ReflectionClass(ReflectArrayConstHolder::class);
+echo json_encode($ref->getConstant("LIST")), "\n";
+echo json_encode($ref->getConstant("MAP")), "\n";
+echo json_encode($ref->getConstant("NESTED")), "\n";
+echo json_encode($ref->getConstant("MIXED")), "\n";
+$all = $ref->getConstants();
+echo count($all), ":", json_encode($all["MIXED"]), "\n";
+$c = $ref->getReflectionConstant("MIXED");
+echo $c ? json_encode($c->getValue()) : "false", "\n";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "[1,2,3]\n{\"a\":1,\"1\":2}\n[1,[\"deep\"],\"s\",null,{\"m\":true}]\n{\"first\":1,\"b\":7,\"0\":8,\"1\":9}\n5:{\"first\":1,\"b\":7,\"0\":8,\"1\":9}\n{\"first\":1,\"b\":7,\"0\":8,\"1\":9}\n"
+    );
+}
+
+/// Reflection and runtime array appends use the implicit integer-key rule for the selected PHP profile.
+#[test]
+fn test_reflection_constant_array_implicit_keys_follow_php_profile() {
+    let source = r#"<?php
+class NegativeKeyConstHolder {
+    public const VALUE = [-5 => "a", "b"];
+}
+$class = new ReflectionClass(NegativeKeyConstHolder::class);
+$constant = $class->getConstant("VALUE");
+$constants = $class->getConstants();
+$array = [-5 => "a", "b"];
+$array[] = "c";
+echo PHP_VERSION, " ", json_encode($constant), " ", json_encode($constants["VALUE"]), " ", json_encode($array), "\n";
+"#;
+    let php82 = compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php82);
+    assert_eq!(
+        php82,
+        "8.2.0 {\"-5\":\"a\",\"0\":\"b\"} {\"-5\":\"a\",\"0\":\"b\"} {\"-5\":\"a\",\"0\":\"b\",\"1\":\"c\"}\n"
+    );
+
+    let php83 = compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php83);
+    assert_eq!(
+        php83,
+        "8.3.0 {\"-5\":\"a\",\"-4\":\"b\"} {\"-5\":\"a\",\"-4\":\"b\"} {\"-5\":\"a\",\"-4\":\"b\",\"-3\":\"c\"}\n"
+    );
+}
+
+/// Pins the known limitation that a parameter defaulted to an enum case reflects as having
+/// no default (PHP reports the default; the enum-case default form is a later gap). A case
+/// nested in an array constant is a separate, later gap and is not exercised here: the
+/// base already fatals registering such a constant with the eval bridge.
+#[test]
+fn test_reflection_parameter_enum_case_defaults_report_unavailable() {
+    let out = compile_and_run_capture(
+        r#"<?php
+enum PinEnum { case Hearts; }
+function withEnumCase($x = PinEnum::Hearts) {}
+echo (new ReflectionParameter("withEnumCase", 0))->isDefaultValueAvailable() ? "y" : "n", "\n";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "n\n");
 }
 
 /// Verifies direct `new ReflectionParameter()` construction for statically known
