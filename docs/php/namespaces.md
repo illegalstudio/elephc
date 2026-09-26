@@ -459,6 +459,8 @@ define("PI", 3.14159);
 ```
 `const` declarations are namespace-aware and resolved at compile time. `define()` string names are global unless they contain an explicit namespace separator. Values must be literals or compile-time-foldable string concatenations when used by include path resolution.
 
+A namespaced constant may reuse the name of a predefined one: `namespace Math; const NAN = …;` declares `Math\NAN`, and `constant('Math\NAN')` reads it. An unqualified `NAN` (or `INF`, `PHP_EOL`, …) inside that namespace still reads the global constant rather than the namespaced one (#1349).
+
 ## Predefined constants
 
 | Constant | Type | Value |
