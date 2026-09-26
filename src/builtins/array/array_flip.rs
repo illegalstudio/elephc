@@ -12,11 +12,14 @@
 //!   `AssocArray<key-from-value, old-key>`. A check hook is required because the
 //!   return type depends on the inferred argument type.
 //! - Declared PHP arrays keep their boxed shape and dispatch on runtime value tags.
+//! - A `mixed` argument or a union with an array member takes the same boxed path: the result
+//!   is the boxed PHP array type, and a non-array payload raises PHP's `TypeError` at run time.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
+use crate::types::checker::builtins::arrays::boxed_value_may_hold_array;
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 builtin! {
@@ -30,13 +33,18 @@ builtin! {
 /// Returns the flipped associative-array type for an `array_flip` call.
 ///
 /// Keys and values swap places, so the new key type is derived from the old value
-/// type via `array_key_type_from_value_type`. The argument is re-inferred here to
+/// type via `array_key_type_from_value_type`. A boxed receiver that may hold an array
+/// (`mixed`, or a union with an array member) flips to the boxed PHP array type, because the
+/// boxed lowering builds its hash from the runtime entries. The argument is re-inferred here to
 /// drive the return type; the registry already inferred it once for side effects,
 /// and arity is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if ty.is_php_array() {
         return Ok(ty);
+    }
+    if boxed_value_may_hold_array(&ty) {
+        return Ok(PhpType::php_array());
     }
     match ty {
         PhpType::Array(elem_ty) => Ok(PhpType::AssocArray {

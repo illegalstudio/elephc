@@ -245,12 +245,24 @@ pub(super) fn lower_in_array_bool_needle_string_array_x86_64(
     Ok(())
 }
 
-/// Branches to `label` when the boolean value operand is true.
+/// Branches to `label` when the `$strict` flag operand is PHP-truthy.
+///
+/// A bool or int flag is tested in place. Any other representation — notably the boxed Mixed
+/// cell an untyped `$strict` parameter arrives in — goes through PHP's bool conversion first:
+/// testing the raw word would read a boxed `false` as a non-zero cell pointer and select `===`.
 pub(super) fn branch_if_bool_value_true(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     label: &str,
 ) -> Result<()> {
+    if !matches!(
+        ctx.raw_value_php_type(value)?,
+        PhpType::Bool | PhpType::False | PhpType::Int
+    ) {
+        crate::codegen::lower_inst::predicates::emit_value_truthiness(ctx, value, "strict flag")?;
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, label);
+        return Ok(());
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(value, "x9")?;
