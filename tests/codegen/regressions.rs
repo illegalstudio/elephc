@@ -37,3 +37,7 @@ mod switch_and_float_params;
 mod return_this_ownership;
 #[path = "regressions/symbol_collisions.rs"]
 mod symbol_collisions;
+#[path = "regressions/fixed_issue_behaviour.rs"]
+mod fixed_issue_behaviour;
+#[path = "regressions/fixed_issue_leaks.rs"]
+mod fixed_issue_leaks;
