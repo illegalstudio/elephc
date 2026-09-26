@@ -240,6 +240,20 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
+        // `$this(...)` invokes the current object, which is exactly `$this->__invoke(...)`.
+        Token::This if matches!(tokens.get(*pos + 1), Some((Token::LParen, _))) => {
+            *pos += 2;
+            let args = parse_args(tokens, pos, span)?;
+            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+            Ok(Expr::new(
+                ExprKind::MethodCall {
+                    object: Box::new(Expr::new(ExprKind::This, span)),
+                    method: "__invoke".to_string(),
+                    args,
+                },
+                span,
+            ))
+        }
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
         Token::Yield => parse_yield(tokens, pos, span),
         other => Err(CompileError::new(
