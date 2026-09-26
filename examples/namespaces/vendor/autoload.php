@@ -5,3 +5,4 @@ require_once "Demo/Support/helpers.php";
 require_once "Demo/Domain/User.php";
 require_once "Demo/View/HtmlRenderer.php";
 require_once "Demo/Http/Controller/HomeController.php";
+require_once "Demo/Theme/Default/Palette.php";
