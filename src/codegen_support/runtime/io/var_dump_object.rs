@@ -20,6 +20,11 @@
 //!   the text PHP prints between the `[` and `]`, already carrying the
 //!   visibility annotation (`"p"`, `"p":protected`, `"p":"C":private`), so the
 //!   walker never has to reason about visibility at runtime.
+//! - DYNAMIC PROPERTIES are not descriptor rows. After the declared rows the walker
+//!   appends the instance's dynamic-property hash (`__rt_obj_dump_dyn_props`, the
+//!   same tail `get_object_vars()` copies) through `__rt_var_dump_hash`, so they
+//!   render as `["name"]=>` in insertion order, and `__rt_vd_obj_count` adds the
+//!   hash's entry count to `(n)`.
 //! - Object layout (see `codegen::lower_inst::objects::emit_object_allocation`):
 //!   class id at offset 0, then a UNIFORM 16-byte slot per property at
 //!   `8 + index * 16` — low word = payload, high word = string length / the
@@ -63,6 +68,7 @@
 //!   leaf helpers (`__rt_vd_seen_*`, `__rt_vd_obj_desc`, `__rt_vd_obj_count`)
 //!   make no calls at all and touch caller-saved scratch only.
 
+use super::super::objects::emit_load_dump_dyn_hash;
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -271,13 +277,15 @@ pub fn emit_vd_obj_desc(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// `__rt_vd_obj_count`: count an object's INITIALIZED declared properties.
+/// `__rt_vd_obj_count`: count an object's INITIALIZED declared properties plus
+/// its dynamic properties.
 ///
 /// PHP's `object(C)#id (n)` header counts only properties that hold a value: a
 /// typed property declared without a default is listed in the body as
 /// `uninitialized(T)` but excluded from `n`. The descriptor's static property
 /// count is therefore not usable directly, and this scan of every slot's
-/// uninitialized marker is what produces PHP's `n`.
+/// uninitialized marker is what produces PHP's `n`. The dynamic-property hash's
+/// entry count is added on top, read inline so the helper stays a leaf.
 ///
 /// Input: AArch64 x0 / x86_64 rdi = object pointer.
 /// Output: AArch64 x0 / x86_64 rax = initialized property count.
@@ -322,6 +330,11 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_obj_count_loop");                            // continue tallying
 
     emitter.label("__rt_vd_obj_count_done");
+    // -- PHP's `(n)` also counts every dynamic property the body appends --
+    emit_load_dump_dyn_hash(emitter, "x1", "x9", "x12", "x13", "__rt_vd_obj_count_ret");
+    emitter.instruction("ldr x12, [x12]");                                      // load the dynamic-property hash entry count
+    emitter.instruction("add x5, x5, x12");                                     // count every dynamic property too
+    emitter.label("__rt_vd_obj_count_ret");
     emitter.instruction("mov x0, x5");                                          // return the initialized property count
     emitter.instruction("ret");                                                 // return to caller
 
@@ -366,6 +379,10 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_obj_count_loop_x86");                      // continue tallying
 
     emitter.label("__rt_vd_obj_count_done_x86");
+    // -- PHP's `(n)` also counts every dynamic property the body appends --
+    emit_load_dump_dyn_hash(emitter, "rdi", "r9", "r10", "r11", "__rt_vd_obj_count_ret_x86");
+    emitter.instruction("add rax, QWORD PTR [r10]");                            // count every dynamic property too
+    emitter.label("__rt_vd_obj_count_ret_x86");
     emitter.instruction("ret");                                                 // return the initialized property count in rax
 
     emitter.label("__rt_vd_obj_count_none_x86");
@@ -675,7 +692,8 @@ pub fn emit_var_dump_emit_recursion_line(emitter: &mut Emitter) {
 }
 
 /// `__rt_var_dump_object`: walk an object's declared properties and emit one
-/// `<indent>[KEY]=>\n<indent>VALUE` block each.
+/// `<indent>[KEY]=>\n<indent>VALUE` block each, then one `["name"]=>` block per
+/// dynamic property in insertion order.
 ///
 /// Every value is handed to `__rt_var_dump_value`, which unboxes Mixed cells and
 /// recurses into nested arrays, hashes and objects — so an object graph nests to
@@ -767,6 +785,13 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_obj_loop");                                  // continue the walk
 
     emitter.label("__rt_vd_obj_done");
+    // -- dynamic properties follow the declared ones, in insertion order --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("bl __rt_obj_dump_dyn_props");                          // x0 = dynamic-property hash, or 0
+    emitter.instruction("cbz x0, __rt_vd_obj_exit");                            // no dynamic properties to append
+    emitter.instruction("bl __rt_var_dump_hash");                               // emit one `["name"]=>` block per dynamic property
+
+    emitter.label("__rt_vd_obj_exit");
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the object-walk frame
     emitter.instruction("ret");                                                 // return to the var_dump caller
@@ -838,6 +863,14 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_obj_loop_x86");                            // continue the walk
 
     emitter.label("__rt_vd_obj_done_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("call __rt_obj_dump_dyn_props");                        // rax = dynamic-property hash, or 0
+    emitter.instruction("test rax, rax");                                       // does the object carry dynamic properties?
+    emitter.instruction("jz __rt_vd_obj_exit_x86");                             // no dynamic properties to append
+    emitter.instruction("mov rdi, rax");                                        // dynamic-property hash → hash walker
+    emitter.instruction("call __rt_var_dump_hash");                             // emit one `["name"]=>` block per dynamic property
+
+    emitter.label("__rt_vd_obj_exit_x86");
     emitter.instruction("add rsp, 64");                                         // release the object-walk frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to the var_dump caller

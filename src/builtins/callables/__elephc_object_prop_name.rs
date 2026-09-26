@@ -16,6 +16,8 @@
 //!   typed property that is still uninitialized. PHP omits uninitialized typed
 //!   properties from `var_export` output, and a real property name is never empty,
 //!   so the prelude simply skips empty names.
+//! - Indices past the declared rows name the instance's dynamic properties in
+//!   insertion order (see `runtime::objects::export_props`).
 
 builtin! {
     contract: "__elephc_object_prop_name",

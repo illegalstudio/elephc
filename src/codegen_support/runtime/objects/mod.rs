@@ -9,6 +9,7 @@
 //! - Helper names are consumed directly by codegen paths for `stdClass` and JSON-decoded `Mixed` values.
 
 mod call_destructor;
+mod dump_dynamic_props;
 mod enum_debug;
 mod export_props;
 mod handles;
@@ -25,6 +26,9 @@ mod print_r_object;
 mod stdclass;
 
 pub(crate) use call_destructor::emit_call_object_destructor;
+pub(crate) use dump_dynamic_props::{
+    emit_load_dump_dyn_hash, emit_obj_dump_dyn_props, emit_obj_dyn_prop_at,
+};
 pub(crate) use enum_debug::{
     emit_obj_enum_case_name, emit_obj_enum_kind, emit_obj_enum_name_offset,
     emit_var_dump_emit_enum_line,
