@@ -376,3 +376,199 @@ echo $declaring->returnsReference() ? "y" : "n";
 
     assert_eq!(out, "ynyny");
 }
+
+/// Verifies a Reflection object codegen builds INSIDE another one can be stringified.
+///
+/// `ReflectionParameter::getDeclaringFunction()` hands back a `ReflectionFunction` that codegen
+/// allocates while it builds the parameter; nothing in the program ever names the class. Its
+/// methods were never lowered, its vtable held null, and every implicit `__toString` on it jumped
+/// to address zero (#1229); `sprintf("%s")` read the class metadata instead and reported the
+/// object as not convertible. The program deliberately never constructs a `ReflectionFunction`
+/// nor calls a method on `$f`: either would pull the class in and hide the defect. It asserts
+/// the type and class of each result, not the rendered text, which is PR #1120's subject.
+#[test]
+fn test_declaring_function_object_stringifies_without_naming_its_class() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$f = $p->getDeclaringFunction();
+echo get_class($f), "|";
+echo gettype((string) $f), "|";
+echo gettype("" . $f), "|";
+echo gettype("{$f}"), "|";
+echo gettype(strval($f)), "|";
+echo strlen($f) >= 0 ? "len" : "bad", "|";
+echo gettype(sprintf("%s", $f));
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string|string|string|string|len|string");
+}
+
+/// Verifies the declaring METHOD object of a parameter can be stringified the same way.
+///
+/// The declaring function of a method's parameter is a `ReflectionMethod`, the second class the
+/// same codegen slot can hold (#1229).
+#[test]
+fn test_declaring_method_object_stringifies_without_naming_its_class() {
+    let out = compile_and_run(
+        r#"<?php
+class DeclaringMethodHost { public function run(int $a) {} }
+$p = new ReflectionParameter(["DeclaringMethodHost", "run"], 0);
+$f = $p->getDeclaringFunction();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionMethod|string");
+}
+
+/// Verifies a parameter's declaring CLASS object can be stringified.
+///
+/// `ReflectionParameter::getDeclaringClass()` is typed `mixed` like the declaring function, and
+/// codegen builds its `ReflectionClass` the same way (#1229).
+#[test]
+fn test_parameter_declaring_class_object_stringifies_without_naming_its_class() {
+    let out = compile_and_run(
+        r#"<?php
+class DeclaringClassHost { public function run(int $a) {} }
+$p = new ReflectionParameter(["DeclaringClassHost", "run"], 0);
+$c = $p->getDeclaringClass();
+echo get_class($c), "|", gettype((string) $c);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionClass|string");
+}
+
+/// Verifies an enum case's enum object can be stringified.
+///
+/// `ReflectionEnumUnitCase::getEnum()` returns a `ReflectionEnum` codegen builds from the case's
+/// `__enum` slot, the last materializer of the #1229 family.
+#[test]
+fn test_enum_case_enum_object_stringifies_without_naming_its_class() {
+    let out = compile_and_run(
+        r#"<?php
+enum MaterializedEnumHost { case A; }
+$case = new ReflectionEnumUnitCase(MaterializedEnumHost::class, "A");
+$e = $case->getEnum();
+echo get_class($e), "|", gettype((string) $e);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionEnum|string");
+}
+
+/// Verifies the declaring function reached through `call_user_func()` can be stringified.
+///
+/// The call lowers to a callable descriptor invoke, not a `MethodCall`, so a rule that only
+/// watched direct calls missed it and the #1229 crash survived on this route.
+#[test]
+fn test_declaring_function_through_call_user_func_stringifies() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$f = call_user_func([$p, "getDeclaringFunction"]);
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string");
+}
+
+/// Verifies the declaring function reached through a first-class callable can be stringified.
+///
+/// A first-class callable keeps its target as `object::getdeclaringfunction`, so the getter's
+/// name is only visible behind that qualifier (#1229).
+#[test]
+fn test_declaring_function_through_first_class_callable_stringifies() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$getter = $p->getDeclaringFunction(...);
+$f = $getter();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string");
+}
+
+/// Verifies a getter name formed from literal fragments still lowers its companion object.
+///
+/// The complete getter does not appear in string data: the method name is assembled by runtime
+/// concatenation, so reachability must combine literal fragments before giving up (#1252).
+#[test]
+fn test_declaring_function_through_concatenated_dynamic_method_name_stringifies() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$getter = "get" . "DeclaringFunction";
+$f = $p->$getter();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string");
+}
+
+/// Verifies the legacy parameter class getter lowers its materialized result without naming it.
+#[test]
+fn test_reflection_parameter_class_getter_object_lowers_without_explicit_type_name() {
+    let out = compile_and_run(
+        r#"<?php
+class GetterClassDependency {}
+function getterClassSurface(GetterClassDependency $value): void {}
+$parameter = new ReflectionParameter("getterClassSurface", "value");
+$class = $parameter->getClass();
+echo get_class($class), ":", gettype((string) $class);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionClass:string");
+}
+
+/// Verifies type objects returned by Reflection getters need no explicit type-name references.
+///
+/// These slots contain freshly materialized `ReflectionType` objects, but the PHP program never
+/// names their concrete synthetic classes or narrows by `instanceof` (#1252).
+#[test]
+fn test_reflection_type_getter_objects_lower_without_explicit_type_names() {
+    let out = compile_and_run(
+        r#"<?php
+interface GetterTypeA {}
+interface GetterTypeB {}
+class GetterTypeBoth implements GetterTypeA, GetterTypeB {}
+function getterTypeSurface(int|string $value, GetterTypeA&GetterTypeB $both): int|string { return $value; }
+class GetterTypeProperty { public int|string $value; }
+$parameterUnion = (new ReflectionParameter("getterTypeSurface", "value"))->getType();
+$parameterIntersection = (new ReflectionParameter("getterTypeSurface", "both"))->getType();
+$returnType = (new ReflectionFunction("getterTypeSurface"))->getReturnType();
+$settableType = (new ReflectionProperty(GetterTypeProperty::class, "value"))->getSettableType();
+foreach ([$parameterUnion, $parameterIntersection, $returnType, $settableType] as $type) {
+    echo get_class($type), ":", gettype((string) $type), "|";
+}
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "ReflectionUnionType:string|ReflectionIntersectionType:string|ReflectionUnionType:string|ReflectionUnionType:string|"
+    );
+}
+
+/// Verifies the declaring function reached through a method name held in a variable can be
+/// stringified — the third route that is not a literal `MethodCall` (#1229).
+#[test]
+fn test_declaring_function_through_dynamic_method_name_stringifies() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$getter = "getDeclaringFunction";
+$f = $p->$getter();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string");
+}
