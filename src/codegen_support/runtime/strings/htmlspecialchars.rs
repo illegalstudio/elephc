@@ -20,7 +20,7 @@ use crate::codegen_support::platform::Arch;
 /// `&` → `&amp;`, `"` → `&quot;`, `'` → `&#039;`, `<` → `&lt;`, `>` → `&gt;`.
 ///
 /// # ABI (ARM64)
-/// - **Input**: `x1` = source string pointer, `x2` = source byte length
+/// - **Input**: `x1` = source string pointer, `x2` = source byte length, `x3` = `ENT_*` flags
 /// - **Output**: `x1` = result pointer, `x2` = result byte length
 /// - Reserves the worst-case `6 * len` expansion through `__rt_concat_reserve` (concat scratch
 ///   while it fits, owned heap storage otherwise) and finishes through `__rt_concat_publish`.
@@ -29,7 +29,9 @@ use crate::codegen_support::platform::Arch;
 ///   `__rt_alloc_overflow` instead of reserving a too-small destination.
 ///
 /// # PHP compatibility
-/// Single-quote escape uses `&#039;` (numeric entity) to match PHP's default `ENT_QUOTES` behavior.
+/// `"` is escaped only when `ENT_COMPAT` (2) is set and `'` only when `ENT_HTML_QUOTE_SINGLE`
+/// (1) is set, so `ENT_NOQUOTES` leaves both literal. The single quote is `&#039;` under
+/// `ENT_HTML401` and `&apos;` under `ENT_XML1`, `ENT_XHTML` and `ENT_HTML5` (#645).
 pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_htmlspecialchars_linux_x86_64(emitter);
@@ -41,10 +43,11 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     emitter.label_global("__rt_htmlspecialchars");
 
     // -- reserve the worst-case six-bytes-per-input-byte entity expansion before writing anything --
-    emitter.instruction("sub sp, sp, #32");                                     // allocate spill space for the borrowed source string
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across the reservation call
-    emitter.instruction("add x29, sp, #16");                                    // establish the htmlspecialchars helper frame pointer
+    emitter.instruction("sub sp, sp, #48");                                     // allocate spill space for the borrowed source string and the flags
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across the reservation call
+    emitter.instruction("add x29, sp, #32");                                    // establish the htmlspecialchars helper frame pointer
     emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length across the reservation call
+    emitter.instruction("str x3, [sp, #16]");                                   // save the ENT_* flags across the reservation call
     emitter.instruction("mov x9, #6");                                          // worst-case entity expansion factor (`&quot;` / `&#039;`)
     emitter.instruction("umulh x10, x2, x9");                                   // capture the high half of the 6 * length product
     emitter.instruction("cbnz x10, __rt_htmlsc_size_overflow");                 // reject a wrapped size instead of reserving a too-small destination
@@ -53,6 +56,7 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     emitter.instruction("mov x9, x0");                                          // destination pointer
     emitter.instruction("mov x10, x0");                                         // save result start
     emitter.instruction("ldp x1, x2, [sp]");                                    // reload the borrowed source pointer and length
+    emitter.instruction("ldr x14, [sp, #16]");                                  // reload the ENT_* flags for the quote decisions
     emitter.instruction("mov x11, x2");                                         // remaining byte count
 
     emitter.label("__rt_htmlsc_loop");
@@ -81,6 +85,7 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_htmlsc_gt");                                 // yes -> write &gt;
 
     // -- store unmodified byte --
+    emitter.label("__rt_htmlsc_plain");
     emitter.instruction("strb w12, [x9], #1");                                  // store byte as-is
     emitter.instruction("b __rt_htmlsc_loop");                                  // next byte
 
@@ -100,6 +105,7 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
 
     // -- &quot; (6 bytes: &, q, u, o, t, ;) --
     emitter.label("__rt_htmlsc_quot");
+    emitter.instruction("tbz x14, #1, __rt_htmlsc_plain");                      // ENT_COMPAT (2) unset: a double quote stays literal
     emitter.instruction("mov w13, #38");                                        // '&'
     emitter.instruction("strb w13, [x9], #1");                                  // write '&'
     emitter.instruction("mov w13, #113");                                       // 'q'
@@ -116,6 +122,9 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
 
     // -- &#039; (6 bytes: &, #, 0, 3, 9, ;) --
     emitter.label("__rt_htmlsc_apos");
+    emitter.instruction("tbz x14, #0, __rt_htmlsc_plain");                      // ENT_HTML_QUOTE_SINGLE (1) unset: a single quote stays literal
+    emitter.instruction("tst x14, #48");                                        // any of ENT_XML1, ENT_XHTML or ENT_HTML5?
+    emitter.instruction("b.ne __rt_htmlsc_apos_named");                         // those doctypes spell the single quote &apos;
     emitter.instruction("mov w13, #38");                                        // '&'
     emitter.instruction("strb w13, [x9], #1");                                  // write '&'
     emitter.instruction("mov w13, #35");                                        // '#'
@@ -126,6 +135,22 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     emitter.instruction("strb w13, [x9], #1");                                  // write '3'
     emitter.instruction("mov w13, #57");                                        // '9'
     emitter.instruction("strb w13, [x9], #1");                                  // write '9'
+    emitter.instruction("mov w13, #59");                                        // ';'
+    emitter.instruction("strb w13, [x9], #1");                                  // write ';'
+    emitter.instruction("b __rt_htmlsc_loop");                                  // next byte
+
+    // -- &apos; (6 bytes: &, a, p, o, s, ;) for the XML1/XHTML/HTML5 doctypes --
+    emitter.label("__rt_htmlsc_apos_named");
+    emitter.instruction("mov w13, #38");                                        // '&'
+    emitter.instruction("strb w13, [x9], #1");                                  // write '&'
+    emitter.instruction("mov w13, #97");                                        // 'a'
+    emitter.instruction("strb w13, [x9], #1");                                  // write 'a'
+    emitter.instruction("mov w13, #112");                                       // 'p'
+    emitter.instruction("strb w13, [x9], #1");                                  // write 'p'
+    emitter.instruction("mov w13, #111");                                       // 'o'
+    emitter.instruction("strb w13, [x9], #1");                                  // write 'o'
+    emitter.instruction("mov w13, #115");                                       // 's'
+    emitter.instruction("strb w13, [x9], #1");                                  // write 's'
     emitter.instruction("mov w13, #59");                                        // ';'
     emitter.instruction("strb w13, [x9], #1");                                  // write ';'
     emitter.instruction("b __rt_htmlsc_loop");                                  // next byte
@@ -158,8 +183,8 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x10");                                         // result pointer
     emitter.instruction("sub x2, x9, x10");                                     // result length
     emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the htmlspecialchars helper frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the htmlspecialchars helper frame
     emitter.instruction("ret");                                                 // return
 
     // -- impossible result size: report the shared allocation-overflow fatal error --
@@ -173,7 +198,7 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
 /// `&` → `&amp;`, `"` → `&quot;`, `'` → `&#039;`, `<` → `&lt;`, `>` → `&gt;`.
 ///
 /// # ABI (x86_64 System V)
-/// - **Input**: `rax` = source string pointer, `rdx` = source byte length
+/// - **Input**: `rax` = source string pointer, `rdx` = source byte length, `rdi` = `ENT_*` flags
 /// - **Output**: `rax` = result pointer, `rdx` = result byte length
 /// - Reserves the worst-case `6 * len` expansion through `__rt_concat_reserve` and publishes the
 ///   written length through `__rt_concat_publish`, so long inputs use owned heap storage instead
@@ -189,6 +214,7 @@ fn emit_htmlspecialchars_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the source pointer and length
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the borrowed source pointer across the reservation call
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the borrowed source length across the reservation call
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the ENT_* flags across the reservation call
     emitter.instruction("imul rax, rdx, 6");                                    // compute the worst-case escaped result size as 6 * source length
     emitter.instruction("jo __rt_htmlsc_size_overflow_linux_x86_64");           // reject a wrapped size instead of reserving a too-small destination
     emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the escaped result
@@ -196,6 +222,7 @@ fn emit_htmlspecialchars_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, r11");                                         // preserve the result start pointer for the returned string value after the loop mutates the destination cursor
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // seed the remaining source length counter from the borrowed input string length
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // preserve the borrowed source string cursor in a dedicated register before the loop mutates caller-saved registers
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the ENT_* flags for the quote decisions
 
     emitter.label("__rt_htmlsc_loop_linux_x86_64");
     emitter.instruction("test rcx, rcx");                                       // stop once every source byte has been classified and copied into concat storage
@@ -213,6 +240,7 @@ fn emit_htmlspecialchars_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_htmlsc_lt_linux_x86_64");                      // write the less-than entity expansion when the current byte is '<'
     emitter.instruction("cmp dl, 62");                                          // is the current byte a greater-than sign that must expand to `&gt;`?
     emitter.instruction("je __rt_htmlsc_gt_linux_x86_64");                      // write the greater-than entity expansion when the current byte is '>'
+    emitter.label("__rt_htmlsc_plain_linux_x86_64");
     emitter.instruction("mov BYTE PTR [r11], dl");                              // store source bytes that do not need HTML escaping directly into concat storage
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer destination cursor after copying an unescaped source byte
     emitter.instruction("jmp __rt_htmlsc_loop_linux_x86_64");                   // continue escaping the remaining source bytes until the input string is exhausted
@@ -231,6 +259,8 @@ fn emit_htmlspecialchars_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_htmlsc_loop_linux_x86_64");                   // continue escaping the remaining source bytes after expanding one ampersand
 
     emitter.label("__rt_htmlsc_quot_linux_x86_64");
+    emitter.instruction("test r9, 2");                                          // is ENT_COMPAT (2) set?
+    emitter.instruction("jz __rt_htmlsc_plain_linux_x86_64");                   // no: a double quote stays literal
     emitter.instruction("mov BYTE PTR [r11], 38");                              // write '&' as the first byte of the `&quot;` entity expansion
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer destination cursor after emitting the first byte of `&quot;`
     emitter.instruction("mov BYTE PTR [r11], 113");                             // write 'q' as the second byte of the `&quot;` entity expansion
@@ -246,6 +276,10 @@ fn emit_htmlspecialchars_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_htmlsc_loop_linux_x86_64");                   // continue escaping the remaining source bytes after expanding one double quote
 
     emitter.label("__rt_htmlsc_apos_linux_x86_64");
+    emitter.instruction("test r9, 1");                                          // is ENT_HTML_QUOTE_SINGLE (1) set?
+    emitter.instruction("jz __rt_htmlsc_plain_linux_x86_64");                   // no: a single quote stays literal
+    emitter.instruction("test r9, 48");                                         // any of ENT_XML1, ENT_XHTML or ENT_HTML5?
+    emitter.instruction("jnz __rt_htmlsc_apos_named_linux_x86_64");             // those doctypes spell the single quote &apos;
     emitter.instruction("mov BYTE PTR [r11], 38");                              // write '&' as the first byte of the `&#039;` entity expansion
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer destination cursor after emitting the first byte of `&#039;`
     emitter.instruction("mov BYTE PTR [r11], 35");                              // write '#' as the second byte of the `&#039;` entity expansion
@@ -259,6 +293,21 @@ fn emit_htmlspecialchars_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11], 59");                              // write ';' as the terminating byte of the `&#039;` entity expansion
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer destination cursor after emitting the final byte of `&#039;`
     emitter.instruction("jmp __rt_htmlsc_loop_linux_x86_64");                   // continue escaping the remaining source bytes after expanding one single quote
+
+    emitter.label("__rt_htmlsc_apos_named_linux_x86_64");
+    emitter.instruction("mov BYTE PTR [r11], 38");                              // write '&' of the `&apos;` entity expansion
+    emitter.instruction("add r11, 1");                                          // advance the destination cursor
+    emitter.instruction("mov BYTE PTR [r11], 97");                              // write 'a' of the `&apos;` entity expansion
+    emitter.instruction("add r11, 1");                                          // advance the destination cursor
+    emitter.instruction("mov BYTE PTR [r11], 112");                             // write 'p' of the `&apos;` entity expansion
+    emitter.instruction("add r11, 1");                                          // advance the destination cursor
+    emitter.instruction("mov BYTE PTR [r11], 111");                             // write 'o' of the `&apos;` entity expansion
+    emitter.instruction("add r11, 1");                                          // advance the destination cursor
+    emitter.instruction("mov BYTE PTR [r11], 115");                             // write 's' of the `&apos;` entity expansion
+    emitter.instruction("add r11, 1");                                          // advance the destination cursor
+    emitter.instruction("mov BYTE PTR [r11], 59");                              // write ';' of the `&apos;` entity expansion
+    emitter.instruction("add r11, 1");                                          // advance the destination cursor
+    emitter.instruction("jmp __rt_htmlsc_loop_linux_x86_64");                   // continue escaping the remaining source bytes
 
     emitter.label("__rt_htmlsc_lt_linux_x86_64");
     emitter.instruction("mov BYTE PTR [r11], 38");                              // write '&' as the first byte of the `&lt;` entity expansion

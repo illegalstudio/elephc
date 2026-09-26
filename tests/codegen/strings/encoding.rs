@@ -1243,3 +1243,53 @@ echo strlen($raw), "|", strlen($out), "|", md5($out);
     );
     assert_eq!(out, "100000|228997|e5e2d387e026fd978522763ba791144f");
 }
+
+/// `htmlspecialchars()` honours its `$flags`: `ENT_NOQUOTES` leaves both quotes literal,
+/// `ENT_COMPAT` escapes only `"`, `ENT_QUOTES` both, and the XML1/XHTML/HTML5 doctypes spell the
+/// single quote `&apos;`. Every call behaved as `ENT_QUOTES`. Regression for #645.
+#[test]
+fn test_htmlspecialchars_honours_its_flags() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = "a'b\"c<d>&e";
+echo htmlspecialchars($s), "\n";
+echo htmlspecialchars($s, ENT_NOQUOTES), "\n";
+echo htmlspecialchars($s, ENT_COMPAT), "\n";
+echo htmlspecialchars($s, ENT_QUOTES), "\n";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_HTML5), "\n";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_XML1), "\n";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_XHTML), "\n";
+echo htmlspecialchars($s, ENT_COMPAT | ENT_HTML5), "\n";
+echo htmlspecialchars($s, 1), "\n";
+$flags = $argc > 5 ? ENT_QUOTES : ENT_NOQUOTES;
+echo htmlspecialchars($s . $argc, $flags), "\n";
+echo htmlentities($s, ENT_NOQUOTES), "\n";
+$long = str_repeat("'\"<", 3000);
+echo strlen(htmlspecialchars($long, ENT_NOQUOTES)), " ", strlen(htmlspecialchars($long, ENT_QUOTES | ENT_HTML5)), "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "a&#039;b&quot;c&lt;d&gt;&amp;e\n",
+            "a'b\"c&lt;d&gt;&amp;e\n",
+            "a'b&quot;c&lt;d&gt;&amp;e\n",
+            "a&#039;b&quot;c&lt;d&gt;&amp;e\n",
+            "a&apos;b&quot;c&lt;d&gt;&amp;e\n",
+            "a&apos;b&quot;c&lt;d&gt;&amp;e\n",
+            "a&apos;b&quot;c&lt;d&gt;&amp;e\n",
+            "a'b&quot;c&lt;d&gt;&amp;e\n",
+            "a&#039;b\"c&lt;d&gt;&amp;e\n",
+            "a'b\"c&lt;d&gt;&amp;e1\n",
+            "a'b\"c&lt;d&gt;&amp;e\n",
+            "18000 48000\n",
+        ),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
