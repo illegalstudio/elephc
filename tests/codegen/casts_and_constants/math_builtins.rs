@@ -338,3 +338,35 @@ fn test_number_format_space_thousands() {
 }
 
 // --- Constants ---
+
+/// `random_int()` accepts `mixed` and union bounds, coerced to int the way PHP does: an int,
+/// a numeric string or an integral float. It failed in the backend with
+/// `random_int for PHP type Mixed`. Regression for #754.
+#[test]
+fn test_random_int_accepts_mixed_and_union_bounds() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function pick(mixed $max): int { return random_int(1, $max); }
+function span(mixed $min, mixed $max): int { return random_int($min, $max); }
+function either(int|string $max): int { return random_int(0, $max); }
+$ok = true;
+for ($i = 0; $i < 200; $i++) {
+    $r = pick(6);
+    $ok = $ok && $r >= 1 && $r <= 6;
+    $s = span("3", 4.0);
+    $ok = $ok && $s >= 3 && $s <= 4;
+    $e = either($i % 2 ? 5 : "5");
+    $ok = $ok && $e >= 0 && $e <= 5;
+}
+echo $ok ? "ok" : "bad", "\n";
+echo span(7, 7), "\n";
+try { span(9, 2); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out.stdout, "ok\n7\nValueError: random_int(): Argument #1 ($min) must be less than or equal to argument #2 ($max)\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
