@@ -18,6 +18,8 @@ mod control;
 pub mod expr;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
+/// Expands relative `namespace\name` references to fully qualified names before parsing.
+mod relative_names;
 mod stmt;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
@@ -117,6 +119,8 @@ pub fn parse_with_recovery_in_mode(
 
 /// Implements recovery parsing after the source-mode scope has been installed.
 fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
+    let expanded = relative_names::expand_relative_names(tokens);
+    let tokens = expanded.as_deref().unwrap_or(tokens);
     reject_excessive_nesting(tokens)?;
     crate::compiler_stack::with_compiler_stack(|| parse_checked_tokens(tokens))
 }
