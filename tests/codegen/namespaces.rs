@@ -684,3 +684,84 @@ echo $t->i();
     );
     assert_eq!(out, "i");
 }
+
+/// `namespace\name` is PHP's relative name, "name in the current namespace", for a
+/// function, a constant, a class in `new`, a static call, `::class`, `instanceof`, an
+/// `implements` list and a parameter type. It failed to parse with
+/// `Unexpected token: Namespace`. Regression for #825.
+#[test]
+fn test_relative_namespace_names_resolve_in_the_current_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\Sub;
+
+const LIMIT = 7;
+
+function helper(): int { return 1; }
+
+class Box {
+    public function __construct(public int $v = 3) {}
+    public static function make(): static { return new static(5); }
+}
+
+interface Shape {}
+final class Square implements namespace\Shape {}
+
+echo namespace\helper(), "\n";
+echo namespace\LIMIT, "\n";
+$b = new namespace\Box();
+echo $b->v, "\n";
+echo namespace\Box::make()->v, "\n";
+echo namespace\Box::class, "\n";
+var_dump(new Square() instanceof namespace\Shape);
+function takes(namespace\Box $b): int { return $b->v; }
+echo takes(new Box(9)), "\n";
+echo \strlen("abc"), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "1\n",
+            "7\n",
+            "3\n",
+            "5\n",
+            "Demo\\Sub\\Box\n",
+            "bool(true)\n",
+            "9\n",
+            "3\n",
+        )
+    );
+}
+
+/// Each braced namespace block is its own current namespace for a relative name, and the
+/// global `namespace {}` block makes `namespace\who()` the global function.
+#[test]
+fn test_relative_namespace_names_follow_braced_namespace_blocks() {
+    let out = compile_and_run(
+        r#"<?php
+namespace First {
+    function who(): string { return "first"; }
+    echo namespace\who(), "\n";
+}
+namespace Second {
+    function who(): string { return "second"; }
+    echo namespace\who(), "\n";
+}
+namespace {
+    function who(): string { return "global"; }
+    echo namespace\who(), "\n";
+    echo First\who(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "first\n",
+            "second\n",
+            "global\n",
+            "first\n",
+        )
+    );
+}

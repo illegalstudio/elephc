@@ -43,6 +43,11 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
   not participate (they apply to unqualified names only), matching PHP
 - Fully-qualified `\Lib\Tool` always refers to global canonical name; a leading `\` suppresses
   alias expansion, so `\M\double()` is *not* rewritten
+- A relative name `namespace\helper()` names `helper` in the current namespace: inside
+  `namespace Demo;` it is exactly `\Demo\helper()`, and in the global namespace it is `\helper()`.
+  It works wherever a name does (calls, constants, `new`, static calls, `::class`, `instanceof`,
+  `implements`, type declarations), and inside braced `namespace X { ... }` blocks each block's
+  own name applies
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity

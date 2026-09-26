@@ -17,3 +17,11 @@ echo $controller->index($user) . "\n";
 echo formatUser($user) . "\n";
 echo function_exists("\\Demo\\Support\\format_user") . "\n";
 echo call_user_func("\\Demo\\Support\\format_user", $user) . "\n";
+
+// `namespace\name` is a relative name: `banner` in the current namespace, Demo\App.
+function banner(string $text): string
+{
+    return "== " . $text . " ==";
+}
+
+echo namespace\banner("relative names") . "\n";
