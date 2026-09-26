@@ -164,6 +164,9 @@ pub(crate) fn literal_default_value(
     expr: &ExprKind,
     op_name: &str,
 ) -> Result<LiteralDefaultValue> {
+    if let Some(folded) = fold_named_class_constant(expr) {
+        return literal_default_value(context, php_type, &folded, op_name);
+    }
     match (php_type, expr) {
         (PhpType::Int, ExprKind::IntLiteral(value)) => Ok(LiteralDefaultValue::Int(*value)),
         (PhpType::Int, ExprKind::Negate(inner)) => match &inner.kind {
@@ -548,6 +551,9 @@ fn literal_array_element(
     expr: &ExprKind,
     op_name: &str,
 ) -> Result<LiteralArrayElement> {
+    if let Some(folded) = fold_named_class_constant(expr) {
+        return literal_array_element(context, elem_type, &folded, op_name);
+    }
     // A nested literal recurses rather than being refused. Under a Mixed-capable element type
     // the nested elements are typed `Mixed` for the same reason the outer ones are -- the
     // container has to accept a later write of any type. A container element type reached
@@ -650,6 +656,9 @@ fn literal_assoc_entries(
 /// string key, and numeric strings are normalized to integer keys later at emit time. Unsupported
 /// key forms fall through to the shared unsupported-default error rather than miscompiling.
 fn literal_array_key(context: &str, expr: &ExprKind, op_name: &str) -> Result<LiteralArrayKey> {
+    if let Some(folded) = fold_named_class_constant(expr) {
+        return literal_array_key(context, &folded, op_name);
+    }
     match expr {
         ExprKind::StringLiteral(value) => Ok(LiteralArrayKey::Str(value.clone())),
         ExprKind::IntLiteral(value) => Ok(LiteralArrayKey::Int(*value)),
@@ -1093,6 +1102,21 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
             "array default element PHP type {:?}",
             other
         ))),
+    }
+}
+
+/// Folds `Foo::class` with a named receiver into the string literal it always is: the name
+/// as written, already resolved against the file's namespace and imports, with no leading
+/// `\`. `self::class` and `static::class` depend on the class they appear in and stay as they
+/// are.
+fn fold_named_class_constant(expr: &ExprKind) -> Option<ExprKind> {
+    match expr {
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } => Some(ExprKind::StringLiteral(
+            name.as_str().trim_start_matches('\\').to_string(),
+        )),
+        _ => None,
     }
 }
 
