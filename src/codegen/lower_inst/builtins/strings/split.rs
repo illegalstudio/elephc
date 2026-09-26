@@ -627,7 +627,8 @@ fn implode_normalized_value_type(
     array_index: usize,
 ) -> Result<Option<PhpType>> {
     let array = expect_operand(inst, array_index)?;
-    match ctx.value_php_type(array)? {
+    let array_ty = ctx.value_php_type(array)?;
+    match array_ty {
         PhpType::AssocArray { value, .. } => Ok(Some(value.codegen_repr())),
         PhpType::Mixed | PhpType::Union(_) => Ok(Some(PhpType::Mixed)),
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => Ok(Some(PhpType::Mixed)),

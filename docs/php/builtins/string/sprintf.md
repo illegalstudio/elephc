@@ -2,7 +2,7 @@
 title: "sprintf()"
 description: "Returns a formatted string."
 sidebar:
-  order: 845
+  order: 908
 ---
 
 ## sprintf()
@@ -15,7 +15,7 @@ Returns a formatted string.
 
 **Parameters**:
 - `$format` (`string`)
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `...$values` - variadic: collects excess arguments into `$values`.
 
 **Returns**: `string`
 

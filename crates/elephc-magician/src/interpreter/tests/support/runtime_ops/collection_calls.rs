@@ -38,6 +38,14 @@ macro_rules! impl_fake_collection_call_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_array_get(array, index)
     }
+    /// Retains a fake raw slot for reference-preserving argument expansion.
+    fn array_get_preserving_references(
+        &mut self,
+        array: RuntimeCellHandle,
+        index: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_array_get_preserving_references(array, index)
+    }
     /// Checks whether a fake array has the requested key without reading its value.
     fn array_key_exists(
         &mut self,

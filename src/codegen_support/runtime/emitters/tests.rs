@@ -107,23 +107,23 @@ fn test_runtime_can_omit_regex_helpers() {
     assert!(!asm.contains("__rt_preg_split:"));
 }
 
-/// Verifies the iconv-backed `mb_strlen()` helper is emitted only for programs that use it.
+/// Verifies the shared mbstring helper is omitted when neither AOT nor eval requires it.
 #[test]
-fn test_runtime_can_gate_mb_strlen_helper() {
+fn test_runtime_can_gate_mbstring_helpers() {
     let target = Target::new(Platform::MacOS, Arch::AArch64);
     let mut omitted = Emitter::new(target);
     emit_runtime(&mut omitted, RuntimeFeatures::none());
-    assert!(!omitted.output().contains("__rt_mb_strlen:"));
+    assert!(!omitted.output().contains("__rt_mbstring_native:"));
 
     let mut included = Emitter::new(target);
     emit_runtime(
         &mut included,
         RuntimeFeatures {
-            mb_strlen: true,
+            mbstring: true,
             ..RuntimeFeatures::none()
         },
     );
-    assert!(included.output().contains("__rt_mb_strlen:"));
+    assert!(included.output().contains("__rt_mbstring_native:"));
 }
 
 /// Verifies that Linux x86_64 uses the shared runtime surface.

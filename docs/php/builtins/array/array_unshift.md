@@ -15,7 +15,7 @@ Prepends one or more elements to the beginning of an array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `...$values` - variadic: collects excess arguments into `$values`.
 
 **Returns**: `int`
 

@@ -10,7 +10,7 @@
 //! - Procedural date/time aliases remain a runtime fallback because eval cannot
 //!   run the static name-resolver rewrite before dispatch.
 
-use super::eval_declared_builtin_values_call;
+use super::eval_declared_builtin_values_call_from_scope;
 use super::super::super::*;
 
 /// Evaluates PHP-visible builtins when they are invoked through a dynamic callable name.
@@ -20,7 +20,24 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if let Some(result) = eval_declared_builtin_values_call(name, evaluated_args, context, values)? {
+    eval_builtin_with_values_from_scope(name, evaluated_args, None, context, values)
+}
+
+/// Evaluates a builtin values hook with the lexical scope owned by a direct source call.
+pub(in crate::interpreter) fn eval_builtin_with_values_from_scope(
+    name: &str,
+    evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if let Some(result) = eval_declared_builtin_values_call_from_scope(
+        name,
+        evaluated_args,
+        lexical_scope,
+        context,
+        values,
+    )? {
         return Ok(Some(result));
     }
 

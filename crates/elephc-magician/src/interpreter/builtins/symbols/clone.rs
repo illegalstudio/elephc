@@ -11,6 +11,7 @@
 eval_builtin! {
     contract: "clone",
     area: Symbols,
+    source_arguments: true,
     direct: Symbols,
     values: Symbols,
 }
@@ -28,14 +29,24 @@ pub(in crate::interpreter) fn eval_clone_declared_call(
         return Err(EvalStatus::RuntimeFatal);
     }
     let operands = args.iter().collect::<Vec<_>>();
-    with_eval_operands(&operands, context, scope, values, |args, context, _, values| {
-        eval_clone_declared_values_result(args, context, values)
+    with_eval_operands(&operands, context, scope, values, |args, context, scope, values| {
+        eval_clone_declared_values_result_with_scope(args, Some(scope), context, values)
     })
 }
 
 /// Clones one materialized object and optionally initializes selected properties.
 pub(in crate::interpreter) fn eval_clone_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_clone_declared_values_result_with_scope(evaluated_args, None, context, values)
+}
+
+/// Keeps the direct caller's visible reference aliases available to clone validation.
+fn eval_clone_declared_values_result_with_scope(
+    evaluated_args: &[RuntimeCellHandle],
+    scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -73,5 +84,5 @@ pub(in crate::interpreter) fn eval_clone_declared_values_result(
         }
     }
 
-    eval_object_clone_with_properties_result(*object, with_properties, context, values)
+    eval_object_clone_with_properties_result(*object, with_properties, scope, context, values)
 }

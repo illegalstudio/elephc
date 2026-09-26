@@ -361,6 +361,35 @@ function exerciseByRefSpread(callable $callback, string &$text): void {
     }
 }
 
+/// The first mb_convert_variables root and each variadic root retain caller storage.
+#[test]
+fn mb_convert_variables_lowers_variadic_roots_as_reference_places() {
+    use crate::ir::Op;
+
+    let source = r#"<?php
+function convertBoth(string $first, string $second): void {
+    mb_convert_variables("UTF-8", "ISO-8859-1", $first, $second);
+}
+"#;
+    for target in [
+        "macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64",
+    ] {
+        let module = lower_for(source, target);
+        let function = module.functions.iter()
+            .find(|function| function.name == "convertBoth").expect("function");
+        let call = function.instructions.iter().find(|inst| {
+            inst.op == Op::RuntimeCall && inst.immediate.as_ref().is_some_and(|immediate| {
+                format!("{immediate:?}").contains("MbConvertVariables")
+            })
+        }).expect("mb_convert_variables runtime call");
+        assert_eq!(call.operands.len(), 4, "{target}: two encodings, first root, tail array");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::LoadRefCell
+            && inst.result == Some(call.operands[2])), "{target}: first root is a live reference");
+        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::InvokerRefArg).count(), 1,
+            "{target}: variadic root is an invoker reference marker");
+    }
+}
+
 /// A dynamic spread result stays published while a later named argument is evaluated.
 #[test]
 fn spread_source_owner_precedes_later_named_argument_call() {

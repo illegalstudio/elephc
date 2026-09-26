@@ -138,6 +138,11 @@ pub(super) fn lower_static_callable_call(
                 &function_name,
                 source_prefers_extension_builtin(&function_name),
             );
+            if let Some(call) = lower_packed_builtin_call(
+                ctx, &function_name, sig.as_ref(), callback_args, expr,
+            ) {
+                return Some(call);
+            }
             // Source-order argument evaluation publishes each owned argument before the next one
             // is evaluated, so a later argument that throws cannot strand an earlier one. The
             // ledger must be balanced on this path too: `emit_builtin_call_value` releases the
@@ -232,6 +237,16 @@ pub(super) fn lower_static_callable_call(
         } => Some(lower_method_call(ctx, &object, &method, callback_args, Op::MethodCall, expr)),
         StaticCallableBinding::InstanceMethod { .. } => None,
     }
+}
+
+/// Keeps invalid positional mbstring callable arities on the boxed runtime diagnostic path.
+pub(super) fn builtin_callable_needs_runtime_arity(name: &str, args: &[Expr]) -> bool {
+    use crate::builtins::semantics::BuiltinLowering;
+    use crate::ir::RuntimeCallTarget;
+    if args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args) { return false; }
+    let Some(definition) = crate::builtins::registry::lookup(name) else { return false; };
+    let BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)) = definition.spec.semantics.lowering else { return false; };
+    target.mbstring_operation().is_some_and(|operation| !operation.supports_arity(args.len()))
 }
 
 /// Resolves a PHP string callback using case-insensitive function lookup rules.

@@ -85,8 +85,10 @@ pub struct ElephcEvalContext {
     pub(super) array_element_aliases: HashMap<usize, EvalArrayReferenceAliases>,
     pub(super) array_reference_retirements: crate::ffi::array_references::ArrayReferenceRetirements,
     pub(super) array_cursors: HashMap<usize, EvalArrayCursor>,
-    pub(super) pcntl_foreign_callables:
-        HashMap<usize, pcntl_runtime::EvalPcntlContextLease>,
+    pub(super) pcntl_foreign_callables: HashMap<
+        usize,
+        (RuntimeCellHandle, pcntl_runtime::EvalPcntlContextLease),
+    >,
     pub(super) dynamic_initialized_properties: HashSet<(u64, String)>,
     pub(super) eval_reflection_attributes: HashMap<u64, EvalReflectionAttributeMetadata>,
     pub(super) eval_reflection_classes: HashMap<u64, String>,

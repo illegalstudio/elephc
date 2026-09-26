@@ -162,7 +162,7 @@ Codegen:
                           or use @file with one name per line)
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
-  --ini KEY=VALUE         Bake an INI directive override (repeatable; opcache.* honored)
+  --ini KEY=VALUE         Bake an INI directive override (OPcache and mbstring startup)
   --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:
@@ -249,11 +249,10 @@ pub(crate) struct CliConfig {
     /// Errors, warnings, and the final success line are unaffected.
     pub(crate) quiet: bool,
     /// Compile-time INI directive overrides from repeated `--ini <key>=<value>` flags, in
-    /// the order supplied (last-wins per key is resolved downstream). For this increment only
-    /// `opcache.*` keys are meaningful — they are baked into the OPcache configuration surface
-    /// (`opcache_get_configuration`/`opcache_get_status`/`ini_get`/enabled-state). A non-opcache
-    /// key is stored but ignored by the opcache layer (general INI is a future increment); it is
-    /// never an error so a forward-looking `--ini` invocation does not break.
+    /// the order supplied (last-wins per key is resolved downstream). OPcache settings feed
+    /// its compatibility surface. Programs using mbstring also initialize its shared engine
+    /// from mbstring directives and effective core encoding defaults. General INI routing
+    /// remains separate; unknown keys are retained without becoming compiler errors.
     pub(crate) ini_overrides: Vec<(String, String)>,
 }
 

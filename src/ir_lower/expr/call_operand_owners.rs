@@ -402,6 +402,7 @@ pub(super) fn root_non_aliasing_callback_operands(
     let mut roots = Vec::new();
     for (index, operand) in operands.iter_mut().enumerate() {
         if def.ref_params.get(index).copied().unwrap_or(false) { continue; }
+        if ctx.has_call_argument_guard(*operand) { continue; }
         let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
         let (value, root) = root_owned_call_operand(ctx, value, span);
         *operand = value.value;
@@ -840,6 +841,7 @@ pub(super) fn pin_throwing_builtin_operands(
         .iter()
         .enumerate()
         .filter(|(index, _)| !rooted.iter().any(|(root, _)| root == index))
+        .filter(|(_, operand)| !ctx.has_call_argument_guard(**operand))
         // A mutating by-reference parameter is caller storage the builtin writes back through,
         // never a temporary this path releases.
         .filter(|(index, _)| !def.ref_params.get(*index).copied().unwrap_or(false))

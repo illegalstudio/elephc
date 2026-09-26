@@ -16,7 +16,7 @@ Write a formatted string to a stream.
 **Parameters**:
 - `$stream` (`resource`)
 - `$format` (`string`)
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `...$values` - variadic: collects excess arguments into `$values`.
 
 **Returns**: `int`
 

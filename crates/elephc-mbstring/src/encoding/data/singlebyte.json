@@ -1,0 +1,225 @@
+{
+    "php_version": "8.5.10",
+    "encodings": {
+        "Windows-1252": {
+            "decode": {
+                "file": "windows-1252-decode.bin",
+                "sha256": "e9b48cc63592586d072de2301f6d4d0025837bccbda0a3bdd11b74b31a0cd9d6"
+            },
+            "encode": {
+                "file": "windows-1252-encode.bin",
+                "sha256": "a7cfc90fa41c4d661fdce91d45eb89d0ff9553e24429a8be140a8d7a459c7d11"
+            }
+        },
+        "Windows-1254": {
+            "decode": {
+                "file": "windows-1254-decode.bin",
+                "sha256": "4fc8d2738158c40bff9c787b19ec185251d81457180ecfcc23271906025e1e9e"
+            },
+            "encode": {
+                "file": "windows-1254-encode.bin",
+                "sha256": "943caaf80c5681bb607e82d3fba56c813783185c86deda0016811d8c0537a49a"
+            }
+        },
+        "ISO-8859-1": {
+            "decode": {
+                "file": "iso-8859-1-decode.bin",
+                "sha256": "8808405eec6fbe306fe3369f88daed79dd5613ddbb5e801f632b01d6218c5f08"
+            },
+            "encode": {
+                "file": "iso-8859-1-encode.bin",
+                "sha256": "6cb40042cec0e6df7f770f16b14567fade55051b1352a0e102cd9897920db140"
+            }
+        },
+        "ISO-8859-2": {
+            "decode": {
+                "file": "iso-8859-2-decode.bin",
+                "sha256": "a96f70c21cf590532f6d3b052b249f142e28a8e5dbe5dfea815998c153d2cc0e"
+            },
+            "encode": {
+                "file": "iso-8859-2-encode.bin",
+                "sha256": "91e0b7c4dfff68d43763de7c4b18e2c3e49440f636467d19ea433ab82171039d"
+            }
+        },
+        "ISO-8859-3": {
+            "decode": {
+                "file": "iso-8859-3-decode.bin",
+                "sha256": "f9f8262765b9a8137d558002d4cef31a97b25e60c28e55e6202f613b43672877"
+            },
+            "encode": {
+                "file": "iso-8859-3-encode.bin",
+                "sha256": "8f5bed5ddb2b2f488f2529df356273efc2cb36860cd56e846e18d238d1101d95"
+            }
+        },
+        "ISO-8859-4": {
+            "decode": {
+                "file": "iso-8859-4-decode.bin",
+                "sha256": "5d5c80045ab443f4fcf948b917d824debaa7a2799298d1b3981e4fb89bbc76e5"
+            },
+            "encode": {
+                "file": "iso-8859-4-encode.bin",
+                "sha256": "5c4b1e132886c68af9ade46121e9898fa6ca8b89a4746ceb3285a3465939afcb"
+            }
+        },
+        "ISO-8859-5": {
+            "decode": {
+                "file": "iso-8859-5-decode.bin",
+                "sha256": "6a455def4f75b55cfc014ebd21335f677ebbbb119a1878935d91b4792f9bff10"
+            },
+            "encode": {
+                "file": "iso-8859-5-encode.bin",
+                "sha256": "d39c7f100c2580aba4ed32d7bd9fd8b2cc9d1ba97ef0ef6050b3cb486e082c10"
+            }
+        },
+        "ISO-8859-6": {
+            "decode": {
+                "file": "iso-8859-6-decode.bin",
+                "sha256": "52a45caab38fb0f3a7eeaa44340c66292da3ab77555edf5f8febba532a612b1e"
+            },
+            "encode": {
+                "file": "iso-8859-6-encode.bin",
+                "sha256": "5dd71e57bac5b351752b86251ea45bad8a4ffae93d84178a2e469c3e5cc9fdb5"
+            }
+        },
+        "ISO-8859-7": {
+            "decode": {
+                "file": "iso-8859-7-decode.bin",
+                "sha256": "14a61b30c68127de3867289b9a75591438f60b48f8968ba547a05bd9ef93fe82"
+            },
+            "encode": {
+                "file": "iso-8859-7-encode.bin",
+                "sha256": "82cc2a3acb8382348734717ee439ac990894aaca99f9196be6810010147f43e2"
+            }
+        },
+        "ISO-8859-8": {
+            "decode": {
+                "file": "iso-8859-8-decode.bin",
+                "sha256": "c6bfa55f5f4d155925728f63782e6a8f0c221b7f587379b79aec3bcb167c6608"
+            },
+            "encode": {
+                "file": "iso-8859-8-encode.bin",
+                "sha256": "265a0699ae914ff18991e3dcc189df925ecc153a192c7df9a6e92b18371d4f7c"
+            }
+        },
+        "ISO-8859-9": {
+            "decode": {
+                "file": "iso-8859-9-decode.bin",
+                "sha256": "22049e7d2c347258c5ca3067f512e2207dadebc8cc187ba5220369a930ca6b74"
+            },
+            "encode": {
+                "file": "iso-8859-9-encode.bin",
+                "sha256": "b61e906de2d5051cb138b7fe83023a57712fa5da37e93056593484a8452d879e"
+            }
+        },
+        "ISO-8859-10": {
+            "decode": {
+                "file": "iso-8859-10-decode.bin",
+                "sha256": "3368c313f485370f411ef535d9a7f55c01f1629e9564e712fcc5c3098b75a264"
+            },
+            "encode": {
+                "file": "iso-8859-10-encode.bin",
+                "sha256": "103443bcc127494d9a78b85ee69e3604cd7aac18cdc481fdf8089218799a41f5"
+            }
+        },
+        "ISO-8859-13": {
+            "decode": {
+                "file": "iso-8859-13-decode.bin",
+                "sha256": "7a04936155c8f4bb4878612e53411827e40a5fd068ffdac4c511e96add9b9d62"
+            },
+            "encode": {
+                "file": "iso-8859-13-encode.bin",
+                "sha256": "efeb14eced900839332fdca66be89b32122bc11aad4b80b6f0583cb006e10981"
+            }
+        },
+        "ISO-8859-14": {
+            "decode": {
+                "file": "iso-8859-14-decode.bin",
+                "sha256": "da141965f3899846437683c54364fa05017a7ea91e4403d1ba0ed693df1f2ef4"
+            },
+            "encode": {
+                "file": "iso-8859-14-encode.bin",
+                "sha256": "28bffd5cfffe9925554a6878d33a2b190e444a68ee34ced7ae88123ab669ff18"
+            }
+        },
+        "ISO-8859-15": {
+            "decode": {
+                "file": "iso-8859-15-decode.bin",
+                "sha256": "4068d1975671a54a509d386ed544b092f87f8978e8e2ca49173d2e8e9f6923a9"
+            },
+            "encode": {
+                "file": "iso-8859-15-encode.bin",
+                "sha256": "72b39281dd6fc15d8d6102df0202a86ba6b27badc4a91ca33afcea369e83bcbe"
+            }
+        },
+        "ISO-8859-16": {
+            "decode": {
+                "file": "iso-8859-16-decode.bin",
+                "sha256": "73019f05df35fb2fc563a3df21c00ecab5f7d7160a33c739cb991321f095b8bb"
+            },
+            "encode": {
+                "file": "iso-8859-16-encode.bin",
+                "sha256": "b27dd9db51d51bfa6cbe31c927691eb7aa5cc8b017a2ea51d2da82ef31fe886b"
+            }
+        },
+        "Windows-1251": {
+            "decode": {
+                "file": "windows-1251-decode.bin",
+                "sha256": "a63efd82776ebafc3e61d8f5a3c0fa9d56361d9f36ae3befc46b3e8553627915"
+            },
+            "encode": {
+                "file": "windows-1251-encode.bin",
+                "sha256": "7619da2a270eebb559828693773bc16f6f0d0b42835291d5d1a894e26a135b12"
+            }
+        },
+        "CP866": {
+            "decode": {
+                "file": "cp866-decode.bin",
+                "sha256": "1a2194aa10d1f46e43961581daa31c085c90763414672d3eb614ed3c4f8fb180"
+            },
+            "encode": {
+                "file": "cp866-encode.bin",
+                "sha256": "6960b6a5b4eb265e4da185a1457d9013247da9894ed98b274128a94c07d3e39d"
+            }
+        },
+        "KOI8-R": {
+            "decode": {
+                "file": "koi8-r-decode.bin",
+                "sha256": "dfec9fee2dbe7ee70c7251485d5a1b9dee67900a3bb1524dfb34830702297a38"
+            },
+            "encode": {
+                "file": "koi8-r-encode.bin",
+                "sha256": "a013085a5d8d373400a0c0eaf9e8620ae4439447a197132f50e41c1a13a59d19"
+            }
+        },
+        "KOI8-U": {
+            "decode": {
+                "file": "koi8-u-decode.bin",
+                "sha256": "e4784b658f58e3429099b746ace8e2cceb6974a71e7c67d17c1df07a32fc86d9"
+            },
+            "encode": {
+                "file": "koi8-u-encode.bin",
+                "sha256": "ae9961f335e1f67fd8f567523c3e1b70f599f5dfc897f29e643de76a809c17db"
+            }
+        },
+        "ArmSCII-8": {
+            "decode": {
+                "file": "armscii-8-decode.bin",
+                "sha256": "4c73f39c24a559514dc5fc879f8df0e7231c3d707bb22bf488977941d0b518c7"
+            },
+            "encode": {
+                "file": "armscii-8-encode.bin",
+                "sha256": "e8880c357effaa0d8c3446a280955338f2b310279957a2827f1a7d1425c52819"
+            }
+        },
+        "CP850": {
+            "decode": {
+                "file": "cp850-decode.bin",
+                "sha256": "c7e031eaeb91d36c24ce7fa0cc66090720165a0c1c47d96827869e59964b462d"
+            },
+            "encode": {
+                "file": "cp850-encode.bin",
+                "sha256": "40574f84eae06b2eb055cebe8ed569e9d174140d0f7eec0850aad280a3d48273"
+            }
+        }
+    }
+}

@@ -97,6 +97,7 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes: 0,
     })
 }
@@ -110,6 +111,30 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     param_types: &[PhpType],
     ref_params: &[bool],
     lifetime: RefArgCellLifetime,
+) -> Result<CallArgMaterialization> {
+    materialize_method_call_args_with_receiver_reg_and_refs_options(
+        ctx,
+        receiver_reg,
+        receiver_ty,
+        operands,
+        param_types,
+        ref_params,
+        lifetime,
+        false,
+    )
+}
+
+
+/// Loads receiver-register method arguments with optional guarded conversion cleanup.
+fn materialize_method_call_args_with_receiver_reg_and_refs_options(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    receiver_ty: &PhpType,
+    operands: &[ValueId],
+    param_types: &[PhpType],
+    ref_params: &[bool],
+    lifetime: RefArgCellLifetime,
+    _guard_conversion_temporaries: bool,
 ) -> Result<CallArgMaterialization> {
     if operands.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
@@ -201,6 +226,7 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes: 0,
     })
 }

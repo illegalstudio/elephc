@@ -38,6 +38,10 @@ pub(in crate::interpreter) fn eval_unary_expr(
     with_eval_operands(&[expr], context, scope, values, |args, _, _, values| {
         match op {
             EvalUnaryOp::Plus | EvalUnaryOp::Negate => {
+                if op == EvalUnaryOp::Negate && values.type_tag(args[0])? == EVAL_TAG_FLOAT {
+                    let bits = values.raw_value_word(args[0])? ^ (1_u64 << 63);
+                    return values.raw_word_value(EVAL_TAG_FLOAT, bits);
+                }
                 let zero = values.int(0)?;
                 let result = if op == EvalUnaryOp::Plus {
                     values.add(zero, args[0])
@@ -81,17 +85,6 @@ pub(in crate::interpreter) fn eval_binary_expr(
     })
 }
 
-/// Evaluates an operand with one owner, retaining borrowed storage before later side effects.
-pub(in crate::interpreter) fn eval_owned_expr(
-    expr: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = eval_expr(expr, context, scope, values)?;
-    if value.is_borrowed() { values.retain(value) } else { Ok(value) }
-}
-
 /// Releases an expression result only when it carries an owner rather than a storage borrow.
 pub(in crate::interpreter) fn release_expr_result(
     value: RuntimeCellHandle,
@@ -99,6 +92,27 @@ pub(in crate::interpreter) fn release_expr_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if value.is_borrowed() { Ok(()) } else { eval_release_value(context, values, value) }
+}
+
+/// Compares borrowed values and releases the comparison cell after reading its truthiness.
+pub(in crate::interpreter) fn eval_comparison_condition(
+    op: EvalBinOp,
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let comparison = values.compare(op, left, right)?;
+    let result = values.truthy(comparison);
+    let released = values.release(comparison);
+    result.and_then(|result| released.map(|()| result))
+}
+
+/// Retains a borrowed result before its source owner is released.
+pub(in crate::interpreter) fn promote_borrowed_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if value.is_borrowed() { values.retain(value) } else { Ok(value) }
 }
 
 /// Keeps source-order argument owners alive through dispatch and reference writeback.

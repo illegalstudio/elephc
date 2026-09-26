@@ -48,6 +48,18 @@ eval($source);
     assert_eq!(out, "1:eval:nestedInventoryTrace:eval:");
 }
 
+/// A live argument ownership guard must never be invoked as a frame reader.
+#[test]
+fn test_core_backtrace_regression_skips_argument_ownership_guards() {
+    let out = compile_and_run(r#"<?php
+function tracedGuard($value): void {
+    foreach (debug_backtrace() as $frame) echo $frame["function"], ":";
+}
+tracedGuard(["owned"]);
+"#);
+    assert_eq!(out, "tracedGuard:");
+}
+
 /// An eval-originated trace keeps omitted optionals out of the frame and keeps variadic tails in.
 ///
 /// Both depend on the hidden argument snapshot, which only exists when the frame-capture gate

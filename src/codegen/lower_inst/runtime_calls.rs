@@ -37,6 +37,13 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
         RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
+        RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),
+        RuntimeCallTarget::ExceptionUnguardOwned => super::exception_instructions::lower_unguard_owned(ctx, inst),
+        RuntimeCallTarget::ExceptionUpdateArrayGuard | RuntimeCallTarget::ExceptionUpdateHashGuard =>
+            super::exception_instructions::lower_update_array_guard(ctx, inst),
+        RuntimeCallTarget::CallArgumentValidateUnpack
+        | RuntimeCallTarget::CallArgumentCollectPositionals
+        | RuntimeCallTarget::CallArgumentCollectNamed => super::call_argument_unpack::lower(ctx, inst, target),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)
@@ -263,6 +270,22 @@ fn lower_unary_string(
         )));
     }
     abi::emit_call_label(ctx.emitter, unary_string_symbol(runtime));
+    if runtime == UnaryStringRuntime::BinToHex {
+        let owned = ctx.next_label("bin2hex_heap_result_owned");
+        let ready = ctx.next_label("bin2hex_result_ready");
+        let (pointer, length) = abi::string_result_regs(ctx.emitter);
+        abi::emit_push_reg_pair(ctx.emitter, pointer, length);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.emitter.instruction(&format!("cmp {result}, 1"));                 // reserve returns a fresh owned string only after leaving scratch storage
+        ctx.emitter.instruction(&format!("{} {owned}", if ctx.emitter.target.arch == crate::codegen::platform::Arch::AArch64 { "b.eq" } else { "je" })); // preserve an already-owned heap result
+        abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
+        abi::emit_call_label(ctx.emitter, "__rt_str_persist");                 // copy the scratch result before later string operations reuse it
+        abi::emit_jump(ctx.emitter, &ready);
+        ctx.emitter.label(&owned);
+        abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
+        ctx.emitter.label(&ready);
+    }
     store_if_result(ctx, inst)
 }
 

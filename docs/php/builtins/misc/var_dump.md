@@ -15,7 +15,7 @@ Dumps information about a variable, including its type and value.
 
 **Parameters**:
 - `$value` (`mixed`)
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `...$values` - variadic: collects excess arguments into `$values`.
 
 **Returns**: `void`
 

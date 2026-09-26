@@ -406,14 +406,14 @@ try { xml_parser_set_option($p, XML_OPTION_TARGET_ENCODING, 5); } catch (ValueEr
 }
 
 /// A dynamically named handler (its name held in a variable, so the checker cannot see
-/// the callee) that declares more required parameters than its event supplies is an
-/// uncatchable runtime fatal when the event fires; PHP throws a catchable
-/// `ArgumentCountError`. The closure-literal form is a compile error, pinned in
-/// `tests/error_tests/xml.rs`.
+/// the callee) that declares more required parameters than its event supplies throws a
+/// catchable `ArgumentCountError` when the event fires. The callback body must not run,
+/// and execution continues after the catch. The closure-literal form is a compile error,
+/// pinned in `tests/error_tests/xml.rs`.
 #[test]
-fn test_xml_dynamic_handler_with_surplus_required_parameters_is_a_runtime_fatal() {
+fn test_xml_dynamic_handler_with_surplus_required_parameters_is_catchable() {
     if skip_without_xml_native(
-        "test_xml_dynamic_handler_with_surplus_required_parameters_is_a_runtime_fatal",
+        "test_xml_dynamic_handler_with_surplus_required_parameters_is_catchable",
     ) {
         return;
     }
@@ -430,19 +430,18 @@ echo "after\n";
     // PHP 8.5.10 (exit 0):
     //   "bool(true)\nArgumentCountError: Too few arguments to function too_many(), 3 passed
     //    and exactly 4 expected\nafter\n"
-    assert!(!out.success, "the surplus parameter must abort the program: {}", out.stdout);
-    assert_eq!(out.stdout, "bool(true)\n");
-    assert!(
-        out.stderr.contains("Fatal error") && out.stderr.contains("missing required argument"),
-        "expected the missing-argument fatal on stderr, got: {}",
-        out.stderr
+    assert!(out.success, "the ArgumentCountError must be catchable: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nArgumentCountError: call_user_func_array(): missing required argument\nafter\n"
     );
     assert!(
-        !out.stdout.contains("after") && !out.stderr.contains("ArgumentCountError"),
-        "the fatal must not be catchable: stdout={:?} stderr={}",
+        !out.stdout.contains("never"),
+        "the rejected callback body must not run: stdout={:?} stderr={}",
         out.stdout,
         out.stderr
     );
+    assert_eq!(out.stderr, "");
 }
 
 /// In a program that never links the bridge, `function_exists()` answers `true` for the

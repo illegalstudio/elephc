@@ -2,7 +2,7 @@
 title: "sscanf()"
 description: "Parses a string according to a format."
 sidebar:
-  order: 846
+  order: 909
 ---
 
 ## sscanf()
@@ -16,7 +16,7 @@ Parses a string according to a format.
 **Parameters**:
 - `$string` (`string`)
 - `$format` (`string`)
-- `...$vars` — variadic: collects excess arguments into `$vars`.
+- `...$vars` - variadic: collects excess arguments into `$vars`.
 
 **Returns**: `array`
 

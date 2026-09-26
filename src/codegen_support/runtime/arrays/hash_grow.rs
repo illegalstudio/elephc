@@ -12,11 +12,11 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_hash_grow` runtime helper for the active target.
-/// Doubles hash table capacity while preserving insertion order: allocates a new
-/// table at 2× capacity, reinserts all owned entries, frees the old table, and
-/// returns the new pointer.
-/// - ARM64 input/output: x0 = old table → x0 = new table
-/// - x86_64 input/output: rdi = old table → rax = new table
+/// Doubles entry capacity while preserving the header identity and insertion order.
+/// The ordinary entry first splits shared storage; `__rt_hash_grow_owned` skips
+/// that split for internal construction writers that deliberately update aliases.
+/// - ARM64 input/output: x0 = hash header, unchanged after owned growth.
+/// - x86_64 input/output: rdi = hash header, returned in rax.
 /// Calls `__rt_hash_ensure_unique` before rehash to split shared storage, then
 /// iterates via `__rt_hash_iter_next` and inserts via `__rt_hash_insert_owned`.
 pub fn emit_hash_grow(emitter: &mut Emitter) {
@@ -28,6 +28,13 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_grow ---");
     emitter.label_global("__rt_hash_grow");
+    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve linkage during normal copy-on-write separation
+    emitter.instruction("mov x29, sp");                                         // establish the separation frame
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // split ordinary shared PHP values before growing
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore caller linkage
+    emitter.instruction("b __rt_hash_grow_owned");                              // grow the resulting unique header
+    emitter.label_global("__rt_hash_grow_owned");
+
 
     // -- set up stack frame --
     // Stack layout:
@@ -40,7 +47,6 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
     emitter.instruction("stp x19, x20, [sp, #32]");                             // save callee-saved registers
-    emitter.instruction("bl __rt_hash_ensure_unique");                          // split shared hash tables before rehashing into new storage
     emitter.instruction("mov x20, x0");                                         // x20 = unique old table pointer
 
     // -- read old table header --
@@ -50,6 +56,9 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
     // -- create new table with 2x capacity --
     emitter.instruction("lsl x0, x9, #1");                                      // x0 = old_capacity * 2
                                            // x1 = value_type (already set)
+    emitter.instruction("cmp x0, #0");                                          // detect an empty source capacity
+    emitter.instruction("mov x10, #1");                                         // choose a minimum grown capacity
+    emitter.instruction("csel x0, x0, x10, ne");                                // allow the first insertion into an empty hash
     emitter.instruction("bl __rt_hash_new");                                    // allocate new table → x0
     emitter.instruction("mov x19, x0");                                         // x19 = new table (callee-saved)
 
@@ -68,13 +77,19 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
     emitter.instruction("mov x19, x0");                                         // update new table ptr (hash_set returns it)
     emitter.instruction("b __rt_hash_grow_loop");                               // continue iterating
 
-    // -- free old table --
+    // Transfer only the six value-layout words, preserving the original lifetime pins.
     emitter.label("__rt_hash_grow_free");
-    emitter.instruction("mov x0, x20");                                         // old table pointer
-    emitter.instruction("bl __rt_heap_free");                                   // free old table
-
-    // -- return new table pointer --
-    emitter.instruction("mov x0, x19");                                         // x0 = new table pointer
+    emitter.instruction("ldr x0, [x20, #40]");                                  // retire the original raw entry allocation
+    emitter.instruction("bl __rt_heap_free");                                   // release storage after moving all key/value owners
+    emitter.instruction("ldp x9, x10, [x19]");                                  // recover replacement count and capacity
+    emitter.instruction("stp x9, x10, [x20]");                                  // publish replacement size in the stable header
+    emitter.instruction("ldp x9, x10, [x19, #16]");                             // recover value metadata and insertion-order head
+    emitter.instruction("stp x9, x10, [x20, #16]");                             // preserve the rebuilt insertion-order chain
+    emitter.instruction("ldp x9, x10, [x19, #32]");                             // recover tail and the new entry allocation
+    emitter.instruction("stp x9, x10, [x20, #32]");                             // transfer entry ownership to the stable header
+    emitter.instruction("mov x0, x19");                                         // discard only the temporary replacement header
+    emitter.instruction("bl __rt_heap_free");                                   // keep its transferred entry allocation alive
+    emitter.instruction("mov x0, x20");                                         // return the original header identity
 
     // -- restore frame and return --
     emitter.instruction("ldp x19, x20, [sp, #32]");                             // restore callee-saved registers
@@ -91,6 +106,15 @@ fn emit_hash_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_grow ---");
     emitter.label_global("__rt_hash_grow");
+    emitter.instruction("push rbp");                                            // preserve linkage during normal copy-on-write separation
+    emitter.instruction("mov rbp, rsp");                                        // establish the separation frame
+    emitter.instruction("call __rt_hash_ensure_unique");                        // split ordinary shared PHP values before growing
+    emitter.instruction("mov rdi, rax");                                        // forward the separated header to owned growth
+    emitter.instruction("pop rbp");                                             // restore caller linkage
+    emitter.instruction("jmp __rt_hash_grow_owned");                            // grow the resulting unique header
+    emitter.label_global("__rt_hash_grow_owned");
+    emitter.instruction("mov rax, rdi");                                        // accept the declared SysV input independently of the caller's return register
+
 
     // -- set up stack frame --
     // Frame layout:
@@ -104,7 +128,6 @@ fn emit_hash_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve local storage while keeping nested calls aligned
     emitter.instruction("mov QWORD PTR [rbp - 32], r12");                       // preserve r12 because SysV treats it as callee-saved
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // preserve r13 because SysV treats it as callee-saved
-    emitter.instruction("call __rt_hash_ensure_unique");                        // split shared hash tables before moving entries into new storage
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the unique old hash table
 
     // -- create new table with 2x capacity --
@@ -138,11 +161,20 @@ fn emit_hash_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the latest destination table pointer
     emitter.instruction("jmp __rt_hash_grow_loop_x");                           // continue rehashing entries
 
-    // -- free old table and return new table --
+    // Transfer only the six value-layout words, preserving the original lifetime pins.
     emitter.label("__rt_hash_grow_free_x");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // old table pointer for the x86_64 heap_free ABI
-    emitter.instruction("call __rt_heap_free");                                 // release the old hash table storage
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the grown hash table
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // recover the original stable header
+    emitter.instruction("mov rax, QWORD PTR [rax + 40]");                       // retire its original raw entry allocation
+    emitter.instruction("call __rt_heap_free");                                 // release storage after moving all key/value owners
+    emitter.instruction("mov r12, QWORD PTR [rbp - 16]");                       // recover the stable destination header
+    emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // recover the temporary replacement header
+    for offset in [0, 8, 16, 24, 32, 40] {
+        emitter.instruction(&format!("mov r10, QWORD PTR [r13 + {offset}]"));   // read one replacement header field
+        emitter.instruction(&format!("mov QWORD PTR [r12 + {offset}], r10"));   // transfer metadata and entry ownership
+    }
+    emitter.instruction("mov rax, r13");                                        // discard only the temporary replacement header
+    emitter.instruction("call __rt_heap_free");                                 // keep its transferred entry allocation alive
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the original header identity
     emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // restore caller r13
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // restore caller r12
     emitter.instruction("add rsp, 48");                                         // release the grow spill frame

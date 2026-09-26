@@ -182,11 +182,19 @@ pub(super) fn first_class_builtin_descriptor(
         }));
     }
     let wrapper_sig = runtime_builtin_wrapper_sig(&name, &callable_wrapper_sig(&sig));
+    let owns_string_return = wrapper_sig.return_type.codegen_repr() == PhpType::Str
+        && crate::builtins::registry::lookup(&name).is_some_and(|definition| {
+            matches!(
+                definition.spec.semantics.runtime_functions,
+                crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                    if target.uses_mbstring_runtime()
+            )
+        });
     let entry_label =
         emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig, strict_php)?;
     Ok(Some(FirstClassCallableDescriptor {
         entry_label: Some(entry_label),
-        owns_string_return: false,
+        owns_string_return,
         kind: callable_descriptor::CALLABLE_DESC_KIND_BUILTIN,
         sig: Some(wrapper_sig),
         invocation: callable_descriptor::CallableDescriptorInvocation::named(

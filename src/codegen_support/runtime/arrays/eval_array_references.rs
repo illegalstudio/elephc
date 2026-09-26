@@ -54,7 +54,7 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
-            super::super::heap_free::emit_heap_free(&mut emitter, true);
+            super::super::heap_free::emit_heap_free(&mut emitter, true, false);
             let output = emitter.output();
             assert_eq!(output.matches("__rt_heap_free_eval_references_done:").count(), 1, "{name}");
             assert!(output.contains("_elephc_eval_array_reference_retire_fn"), "{name}");
@@ -78,7 +78,7 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
-            super::super::heap_free::emit_heap_free(&mut emitter, false);
+            super::super::heap_free::emit_heap_free(&mut emitter, false, false);
             let output = emitter.output();
             assert!(!output.contains("__rt_heap_free_eval_references_done"), "{name}");
             assert!(!output.contains("_elephc_eval_array_reference_retire_fn"), "{name}");

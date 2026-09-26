@@ -16,6 +16,9 @@ pub(super) fn eval_named_callable_with_call_user_func_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if eval_builtin_uses_owned_arguments(name) {
+        return eval_builtin_callback_with_arguments(name, positional_args(evaluated_args), false, context, values);
+    }
     if let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? {
         return Ok(result);
     }

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Heap helpers own allocator metadata, debug accounting, and free-list invariants used by all refcounted runtime values.
+//! - Enabled mbstring hooks retire native string identity leases before storage can be reused.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -27,9 +28,9 @@ use crate::codegen_support::platform::Arch;
 /// Input: `x0` = user pointer (as returned by `heap_alloc`)
 ///
 /// ABI: `x0` is callee-saved where needed; all other registers are scratch.
-pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool) {
+pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_heap_free_linux_x86_64(emitter, eval_bridge);
+        emit_heap_free_linux_x86_64(emitter, eval_bridge, mbstring);
         return;
     }
 
@@ -74,6 +75,11 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.label("__rt_heap_free_object_handle_done");
     if eval_bridge {
         super::eval_array_references::emit_eval_array_reference_retirement(emitter);
+    }
+    if mbstring {
+        emitter.instruction("stp x0, x30, [sp, #-16]!");                        // preserve the freed pointer and caller return address across the metadata callback
+        emitter.instruction("bl __rt_mbstring_ini_forget");                     // retire the string identity before allocator reuse
+        emitter.instruction("ldp x0, x30, [sp], #16");                          // restore the frameless allocator's input and original return address
     }
 
     // -- debug mode: validate the free list before mutating it --
@@ -322,7 +328,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool) {
 ///
 /// Input: `rax` = user pointer
 /// Output: `rax` preserved through the free path; all other scratch registers are clobbered.
-fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) {
+fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) {
     let double_free_msg = "Fatal error: heap debug detected double free\n";
 
     emitter.blank();
@@ -351,7 +357,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the current heap kind word before deciding whether a zero refcount is stale or legitimately being freed
     emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word while isolating the ownership marker for the stale-free check
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker from the packed kind metadata
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // does this heap-range pointer still carry a live x86_64 heap marker?
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// does this heap-range pointer still carry a live x86_64 heap marker?
     emitter.instruction("je __rt_heap_free_debug_checked");                     // yes — a live marker means this is the first legitimate free path, even if refcount is already zero
     emitter.instruction("mov ecx, DWORD PTR [rax - 12]");                       // load the current live refcount before any x86_64 free-side mutations
     emitter.instruction("test ecx, ecx");                                       // does the header still look like a live heap block?
@@ -362,7 +368,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.label("__rt_heap_free_debug_checked");
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
 
     // -- return this block's PHP object handle to the pool before the storage goes --
@@ -381,6 +387,11 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.label("__rt_heap_free_object_handle_done");
     if eval_bridge {
         super::eval_array_references::emit_eval_array_reference_retirement(emitter);
+    }
+    if mbstring {
+        emitter.instruction("sub rsp, 8");                                      // align the identity-retirement call from the frameless entry
+        emitter.instruction("call __rt_mbstring_ini_forget");                   // retire the string identity before allocator reuse
+        emitter.instruction("add rsp, 8");                                      // restore the allocator's entry stack
     }
 
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
@@ -600,12 +611,25 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
-            emit_heap_free(&mut emitter, false);
+            emit_heap_free(&mut emitter, false, false);
             let output = emitter.output();
             let probe = output.find("_obj_handle_index").unwrap();
             let skip = output.find("__rt_heap_free_object_handle_done").unwrap();
             let call = output.find("__rt_object_handle_release").unwrap();
             assert!(probe < skip && skip < call, "{name}");
+        }
+    }
+
+    /// The optional metadata callback must not replace the frameless AArch64 return address.
+    #[test]
+    fn heap_free_preserves_aarch64_linkage_across_mbstring_retirement() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_heap_free(&mut emitter, false, true);
+            let output = emitter.output();
+            assert!(output.contains(
+                "stp x0, x30, [sp, #-16]!\n    bl __rt_mbstring_ini_forget\n    ldp x0, x30, [sp], #16"
+            ), "{name}");
         }
     }
 }

@@ -12,6 +12,8 @@
 #[cfg(not(test))]
 pub mod callables;
 pub(crate) mod array_references;
+#[cfg(not(test))]
+mod mbstring_array_references;
 pub mod context;
 pub mod declared_symbols;
 pub(crate) mod dynamic_destructors;

@@ -2,7 +2,7 @@
 title: "ini_set() - internals"
 description: "Compiler internals for ini_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 914
+  order: 977
 ---
 
 ## `ini_set()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:4494](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L4494) (`ini_set`)
+- **Lowering**: [`src/web_prelude/build.rs`:4495](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L4495) (`ini_set`)
 - **Function symbol**: `ini_set()`
 
 
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function ini_set(string $option, mixed $value): mixed
+function ini_set(string $option, string|int|float|bool|null $value): string|false
 ```
 
 ## What the type checker enforces
@@ -38,7 +38,7 @@ function ini_set(string $option, mixed $value): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

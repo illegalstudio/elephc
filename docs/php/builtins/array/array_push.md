@@ -15,7 +15,7 @@ Pushes one or more elements onto the end of array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `...$values` - variadic: collects excess arguments into `$values`.
 
 **Returns**: `int`
 

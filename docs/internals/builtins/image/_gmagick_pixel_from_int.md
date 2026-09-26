@@ -2,7 +2,7 @@
 title: "_gmagick_pixel_from_int() - internals"
 description: "Compiler internals for _gmagick_pixel_from_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1094
+  order: 1158
 ---
 
 ## `_gmagick_pixel_from_int()` - internals
@@ -38,8 +38,8 @@ function _gmagick_pixel_from_int(int $packed): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

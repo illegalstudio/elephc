@@ -285,6 +285,7 @@ fn parse_fragment_accepts_unset_source() {
             EvalStmt::UnsetVar {
                 name: "y".to_string()
             },
+            EvalStmt::GcCollect,
         ]
     );
 }

@@ -902,7 +902,10 @@ fn merge_local_assignment_type(
         return Ok(());
     }
     if let Some(existing) = env.get(name) {
-        let merged_ty = checker.merged_assignment_type(existing, ty);
+        let merged_ty = checker.merged_assignment_type(existing, ty).or_else(|| {
+            checker.guarded_union_types.get(name)
+                .and_then(|original| checker.merged_assignment_type(original, ty))
+        });
         if merged_ty.is_none() {
             // `existing` may be a FLOW FACT rather than the binding: inside a guarded region the
             // environment holds the guard's view, and `$g = glob(…); if ($g === false) { $g =
@@ -981,6 +984,7 @@ fn merge_local_assignment_type(
                 // The fresh binding is created here, at depth 0 — pin that explicitly so a
                 // later kill or retype of the same name is judged against THIS binding.
                 checker.local_binding_depth.insert(name.to_string(), 0);
+                checker.guarded_union_types.remove(name);
                 // Unlike the `unset` kill, the per-name callable/reflection tables are NOT
                 // cleared here. The old binding's metadata is already gone: `check_assign`
                 // ran `update_callable_assignment_metadata`,

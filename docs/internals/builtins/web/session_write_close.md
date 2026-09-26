@@ -2,7 +2,7 @@
 title: "session_write_close() - internals"
 description: "Compiler internals for session_write_close(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 937
+  order: 1000
 ---
 
 ## `session_write_close()` - internals
@@ -38,7 +38,7 @@ function session_write_close(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

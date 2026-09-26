@@ -1,0 +1,452 @@
+[
+    {
+        "function": "mb_decode_mimeheader",
+        "count": 2,
+        "message": "mb_decode_mimeheader() expects exactly 1 argument, 2 given",
+        "trace": []
+    },
+    {
+        "function": "mb_decode_mimeheader",
+        "count": 0,
+        "message": "mb_decode_mimeheader() expects exactly 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_convert_encoding",
+        "count": 4,
+        "message": "mb_convert_encoding() expects at most 3 arguments, 4 given",
+        "trace": []
+    },
+    {
+        "function": "mb_convert_encoding",
+        "count": 1,
+        "message": "mb_convert_encoding() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_detect_encoding",
+        "count": 4,
+        "message": "mb_detect_encoding() expects at most 3 arguments, 4 given",
+        "trace": []
+    },
+    {
+        "function": "mb_detect_encoding",
+        "count": 0,
+        "message": "mb_detect_encoding() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_encode_numericentity",
+        "count": 5,
+        "message": "mb_encode_numericentity() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_encode_numericentity",
+        "count": 1,
+        "message": "mb_encode_numericentity() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_decode_numericentity",
+        "count": 4,
+        "message": "mb_decode_numericentity() expects at most 3 arguments, 4 given",
+        "trace": []
+    },
+    {
+        "function": "mb_decode_numericentity",
+        "count": 1,
+        "message": "mb_decode_numericentity() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_detect_order",
+        "count": 2,
+        "message": "mb_detect_order() expects at most 1 argument, 2 given",
+        "trace": []
+    },
+    {
+        "function": "mb_list_encodings",
+        "count": 1,
+        "message": "mb_list_encodings() expects exactly 0 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_convert_case",
+        "count": 4,
+        "message": "mb_convert_case() expects at most 3 arguments, 4 given",
+        "trace": []
+    },
+    {
+        "function": "mb_convert_case",
+        "count": 1,
+        "message": "mb_convert_case() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_lcfirst",
+        "count": 3,
+        "message": "mb_lcfirst() expects at most 2 arguments, 3 given",
+        "trace": []
+    },
+    {
+        "function": "mb_lcfirst",
+        "count": 0,
+        "message": "mb_lcfirst() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strimwidth",
+        "count": 6,
+        "message": "mb_strimwidth() expects at most 5 arguments, 6 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strimwidth",
+        "count": 2,
+        "message": "mb_strimwidth() expects at least 3 arguments, 2 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strtolower",
+        "count": 3,
+        "message": "mb_strtolower() expects at most 2 arguments, 3 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strtolower",
+        "count": 0,
+        "message": "mb_strtolower() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strtoupper",
+        "count": 3,
+        "message": "mb_strtoupper() expects at most 2 arguments, 3 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strtoupper",
+        "count": 0,
+        "message": "mb_strtoupper() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strwidth",
+        "count": 3,
+        "message": "mb_strwidth() expects at most 2 arguments, 3 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strwidth",
+        "count": 0,
+        "message": "mb_strwidth() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_ucfirst",
+        "count": 3,
+        "message": "mb_ucfirst() expects at most 2 arguments, 3 given",
+        "trace": []
+    },
+    {
+        "function": "mb_ucfirst",
+        "count": 0,
+        "message": "mb_ucfirst() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_substr",
+        "count": 5,
+        "message": "mb_substr() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_substr",
+        "count": 1,
+        "message": "mb_substr() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strcut",
+        "count": 5,
+        "message": "mb_strcut() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strcut",
+        "count": 1,
+        "message": "mb_strcut() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_scrub",
+        "count": 3,
+        "message": "mb_scrub() expects at most 2 arguments, 3 given",
+        "trace": []
+    },
+    {
+        "function": "mb_scrub",
+        "count": 0,
+        "message": "mb_scrub() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_trim",
+        "count": 4,
+        "message": "mb_trim() expects at most 3 arguments, 4 given",
+        "trace": []
+    },
+    {
+        "function": "mb_trim",
+        "count": 0,
+        "message": "mb_trim() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_ltrim",
+        "count": 4,
+        "message": "mb_ltrim() expects at most 3 arguments, 4 given",
+        "trace": []
+    },
+    {
+        "function": "mb_ltrim",
+        "count": 0,
+        "message": "mb_ltrim() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_rtrim",
+        "count": 4,
+        "message": "mb_rtrim() expects at most 3 arguments, 4 given",
+        "trace": []
+    },
+    {
+        "function": "mb_rtrim",
+        "count": 0,
+        "message": "mb_rtrim() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_str_pad",
+        "count": 6,
+        "message": "mb_str_pad() expects at most 5 arguments, 6 given",
+        "trace": []
+    },
+    {
+        "function": "mb_str_pad",
+        "count": 1,
+        "message": "mb_str_pad() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_convert_kana",
+        "count": 4,
+        "message": "mb_convert_kana() expects at most 3 arguments, 4 given",
+        "trace": []
+    },
+    {
+        "function": "mb_convert_kana",
+        "count": 0,
+        "message": "mb_convert_kana() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_substr_count",
+        "count": 4,
+        "message": "mb_substr_count() expects at most 3 arguments, 4 given",
+        "trace": []
+    },
+    {
+        "function": "mb_substr_count",
+        "count": 1,
+        "message": "mb_substr_count() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_ord",
+        "count": 3,
+        "message": "mb_ord() expects at most 2 arguments, 3 given",
+        "trace": []
+    },
+    {
+        "function": "mb_ord",
+        "count": 0,
+        "message": "mb_ord() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_chr",
+        "count": 3,
+        "message": "mb_chr() expects at most 2 arguments, 3 given",
+        "trace": []
+    },
+    {
+        "function": "mb_chr",
+        "count": 0,
+        "message": "mb_chr() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strpos",
+        "count": 5,
+        "message": "mb_strpos() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strpos",
+        "count": 1,
+        "message": "mb_strpos() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_stripos",
+        "count": 5,
+        "message": "mb_stripos() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_stripos",
+        "count": 1,
+        "message": "mb_stripos() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strrpos",
+        "count": 5,
+        "message": "mb_strrpos() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strrpos",
+        "count": 1,
+        "message": "mb_strrpos() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strripos",
+        "count": 5,
+        "message": "mb_strripos() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strripos",
+        "count": 1,
+        "message": "mb_strripos() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strstr",
+        "count": 5,
+        "message": "mb_strstr() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strstr",
+        "count": 1,
+        "message": "mb_strstr() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_stristr",
+        "count": 5,
+        "message": "mb_stristr() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_stristr",
+        "count": 1,
+        "message": "mb_stristr() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strrchr",
+        "count": 5,
+        "message": "mb_strrchr() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strrchr",
+        "count": 1,
+        "message": "mb_strrchr() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strrichr",
+        "count": 5,
+        "message": "mb_strrichr() expects at most 4 arguments, 5 given",
+        "trace": []
+    },
+    {
+        "function": "mb_strrichr",
+        "count": 1,
+        "message": "mb_strrichr() expects at least 2 arguments, 1 given",
+        "trace": []
+    },
+    {
+        "function": "mb_language",
+        "count": 2,
+        "message": "mb_language() expects at most 1 argument, 2 given",
+        "trace": []
+    },
+    {
+        "function": "mb_internal_encoding",
+        "count": 2,
+        "message": "mb_internal_encoding() expects at most 1 argument, 2 given",
+        "trace": []
+    },
+    {
+        "function": "mb_http_output",
+        "count": 2,
+        "message": "mb_http_output() expects at most 1 argument, 2 given",
+        "trace": []
+    },
+    {
+        "function": "mb_encoding_aliases",
+        "count": 2,
+        "message": "mb_encoding_aliases() expects exactly 1 argument, 2 given",
+        "trace": []
+    },
+    {
+        "function": "mb_encoding_aliases",
+        "count": 0,
+        "message": "mb_encoding_aliases() expects exactly 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_str_split",
+        "count": 4,
+        "message": "mb_str_split() expects at most 3 arguments, 4 given",
+        "trace": []
+    },
+    {
+        "function": "mb_str_split",
+        "count": 0,
+        "message": "mb_str_split() expects at least 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_preferred_mime_name",
+        "count": 2,
+        "message": "mb_preferred_mime_name() expects exactly 1 argument, 2 given",
+        "trace": []
+    },
+    {
+        "function": "mb_preferred_mime_name",
+        "count": 0,
+        "message": "mb_preferred_mime_name() expects exactly 1 argument, 0 given",
+        "trace": []
+    },
+    {
+        "function": "mb_check_encoding",
+        "count": 3,
+        "message": "mb_check_encoding() expects at most 2 arguments, 3 given",
+        "trace": []
+    },
+    {
+        "function": "mb_substitute_character",
+        "count": 2,
+        "message": "mb_substitute_character() expects at most 1 argument, 2 given",
+        "trace": []
+    }
+]

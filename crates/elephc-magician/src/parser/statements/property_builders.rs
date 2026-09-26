@@ -165,6 +165,7 @@ pub(super) fn property_array_set_stmt(
 pub(super) fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttributeArg> {
     match expr {
         EvalExpr::Const(EvalConst::String(value)) => Some(EvalAttributeArg::String(value.clone())),
+        EvalExpr::Const(EvalConst::Bytes(value)) => Some(EvalAttributeArg::Bytes(value.clone())),
         EvalExpr::Const(EvalConst::Int(value)) => Some(EvalAttributeArg::Int(*value)),
         EvalExpr::Const(EvalConst::Float(value)) => Some(EvalAttributeArg::Float(value.to_bits())),
         EvalExpr::Const(EvalConst::Bool(value)) => Some(EvalAttributeArg::Bool(*value)),

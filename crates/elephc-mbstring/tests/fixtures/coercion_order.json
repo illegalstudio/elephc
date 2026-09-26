@@ -1,0 +1,2167 @@
+[
+    {
+        "scenario": "array_reference_mutation",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "bool",
+            false
+        ],
+        "trace": [
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": {
+            "bytes": {
+                "bytes": "ff"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_reference_mutation",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "bool",
+            false
+        ],
+        "trace": [
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": {
+            "bytes": {
+                "bytes": "ff"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_reference_mutation",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "bool",
+            false
+        ],
+        "trace": [
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": {
+            "bytes": {
+                "bytes": "ff"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_reference_mutation",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636865636b5f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e6729206d757374206265206f662074797065203f737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "bytes": {
+                "bytes": "6f6b"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_reference_mutation",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636865636b5f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e6729206d757374206265206f662074797065203f737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "bytes": {
+                "bytes": "6f6b"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_reference_mutation",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636865636b5f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e6729206d757374206265206f662074797065203f737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "bytes": {
+                "bytes": "6f6b"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_cow_mutation",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "bool",
+            true
+        ],
+        "trace": [
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": {
+            "array": {
+                "name": {
+                    "bytes": "ff"
+                }
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_cow_mutation",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "bool",
+            true
+        ],
+        "trace": [
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": {
+            "array": {
+                "name": {
+                    "bytes": "ff"
+                }
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_cow_mutation",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "bool",
+            true
+        ],
+        "trace": [
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": {
+            "array": {
+                "name": {
+                    "bytes": "ff"
+                }
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_cow_mutation",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636865636b5f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e6729206d757374206265206f662074797065203f737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "array": {
+                "name": {
+                    "bytes": "6f6b"
+                }
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_cow_mutation",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636865636b5f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e6729206d757374206265206f662074797065203f737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "array": {
+                "name": {
+                    "bytes": "6f6b"
+                }
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "array_cow_mutation",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636865636b5f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e6729206d757374206265206f662074797065203f737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "array": {
+                "name": {
+                    "bytes": "6f6b"
+                }
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "scalar_reference_mutation",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "bool",
+            true
+        ],
+        "trace": [
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": {
+            "bytes": {
+                "bytes": "ff"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "scalar_reference_mutation",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "bool",
+            true
+        ],
+        "trace": [
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": {
+            "bytes": {
+                "bytes": "ff"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "scalar_reference_mutation",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "bool",
+            true
+        ],
+        "trace": [
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": {
+            "bytes": {
+                "bytes": "ff"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "scalar_reference_mutation",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636865636b5f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e6729206d757374206265206f662074797065203f737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "bytes": {
+                "bytes": "6f6b"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "scalar_reference_mutation",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636865636b5f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e6729206d757374206265206f662074797065203f737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "bytes": {
+                "bytes": "6f6b"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "scalar_reference_mutation",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636865636b5f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e6729206d757374206265206f662074797065203f737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "bytes": {
+                "bytes": "6f6b"
+            }
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "earlier_stringable_mutates_later_scalar",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "string",
+            "61"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": {
+            "offset": 2
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "earlier_stringable_mutates_later_scalar",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "string",
+            "61"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": {
+            "offset": 2
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "earlier_stringable_mutates_later_scalar",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "string",
+            "61"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": {
+            "offset": 2
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "earlier_stringable_mutates_later_scalar",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "offset": 0
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "earlier_stringable_mutates_later_scalar",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "offset": 0
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "earlier_stringable_mutates_later_scalar",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": {
+            "offset": 0
+        },
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_changes_internal",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "int",
+            2
+        ],
+        "trace": [
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": [],
+        "internal": "8bit",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_changes_internal",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "int",
+            2
+        ],
+        "trace": [
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": [],
+        "internal": "8bit",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_changes_internal",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "int",
+            2
+        ],
+        "trace": [
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": [],
+        "internal": "8bit",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_changes_internal",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_changes_internal",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_changes_internal",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_throws",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "error",
+            "RuntimeException",
+            "63616c6c6261636b2073746f70706564"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_throws",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "error",
+            "RuntimeException",
+            "63616c6c6261636b2073746f70706564"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_throws",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "RuntimeException",
+            "63616c6c6261636b2073746f70706564"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_throws",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_throws",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "stringable_throws",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "null_before_stringable",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "int",
+            0
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "6d625f7374726c656e28293a2050617373696e67206e756c6c20746f20706172616d65746572202331202824737472696e6729206f66207479706520737472696e672069732064657072656361746564"
+            ],
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "null_before_stringable",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "error",
+            "RuntimeException",
+            "646961676e6f737469632073746f70706564"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "6d625f7374726c656e28293a2050617373696e67206e756c6c20746f20706172616d65746572202331202824737472696e6729206f66207479706520737472696e672069732064657072656361746564"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "null_before_stringable",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "int",
+            0
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "6d625f7374726c656e28293a2050617373696e67206e756c6c20746f20706172616d65746572202331202824737472696e6729206f66207479706520737472696e672069732064657072656361746564"
+            ],
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": [],
+        "internal": "8bit",
+        "language": "neutral",
+        "substitution": 33,
+        "precision": "3"
+    },
+    {
+        "scenario": "null_before_stringable",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c206e756c6c20676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "null_before_stringable",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c206e756c6c20676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "null_before_stringable",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c206e756c6c20676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "lossy_before_stringable",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "string",
+            "61"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "496d706c6963697420636f6e76657273696f6e2066726f6d20666c6f617420302e3520746f20696e74206c6f73657320707265636973696f6e"
+            ],
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "lossy_before_stringable",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "error",
+            "RuntimeException",
+            "646961676e6f737469632073746f70706564"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "496d706c6963697420636f6e76657273696f6e2066726f6d20666c6f617420302e3520746f20696e74206c6f73657320707265636973696f6e"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "lossy_before_stringable",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "string",
+            "61"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "496d706c6963697420636f6e76657273696f6e2066726f6d20666c6f617420302e3520746f20696e74206c6f73657320707265636973696f6e"
+            ],
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": [],
+        "internal": "8bit",
+        "language": "neutral",
+        "substitution": 33,
+        "precision": "3"
+    },
+    {
+        "scenario": "lossy_before_stringable",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202332202824737461727429206d757374206265206f66207479706520696e742c20666c6f617420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "lossy_before_stringable",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202332202824737461727429206d757374206265206f66207479706520696e742c20666c6f617420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "lossy_before_stringable",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202332202824737461727429206d757374206265206f66207479706520696e742c20666c6f617420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "nan_before_stringable",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "int",
+            3
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                2,
+                "756e6578706563746564204e414e2076616c75652077617320636f657263656420746f20737472696e67"
+            ],
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "nan_before_stringable",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "error",
+            "RuntimeException",
+            "646961676e6f737469632073746f70706564"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                2,
+                "756e6578706563746564204e414e2076616c75652077617320636f657263656420746f20737472696e67"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "nan_before_stringable",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "int",
+            3
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                2,
+                "756e6578706563746564204e414e2076616c75652077617320636f657263656420746f20737472696e67"
+            ],
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": [],
+        "internal": "8bit",
+        "language": "neutral",
+        "substitution": 33,
+        "precision": "3"
+    },
+    {
+        "scenario": "nan_before_stringable",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c20666c6f617420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "nan_before_stringable",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c20666c6f617420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "nan_before_stringable",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f7374726c656e28293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c20666c6f617420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "all_coercions_before_bad_encoding",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f73756273747228293a20417267756d656e74202334202824656e636f64696e6729206d75737420626520612076616c696420656e636f64696e672c20226e6f742d616e2d656e636f64696e672220676976656e"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "6d625f73756273747228293a2050617373696e67206e756c6c20746f20706172616d65746572202331202824737472696e6729206f66207479706520737472696e672069732064657072656361746564"
+            ],
+            [
+                "diagnostic",
+                8192,
+                "496d706c6963697420636f6e76657273696f6e2066726f6d20666c6f617420302e3520746f20696e74206c6f73657320707265636973696f6e"
+            ],
+            [
+                "diagnostic",
+                8192,
+                "496d706c6963697420636f6e76657273696f6e2066726f6d20666c6f617420312e3520746f20696e74206c6f73657320707265636973696f6e"
+            ],
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "all_coercions_before_bad_encoding",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "error",
+            "RuntimeException",
+            "646961676e6f737469632073746f70706564"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "6d625f73756273747228293a2050617373696e67206e756c6c20746f20706172616d65746572202331202824737472696e6729206f66207479706520737472696e672069732064657072656361746564"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "all_coercions_before_bad_encoding",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f73756273747228293a20417267756d656e74202334202824656e636f64696e6729206d75737420626520612076616c696420656e636f64696e672c20226e6f742d616e2d656e636f64696e672220676976656e"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "6d625f73756273747228293a2050617373696e67206e756c6c20746f20706172616d65746572202331202824737472696e6729206f66207479706520737472696e672069732064657072656361746564"
+            ],
+            [
+                "diagnostic",
+                8192,
+                "496d706c6963697420636f6e76657273696f6e2066726f6d20666c6f617420302e3520746f20696e74206c6f73657320707265636973696f6e"
+            ],
+            [
+                "diagnostic",
+                8192,
+                "496d706c6963697420636f6e76657273696f6e2066726f6d20666c6f617420312e3520746f20696e74206c6f73657320707265636973696f6e"
+            ],
+            [
+                "stringify",
+                "encoding"
+            ]
+        ],
+        "observed": [],
+        "internal": "8bit",
+        "language": "neutral",
+        "substitution": 33,
+        "precision": "3"
+    },
+    {
+        "scenario": "all_coercions_before_bad_encoding",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c206e756c6c20676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "all_coercions_before_bad_encoding",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c206e756c6c20676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "all_coercions_before_bad_encoding",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c206e756c6c20676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_stops_at_invalid",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e6720226e6f742d616e2d656e636f64696e6722"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_stops_at_invalid",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e6720226e6f742d616e2d656e636f64696e6722"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_stops_at_invalid",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e6720226e6f742d616e2d656e636f64696e6722"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_stops_at_invalid",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e6720226e6f742d616e2d656e636f64696e6722"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_stops_at_invalid",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e6720226e6f742d616e2d656e636f64696e6722"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_stops_at_invalid",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e6720226e6f742d616e2d656e636f64696e6722"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_before_language_change",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "bool",
+            false
+        ],
+        "trace": [
+            [
+                "stringify",
+                "later"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_before_language_change",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "bool",
+            false
+        ],
+        "trace": [
+            [
+                "stringify",
+                "later"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_before_language_change",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "bool",
+            false
+        ],
+        "trace": [
+            [
+                "stringify",
+                "later"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_before_language_change",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "bool",
+            false
+        ],
+        "trace": [
+            [
+                "stringify",
+                "later"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_before_language_change",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "bool",
+            false
+        ],
+        "trace": [
+            [
+                "stringify",
+                "later"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_before_language_change",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "bool",
+            false
+        ],
+        "trace": [
+            [
+                "stringify",
+                "later"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_after_language_change",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "string",
+            "534a4953"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_after_language_change",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "string",
+            "534a4953"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_after_language_change",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "string",
+            "534a4953"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_after_language_change",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "string",
+            "534a4953"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_after_language_change",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "string",
+            "534a4953"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_auto_after_language_change",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "string",
+            "534a4953"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "first"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "Japanese",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_conversion_outer_then_elements",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "string",
+            "e38182"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "target"
+            ],
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_conversion_outer_then_elements",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "string",
+            "e38182"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "target"
+            ],
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_conversion_outer_then_elements",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "string",
+            "e38182"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "target"
+            ],
+            [
+                "stringify",
+                "source"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_conversion_outer_then_elements",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636f6e766572745f656e636f64696e6728293a20417267756d656e74202332202824746f5f656e636f64696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_conversion_outer_then_elements",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636f6e766572745f656e636f64696e6728293a20417267756d656e74202332202824746f5f656e636f64696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_conversion_outer_then_elements",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f636f6e766572745f656e636f64696e6728293a20417267756d656e74202332202824746f5f656e636f64696e6729206d757374206265206f66207479706520737472696e672c204d624f726465725465787420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_throws",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "error",
+            "RuntimeException",
+            "6c6973742063616c6c6261636b2073746f70706564"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "failure"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_throws",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "error",
+            "RuntimeException",
+            "6c6973742063616c6c6261636b2073746f70706564"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "failure"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_throws",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "RuntimeException",
+            "6c6973742063616c6c6261636b2073746f70706564"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "failure"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_throws",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "RuntimeException",
+            "6c6973742063616c6c6261636b2073746f70706564"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "failure"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_throws",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "RuntimeException",
+            "6c6973742063616c6c6261636b2073746f70706564"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "failure"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_throws",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "RuntimeException",
+            "6c6973742063616c6c6261636b2073746f70706564"
+        ],
+        "trace": [
+            [
+                "stringify",
+                "failure"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_null_before_invalid",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e67202222"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_null_before_invalid",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e67202222"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_null_before_invalid",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e67202222"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_null_before_invalid",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e67202222"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_null_before_invalid",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e67202222"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_null_before_invalid",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e67202222"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_numeric_before_stringable",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e672022312e3522"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_numeric_before_stringable",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e672022312e3522"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_numeric_before_stringable",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e672022312e3522"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_numeric_before_stringable",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e672022312e3522"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_numeric_before_stringable",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e672022312e3522"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "list_numeric_before_stringable",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "ValueError",
+            "6d625f6465746563745f656e636f64696e6728293a20417267756d656e74202332202824656e636f64696e67732920636f6e7461696e7320696e76616c696420656e636f64696e672022312e3522"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "float_format_before_later_warning",
+        "strict": false,
+        "handler": "observe",
+        "result": [
+            "string",
+            "312e3233343536373839"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "496d706c6963697420636f6e76657273696f6e2066726f6d20666c6f617420302e3520746f20696e74206c6f73657320707265636973696f6e"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "float_format_before_later_warning",
+        "strict": false,
+        "handler": "throw",
+        "result": [
+            "error",
+            "RuntimeException",
+            "646961676e6f737469632073746f70706564"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "496d706c6963697420636f6e76657273696f6e2066726f6d20666c6f617420302e3520746f20696e74206c6f73657320707265636973696f6e"
+            ]
+        ],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "float_format_before_later_warning",
+        "strict": false,
+        "handler": "mutate",
+        "result": [
+            "string",
+            "312e3233343536373839"
+        ],
+        "trace": [
+            [
+                "diagnostic",
+                8192,
+                "496d706c6963697420636f6e76657273696f6e2066726f6d20666c6f617420302e3520746f20696e74206c6f73657320707265636973696f6e"
+            ]
+        ],
+        "observed": [],
+        "internal": "8bit",
+        "language": "neutral",
+        "substitution": 33,
+        "precision": "3"
+    },
+    {
+        "scenario": "float_format_before_later_warning",
+        "strict": true,
+        "handler": "observe",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c20666c6f617420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "float_format_before_later_warning",
+        "strict": true,
+        "handler": "throw",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c20666c6f617420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    },
+    {
+        "scenario": "float_format_before_later_warning",
+        "strict": true,
+        "handler": "mutate",
+        "result": [
+            "error",
+            "TypeError",
+            "6d625f73756273747228293a20417267756d656e74202331202824737472696e6729206d757374206265206f66207479706520737472696e672c20666c6f617420676976656e"
+        ],
+        "trace": [],
+        "observed": [],
+        "internal": "UTF-8",
+        "language": "neutral",
+        "substitution": 63,
+        "precision": "14"
+    }
+]

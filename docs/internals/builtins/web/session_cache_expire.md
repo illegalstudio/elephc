@@ -2,7 +2,7 @@
 title: "session_cache_expire() - internals"
 description: "Compiler internals for session_cache_expire(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 916
+  order: 979
 ---
 
 ## `session_cache_expire()` - internals
@@ -38,7 +38,7 @@ function session_cache_expire(?int $value = null): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

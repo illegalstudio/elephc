@@ -2,7 +2,7 @@
 title: "xml_get_current_line_number()"
 description: "Returns the current line number of the parser."
 sidebar:
-  order: 943
+  order: 1006
 ---
 
 ## xml_get_current_line_number()

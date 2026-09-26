@@ -40,8 +40,11 @@
 //!   so no EIR call names it.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::RuntimeFeatures;
+
+const CLEANUP: Scope = Scope { arm: 16, x86: 32 };
 
 /// mixed_free_deep: free a mixed cell and release its owned child payload.
 /// Input: x0 = mixed cell pointer
@@ -238,6 +241,7 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the mixed pointer after child release
 
     emitter.instruction("bl __rt_heap_free");                                   // free the mixed cell storage itself
+    CLEANUP.finish(emitter);
 
     super::deep_cleanup::finish(emitter, "__rt_mixed_free_deep_return");
     emitter.label("__rt_mixed_free_deep_done");
@@ -435,6 +439,7 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the mixed pointer after the optional child release helper call
 
     emitter.instruction("call __rt_heap_free");                                 // release the mixed box storage itself through the shared x86_64 heap wrapper
+    CLEANUP.finish(emitter);
 
     super::deep_cleanup::finish(emitter, "__rt_mixed_free_deep_return");
     emitter.label("__rt_mixed_free_deep_done");

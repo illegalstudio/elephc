@@ -58,8 +58,8 @@ pub(super) fn builtin_reflection_owner_constructor_method(
 /// the spellings the checker cannot see through — a first-class callable
 /// (`$r->getAttributes(...)`) and `call_user_func_array([$r, 'getAttributes'], $args)` both reach
 /// the method without a visible argument list, and both answered with the subset before this
-/// throw existed. A null `$name` filters nothing, so PHP ignores `$flags` there and so does the
-/// early return above the check.
+/// throw existed. A null `$name` filters nothing, so PHP ignores `$flags` there. Both paths
+/// collect into a fresh typed array, giving returned elements independent ownership.
 pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     let name = variable_expr("name", dummy_span);
@@ -82,17 +82,22 @@ pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
     // `strcasecmp($attribute->getName(), $name) === 0`. PHP compares the two class names the way
     // it compares every class name — folding ASCII case — so `===` on the two strings would miss
     // `getAttributes("markerone")` for `#[MarkerOne]`.
-    let matches_filter = binary_expr(
+    let matches_name = binary_expr(
         Expr::new(
             ExprKind::FunctionCall {
                 name: Name::unqualified("strcasecmp".to_string()),
-                args: vec![attribute_name, name],
+                args: vec![attribute_name, name.clone()],
             },
             dummy_span,
         ),
         BinOp::StrictEq,
         Expr::new(ExprKind::IntLiteral(0), dummy_span),
         dummy_span,
+    );
+    let matches_filter = binary_expr(name_is_null, BinOp::Or, matches_name, dummy_span);
+    let unsupported_flags = binary_expr(
+        binary_expr(name.clone(), BinOp::StrictNotEq, Expr::new(ExprKind::Null, dummy_span), dummy_span),
+        BinOp::And, flags_requested, dummy_span,
     );
 
     ClassMethod {
@@ -125,19 +130,7 @@ pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
         body: vec![
             Stmt::new(
                 StmtKind::If {
-                    condition: name_is_null,
-                    then_body: vec![Stmt::new(
-                        StmtKind::Return(Some(source.clone())),
-                        dummy_span,
-                    )],
-                    elseif_clauses: Vec::new(),
-                    else_body: None,
-                },
-                dummy_span,
-            ),
-            Stmt::new(
-                StmtKind::If {
-                    condition: flags_requested,
+                    condition: unsupported_flags,
                     then_body: vec![throw_new_reflection_exception(
                         string_lit(
                             "ReflectionAttribute::IS_INSTANCEOF is not supported yet: it needs a \

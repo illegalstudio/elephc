@@ -9,8 +9,10 @@
 //! - Deep free helpers recursively release owned child storage and must match the heap kind/tag layout exactly.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 use crate::codegen_support::platform::Arch;
 
+const CLEANUP: Scope = Scope { arm: 16, x86: 48 };
 
 /// Emits `__rt_array_free_deep` and `__rt_array_free_deep_done` helpers.
 ///
@@ -128,10 +130,12 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.label("__rt_array_free_deep_struct");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array pointer
     emitter.instruction("bl __rt_heap_free");                                   // free array struct
+    CLEANUP.finish(emitter);
 
     // -- restore frame --
     super::deep_cleanup::finish(emitter, "__rt_array_free_deep_return");
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_array_free_deep_done");
     emitter.instruction("ret");                                                 // return
 }
@@ -231,6 +235,7 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_free");                                 // release the indexed-array storage itself through the x86_64 heap wrapper
     super::deep_cleanup::finish(emitter, "__rt_array_free_deep_return");
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_array_free_deep_done");
     emitter.instruction("ret");                                                 // return to the caller after releasing the indexed array and any owned heap-backed elements
 }

@@ -14,7 +14,7 @@ function array_merge(...$arrays): array
 Merges the elements of two arrays.
 
 **Parameters**:
-- `...$arrays` — variadic: collects excess arguments into `$arrays`.
+- `...$arrays` - variadic: collects excess arguments into `$arrays`.
 
 **Returns**: `array`
 

@@ -14,6 +14,7 @@ mod function_binding;
 mod function_staging;
 mod method_binding;
 mod native_execution;
+pub(in crate::interpreter) mod builtin_arguments;
 
 use super::*;
 
@@ -79,7 +80,9 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                     eval_call_arg_value(arg.value(), context, caller_scope, values)?;
                 let value = if value.is_borrowed() {
                     values.retain(value)?
-                } else { value };
+                } else {
+                    value
+                };
                 evaluated_args.push(EvaluatedCallArg {
                     name: Some(name.to_string()),
                     value,
@@ -94,7 +97,9 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
             let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
             let value = if value.is_borrowed() {
                 values.retain(value)?
-            } else { value };
+            } else {
+                value
+            };
             evaluated_args.push(EvaluatedCallArg {
                 name: None,
                 value,
@@ -110,6 +115,103 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
         return Err(status);
     }
     Ok(evaluated_args)
+}
+
+/// Captures owned builtin inputs, using shared reference modes when a contract is supplied.
+/// Without a contract, call_user_func captures independent values even for reference parameters.
+pub(in crate::interpreter) fn eval_owned_builtin_call_arg_values(
+    args: &[EvalCallArg], context: &mut ElephcEvalContext, caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps, owners: &mut Vec<RuntimeCellHandle>, evaluated: &mut Vec<EvaluatedCallArg>,
+    contract: Option<&elephc_builtin_contract::BuiltinContract>,
+) -> Result<(), EvalStatus> {
+    evaluate_call_arguments(args, context, caller_scope, values, &mut |_, _| {}, Some(owners), evaluated, contract)
+}
+
+/// Evaluates source arguments with legacy targets or explicit owners selected by the parameter contract.
+fn evaluate_call_arguments(
+    args: &[EvalCallArg], context: &mut ElephcEvalContext, caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps, observe: &mut impl FnMut(&EvalExpr, RuntimeCellHandle),
+    mut owners: Option<&mut Vec<RuntimeCellHandle>>, evaluated_args: &mut Vec<EvaluatedCallArg>,
+    contract: Option<&elephc_builtin_contract::BuiltinContract>,
+) -> Result<(), EvalStatus> {
+    let mut saw_named = false;
+
+    for arg in args {
+        if arg.is_spread() {
+            if saw_named {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let spread = if let Some(owners) = owners.as_deref_mut() {
+                let spread = eval_owned_expr(arg.value(), context, caller_scope, values)?;
+                owners.push(spread);
+                spread
+            } else { eval_expr(arg.value(), context, caller_scope, values)? };
+            observe(arg.value(), spread);
+            if !values.is_array_like(spread)? {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if let Some(owners) = owners.as_deref_mut() {
+                if let Some(contract) = contract.filter(|contract| contract.params.iter().any(|param| param.by_ref)) {
+                    builtin_arguments::append_spread(contract, spread, evaluated_args, &mut saw_named, context, values, owners)?;
+                } else {
+                    append_unpacked_value_call_args(spread, evaluated_args, &mut saw_named, context, values, owners)?;
+                }
+                let index = owners.iter().position(|value| *value == spread).expect("captured spread owner");
+                owners.remove(index);
+                context.clear_array_metadata(spread);
+                eval_release_value(context, values, spread)?;
+            } else {
+                append_unpacked_call_arg_values(spread, evaluated_args, &mut saw_named, context, values)?;
+            }
+            continue;
+        }
+
+        if let Some(name) = arg.name() {
+            saw_named = true;
+            let (value, ref_target) =
+                evaluate_call_argument_value(arg.value(), context, caller_scope, values, owners.as_deref_mut(),
+                    builtin_arguments::by_reference(contract, Some(name), evaluated_args.len()))?;
+            observe(arg.value(), value);
+            evaluated_args.push(EvaluatedCallArg {
+                name: Some(name.to_string()),
+                value,
+                ref_target,
+            });
+            continue;
+        }
+
+        if saw_named {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let (value, ref_target) = evaluate_call_argument_value(arg.value(), context, caller_scope, values, owners.as_deref_mut(),
+            builtin_arguments::by_reference(contract, None, evaluated_args.len()))?;
+        observe(arg.value(), value);
+        evaluated_args.push(EvaluatedCallArg {
+            name: None,
+            value,
+            ref_target,
+        });
+    }
+
+    Ok(())
+}
+
+/// Captures an independent value or persistent reference owner, retaining legacy binding for unowned calls.
+fn evaluate_call_argument_value(
+    expr: &EvalExpr, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps, owners: Option<&mut Vec<RuntimeCellHandle>>,
+    by_reference: bool,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    if let Some(owners) = owners {
+        if by_reference {
+            let reference = builtin_arguments::reference(expr, context, scope, values)?;
+            owners.push(reference);
+            return Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference })));
+        }
+        let value = eval_owned_expr(expr, context, scope, values)?;
+        owners.push(value);
+        Ok((value, None))
+    } else { eval_call_arg_value(expr, context, scope, values) }
 }
 
 /// Evaluates one call arg and captures caller-side storage for by-reference parameters.

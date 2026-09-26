@@ -11,6 +11,13 @@ use super::*;
 
 /// Lowers an associative array literal.
 pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr) -> LoweredValue {
+    lower_assoc_array_literal_with_guard(ctx, pairs, expr, false)
+}
+
+/// Protects a callback's partially built argument hash until invocation consumes its ownership.
+pub(super) fn lower_assoc_array_literal_with_guard(
+    ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr, guarded: bool,
+) -> LoweredValue {
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
@@ -19,10 +26,12 @@ pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    if guarded { guard_descriptor_container(ctx, hash, expr.span); }
     for (key, value) in pairs {
         let key = lower_expr(ctx, key);
         let value = lower_expr(ctx, value);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
+        if guarded { ctx.refresh_argument_array_guard(hash, expr.span); }
     }
     hash
 }
@@ -101,6 +110,10 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
     }
     match &value.kind {
         ExprKind::Null => PhpType::Mixed,
+        ExprKind::Ternary { .. } => {
+            // Use the actual branch-merge representation before choosing hash storage.
+            ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
+        }
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))

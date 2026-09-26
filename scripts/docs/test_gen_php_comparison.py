@@ -223,7 +223,7 @@ class ValidationTests(unittest.TestCase):
         ]
         code, out = run_gen(registry=reg, baseline=baseline)
         self.assertEqual(code, 0)
-        self.assertIn("| `core` | 2 / 2 · 100% | — | — |", out)
+        self.assertIn("| `core` | 2 / 2 · 100% | - | - |", out)
         self.assertIn("elephc implements 1 PHP language constructs", out)
         self.assertIn("`isset()`", out)
         self.assertNotIn("`exit()`, `isset()`", out)
@@ -335,7 +335,7 @@ class RenderTests(unittest.TestCase):
         # standard: functions 2 of 3, classes 1 of 2, constants 1 of 2; pcre: functions 0 of 1,
         # no classes, constants 1 of 1.
         self.assertIn("| `standard` | 2 / 3 · 67% | 1 / 2 · 50% | 1 / 2 · 50% |", first)
-        self.assertIn("| `pcre` | 0 / 1 · 0% | — | 1 / 1 · 100% |", first)
+        self.assertIn("| `pcre` | 0 / 1 · 0% | - | 1 / 1 · 100% |", first)
         self.assertIn("functions **2 / 4**", first)
         self.assertIn("classes **1 / 2**", first)
         self.assertIn("constants **2 / 3**", first)

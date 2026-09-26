@@ -455,6 +455,26 @@ impl ElephcEvalContext {
         }
     }
 
+    /// Removes alias and cursor metadata when an array box is retired or reused.
+    pub(crate) fn clear_array_metadata(&mut self, array: RuntimeCellHandle) {
+        let identity = array.as_ptr() as usize;
+        self.array_element_aliases.remove(&identity);
+        self.array_cursors.remove(&identity);
+    }
+
+    /// Copies array references and cursor state to an independently owned array box.
+    pub(crate) fn copy_array_metadata(&mut self, source: RuntimeCellHandle, target: RuntimeCellHandle) {
+        let source_id = source.as_ptr() as usize;
+        let target_id = target.as_ptr() as usize;
+        if source_id == target_id { return; }
+        let cursor = self.array_cursors.get(&source_id).copied();
+        self.clone_array_element_aliases(source, target, None);
+        self.array_cursors.remove(&target_id);
+        if let Some(cursor) = cursor {
+            self.array_cursors.insert(target_id, cursor);
+        }
+    }
+
     /// Drops only retired allocation records, preserving any newer allocation at the same address.
     fn prune_retired_array_aliases(&mut self) {
         for address in self.array_reference_retirements.take() {

@@ -16,6 +16,7 @@ use super::func_args::eval_literal_func_args_callback;
 eval_builtin! {
     contract: "call_user_func",
     area: Core,
+    source_arguments: true,
     direct: Core,
     values: Core,
 }
@@ -38,14 +39,24 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func(
             _ => unreachable!("literal func-args callback was canonicalized"),
         };
     }
-    let operands = args.iter().collect::<Vec<_>>();
-    with_eval_operands(&operands, context, scope, values, |args, context, scope, values| {
-        let borrowed = args.iter().map(|value| value.borrowed()).collect();
-        let result = eval_call_user_func_with_values_from_scope(borrowed, Some(scope), context, values)?;
-        // A callback may return an argument borrow. Acquire the result before the
-        // operand leases retire, just as ordinary evaluated call arguments do.
-        if result.is_borrowed() { values.retain(result) } else { Ok(result) }
-    })
+    let callback = eval_owned_expr(&args[0], context, scope, values)?;
+    if let Ok(EvaluatedCallable::Named { name, .. }) = eval_callable_from_scope(callback, context, scope, values) {
+        if eval_builtin_uses_owned_arguments(&name) {
+            let arguments = args[1..].iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+            let result = eval_builtin_call_by_value(&name, &arguments, context, scope, values);
+            return finish_eval_argument_values(result, [callback], context, values);
+        }
+    }
+    let mut operands = vec![callback];
+    for argument in &args[1..] {
+        match eval_owned_expr(argument, context, scope, values) {
+            Ok(value) => operands.push(value),
+            Err(status) => return finish_eval_argument_values(Err(status), operands, context, values),
+        }
+    }
+    let borrowed = operands.iter().copied().map(RuntimeCellHandle::borrowed).collect();
+    let result = eval_call_user_func_with_values_from_scope(borrowed, Some(scope), context, values);
+    finish_eval_argument_values(result, operands, context, values)
 }
 
 /// Dispatches `call_user_func` after its callback and arguments are already evaluated.

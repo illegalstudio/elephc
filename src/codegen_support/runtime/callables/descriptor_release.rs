@@ -127,6 +127,7 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_heap_free");                                   // return the runtime descriptor block to the heap allocator
     super::super::arrays::deep_cleanup::finish(emitter, "__rt_callable_descriptor_release_return");
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_callable_descriptor_release_done");
     emitter.instruction("ret");                                                 // return after releasing or ignoring the descriptor
 }
@@ -232,6 +233,7 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_free");                                 // return the runtime descriptor block to the heap allocator
     super::super::arrays::deep_cleanup::finish(emitter, "__rt_callable_descriptor_release_return");
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_callable_descriptor_release_done");
     emitter.instruction("ret");                                                 // return after releasing or ignoring the descriptor
 }

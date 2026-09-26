@@ -17,7 +17,75 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
-    emit_runtime_callable_invoker_with_string_owner(ctx, sig, captures, false)
+    emit_runtime_callable_invoker_with_string_owner(ctx, sig, captures, false, false)
+}
+
+/// Emits a builtin invoker with mbstring's runtime argument boundary when required.
+pub(super) fn emit_runtime_builtin_invoker_inline(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    sig: &FunctionSig,
+) -> String {
+    let operation = crate::builtins::registry::lookup(name).and_then(|definition| {
+        if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(target) =
+            definition.spec.semantics.runtime_functions
+        {
+            target.mbstring_operation()
+        } else {
+            None
+        }
+    });
+    let Some(operation) = operation else {
+        return emit_runtime_callable_invoker_inline(ctx, sig, &[]);
+    };
+    if operation == elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables {
+        let label = ctx.next_global_label("callable_invoker");
+        let done_label = ctx.next_label("callable_invoker_done");
+        let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
+            ctx.module, None, sig,
+        );
+        let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+            label: &label,
+            sig,
+            captures: &[],
+            mbstring_operation: None,
+            mbstring_variable_ref_warnings: true,
+            owns_string_return: false,
+            php_return_status: false,
+            defaults: &defaults,
+        };
+        let enclosing = ctx.emitter.current_text_section();
+        abi::emit_jump(ctx.emitter, &done_label);
+        super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
+            ctx.emitter, ctx.data, &invoker,
+        );
+        ctx.emitter.reopen_text_section(enclosing);
+        ctx.emitter.label(&done_label);
+        return label;
+    }
+    let label = ctx.next_global_label("callable_invoker");
+    let done_label = ctx.next_label("callable_invoker_done");
+    let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
+        ctx.module, None, sig,
+    );
+    let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        label: &label,
+        sig,
+        captures: &[],
+        mbstring_operation: Some(operation),
+        mbstring_variable_ref_warnings: false,
+        owns_string_return: sig.return_type.codegen_repr() == PhpType::Str,
+        php_return_status: false,
+        defaults: &defaults,
+    };
+    let enclosing = ctx.emitter.current_text_section();
+    abi::emit_jump(ctx.emitter, &done_label);
+    super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
+        ctx.emitter, ctx.data, &invoker,
+    );
+    ctx.emitter.reopen_text_section(enclosing);
+    ctx.emitter.label(&done_label);
+    label
 }
 
 /// Emits an invoker whose result-copy policy follows the concrete callee's string ownership.
@@ -26,8 +94,9 @@ pub(super) fn emit_runtime_callable_invoker_with_string_owner(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
     owns_string_return: bool,
+    php_return_status: bool,
 ) -> String {
-    emit_runtime_callable_invoker_in_class(ctx, sig, captures, owns_string_return, None)
+    emit_runtime_callable_invoker_in_class(ctx, sig, captures, owns_string_return, php_return_status, None)
 }
 
 /// Emits a descriptor invoker whose defaults resolve in the DECLARING class's constant scope.
@@ -39,6 +108,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
     owns_string_return: bool,
+    php_return_status: bool,
     current_class: Option<&str>,
 ) -> String {
     ctx.shared.callable_argument_normalizer |=
@@ -50,7 +120,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     );
     if let Some(label) =
         ctx.shared
-            .runtime_callable_invoker(sig, captures, owns_string_return, &defaults)
+            .runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults)
     {
         return label;
     }
@@ -60,7 +130,10 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         label: &label,
         sig,
         captures,
+        mbstring_operation: None,
+        mbstring_variable_ref_warnings: false,
         owns_string_return,
+        php_return_status,
         defaults: &defaults,
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
@@ -71,7 +144,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, owns_string_return, &defaults, &label);
+        .cache_runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults, &label);
     label
 }
 
@@ -271,7 +344,7 @@ fn build_runtime_call_wrapper_function(
                 data: &mut module.data,
                 strict_php,
             };
-            Some(crate::builtins::semantics::lower_registry_call(
+            let result = crate::builtins::semantics::lower_registry_call(
                 &mut lowering,
                 def,
                 &operands,
@@ -284,19 +357,73 @@ fn build_runtime_call_wrapper_function(
                     name, error,
                 ))
             })?
-            .value)
+            .value;
+            let ownership = wrapper_result_ownership(
+                def.spec.semantics.result_ownership,
+                &return_php_type,
+                name,
+            )?;
+            builder.set_value_ownership(result, ownership);
+            Some(result)
         }
-        RuntimeCallWrapperKind::Extern => builder.emit(
-            Op::ExternCall,
-            operands,
-            Some(Immediate::Data(data)),
-            wrapper_return_ir_type(&return_php_type),
-            return_php_type.clone(),
-            Ownership::for_php_type(&return_php_type),
-        ),
+        RuntimeCallWrapperKind::Extern => {
+            let result = builder.emit(
+                Op::ExternCall,
+                operands,
+                Some(Immediate::Data(data)),
+                wrapper_return_ir_type(&return_php_type),
+                return_php_type.clone(),
+                if Ownership::php_type_needs_lifetime_tracking(&return_php_type) {
+                    Ownership::Borrowed
+                } else {
+                    Ownership::NonHeap
+                },
+            );
+            result
+        }
     };
     builder.terminate(Terminator::Return { value: result });
     Ok(function)
+}
+
+/// Maps a builtin's shared ownership contract onto its synthetic wrapper result.
+fn wrapper_result_ownership(
+    contract: crate::builtins::semantics::BuiltinResultOwnership,
+    return_ty: &PhpType,
+    name: &str,
+) -> Result<Ownership> {
+    use crate::builtins::semantics::BuiltinResultOwnership;
+    if !Ownership::php_type_needs_lifetime_tracking(return_ty) {
+        return Ok(Ownership::NonHeap);
+    }
+    match contract {
+        BuiltinResultOwnership::Fresh => Ok(Ownership::Owned),
+        BuiltinResultOwnership::Borrowed | BuiltinResultOwnership::Aliases(_) => {
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::MayAliasArguments
+            if return_ty.codegen_repr() == PhpType::Str =>
+        {
+            // String wrapper returns are persisted before the native C boundary,
+            // so aliasing and fresh scratch paths share one borrowed EIR convention.
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::MayAliasArguments => {
+            Err(CodegenIrError::invalid_module(format!(
+                "callable wrapper {} needs a runtime marker for path-dependent ownership of {:?}",
+                name, return_ty
+            )))
+        }
+        BuiltinResultOwnership::Independent if return_ty.codegen_repr() == PhpType::Str => {
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::Independent | BuiltinResultOwnership::NonHeap => {
+            Err(CodegenIrError::invalid_module(format!(
+                "callable wrapper {} has ambiguous {:?} ownership for {:?}",
+                name, contract, return_ty
+            )))
+        }
+    }
 }
 
 /// EIR construction adapter used by synthetic builtin callable wrappers.
@@ -391,7 +518,9 @@ impl crate::builtins::semantics::BuiltinLoweringContext
             crate::ir::RuntimeCallTarget::Function(target) => {
                 crate::ir::RuntimeCallTarget::ProfiledFunction {
                     target,
+                    arguments: crate::ir::RuntimeArgumentLayout::Values,
                     strict_php: self.strict_php,
+                    strict_types: None,
                 }
             }
             target => target,

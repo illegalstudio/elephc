@@ -173,7 +173,7 @@ fn test_x86_64_runtime_array_new_carries_size_guard() {
     ] {
         assert!(
             array_new.contains(expected),
-            "x86_64 __rt_array_new missing {expected}: {array_new}"
+            "x86_64 __rt_array_new missing {expected}"
         );
     }
     assert!(
@@ -183,19 +183,21 @@ fn test_x86_64_runtime_array_new_carries_size_guard() {
     let range = runtime_asm_function(&runtime_asm, "__rt_range");
     assert!(
         range.contains("jle __rt_range_size_fail"),
-        "x86_64 __rt_range missing the wrapped element-count guard: {range}"
+        "x86_64 __rt_range missing the wrapped element-count guard"
     );
     let hash_new = runtime_asm_function(&runtime_asm, "__rt_hash_new");
     for expected in [
         "cmovg rax, rdi",
         "imul rax, 64",
         "jo __rt_hash_cap_overflow",
-        "add rax, 40",
-        "jle __rt_hash_new_done",
+        "mov eax, 64",
+        "mov QWORD PTR [rax + 40], r10",
+        "mov QWORD PTR [rax + 48], 0",
+        "jz __rt_hash_new_done",
     ] {
         assert!(
             hash_new.contains(expected),
-            "x86_64 __rt_hash_new missing {expected}: {hash_new}"
+            "x86_64 __rt_hash_new missing {expected}"
         );
     }
 }

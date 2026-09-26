@@ -203,7 +203,8 @@ fn eval_class_attribute_arg_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match arg {
-        EvalAttributeArg::String(value) => values.string(value),
+        EvalAttributeArg::String(value) => values.string_literal(value),
+        EvalAttributeArg::Bytes(value) => values.string_literal_bytes(value),
         EvalAttributeArg::Int(value) => values.int(*value),
         EvalAttributeArg::Float(bits) => values.float(f64::from_bits(*bits)),
         EvalAttributeArg::Bool(value) => values.bool_value(*value),

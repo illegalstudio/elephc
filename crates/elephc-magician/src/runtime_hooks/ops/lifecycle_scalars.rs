@@ -45,6 +45,12 @@ macro_rules! impl_lifecycle_scalar_ops {
         self.release_cells([value])
     }
 
+    /// Runs an automatic collection safe point after eval releases a scope root.
+    fn collect_cycles(&mut self) -> Result<(), EvalStatus> {
+        let status = unsafe { __elephc_eval_collect_cycles() };
+        self.handle_native_cleanup_status(status)
+    }
+
     /// Forces collection and schedules a bounded native Throwable for eval's catch machinery.
     fn gc_collect_cycles(&mut self) -> Result<i64, EvalStatus> {
         let mut throwable = std::ptr::null_mut();
@@ -111,6 +117,35 @@ macro_rules! impl_lifecycle_scalar_ops {
         children: &[RuntimeCellHandle],
     ) -> Result<(), EvalStatus> {
         crate::runtime_hooks::object_owners::retain_object_children(self, object, children)
+    }
+
+    /// Uses the runtime's GC-traced persistent reference cells.
+    fn supports_persistent_references(&self) -> bool { true }
+
+    /// Checks the runtime wrapper marker before an assignment writes through it.
+    fn is_reference(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_is_reference(value.as_ptr()) } != 0)
+    }
+
+    /// Inspects the native wrapper's physical owners before COW separates an orphan reference.
+    fn reference_is_shared(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_reference_is_shared(value.as_ptr()) } != 0)
+    }
+
+    /// Allocates an independently owned reference wrapper around a copied PHP value.
+    fn reference_new(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_reference_new(value.as_ptr()) })
+    }
+
+    /// Publishes a copied replacement and transfers the previous owner for cleanup.
+    fn reference_replace(&mut self, reference: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        let previous = unsafe { __elephc_eval_value_reference_replace(reference.as_ptr(), value.as_ptr()) };
+        if previous.is_null() { self.null() } else { Self::handle(previous) }
+    }
+
+    /// Detaches a reference before returning an ordinary PHP value copy.
+    fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_copy(value.as_ptr()) })
     }
 
     /// Emits one PHP warning through the generated runtime diagnostic helper.
@@ -194,6 +229,16 @@ macro_rules! impl_lifecycle_scalar_ops {
     /// Creates a boxed string Mixed cell through the generated runtime wrapper.
     fn string(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_string(value.as_ptr(), value.len() as u64) })
+    }
+
+    /// Boxes a PHP literal and registers its native payload as an interned logical origin.
+    fn string_literal(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_string_literal(value.as_ptr(), value.len() as u64) })
+    }
+
+    /// Boxes arbitrary literal bytes with the same native interned origin as UTF-8 literals.
+    fn string_literal_bytes(&mut self, value: &[u8]) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_string_literal(value.as_ptr(), value.len() as u64) })
     }
 
     /// Creates a boxed string Mixed cell from raw PHP bytes through the generated runtime wrapper.

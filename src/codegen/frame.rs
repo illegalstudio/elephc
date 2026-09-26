@@ -19,10 +19,11 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
-    emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
+    emit_box_current_value_as_mixed,
+    emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::data_section::DataWord;
-use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
+use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{
     CoreBuiltinOp, Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
     RuntimeCallTarget, ValueDef, ValueId,
@@ -35,6 +36,9 @@ use super::context::FunctionContext;
 use super::local_analysis::LocalSlotAnalysis;
 use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
+
+mod destructor_cleanup;
+pub(super) use destructor_cleanup::is_destructor;
 
 const FRAME_FOOTER_BYTES: usize = 16;
 // Every activation has readable reader/line words, including synthetic frames hidden from backtraces.
@@ -61,6 +65,7 @@ pub(super) struct FrameLayout {
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
+    pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
     pub(super) exception_cleanup_activation: bool,
@@ -131,6 +136,14 @@ pub(super) fn layout_for_function(
         offset += TRY_HANDLER_SLOT_SIZE;
         try_handler_offsets.insert(token, offset);
     }
+    let mut exception_guard_offsets = HashMap::new();
+    for inst in &function.instructions {
+        if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionGuardOwned))) {
+            let token = inst.result.expect("owned-value guard produces its stack token");
+            offset += EXCEPTION_GUARD_SLOT_SIZE;
+            exception_guard_offsets.insert(token, offset);
+        }
+    }
     let mut callee_saved_offsets = Vec::new();
     for reg in allocation.used_callee_saved() {
         offset += 8;
@@ -161,6 +174,7 @@ pub(super) fn layout_for_function(
         local_offsets,
         ref_cell_state_offsets,
         try_handler_offsets,
+        exception_guard_offsets,
         concat_base_offset,
         exception_activation_offset,
         exception_cleanup_activation: exception_activations,
@@ -554,6 +568,10 @@ pub(super) fn emit_exception_cleanup_callback(
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
     ctx.emitter.blank();
     ctx.emitter.comment("exceptional PHP frame cleanup callback");
+    if is_destructor(ctx.function) {
+        destructor_cleanup::emit_callback(ctx, entry_label);
+        return;
+    }
     ctx.emitter.label_global(&callback);
     ctx.unwinding_cleanup = true;
     match ctx.emitter.target.arch {
@@ -631,6 +649,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_static_property_cleanup(ctx);
     if module_uses_resource_inventory_cleanup(ctx.module) {
         abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
+    }
+    if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_release_catalog");
     }
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
@@ -1307,6 +1328,10 @@ fn emit_function_local_epilogue_cleanup(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
 ) {
+    if ctx.exception_activation_offset.is_some() && is_destructor(ctx.function) {
+        destructor_cleanup::emit_call(ctx);
+        return;
+    }
     // Instrument exit runs FIRST — before the early return for cleanup-free
     // functions — so every return path records the exit. It preserves the
     // return value across its own call.
@@ -1406,6 +1431,21 @@ fn function_cleanup_locals(
     locals
 }
 
+/// Returns whether the frame epilogue owns the refcounted value in a local slot.
+pub(super) fn local_slot_has_epilogue_owner(
+    ctx: &FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> bool {
+    let cleanup_locals = if ctx.is_main {
+        main_cleanup_locals(ctx)
+    } else {
+        function_cleanup_locals(ctx, None)
+    };
+    cleanup_locals
+        .iter()
+        .any(|(_, cleanup_slot, _, _)| *cleanup_slot == slot)
+}
+
 /// Returns whether a local slot belongs to a function parameter.
 fn local_slot_is_parameter(function: &Function, slot: LocalSlotId) -> bool {
     function.params.get(slot.as_raw() as usize).is_some()
@@ -1462,11 +1502,24 @@ fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
 }
 
 /// Returns the local slot whose cleanup this return path must skip, if ownership is transferred.
-pub(super) fn return_cleanup_skip_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
-    let result_ty = function.value(value)?.php_type.codegen_repr();
-    let return_ty = function.return_php_type.codegen_repr();
+pub(super) fn return_cleanup_skip_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Option<LocalSlotId> {
+    let result_ty = ctx.function.value(value)?.php_type.codegen_repr();
+    let return_ty = ctx.function.return_php_type.codegen_repr();
     let mut visited = HashSet::new();
-    return_cleanup_skip_slot_inner(function, value, &result_ty, &return_ty, &mut visited)
+    let slot = return_cleanup_skip_slot_inner(
+        ctx.function,
+        value,
+        &result_ty,
+        &return_ty,
+        &mut visited,
+    )?;
+    function_cleanup_locals(ctx, None)
+        .iter()
+        .any(|(_, owned_slot, _, _)| *owned_slot == slot)
+        .then_some(slot)
 }
 
 /// Returns whether a string return transfers an ordinary local owner out of the frame.
@@ -1478,7 +1531,13 @@ pub(in crate::codegen) fn return_transfers_local_string_owner(
     function: &Function,
     value: ValueId,
 ) -> bool {
-    let Some(slot) = return_cleanup_skip_slot(function, value) else {
+    let Some(result_ty) = function.value(value).map(|value| value.php_type.codegen_repr()) else {
+        return false;
+    };
+    let return_ty = function.return_php_type.codegen_repr();
+    let Some(slot) = return_cleanup_skip_slot_inner(
+        function, value, &result_ty, &return_ty, &mut HashSet::new(),
+    ) else {
         return false;
     };
     if local_slot_is_parameter(function, slot)
@@ -2202,6 +2261,7 @@ fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_function_return_epilogue(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
+    return_ownership: super::return_ownership::ReturnOwnershipStatus,
 ) {
     emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
     for local in &ctx.function.locals {
@@ -2212,6 +2272,14 @@ pub(super) fn emit_function_return_epilogue(
     }
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
+    match return_ownership {
+        super::return_ownership::ReturnOwnershipStatus::Static(owned) => {
+            super::return_ownership::emit_status(ctx.emitter, owned);
+        }
+        super::return_ownership::ReturnOwnershipStatus::Dynamic(offset) => {
+            super::return_ownership::emit_load_status(ctx.emitter, offset);
+        }
+    }
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
 }
@@ -2229,6 +2297,7 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_function_local_epilogue_cleanup(ctx, None);
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
+    super::return_ownership::emit_status(ctx.emitter, true);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
     ctx.epilogue_emitted = true;

@@ -2,7 +2,7 @@
 title: "session_create_id() - internals"
 description: "Compiler internals for session_create_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 919
+  order: 982
 ---
 
 ## `session_create_id()` - internals
@@ -38,7 +38,7 @@ function session_create_id(string $prefix = ''): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

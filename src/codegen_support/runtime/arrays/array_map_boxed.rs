@@ -197,8 +197,8 @@ fn read_aarch64_entry(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_map_boxed_value");                        // box or retain the argument before invocation
     emitter.label("__rt_array_map_boxed_hash");
     emitter.instruction("tbnz x10, #63, __rt_array_map_boxed_cleanup");         // minus one ends the live insertion-order chain
+    emitter.instruction("ldr x11, [x11, #40]");                                 // locate the separately allocated hash entries
     emitter.instruction("add x11, x11, x10, lsl #6");                           // each source hash bucket has sixty-four bytes
-    emitter.instruction("add x11, x11, #40");                                   // skip the fixed hash header
     emitter.instruction("ldr x9, [x11, #56]");                                  // follow the next live bucket rather than a tombstone
     abi::store_at_offset(emitter, "x9", CURSOR);
     emitter.instruction("ldp x9, x10, [x11, #8]");                              // borrow the source key while the snapshot owns its bytes
@@ -238,8 +238,9 @@ fn read_x86_64_entry(emitter: &mut Emitter) {
     emitter.label("__rt_array_map_boxed_hash");
     emitter.instruction("test r10, r10");                                       // inspect the insertion-order end sentinel
     emitter.instruction("js __rt_array_map_boxed_cleanup");                     // no more live source buckets remain
+    emitter.instruction("mov r11, QWORD PTR [r11 + 40]");                       // locate the separately allocated hash entries
     emitter.instruction("shl r10, 6");                                          // each hash bucket occupies sixty-four bytes
-    emitter.instruction("lea r11, [r11 + r10 + 40]");                           // skip the fixed header and preceding buckets
+    emitter.instruction("add r11, r10");                                       // locate the selected entry in the separate storage
     emitter.instruction("mov r9, QWORD PTR [r11 + 56]");                        // follow the next live insertion-order link
     abi::store_at_offset(emitter, "r9", CURSOR);
     emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                         // preserve the key's low word

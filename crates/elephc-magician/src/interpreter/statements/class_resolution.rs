@@ -243,13 +243,14 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_object_clone_with_properties_result(object, None, context, values)
+    eval_object_clone_with_properties_result(object, None, None, context, values)
 }
 
 /// Creates a shallow clone, invokes `__clone()`, then applies PHP 8.5 property overrides.
 pub(crate) fn eval_object_clone_with_properties_result(
     object: RuntimeCellHandle,
     with_properties: Option<RuntimeCellHandle>,
+    scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -338,7 +339,7 @@ pub(crate) fn eval_object_clone_with_properties_result(
 
         context.restart_clone_initialization(clone_identity);
         if let Some(properties) = with_properties {
-            eval_apply_clone_properties(clone, properties, context, values)?;
+            eval_apply_clone_properties(clone, properties, scope, context, values)?;
         }
         Ok(())
     })();
@@ -354,6 +355,7 @@ pub(crate) fn eval_object_clone_with_properties_result(
 fn eval_apply_clone_properties(
     clone: RuntimeCellHandle,
     properties: RuntimeCellHandle,
+    scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -384,7 +386,7 @@ fn eval_apply_clone_properties(
             // either one refusing throws at this exact point in php's iteration order.
             let alias_is_shared = eval_array_reference_key(key, values)?
                 .and_then(|key| context.array_element_alias(properties, &key).cloned())
-                .is_some_and(|reference| eval_clone_property_reference_is_shared(&reference));
+                .is_some_and(|reference| eval_clone_property_reference_is_shared(&reference, scope));
             let entry_is_shared = crate::runtime_hooks::array_entry_is_shared_reference(
                 properties,
                 &property_name,
@@ -411,12 +413,10 @@ fn eval_apply_clone_properties(
 }
 
 /// Returns whether a clone override still shares its array element with another storage slot.
-fn eval_clone_property_reference_is_shared(target: &EvalReferenceTarget) -> bool {
+fn eval_clone_property_reference_is_shared(target: &EvalReferenceTarget, scope: Option<&ElephcEvalScope>) -> bool {
     match target {
         EvalReferenceTarget::Variable { scope, name } => unsafe {
-            scope
-                .as_ref()
-                .is_some_and(|scope| scope.contains_visible(name))
+            scope.as_ref().is_some_and(|scope| scope.contains_visible(name))
         },
         EvalReferenceTarget::ArrayElement {
             scope, array_name, ..
@@ -426,11 +426,12 @@ fn eval_clone_property_reference_is_shared(target: &EvalReferenceTarget) -> bool
                 .is_some_and(|scope| scope.contains_visible(array_name))
         },
         EvalReferenceTarget::NestedArrayElement { array_target, .. } => {
-            eval_clone_property_reference_is_shared(array_target)
+            eval_clone_property_reference_is_shared(array_target, scope)
         }
+        EvalReferenceTarget::Cell { cell } => scope.map_or(true, |scope| scope.visible_entries()
+            .iter().any(|(_, visible)| visible.as_ptr() == cell.as_ptr())),
         EvalReferenceTarget::ObjectProperty { .. }
         | EvalReferenceTarget::StaticProperty { .. }
-        | EvalReferenceTarget::Cell { .. }
         | EvalReferenceTarget::InvokerSlot { .. } => true,
     }
 }

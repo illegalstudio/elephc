@@ -2,13 +2,13 @@
 title: "wordwrap()"
 description: "Wraps a string to a given number of characters."
 sidebar:
-  order: 881
+  order: 944
 ---
 
 ## wordwrap()
 
 ```php
-function wordwrap(string $string, int $width = 75, string $break = '\n', bool $cut_long_words = false): string
+function wordwrap(string $string, int $width = 75, string $break = "\n", bool $cut_long_words = false): string
 ```
 
 Wraps a string to a given number of characters.
@@ -16,7 +16,7 @@ Wraps a string to a given number of characters.
 **Parameters**:
 - `$string` (`string`)
 - `$width` (`int`), default `75`, optional
-- `$break` (`string`), default `'\n'`, optional
+- `$break` (`string`), default `"\n"`, optional
 - `$cut_long_words` (`bool`), default `false`, optional
 
 **Returns**: `string`

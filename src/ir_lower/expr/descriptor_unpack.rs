@@ -136,19 +136,26 @@ pub(super) fn lower_descriptor_unpack_source(
     state: &DescriptorUnpackState,
     source: LoweredValue,
     span: Span,
+    by_ref_origin: Option<LocalSlotId>,
 ) {
     // A boxed source keeps the guarded, unreachable iterator path codegen-valid even for
     // a statically non-Traversable object or callable. Evaluation still occurs only once.
-    let source = coerce_descriptor_invoker_mixed_value(ctx, source, span);
-    // Pin even borrowed sources: iterator methods can rebind the caller's original storage.
-    let pinned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
-    let (pinned, source_owner) = root_owned_call_operand(ctx, pinned, span);
-    // The pin owns its added reference. Retire the original only when expression lowering also
-    // produced an owner, since a LoadRefCell source merely borrows its caller's pointee.
-    if ctx.value_is_owning_temporary(source) {
-        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
-    }
-    let source = pinned;
+    let (source, source_owner) = if by_ref_origin.is_some() {
+        // A by-reference spread must split and republish the caller's array before it pins
+        // anything. The origin local owns the source until the invocation has completed.
+        (source, None)
+    } else {
+        let source = coerce_descriptor_invoker_mixed_value(ctx, source, span);
+        // Pin even borrowed sources: iterator methods can rebind the caller's original storage.
+        let pinned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
+        let (pinned, source_owner) = root_owned_call_operand(ctx, pinned, span);
+        // The pin owns its added reference. Retire the original only when expression lowering also
+        // produced an owner, since a LoadRefCell source merely borrows its caller's pointee.
+        if ctx.value_is_owning_temporary(source) {
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+        }
+        (pinned, source_owner)
+    };
     reject_non_iterable_source(ctx, source, span);
     let key_slot = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let value_slot = ctx.declare_owned_hidden_temp(PhpType::Mixed);
@@ -158,7 +165,8 @@ pub(super) fn lower_descriptor_unpack_source(
     }
     // Publish the getIterator owner inside the source/key/value LIFO stack, last,
     // so retirement below is exact reverse order.
-    let (iterator, iterator_owner, _) = ctx.emit_iter_start(source, false, span);
+    let (iterator, iterator_owner, _) =
+        ctx.emit_iter_start_with_origin(source, by_ref_origin.is_some(), by_ref_origin, span);
     let header = ctx.builder.create_named_block("descriptor.unpack.next", Vec::new());
     let body = ctx.builder.create_named_block("descriptor.unpack.body", Vec::new());
     let exit = ctx.builder.create_named_block("descriptor.unpack.exit", Vec::new());
@@ -188,7 +196,11 @@ pub(super) fn lower_descriptor_unpack_source(
         let current = ctx.emit_value(
             op,
             vec![iterator.value],
-            None,
+            (op == Op::IterCurrentValue).then_some(if by_ref_origin.is_some() {
+                Immediate::I64(1)
+            } else {
+                Immediate::Bool(true)
+            }),
             PhpType::Mixed,
             op.default_effects(),
             Some(span),

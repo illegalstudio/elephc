@@ -8,7 +8,11 @@
 //! Key details:
 //! - GC helpers must honor cycle-collection suppression, mark bits, and parent/child references without double-releasing values.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
+
+const CLEANUP: Scope = Scope { arm: 104, x86: 64 };
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 
@@ -16,15 +20,11 @@ use super::gc_collect_cycles_x86_64::emit_gc_collect_cycles_linux_x86_64;
 
 /// Emits `__rt_gc_collect_cycles` and `__rt_gc_collect_cycles_done` runtime helpers.
 ///
-/// Reclaims unreachable refcounted array/hash/object graphs via a four-pass algorithm:
-/// 1. **Clear pass** – clears transient GC metadata while preserving kind + value_type bits
-/// 2. **Count pass** – counts incoming heap edges for every live refcounted block; the
-///    edge count is stored in the upper 32 bits of the 64-bit heap kind word
-/// 3. **Mark pass** – marks externally-rooted blocks (refcount > incoming edges) and
-///    recursively marks their reachable children via `__rt_gc_mark_reachable`
-/// 4. **Free pass** – frees every block whose reachable bit was not set, using
-///    `__rt_array_free_deep`, `__rt_hash_free_deep`, `__rt_mixed_free_deep`, or
-///    `__rt_object_free_deep` as appropriate
+/// Reclaims unreachable refcounted graphs after counting heap edges and marking external roots.
+/// Dynamic-property hashes and boxed reference children participate in both traversals.
+/// Destructors run while all captured graph storage is intact, then resumable cleanup
+/// frees unreachable nodes and propagates a pending exception after restoring GC state.
+/// Bit 17 records the original candidate set so destructor allocations survive this scan.
 ///
 /// Input: `emitter` must be initialized for the target architecture.
 /// Side effects: may invoke `__rt_gc_note_child_ref`, `__rt_gc_mark_reachable`, and
@@ -46,8 +46,12 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("ldr x10, [x9]");                                       // load the current collector-active flag
     emitter.instruction("cbnz x10, __rt_gc_collect_cycles_done");               // nested collection attempts are ignored
-    emitter.instruction("mov x10, #1");                                         // suppress nested collection throughout destructor callbacks
-    emitter.instruction("str x10, [x9]");                                       // distinguish collection activity from the later sweep phase
+
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_gc_release_suppressed", 0);
+    emitter.instruction("cbnz x10, __rt_gc_collect_cycles_done");               // defer root scans until enclosing container cleanup is complete
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
+    emitter.instruction("mov x10, #1");                                         // guard nested collection before any PHP destructor can run
+    emitter.instruction("str x10, [x9]");                                       // publish the active collector state on AArch64
 
     // -- set up a stack frame for the collector state --
     // Stack layout:
@@ -60,11 +64,16 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     //   [sp, #64] = saved x29
     //   [sp, #72] = saved x30
     //   [sp, #80] = collected graph-node count
-    emitter.instruction("sub sp, sp, #96");                                     // allocate collector stack frame
+    //   [sp, #96] = destructor rescan state
+    //   [sp, #104] = pending cleanup exception
+    //   [sp, #112] = enclosing GC suppression
+    emitter.instruction("sub sp, sp, #128");                                    // allocate collector stack frame
     emitter.instruction("str x19, [sp, #48]");                                  // preserve the callee-saved scratch register used during child scans
     emitter.instruction("str x20, [sp, #56]");                                  // preserve the callee-saved payload-size register used during heap scans
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // set up the collector frame pointer
+    emitter.instruction("str xzr, [sp, #96]");                                  // start with no destructor-driven rescan
+    CLEANUP.begin(emitter);
     emitter.instruction("bl __rt_gc_collector_begin");                          // start timing this complete collector pass
 
     // -- refresh heap bounds after destructor callbacks have mutated the graph --
@@ -91,6 +100,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("mov x14, #0xffff");                                    // preserve kind and indexed element storage
     emitter.instruction("movk x14, #6, lsl #16");                               // preserve destructor completion and snapshot pins while clearing marks
     emitter.instruction("and x13, x13, x14");                                   // clear the transient incoming-count and reachable bits
+    emitter.instruction("orr x13, x13, #0x20000");                              // mark only this scan's original live blocks as collection candidates
     emitter.instruction("str x13, [x9, #8]");                                   // persist the reset kind word
     emitter.label("__rt_gc_collect_cycles_clear_next");
     emitter.instruction("add x9, x9, x11");                                     // advance by the payload size
@@ -175,9 +185,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, x13");                                        // have we visited every hash slot?
     emitter.instruction("b.ge __rt_gc_collect_cycles_count_next");              // finish the hash scan once all slots were visited
     emitter.instruction("mov x15, #64");                                        // each hash entry occupies 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x15, x14, x15");                                   // compute the byte offset for this hash entry
-    emitter.instruction("add x15, x12, x15");                                   // advance from the hash base to the entry
-    emitter.instruction("add x15, x15, #40");                                   // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x15", "x12", "x14");
     emitter.instruction("ldr x0, [x15]");                                       // load the occupied flag from this slot
     emitter.instruction("cmp x0, #1");                                          // is this hash slot occupied?
     emitter.instruction("b.ne __rt_gc_collect_cycles_count_hash_next");         // skip empty or tombstone slots
@@ -397,6 +405,9 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("add x10, x9, x11");                                    // compute the next header before reclaiming this block
     emitter.instruction("add x10, x10, #16");                                   // account for the 16-byte heap header
     emitter.instruction("str x10, [sp, #0]");                                   // save the next header before deep-freeing this block
+    emitter.instruction("ldr w10, [x9, #4]");                                   // retain the guard left by the earlier object destructor phase
+    emitter.instruction("and w10, w10, #0x80000000");                           // clear ordinary owners while preserving destruction-in-progress
+    emitter.instruction("str w10, [x9, #4]");                                   // prevent back-edge reentry without running the destructor twice
     emitter.instruction("add x0, x9, #16");                                     // convert the heap header back to the user pointer
     emitter.instruction("cmp x14, #2");                                         // is this an indexed array?
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_array");              // deep-free unreachable arrays
@@ -409,10 +420,10 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_object_free_deep");                            // deep-free unreachable objects
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_array");
-    emitter.instruction("bl __rt_array_free_deep");                             // deep-free the unreachable array graph node
+    CLEANUP.call(emitter, "__rt_array_free_deep", false);                             // deep-free the unreachable array graph node
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_hash");
-    emitter.instruction("bl __rt_hash_free_deep");                              // deep-free the unreachable hash graph node
+    CLEANUP.call(emitter, "__rt_hash_free_deep", false);                              // deep-free the unreachable hash graph node
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_mixed");
     emitter.instruction("bl __rt_mixed_free_deep");                             // deep-free the unreachable mixed graph node
@@ -443,12 +454,58 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_stats_done");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("str xzr, [x9]");                                       // mark the collector as inactive again
+    CLEANUP.finish(emitter);
+    emitter.instruction("cbz x0, __rt_gc_collect_cycles_cleanup_done");        // preserve a cleanup throw until the collector frame is gone
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x1", "_gc_pending_throw", 0);
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x0", "_gc_pending_throw", 0);
+    crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    emitter.instruction("bl __rt_exception_chain");                             // keep an earlier destructor throw behind the cleanup throw
+    emitter.label("__rt_gc_collect_cycles_cleanup_done");
+    emitter.instruction("ldr x0, [sp, #80]");                                  // return the collection count when no exception escaped
     emitter.instruction("ldr x19, [sp, #48]");                                  // restore the callee-saved scratch register after collection
     emitter.instruction("ldr x20, [sp, #56]");                                  // restore the callee-saved payload-size register after collection
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // tear down the collector stack frame
+    emitter.instruction("add sp, sp, #128");                                    // tear down the collector stack frame
     emitter.instruction("b __rt_gc_rethrow_pending");                           // propagate captured throws only after all collector state is balanced
 
     emitter.label("__rt_gc_collect_cycles_done");
     emitter.instruction("ret");                                                 // return to the caller
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    #[test]
+    fn suppressed_aarch64_collection_does_not_set_active_flag() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_gc_collect_cycles(&mut emitter);
+            let output = emitter.output();
+            let suppression = output.find("_gc_release_suppressed").unwrap();
+            let skip = output[suppression..].find("cbnz x10, __rt_gc_collect_cycles_done").unwrap() + suppression;
+            let active = output[skip..].find("str x10, [x9]").unwrap() + skip;
+            assert!(skip < active, "{name}");
+            assert!(!output[..skip].contains("str x10, [x9]"), "{name}");
+        }
+    }
+
+    #[test]
+    fn aarch64_collector_keeps_count_rescan_and_cleanup_in_separate_frame_slots() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_gc_collect_cycles(&mut emitter);
+            let output = emitter.output();
+            assert!(output.contains("sub sp, sp, #128"), "{name}");
+            assert!(output.contains("str xzr, [sp, #96]"), "{name}: rescan state");
+            assert!(output.contains("str xzr, [sp, #104]"), "{name}: pending exception");
+            assert!(output.contains("str x10, [sp, #112]"), "{name}: suppression state");
+            let restore = output.rfind("ldr x0, [sp, #80]").unwrap();
+            let rethrow = output.rfind("b __rt_gc_rethrow_pending").unwrap();
+            assert!(restore < rethrow, "{name}: collected count survives cleanup");
+            assert!(output.contains("add sp, sp, #128"), "{name}");
+        }
+    }
 }

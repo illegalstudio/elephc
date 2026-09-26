@@ -182,6 +182,7 @@ fn emit_active_trace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let cursor_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, cursor_reg, TRACE_CURSOR_OFFSET);
     emit_branch_if_zero(ctx, cursor_reg, &finish_label);
+    emit_skip_owned_guard(ctx, cursor_reg, &next_label);
     let callback_reg = match ctx.emitter.target.arch {
         Arch::AArch64 => "x10",
         Arch::X86_64 => "r10",
@@ -227,6 +228,21 @@ fn emit_trace_limit_guard(ctx: &mut FunctionContext<'_>, done: &str) {
         }
     }
     ctx.emitter.label(&unlimited);
+}
+
+/// Skips ownership guards whose offset 24 holds an owner instead of a frame reader.
+fn emit_skip_owned_guard(ctx: &mut FunctionContext<'_>, cursor: &str, next: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x11, [{cursor}, #16]"));
+            ctx.emitter.instruction(&format!("cmp x11, {cursor}"));
+            ctx.emitter.instruction(&format!("b.eq {next}"));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [{cursor} + 16], {cursor}"));
+            ctx.emitter.instruction(&format!("je {next}"));
+        }
+    }
 }
 
 /// Calls one activation's frame reader with its record and the original options mask.
@@ -784,6 +800,7 @@ pub(super) fn lower_debug_print_backtrace(
     let cursor_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, cursor_reg, TRACE_CURSOR_OFFSET);
     emit_branch_if_zero(ctx, cursor_reg, &finish_label);
+    emit_skip_owned_guard(ctx, cursor_reg, &next_label);
     let callback_reg = match ctx.emitter.target.arch {
         Arch::AArch64 => "x10",
         Arch::X86_64 => "r10",

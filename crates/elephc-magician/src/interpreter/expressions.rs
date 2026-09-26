@@ -15,6 +15,10 @@ mod calls;
 
 pub(in crate::interpreter) use calls::*;
 mod evaluation;
+mod owned;
+
+use owned::*;
+pub(in crate::interpreter) use owned::eval_output_expr;
 
 pub(in crate::interpreter) use evaluation::{
     eval_array_access_object_matches, eval_array_get_result, eval_binary_result, eval_closure_object_expr,
@@ -28,6 +32,32 @@ pub(in crate::interpreter) fn eval_expr(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_expr_with_result_ownership(expr, context, scope, values, false)
+}
+
+/// Evaluates a value that can be stored or returned independently of the current scope.
+pub(in crate::interpreter) fn eval_owned_expr(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = eval_expr_with_result_ownership(expr, context, scope, values, true)?;
+    if value.is_borrowed() {
+        copy_scope_value(value, context, values)
+    } else {
+        Ok(value)
+    }
+}
+
+/// Preserves expression evaluation order while optionally owning the selected result.
+fn eval_expr_with_result_ownership(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+    own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match expr {
         EvalExpr::Array(elements) => {
@@ -101,9 +131,10 @@ pub(in crate::interpreter) fn eval_expr(
             })
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            let property = eval_dynamic_member_name(property, context, scope, values)?;
-            eval_property_get_result(object, &property, context, values)
+            with_owned_receiver(object, context, scope, values, |object, context, scope, values| {
+                let property = eval_dynamic_member_name(property, context, scope, values)?;
+                eval_property_get_with_result_ownership(object, &property, context, values, true)
+            })
         }
         EvalExpr::DynamicStaticMethodCall {
             class_name,
@@ -121,41 +152,42 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::DynamicStaticPropertyGet {
             class_name,
             property,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
-            eval_static_property_get_result(&class_name, property, context, values)
-        }
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, _, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
+            eval_static_property_get_with_result_ownership(&class_name, property, context, values, own_result)
+        }),
         EvalExpr::DynamicStaticPropertyNameGet {
             class_name,
             property,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, scope, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
             let property = eval_dynamic_member_name(property, context, scope, values)?;
-            eval_static_property_get_result(&class_name, &property, context, values)
-        }
+            eval_static_property_get_with_result_ownership(&class_name, &property, context, values, own_result)
+        }),
         EvalExpr::DynamicClassConstantFetch {
             class_name,
             constant,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, _, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
             eval_class_constant_fetch_result(&class_name, constant, context, values)
-        }
+        }),
         EvalExpr::DynamicClassConstantNameFetch {
             class_name,
             constant,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, scope, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
             let constant = eval_dynamic_member_name(constant, context, scope, values)?;
             eval_class_constant_fetch_result(&class_name, &constant, context, values)
-        }
-        EvalExpr::DynamicClassNameFetch { class_name } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            eval_dynamic_class_name_fetch_result(class_name, context, values)
-        }
+        }),
+        EvalExpr::DynamicClassNameFetch { class_name } => with_eval_operands(
+            &[class_name],
+            context,
+            scope,
+            values,
+            |classes, context, _, values| {
+                eval_dynamic_class_name_fetch_result(classes[0], context, values)
+            },
+        ),
         EvalExpr::Include {
             path,
             required,
@@ -166,7 +198,7 @@ pub(in crate::interpreter) fn eval_expr(
         }
         EvalExpr::LoadVar(name) => {
             if let Some(value) = visible_scope_cell(context, scope, name) {
-                Ok(value)
+                if own_result { copy_scope_value(value, context, values) } else { Ok(value) }
             } else {
                 values.warning(&format!("Warning: Undefined variable ${name}\n"))?;
                 values.null()
@@ -177,7 +209,7 @@ pub(in crate::interpreter) fn eval_expr(
             subject,
             arms,
             default,
-        } => eval_match_expr(subject, arms, default.as_deref(), context, scope, values),
+        } => eval_match_expr(subject, arms, default.as_deref(), context, scope, values, own_result),
         EvalExpr::Clone(object) => with_eval_operands(
             &[object.as_ref()],
             context,
@@ -224,7 +256,7 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::StaticPropertyGet {
             class_name,
             property,
-        } => eval_static_property_get_result(class_name, property, context, values),
+        } => eval_static_property_get_with_result_ownership(class_name, property, context, values, own_result),
         EvalExpr::ClassConstantFetch {
             class_name,
             constant,
@@ -269,11 +301,12 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::NullCoalesce { value, default } => {
             let value = if let EvalExpr::LoadVar(name) = value.as_ref() {
                 match visible_scope_cell(context, scope, name) {
+                    Some(value) if own_result => copy_scope_value(value, context, values)?,
                     Some(value) => value,
                     None => values.null()?,
                 }
             } else {
-                eval_expr(value, context, scope, values)?
+                eval_expr_with_result_ownership(value, context, scope, values, own_result)?
             };
             if values.is_null(value)? {
                 release_expr_result(value, context, values)?;
@@ -283,28 +316,25 @@ pub(in crate::interpreter) fn eval_expr(
             }
         }
         EvalExpr::NullsafePropertyGet { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            if values.is_null(object)? {
-                return values.null();
-            }
-            eval_property_get_result(object, property, context, values)
+            with_owned_receiver(object, context, scope, values, |object, context, _scope, values| {
+                if values.is_null(object)? { return values.null(); }
+                eval_property_get_with_result_ownership(object, property, context, values, true)
+            })
         }
         EvalExpr::NullsafeDynamicPropertyGet { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            if values.is_null(object)? {
-                return values.null();
-            }
-            let property = eval_dynamic_member_name(property, context, scope, values)?;
-            eval_property_get_result(object, &property, context, values)
+            with_owned_receiver(object, context, scope, values, |object, context, scope, values| {
+                if values.is_null(object)? { return values.null(); }
+                let property = eval_dynamic_member_name(property, context, scope, values)?;
+                eval_property_get_with_result_ownership(object, &property, context, values, true)
+            })
         }
         EvalExpr::PropertyGet { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            eval_property_get_result(object, property, context, values)
+            with_owned_receiver(object, context, scope, values, |object, context, _scope, values| {
+                eval_property_get_with_result_ownership(object, property, context, values, true)
+            })
         }
         EvalExpr::Print(inner) => {
-            let value = eval_expr(inner, context, scope, values)?;
-            let value = eval_string_context_value(value, context, values)?;
-            values.echo(value)?;
+            eval_output_expr(inner, context, scope, values)?;
             values.int(1)
         }
         EvalExpr::Ternary {

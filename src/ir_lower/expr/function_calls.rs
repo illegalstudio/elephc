@@ -53,6 +53,16 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = ref_place_args::lower_builtin_ref_place_call(ctx, name, args, expr) {
         return value;
     }
+    if php_symbol_key(canonical.trim_start_matches('\\')) == "mb_convert_variables"
+        && args.iter().any(is_spread_arg)
+        && !ctx.functions.contains_key(canonical)
+        && !ctx.extern_functions.contains_key(canonical)
+    {
+        let callback = Expr::new(ExprKind::StringLiteral("mb_convert_variables".to_string()), expr.span);
+        let sig = crate::types::first_class_callable_builtin_sig("mb_convert_variables");
+        return lower_call_user_func_descriptor_invoke(ctx, &callback, args, sig.as_ref(), expr)
+            .expect("mb_convert_variables descriptor invocation");
+    }
     if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
         return value;
     }
@@ -86,6 +96,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
+    if !is_extern && !is_user_function {
+        if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr) {
+            return call;
+        }
+    }
     // A by-reference-returning callee hands back a lease that has to survive this caller's own
     // cleanup, so its staging is published before the arguments are evaluated. Only the direct
     // user-call branch below transfers a cell; an extern, builtin or eval-dispatched call with
@@ -122,7 +137,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         // like the same fixed signature reached through a builtin descriptor surface.
         sig.as_ref()
             .and_then(|signature| {
-                dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, canonical)
+                dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, canonical, false)
             })
             .unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args))
     } else if is_extern {
@@ -218,6 +233,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     call
 }
+
 
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 pub(super) fn emit_builtin_call_value(
@@ -374,6 +390,25 @@ pub(super) fn emit_builtin_call_value(
             effects_lookup::language_construct_effects(name),
         )
     };
+    let eval_needs_barrier = match eval_literal {
+        Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
+        None => true,
+    };
+    if is_eval {
+        ctx.begin_argument_guard_scope();
+        for (parameter, value) in operands.iter().copied().enumerate() {
+            let source = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            if ctx.value_is_owning_temporary(source)
+                && !ctx.has_call_argument_guard(source.value)
+            {
+                ctx.guard_call_argument(source, parameter, span);
+            }
+        }
+        ctx.end_argument_guard_scope();
+    }
     let call = ctx.emit_value(
         op,
         operands.clone(),
@@ -382,18 +417,19 @@ pub(super) fn emit_builtin_call_value(
         effects,
         Some(span),
     );
+    // Scope widening can make the already-lowered source load an owned string cast.
+    // Eval guards that owner through exceptional exits, then releases it normally here.
     if let Some(slot) = eval_source_owner {
         retire_owned_call_operand(ctx, slot, span);
     } else {
-        // Eval returns a boxed PHP value, never ownership of the code buffer
-        // passed to the parser. Even `return $source` reads its scope cell.
-        let return_alias = if is_eval { ReturnArgAlias::None } else { ReturnArgAlias::Unknown };
-        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), &return_alias, span);
+        release_owned_call_arg_temporaries(
+            ctx,
+            &operands,
+            Some(call.value),
+            if is_eval { &ReturnArgAlias::None } else { &ReturnArgAlias::Unknown },
+            span,
+        );
     }
-    let eval_needs_barrier = match eval_literal {
-        Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
-        None => true,
-    };
     if is_eval {
         ctx.mark_eval_executed();
         if eval_needs_barrier {
@@ -473,6 +509,7 @@ fn declared_type_is_a_safe_fallback(declared: &PhpType, checked: Option<&PhpType
     let Some(checked) = checked else {
         return true;
     };
+    /// Distinguishes PHP value representations from extension-only raw descriptors.
     fn is_a_php_value(ty: &PhpType) -> bool {
         !matches!(
             ty,

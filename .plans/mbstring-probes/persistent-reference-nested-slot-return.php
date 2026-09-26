@@ -1,0 +1,1 @@
+<?php $source = $argc > 0 ? 'function make_slot(): array { $values = ["alive"]; return [&$values[0]]; } $input=make_slot(); echo json_encode(mb_convert_encoding($input,"UTF-8","UTF-8"));' : ''; eval($source);

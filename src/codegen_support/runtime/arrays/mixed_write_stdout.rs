@@ -34,6 +34,7 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
 
     emitter.instruction("sub sp, sp, #16");                                     // allocate a small frame so nested helper calls can preserve x30
     emitter.instruction("str x30, [sp]");                                       // save the caller return address before any nested bl instructions
+    emitter.instruction("bl __rt_mixed_deref");                                 // print the current value held by a reference wrapper
     emitter.instruction("cbz x0, __rt_mixed_write_stdout_done");                // null mixed pointers print nothing
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed runtime payload tag
     emitter.instruction("cmp x9, #8");                                          // is the boxed value null?
@@ -108,6 +109,7 @@ fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before any nested helper calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base so nested calls stay 16-byte aligned
+    emitter.instruction("call __rt_mixed_deref");                               // print the current value held by a reference wrapper
     emitter.instruction("test rax, rax");                                       // null mixed pointers print nothing
     emitter.instruction("je __rt_mixed_write_stdout_done");                     // skip printing when the mixed value is absent
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the boxed runtime payload tag from the mixed cell header

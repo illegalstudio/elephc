@@ -2,22 +2,22 @@
 title: "ini_set()"
 description: "Overrides a configuration directive for the rest of the request."
 sidebar:
-  order: 914
+  order: 977
 ---
 
 ## ini_set()
 
 ```php
-function ini_set(string $option, mixed $value): mixed
+function ini_set(string $option, string|int|float|bool|null $value): string|false
 ```
 
 Overrides a configuration directive for the rest of the request.
 
 **Parameters**:
 - `$option` (`string`)
-- `$value` (`mixed`)
+- `$value` (`string|int|float|bool|null`)
 
-**Returns**: `mixed`
+**Returns**: `string|false`
 
 ## Availability
 

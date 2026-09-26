@@ -38,7 +38,7 @@ function cairo_pattern_create_radial(float $cx0, float $cy0, float $radius0, flo
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

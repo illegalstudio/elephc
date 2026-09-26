@@ -18,6 +18,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::arrays::hash_layout::NEXT_INDEX_OFFSET;
 
 /// zval_pack_array_hash: build a PHP hash HashTable from an elephc assoc array.
 /// Walks the elephc hash in insertion order via `__rt_hash_iter_next`, computes the
@@ -197,7 +198,9 @@ pub fn emit_zval_pack_array_hash(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #28]");                                   // store nNumOfElements at offset 28 (32-bit)
     emitter.instruction("mov x9, #-1");                                         // HT_INVALID_IDX for the internal pointer
     emitter.instruction("str w9, [x0, #32]");                                   // store nInternalPointer at offset 32 (32-bit)
-    emitter.instruction("str xzr, [x0, #40]");                                  // nNextFreeElement = 0 at offset 40 (64-bit)
+    emitter.instruction("ldr x9, [sp]");                                        // recover the source hash after packing every live entry
+    emitter.instruction(&format!("ldr x9, [x9, #{NEXT_INDEX_OFFSET}]"));        // preserve automatic indexing, including deleted integer keys
+    emitter.instruction("str x9, [x0, #40]");                                   // publish the signed nNextFreeElement in Zend's header
     emitter.instruction("str xzr, [x0, #48]");                                  // pDestructor = NULL at offset 48
     emitter.instruction("ldr x0, [sp, #80]");                                   // return the HashTable pointer
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
@@ -377,7 +380,9 @@ fn emit_zval_pack_array_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [rax + 24], ecx");                       // store nNumUsed at offset 24 (32-bit)
     emitter.instruction("mov DWORD PTR [rax + 28], ecx");                       // store nNumOfElements at offset 28 (32-bit)
     emitter.instruction("mov DWORD PTR [rax + 32], -1");                        // nInternalPointer = HT_INVALID_IDX (32-bit)
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // nNextFreeElement = 0 at offset 40 (64-bit)
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // recover the source hash after packing every live entry
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rcx + {NEXT_INDEX_OFFSET}]")); // preserve automatic indexing and deleted-key history
+    emitter.instruction("mov QWORD PTR [rax + 40], rcx");                       // publish the signed nNextFreeElement in Zend's header
     emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // pDestructor = NULL
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // return the HashTable pointer
     emitter.instruction("add rsp, 112");                                        // release the local slots

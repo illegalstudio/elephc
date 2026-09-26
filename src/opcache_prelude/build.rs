@@ -738,21 +738,30 @@ pub(crate) fn cli_ini_get_decl() -> Stmt {
     function("ini_get")
         .param("option", TypeExpr::Str)
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
-        .body(vec![s_return(e_call(
+        .body(vec![crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_GET), s_return(e_call(
             "__elephc_opcache_ini_string",
             vec![e_var("option")],
         ))])
         .build()
 }
 
-/// The CLI `ini_set(string $option, $value): string|false` wrapper: every `opcache.*` directive
-/// is baked into the binary, so it reports failure for every key.
+/// Routes mutable shared INI settings and retains failure for compiled-in opcache directives.
 pub(crate) fn cli_ini_set_decl() -> Stmt {
     function("ini_set")
         .param("option", TypeExpr::Str)
-        .param_untyped("value")
+        .param(
+            "value",
+            t_union(vec![
+                TypeExpr::Str,
+                TypeExpr::Int,
+                TypeExpr::Float,
+                TypeExpr::Bool,
+                TypeExpr::Void,
+            ]),
+        )
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
+            crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_SET),
             s_assign("value", e_cast(CastType::String, e_var("value"))),
             s_if(
                 e_binop(
@@ -769,73 +778,10 @@ pub(crate) fn cli_ini_set_decl() -> Stmt {
         .build()
 }
 
-/// The CLI `ini_get_all(?string $extension = null, bool $details = true)` wrapper — the
-/// extension-filter dispatch, byte-modeled on php-src. The return type hint is deliberately
-/// omitted; the `$details` split happens HERE rather than inside a shared loop, because a
-/// function writing an array on one branch and a scalar on the other into the SAME slot
-/// miscompiles.
+/// Builds the CLI enumeration wrapper with shared Core/mbstring rows and opcache filtering.
+/// Detail and plain branches use separate local slots for their different value shapes.
 pub(crate) fn cli_ini_get_all_decl() -> Stmt {
-    function("ini_get_all")
-        .param_default("extension", t_nullable(TypeExpr::Str), e_null())
-        .param_default("details", TypeExpr::Bool, e_bool(true))
-        .body(vec![
-            s_if(
-                e_binop(
-                    e_binop(
-                        e_binop(e_var("extension"), BinOp::StrictNotEq, e_null()),
-                        BinOp::And,
-                        e_binop(
-                            e_var("extension"),
-                            BinOp::StrictNotEq,
-                            e_str("zend opcache"),
-                        ),
-                    ),
-                    BinOp::And,
-                    e_binop(e_var("extension"), BinOp::StrictNotEq, e_str("core")),
-                ),
-                vec![
-                    s_if(
-                        e_call("__elephc_ini_module_known", vec![e_var("extension")]),
-                        vec![s_return(e_array(vec![]))],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_call(
-                        "fwrite",
-                        vec![
-                            e_const("STDERR"),
-                            e_binop(
-                                e_binop(
-                                    e_binop(
-                                        e_str("Warning: ini_get_all(): Extension \""),
-                                        BinOp::Concat,
-                                        e_var("extension"),
-                                    ),
-                                    BinOp::Concat,
-                                    e_str("\" cannot be found"),
-                                ),
-                                BinOp::Concat,
-                                e_str("\n"),
-                            ),
-                        ],
-                    )),
-                    s_return(e_bool(false)),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_var("details"),
-                vec![s_return(e_call(
-                    "__elephc_opcache_ini_all_details",
-                    vec![],
-                ))],
-                vec![],
-                None,
-            ),
-            s_return(e_call("__elephc_opcache_ini_all_plain", vec![])),
-        ])
-        .build()
+    crate::shared_ini_prelude::all_declaration(false)
 }
 
 /// `__elephc_ini_module_known(?string $m): bool` — the known-module predicate `ini_get_all`'s
@@ -922,14 +868,10 @@ pub(crate) fn ini_helper_decls(
                     vec![],
                     None,
                 ),
-                s_assign(
-                    "__elephc_raw",
-                    e_cast(
-                        CastType::String,
-                        e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
-                    ),
-                ),
-                s_return(e_var("__elephc_raw")),
+                s_return(e_cast(
+                    CastType::String,
+                    e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
+                )),
             ])
             .build(),
         function("__elephc_opcache_ini_access")

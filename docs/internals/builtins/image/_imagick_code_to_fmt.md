@@ -2,7 +2,7 @@
 title: "_imagick_code_to_fmt() - internals"
 description: "Compiler internals for _imagick_code_to_fmt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1095
+  order: 1159
 ---
 
 ## `_imagick_code_to_fmt()` - internals
@@ -38,8 +38,8 @@ function _imagick_code_to_fmt(int $code): string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

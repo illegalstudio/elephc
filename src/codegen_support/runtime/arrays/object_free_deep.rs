@@ -10,10 +10,12 @@
 //! - Destructor exceptions are deferred until sibling owners and the object storage have been released.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
 use crate::codegen_support::RuntimeFeatures;
 
+const CLEANUP: Scope = Scope { arm: 32, x86: 48 };
 
 /// Emits the `__rt_object_free_deep` runtime helper for ARM64.
 /// Frees an object instance and recursively releases all heap-backed property payloads
@@ -70,7 +72,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     // global) gave the object a new owner. php keeps such an object alive and never runs its
     // destructor again; freeing it here left that owner holding dead storage, and the next
     // release of the same block ran `__destruct` a second time. Drop the in-progress guard,
-    // remember completion in kind bit 17 exactly like the collector does, and leave.
+    // remember completion in kind bit 14 exactly like the collector does, and leave.
     // Only a destructor run by THIS call can resurrect, and its guard bit 31 is the witness:
     // the collector's sweep frees cycle members that still count their peers as owners after
     // it ran their destructors itself, and those must be freed, not kept.
@@ -81,13 +83,24 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("cbz w10, __rt_object_free_deep_not_resurrected");      // no surviving owner: release the storage as before
     emitter.instruction("str w10, [x0, #-12]");                                 // clear the guard so those owners release normally later
     emitter.instruction("ldr x10, [x0, #-8]");                                  // load the uniform heap kind word
-    emitter.instruction("orr x10, x10, #0x20000");                              // mark the destructor as completed for the final release
+    emitter.instruction("orr x10, x10, #0x4000");                               // mark the destructor as completed for the final release
     emitter.instruction("str x10, [x0, #-8]");                                  // persist the completion mark in the header
     emitter.instruction("b __rt_object_free_deep_resurrected");                 // keep the object and unwind only this cleanup frame
     emitter.label("__rt_object_free_deep_not_resurrected");
     emitter.instruction("ldr x0, [sp]");                                        // pass the object identity before any property payload is released
     super::deep_cleanup::invoke(emitter, "__rt_eval_object_release_children", "x0");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer after the destructor returns
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // inspect owners retained by PHP destruction
+    emitter.instruction("and w10, w9, #0x7fffffff");                            // exclude the temporary destructor guard from ownership
+    emitter.instruction("cbz w10, __rt_object_free_deep_release");              // release properties only when no PHP owner remains
+    emitter.instruction("str w10, [x0, #-12]");                                 // restore the ordinary count of a resurrected receiver
+    emitter.instruction("b __rt_object_free_deep_resurrected");                 // preserve its properties and pending throwable state
+    emitter.label("__rt_object_free_deep_release");
+    emitter.instruction("orr w9, w9, #0x80000000");                             // suppress recursive release while dismantling the final object graph
+    emitter.instruction("str w9, [x0, #-12]");                                  // keep an in-progress allocation distinct from a free-list block
+    emitter.instruction("ldr x0, [sp]");                                        // pass the final object identity after resurrection was ruled out
+    CLEANUP.call(emitter, "__rt_eval_object_release_children", true);           // detach hidden eval edges and contain receiver destructor throws
+    emitter.instruction("ldr x0, [sp]");                                        // restore the object pointer before property cleanup
 
     // -- incomplete objects own a persisted original class name plus a semantic
     // property hash instead of declared class property slots; release both --
@@ -316,6 +329,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.label("__rt_object_free_deep_resurrected");
     super::deep_cleanup::finish(emitter, "__rt_object_free_deep_return");
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_object_free_deep_done");
     emitter.instruction("ret");                                                 // return to the caller
 }
@@ -368,12 +382,22 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("and r10d, 0x7fffffff");                                // isolate the real owners the destructor body left behind
     emitter.instruction("jz __rt_object_free_deep_not_resurrected_x");          // no surviving owner: release the storage as before
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // clear the guard so those owners release normally later
-    emitter.instruction("or QWORD PTR [rax - 8], 0x20000");                     // mark the destructor as completed for the final release
+    emitter.instruction("or QWORD PTR [rax - 8], 0x4000");                      // mark the destructor as completed for the final release
     emitter.instruction("jmp __rt_object_free_deep_resurrected_x");             // keep the object and unwind only this cleanup frame
     emitter.label("__rt_object_free_deep_not_resurrected_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the object identity through the C ABI
     super::deep_cleanup::invoke(emitter, "__rt_eval_object_release_children", "rdi");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after the destructor returns
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // recover the receiver count after protected destruction
+    emitter.instruction("and r10d, 0x7fffffff");                                // exclude the temporary destructor flag from remaining owners
+    emitter.instruction("jz __rt_object_free_deep_release");                    // dismantle properties only for the final released owner
+    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // restore usable refcounts for a retained receiver
+    emitter.instruction("jmp __rt_object_free_deep_resurrected_x");             // preserve resurrected identity while propagating pending exceptions
+    emitter.label("__rt_object_free_deep_release");
+    emitter.instruction("or DWORD PTR [rax - 12], 0x80000000");                 // suppress recursive final release and preserve heap liveness during cleanup
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the final object identity after resurrection was ruled out
+    CLEANUP.call(emitter, "__rt_eval_object_release_children", true);           // detach hidden eval edges and contain receiver destructor throws
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the object pointer before property cleanup
 
     // -- incomplete objects own a persisted original class name plus a semantic
     // property hash instead of declared class property slots; release both --
@@ -568,11 +592,16 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
 
     emitter.label("__rt_object_free_deep_no_dyn_props");
+    if features.eval_bridge {
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // remove eval identity metadata immediately before storage can be reused
+        emitter.bl_c("__elephc_eval_dynamic_object_forget");
+    }
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after finishing the optional property cleanup pass
     emitter.instruction("call __rt_heap_free");                                 // release the object storage itself through the x86_64 heap wrapper
     emitter.label("__rt_object_free_deep_resurrected_x");
     super::deep_cleanup::finish(emitter, "__rt_object_free_deep_return");
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_object_free_deep_done");
     emitter.instruction("ret");                                                 // return to the caller after releasing the object and any owned heap-backed properties
 }

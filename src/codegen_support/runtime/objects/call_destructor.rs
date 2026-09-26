@@ -23,10 +23,10 @@
 //! - Re-entrancy guard: before calling the destructor, bit 31 of the 32-bit
 //!   refcount is set. A balanced `$tmp = $this;`/scope-exit inside the body then
 //!   decrements from `0x8000_0001` back to `0x8000_0000` instead of reaching zero,
-//!   so it cannot re-enter the free path and double-free the object. Ordinary
-//!   last-owner resurrection remains unsupported. Collector snapshots instead
-//!   clear the temporary guard after the callback, recount real owners, and keep
-//!   completed destructors marked separately in heap-kind bit 17.
+//!   so it cannot re-enter the free path and double-free the object. The entry
+//!   boundary checks that guard before marking persistent completion in kind bit 14.
+//!   Kind bit 17 also marks current GC scan candidates, so it cannot suppress
+//!   an ordinary destructor call by itself.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -37,6 +37,8 @@ use crate::codegen_support::abi;
 /// Output: none. Clobbers scratch registers; preserves the object pointer's
 /// memory so the caller can continue the deep-free after the destructor returns.
 pub(crate) fn emit_call_object_destructor(emitter: &mut Emitter) {
+    emit_eval_throwable(emitter);
+    emit_destructor_lifetime_boundary(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_call_object_destructor_x86_64(emitter);
         return;
@@ -44,15 +46,42 @@ pub(crate) fn emit_call_object_destructor(emitter: &mut Emitter) {
     emit_call_object_destructor_aarch64(emitter);
 }
 
+
+
+/// Marks destructor invocation once; failed construction uses the same bit to suppress invocation.
+fn emit_destructor_lifetime_boundary(emitter: &mut Emitter) {
+    let arm = emitter.target.arch == Arch::AArch64;
+    emitter.label_global("__rt_call_object_destructor");
+    if arm {
+        emitter.instruction("cbz x0, __rt_object_destructor_boundary_ret");     // reject a missing receiver before probing its header
+        emitter.instruction("ldr w10, [x0, #-12]");                             // inspect a destructor already running on this receiver
+        emitter.instruction("tbnz w10, #31, __rt_object_destructor_boundary_ret");// leave a reentrant call unmarked for its active owner
+        emitter.instruction("ldr x9, [x0, #-8]");                               // inspect persistent object destructor state
+        emitter.instruction("tbnz x9, #14, __rt_object_destructor_boundary_ret");// skip a completed destructor or failed construction permanently
+        emitter.instruction("orr x9, x9, #0x4000");                             // record invocation before any user callback or throwable
+        emitter.instruction("str x9, [x0, #-8]");                               // preserve called state in the low sixteen kind-word bits across GC
+        emitter.instruction("b __rt_call_object_destructor_body");              // let the protected caller finish temporary release state
+    } else {
+        emitter.instruction("test rdi, rdi");                                   // reject a missing receiver before reading object metadata
+        emitter.instruction("jz __rt_object_destructor_boundary_ret");          // return immediately for a null receiver
+        emitter.instruction("test DWORD PTR [rdi - 12], 0x80000000");           // inspect a destructor already running on this receiver
+        emitter.instruction("jnz __rt_object_destructor_boundary_ret");         // leave a reentrant call unmarked for its active owner
+        emitter.instruction("test QWORD PTR [rdi - 8], 0x4000");                // inspect persistent destructor-called or suppression state
+        emitter.instruction("jnz __rt_object_destructor_boundary_ret");         // completed and failed construction must not invoke PHP destruction
+        emitter.instruction("or QWORD PTR [rdi - 8], 0x4000");                  // record invocation before a callback can escape
+        emitter.instruction("jmp __rt_call_object_destructor_body");            // reuse the existing protected caller and native/eval dispatch
+    }
+    emitter.label("__rt_object_destructor_boundary_ret");
+    emitter.instruction("ret");                                                 // leave reclamation to current owners and the collector's fresh root scan
+}
+
 /// Emits the ARM64 `__rt_call_object_destructor` helper.
 fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: call_object_destructor ---");
-    emitter.label_global("__rt_call_object_destructor");
+    emitter.label_global("__rt_call_object_destructor_body");
 
     emitter.instruction("cbz x0, __rt_call_object_destructor_ret");             // null receiver → nothing to destruct
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // inspect persistent cycle-collector destructor completion
-    emitter.instruction("tbnz x9, #17, __rt_call_object_destructor_ret");       // later sweeps and final releases must not rerun completed PHP code
     emitter.instruction("ldr w9, [x0, #-12]");                                  // w9 = object refcount (header offset -12)
     emitter.instruction("tbnz w9, #31, __rt_call_object_destructor_ret");       // destruction already in progress → never run twice
     abi::emit_symbol_address(emitter, "x10", "_elephc_eval_dynamic_object_destruct_fn");
@@ -80,6 +109,7 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     emitter.instruction("movz w12, #0x8000, lsl #16");                          // w12 = destruction-in-progress flag bit
     emitter.instruction("bic w9, w9, w12");                                     // clear the temporary eval guard before static lookup
     emitter.instruction("str w9, [x0, #-12]");                                  // persist the restored refcount guard state
+    emitter.instruction("b __rt_call_object_destructor_static");                // continue ordinary lookup after restoring a missed eval guard
     emitter.label("__rt_call_object_destructor_static");
     emitter.instruction("ldr x11, [x0]");                                       // x11 = runtime class_id (object payload offset 0)
     // emit_load_symbol_to_reg uses x9 as scratch, so class_id is kept in x11.
@@ -109,12 +139,10 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
 fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: call_object_destructor ---");
-    emitter.label_global("__rt_call_object_destructor");
+    emitter.label_global("__rt_call_object_destructor_body");
 
     emitter.instruction("test rdi, rdi");                                       // null receiver → nothing to destruct
     emitter.instruction("jz __rt_call_object_destructor_ret");                  // skip the lookup for a null object
-    emitter.instruction("test QWORD PTR [rdi - 8], 0x20000");                   // inspect persistent cycle-collector destructor completion
-    emitter.instruction("jnz __rt_call_object_destructor_ret");                 // later sweeps and last-owner releases never rerun completed PHP code
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // eax = object refcount (header offset -12)
     emitter.instruction("test eax, 0x80000000");                                // is destruction already in progress?
     emitter.instruction("jnz __rt_call_object_destructor_ret");                 // never run a destructor twice
@@ -142,6 +170,7 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // reload the refcount after an eval miss
     emitter.instruction("and eax, 0x7fffffff");                                 // clear the temporary eval guard before static lookup
     emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the restored refcount guard state
+    emitter.instruction("jmp __rt_call_object_destructor_static_x86");          // continue static lookup after restoring a missed eval guard
     emitter.label("__rt_call_object_destructor_static_x86");
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = runtime class_id (object payload offset 0)
     abi::emit_cmp_reg_to_symbol(emitter, "rax", "_class_destruct_count");       // is class_id within the destructor table?
@@ -186,5 +215,38 @@ mod tests {
             assert!(asm.find(callback).unwrap() < asm.find(status).unwrap(), "{name}");
             assert!(asm.find(status).unwrap() < asm.find("__rt_throw_boxed_destructor_exception").unwrap(), "{name}");
         }
+    }
+}
+
+/// Publishes an owned eval Throwable box before entering the native exception unwinder.
+fn emit_eval_throwable(emitter: &mut Emitter) {
+    emitter.label_global("__rt_destructor_throw_mixed");
+    if emitter.target.arch == Arch::AArch64 {
+    emitter.instruction("sub sp, sp, #32");                                     // reserve boxed ownership and native linkage for exception publication
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // retain the native cleanup caller while transferring Throwable ownership
+    emitter.instruction("add x29, sp, #16");                                    // establish the native publication frame
+    emitter.instruction("str x0, [sp]");                                        // preserve the sole boxed Throwable owner
+    emitter.instruction("bl __rt_mixed_unbox");                                 // resolve the concrete object payload before acquiring its pending owner
+    emitter.instruction("mov x0, x1");                                          // adapt the raw Throwable payload to the retain convention
+    emitter.instruction("bl __rt_incref");                                      // retain the object independently from its boxed callback owner
+        abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
+    emitter.instruction("ldr x0, [sp]");                                        // recover the callback box after publishing raw Throwable ownership
+    emitter.instruction("bl __rt_decref_mixed");                                // consume the box while its object remains owned by the pending slot
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the native caller before propagating the exception
+    emitter.instruction("add sp, sp, #32");                                     // release publication storage after ownership transfer
+    emitter.instruction("b __rt_throw_current");                                // enter the cleanup handler without any remaining Rust frame
+    } else {
+    emitter.instruction("push rbp");                                            // preserve native linkage and align the publication calls
+    emitter.instruction("mov rbp, rsp");                                        // establish the Throwable publication frame
+    emitter.instruction("sub rsp, 16");                                         // reserve the callback box across native unboxing and retention
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // retain the owned box while its object gains independent ownership
+    emitter.instruction("call __rt_mixed_unbox");                               // resolve the concrete Throwable object payload
+    emitter.instruction("mov rax, rdi");                                        // pass the unboxed object to the native retain helper
+    emitter.instruction("call __rt_incref");                                    // acquire the object owner transferred to pending exception storage
+        abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // recover the boxed callback owner after publishing its object
+    emitter.instruction("call __rt_decref_mixed");                              // consume the box without releasing the still-pending Throwable
+    emitter.instruction("leave");                                               // restore native linkage after the ownership transfer is complete
+    emitter.instruction("jmp __rt_throw_current");                              // propagate through the enclosing protected cleanup handler
     }
 }

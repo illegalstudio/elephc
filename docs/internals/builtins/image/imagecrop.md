@@ -38,7 +38,7 @@ function imagecrop(mixed $image, mixed $rect = ['x' => 0, 'y' => 0, 'width' => 0
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

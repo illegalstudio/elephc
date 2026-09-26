@@ -8,30 +8,34 @@
 //! - Input argument cells are borrowed; successful result cells transfer ownership
 //!   through `result_out` to Magician.
 //! - Unknown IDs and unsupported arities fail closed without invoking a helper.
+//! - The incoming eval context survives helper calls in x23/r15 for protected callbacks.
 
 use elephc_builtin_contract::{RuntimeBuiltinId, RuntimeBuiltinStatus};
 
 use super::*;
 
 /// Emits the AArch64 implementation of `__elephc_runtime_builtin_call_v1`.
-pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter) {
+pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter, features: RuntimeFeatures) {
     label_c_global(emitter, "__elephc_runtime_builtin_call_v1");
     emitter.instruction("sub sp, sp, #64");                                     // allocate an ABI-aligned dispatcher frame
     emitter.instruction("stp x19, x20, [sp]");                                  // preserve callee-saved ID and argument registers
     emitter.instruction("stp x21, x22, [sp, #16]");                             // preserve count and result-out registers
+    emitter.instruction("str x23, [sp, #32]");                                  // preserve the callee-saved register retaining the eval context
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish a stable dispatcher frame pointer
     emitter.instruction("mov x19, x0");                                         // retain the typed runtime builtin ID
     emitter.instruction("mov x20, x1");                                         // retain the borrowed argument-pointer array
     emitter.instruction("mov x21, x2");                                         // retain the boxed argument count
     emitter.instruction("mov x22, x4");                                         // retain the caller-owned result-out slot
+    emitter.instruction("mov x23, x3");                                         // retain the active eval context for protected argument callbacks
     emitter.instruction("cbz x22, __elephc_runtime_builtin_v1_fatal");          // reject a missing result ownership slot
     emitter.instruction("str xzr, [x22]");                                      // clear result-out before any fallible dispatch
     emitter.instruction("cbz x21, __elephc_runtime_builtin_v1_dispatch");       // zero-arity calls need no argument array
     emitter.instruction("cbz x20, __elephc_runtime_builtin_v1_fatal");          // non-empty calls require a readable pointer array
     emitter.label("__elephc_runtime_builtin_v1_dispatch");
 
-    for (id, label) in runtime_dispatch_labels() {
+    for (id, label) in runtime_dispatch_labels().into_iter()
+        .filter(|(id, _)| !id.is_mbstring() || features.mbstring || features.eval_bridge) {
         emitter.instruction(&format!("cmp x19, #{}", id.as_u32()));             // compare the retained builtin ID with this arm's contract value
         emitter.instruction(&format!("b.eq {label}"));                          // dispatch to the matching builtin arm
     }
@@ -54,10 +58,14 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emit_aarch64_binary_case(emitter, RuntimeBuiltinId::ArrayKeyExists, "array_key_exists", "__elephc_eval_value_array_key_exists");
     emit_aarch64_zero_arg_boxed_int_case(emitter, RuntimeBuiltinId::ObGetLevel, "ob_get_level", "__elephc_eval_ob_level");
     emit_aarch64_ob_length_case(emitter);
-    emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObClean, "ob_clean", "__elephc_eval_ob_clean", None);
-    emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush", "__elephc_eval_ob_flush", None);
-    emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean", "__elephc_eval_ob_end", Some(0));
-    emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush", "__elephc_eval_ob_end", Some(1));
+    emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObClean, "ob_clean");
+    emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush");
+    emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean");
+    emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush");
+
+    if features.mbstring || features.eval_bridge {
+        super::mbstring::emit_aarch64_mbstring(emitter, features.mbregex);
+    }
 
     emitter.label("__elephc_runtime_builtin_v1_result");
     emitter.instruction("cbz x0, __elephc_runtime_builtin_v1_fatal");           // null helper results report runtime failure
@@ -72,13 +80,14 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_done");
     emitter.instruction("ldp x19, x20, [sp]");                                  // restore callee-saved ID and arguments
     emitter.instruction("ldp x21, x22, [sp, #16]");                             // restore callee-saved count and result slot
+    emitter.instruction("ldr x23, [sp, #32]");                                  // restore the caller's context register on every status path
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the dispatcher frame
     emitter.instruction("ret");                                                 // return the version-one runtime status
 }
 
 /// Emits the x86_64 implementation of `__elephc_runtime_builtin_call_v1`.
-pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
+pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter, features: RuntimeFeatures) {
     label_c_global(emitter, "__elephc_runtime_builtin_call_v1");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable dispatcher frame
@@ -86,10 +95,13 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.instruction("push r12");                                            // preserve the borrowed argument-pointer array
     emitter.instruction("push r13");                                            // preserve the boxed argument count
     emitter.instruction("push r14");                                            // preserve the caller-owned result-out slot and call alignment
+    emitter.instruction("push r15");                                            // preserve the register retaining the incoming eval context
+    emitter.instruction("sub rsp, 8");                                          // maintain SysV alignment after saving five working registers
     emitter.instruction("mov ebx, edi");                                        // retain the typed runtime builtin ID
     emitter.instruction("mov r12, rsi");                                        // retain the borrowed argument-pointer array
     emitter.instruction("mov r13, rdx");                                        // retain the boxed argument count
     emitter.instruction("mov r14, r8");                                         // retain the caller-owned result-out slot
+    emitter.instruction("mov r15, rcx");                                        // retain the active eval context for protected argument callbacks
     emitter.instruction("test r14, r14");                                       // validate the result ownership slot
     emitter.instruction("jz __elephc_runtime_builtin_v1_fatal_x86");            // reject a missing result-out pointer
     emitter.instruction("mov QWORD PTR [r14], 0");                              // clear result-out before fallible dispatch
@@ -99,7 +111,8 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.instruction("jz __elephc_runtime_builtin_v1_fatal_x86");            // fail closed for a missing argument array
     emitter.label("__elephc_runtime_builtin_v1_dispatch_x86");
 
-    for (id, label) in runtime_dispatch_labels() {
+    for (id, label) in runtime_dispatch_labels().into_iter()
+        .filter(|(id, _)| !id.is_mbstring() || features.mbstring || features.eval_bridge) {
         emitter.instruction(&format!("cmp ebx, {}", id.as_u32()));              // compare the retained builtin ID with this arm's contract value
         emitter.instruction(&format!("je {label}_x86"));                        // dispatch to the matching builtin arm
     }
@@ -122,10 +135,14 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emit_x86_64_binary_case(emitter, RuntimeBuiltinId::ArrayKeyExists, "array_key_exists", "__elephc_eval_value_array_key_exists");
     emit_x86_64_zero_arg_boxed_int_case(emitter, RuntimeBuiltinId::ObGetLevel, "ob_get_level", "__elephc_eval_ob_level");
     emit_x86_64_ob_length_case(emitter);
-    emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObClean, "ob_clean", "__elephc_eval_ob_clean", None);
-    emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush", "__elephc_eval_ob_flush", None);
-    emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean", "__elephc_eval_ob_end", Some(0));
-    emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush", "__elephc_eval_ob_end", Some(1));
+    emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObClean, "ob_clean");
+    emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush");
+    emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean");
+    emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush");
+
+    if features.mbstring || features.eval_bridge {
+        super::mbstring::emit_x86_64_mbstring(emitter, features.mbregex);
+    }
 
     emitter.label("__elephc_runtime_builtin_v1_result_x86");
     emitter.instruction("test rax, rax");                                       // null helper results report runtime failure
@@ -139,6 +156,8 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_unsupported_x86");
     emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::Unsupported as i32)); // report Unsupported for unknown IDs and arities
     emitter.label("__elephc_runtime_builtin_v1_done_x86");
+    emitter.instruction("add rsp, 8");                                          // discard dispatcher alignment padding on every status path
+    emitter.instruction("pop r15");                                             // restore the caller's context register after helper completion
     emitter.instruction("pop r14");                                             // restore the caller-owned result-out register
     emitter.instruction("pop r13");                                             // restore the boxed argument count register
     emitter.instruction("pop r12");                                             // restore the borrowed argument-array register
@@ -148,7 +167,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
 }
 
 /// Returns stable branch labels for every version-one runtime builtin ID.
-fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 21] {
+fn runtime_dispatch_labels() -> Vec<(RuntimeBuiltinId, String)> {
     let labels = [
         (RuntimeBuiltinId::Boolval, "__elephc_runtime_builtin_v1_boolval"),
         (RuntimeBuiltinId::Floatval, "__elephc_runtime_builtin_v1_floatval"),
@@ -172,7 +191,10 @@ fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 21] {
         (RuntimeBuiltinId::ObEndClean, "__elephc_runtime_builtin_v1_ob_end_clean"),
         (RuntimeBuiltinId::ObEndFlush, "__elephc_runtime_builtin_v1_ob_end_flush"),
     ];
-    for (runtime_id, _) in labels {
+    let mut labels: Vec<_> = labels.into_iter().map(|(id, label)| (id, label.to_owned())).collect();
+    labels.extend(crate::builtins::registry::eval_runtime_builtin_ids().filter(|id| id.is_mbstring()).map(|id|
+        (id, format!("__elephc_runtime_builtin_v1_mbstring_{}", id.as_u32()))));
+    for &(runtime_id, _) in &labels {
         let binding = crate::builtins::registry::lookup_runtime_builtin(runtime_id);
         assert_eq!(
             binding.spec.id(),
@@ -275,22 +297,15 @@ fn emit_aarch64_ob_length_case(emitter: &mut Emitter) {
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer boxed PHP false
 }
 
-/// Emits one AArch64 zero-argument boolean result arm.
+/// Emits a zero-argument output arm whose PHP callbacks stay inside a native exception boundary.
 fn emit_aarch64_zero_arg_boxed_bool_case(
     emitter: &mut Emitter,
-    _id: RuntimeBuiltinId,
+    id: RuntimeBuiltinId,
     label: &str,
-    symbol: &str,
-    flag: Option<u64>,
 ) {
     emitter.label(&format!("__elephc_runtime_builtin_v1_{label}"));
-    emitter.instruction("cbnz x21, __elephc_runtime_builtin_v1_unsupported");   // require zero PHP arguments
-    if let Some(flag) = flag {
-        emitter.instruction(&format!("mov x0, #{flag}"));                       // select clean or flush end behavior
-    }
-    emitter.bl_c(symbol);
-    emitter.bl_c("__elephc_eval_value_bool");
-    emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed boolean result
+    emitter.instruction("cbnz x21, __elephc_runtime_builtin_v1_unsupported");   // require zero PHP arguments before native output
+    super::output::emit_boxed_builtin(emitter, id);
 }
 
 /// Emits one x86_64 unary boxed-result dispatch arm.
@@ -394,24 +409,16 @@ fn emit_x86_64_ob_length_case(emitter: &mut Emitter) {
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer boxed PHP false
 }
 
-/// Emits one x86_64 zero-argument boolean result arm.
+/// Emits a zero-argument output arm whose PHP callbacks stay inside a native exception boundary.
 fn emit_x86_64_zero_arg_boxed_bool_case(
     emitter: &mut Emitter,
-    _id: RuntimeBuiltinId,
+    id: RuntimeBuiltinId,
     label: &str,
-    symbol: &str,
-    flag: Option<u64>,
 ) {
     emitter.label(&format!("__elephc_runtime_builtin_v1_{label}_x86"));
-    emitter.instruction("test r13, r13");                                       // require zero PHP arguments
-    emitter.instruction("jnz __elephc_runtime_builtin_v1_unsupported_x86");     // reject unsupported arity
-    if let Some(flag) = flag {
-        emitter.instruction(&format!("mov edi, {flag}"));                       // select clean or flush end behavior
-    }
-    emitter.bl_c(symbol);
-    emitter.instruction("mov rdi, rax");                                        // pass the raw result to the bool boxer
-    emitter.bl_c("__elephc_eval_value_bool");
-    emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed boolean result
+    emitter.instruction("test r13, r13");                                       // validate the shared PHP arity
+    emitter.instruction("jnz __elephc_runtime_builtin_v1_unsupported_x86");     // reject extra arguments before native output
+    super::output::emit_boxed_builtin(emitter, id);
 }
 
 #[cfg(test)]
@@ -423,8 +430,8 @@ mod tests {
     fn emit_for(target: Target) -> String {
         let mut emitter = Emitter::new(target);
         match target.arch {
-            Arch::AArch64 => emit_aarch64_runtime_builtin_dispatch(&mut emitter),
-            Arch::X86_64 => emit_x86_64_runtime_builtin_dispatch(&mut emitter),
+            Arch::AArch64 => emit_aarch64_runtime_builtin_dispatch(&mut emitter, RuntimeFeatures::all()),
+            Arch::X86_64 => emit_x86_64_runtime_builtin_dispatch(&mut emitter, RuntimeFeatures::all()),
         }
         emitter.output()
     }
@@ -434,6 +441,8 @@ mod tests {
     fn runtime_builtin_dispatch_is_emitted_for_all_supported_architectures() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
+            Target::parse("ios-arm64").unwrap(),
+            Target::parse("ios-sim-arm64").unwrap(),
             Target::new(Platform::Linux, Arch::AArch64),
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
@@ -442,6 +451,54 @@ mod tests {
             assert!(asm.contains(&format!("{symbol}:")), "{target:?}:\n{asm}");
             assert!(asm.contains("runtime_builtin_v1_unsupported"), "{target:?}:\n{asm}");
         }
+    }
+
+    /// Routes registered capture IDs through the V4 host on every supported target.
+    #[test]
+    fn runtime_builtin_dispatch_routes_capture_references() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let asm = emit_for(Target::parse(name).unwrap());
+            for id in [RuntimeBuiltinId::MbEreg, RuntimeBuiltinId::MbEregi] {
+                assert!(asm.contains(&format!("__elephc_runtime_builtin_v1_mbstring_{}", id.as_u32())),
+                    "{name}: registered capture binding must have a boxed dispatch route");
+            }
+            assert!(asm.contains(&format!("__elephc_runtime_builtin_v1_mbstring_{}", RuntimeBuiltinId::MbEregMatch.as_u32())));
+            assert!(asm.contains("__rt_mbstring_capture_invoke"), "{name}");
+        }
+    }
+
+    /// Assembles capture dispatch with and without its native provider on all supported targets.
+    #[test]
+    #[ignore = "requires clang with ELF AArch64/x86_64 and Apple AArch64 assembler support"]
+    fn runtime_builtin_dispatch_assembles_mbstring_capture_targets() {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!("mbstring-eval-capture-{}-{nonce}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        for (name, triple) in [
+            ("linux-x86_64", "x86_64-linux-gnu"), ("linux-aarch64", "aarch64-linux-gnu"),
+            ("macos-aarch64", "arm64-apple-macos11"), ("ios-arm64", "arm64-apple-ios13"),
+            ("ios-sim-arm64", "arm64-apple-ios13-simulator"),
+        ] {
+            for mbregex in [false, true] {
+                let target = Target::parse(name).unwrap();
+                let mut emitter = Emitter::new(target);
+                if target.arch == Arch::X86_64 { emitter.raw(".intel_syntax noprefix"); }
+                emitter.raw(".text");
+                let features = RuntimeFeatures { mbregex, ..RuntimeFeatures::all() };
+                match target.arch {
+                    Arch::AArch64 => emit_aarch64_runtime_builtin_dispatch(&mut emitter, features),
+                    Arch::X86_64 => emit_x86_64_runtime_builtin_dispatch(&mut emitter, features),
+                }
+                let assembly = emitter.output();
+                assert_eq!(assembly.contains("__rt_mbstring_capture_invoke"), mbregex, "{name}");
+                let input = directory.join(format!("{name}-{mbregex}.s"));
+                std::fs::write(&input, assembly).unwrap();
+                let output = std::process::Command::new("clang").args(["-target", triple, "-c"]).arg(&input)
+                    .arg("-o").arg(input.with_extension("o")).output().expect("clang is required for this explicit target check");
+                assert!(output.status.success(), "{name}, mbregex={mbregex}: {}", String::from_utf8_lossy(&output.stderr));
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     /// Verifies representative types, math, strings, arrays, and I/O IDs have dispatch arms.

@@ -13,6 +13,7 @@
 mod array_chunk;
 mod array_chunk_refcounted;
 mod array_chunk_to_hash;
+mod call_argument_unpack;
 mod array_count_values;
 mod array_column;
 mod array_column_boxed;
@@ -127,12 +128,17 @@ mod gc_mark_reachable;
 mod gc_note_child_ref;
 mod hash_count;
 mod hash_append;
+mod hash_append_error;
+mod hash_next_index;
 mod hash_clone_shallow;
 mod hash_chunk;
 mod hash_fnv1a;
 mod hash_free_deep;
 mod hash_get;
 mod hash_grow;
+pub(crate) mod hash_layout;
+mod hash_pin;
+mod hash_write_guard;
 mod hash_array_union;
 mod hash_key_eq;
 mod hash_key_hash;
@@ -178,6 +184,7 @@ mod iterable_write_stdout;
 mod mixed_abs;
 mod mixed_cast_array;
 mod mixed_clone;
+mod mixed_reference;
 mod mixed_cast_bool;
 mod mixed_cast_float;
 mod mixed_cast_int;
@@ -212,6 +219,7 @@ pub use array_chunk::emit_array_chunk;
 pub use array_chunk_refcounted::emit_array_chunk_refcounted;
 /// Emit refcounted array chunk helper.
 pub use array_chunk_to_hash::emit_array_chunk_to_hash;
+pub use call_argument_unpack::emit_call_argument_unpack;
 /// Emit key-preserving array chunk helper (array_chunk preserve_keys).
 pub use array_column::emit_array_column;
 pub use array_column_boxed::emit_array_column_boxed;
@@ -439,6 +447,8 @@ pub use hash_free_deep::emit_hash_free_deep;
 pub use hash_get::emit_hash_get;
 /// Emit hash get helper.
 pub use hash_grow::emit_hash_grow;
+pub use hash_pin::emit_hash_pin;
+pub use hash_write_guard::emit_hash_write_guards;
 /// Emit hash grow helper.
 pub use hash_array_union::emit_hash_array_union;
 /// Emit hash array union helper.
@@ -511,6 +521,7 @@ pub use mixed_abs::emit_mixed_abs;
 pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.
 pub use mixed_clone::emit_mixed_clone;
+pub use mixed_reference::emit_mixed_reference;
 /// Emit Mixed from value conversion helper.
 pub use mixed_from_value::emit_mixed_from_value;
 /// Emit Mixed instanceof check helper.

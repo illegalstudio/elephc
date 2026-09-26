@@ -5,18 +5,12 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - The synthesized body lands each matched element in a typed local before pushing it, which
-//!   is the compiler's ONLY `Op::MixedUnbox` site. That op's lowering ends in
-//!   `emit_unbox_mixed_to_owned_refcounted_result`, so the value it produces already owns a
-//!   reference; the EIR read it as a borrow and acquired a second one, and the single slot
-//!   release in the epilogue never balanced it. Each matched attribute then leaked itself and
-//!   the whole subtree it owns — five heap blocks per match, measured.
-//! - `new ReflectionClass(...)` leaks two blocks per construction at HEAD, on its own, so these
-//!   tests cannot assert `leak summary: clean`, and reusing ONE owner across the loop would not
-//!   catch the bug either: the surplus reference lands on the same attribute every time, so the
-//!   refcount climbs while the block count does not. Each test therefore compares two programs
-//!   that construct the SAME number of owners and differ only in how they call `getAttributes`.
-//!   The construction baseline cancels and a per-call imbalance does not.
+//! - The synthesized body lands each matched element in a typed local before pushing it.
+//!   Both unfiltered and filtered calls build fresh result arrays, so ownership of elements
+//!   loaded from the private attribute storage can be compared across the two paths.
+//! - Reflection construction has unrelated live blocks, so these tests compare two programs
+//!   that construct the same number of owners and differ in the `getAttributes` call. Creating
+//!   a fresh owner per iteration exposes reference leaks that reuse of one owner would hide.
 
 use crate::support::compile_and_run_with_heap_debug;
 
@@ -78,9 +72,7 @@ fn assert_same_live_blocks(
     );
 }
 
-/// A matched element must not leave a reference behind. Against the unfiltered call — which
-/// hands back `__attrs` itself and allocates nothing — the filtered call used to end twenty
-/// iterations one hundred blocks higher: five per match.
+/// A matched element must not leave a reference behind relative to an unfiltered call.
 #[test]
 fn test_filtered_get_attributes_does_not_leak_per_call() {
     assert_same_live_blocks(

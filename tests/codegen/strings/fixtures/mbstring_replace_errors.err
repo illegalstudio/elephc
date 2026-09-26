@@ -1,0 +1,6 @@
+Warning: mb_ereg_replace(): mbregex compile err: premature end of char-class
+Deprecated: mb_ereg_replace(): Passing null to parameter #2 ($replacement) of type string is deprecated
+Warning: mb_ereg_replace(): mbregex search failure in php_mbereg_replace_exec(): retry-limit-in-match over
+Warning: mb_eregi_replace(): mbregex compile err: premature end of char-class
+Deprecated: mb_eregi_replace(): Passing null to parameter #2 ($replacement) of type string is deprecated
+Warning: mb_eregi_replace(): mbregex search failure in php_mbereg_replace_exec(): retry-limit-in-match over

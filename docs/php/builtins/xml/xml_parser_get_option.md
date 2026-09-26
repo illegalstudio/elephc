@@ -2,7 +2,7 @@
 title: "xml_parser_get_option()"
 description: "Reads an XML_OPTION_* parser option."
 sidebar:
-  order: 950
+  order: 1013
 ---
 
 ## xml_parser_get_option()

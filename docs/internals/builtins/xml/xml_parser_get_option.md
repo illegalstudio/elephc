@@ -2,7 +2,7 @@
 title: "xml_parser_get_option() - internals"
 description: "Compiler internals for xml_parser_get_option(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 950
+  order: 1013
 ---
 
 ## `xml_parser_get_option()` - internals

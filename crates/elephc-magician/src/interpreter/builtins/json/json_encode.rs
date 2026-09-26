@@ -215,7 +215,7 @@ fn eval_json_encode_append_float(
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
-    let float = eval_float_value(value, values)?;
+    let float = f64::from_bits(values.raw_value_word(value)?);
     if !float.is_finite() {
         *error = Some(EvalJsonEncodeError {
             code: EVAL_JSON_ERROR_INF_OR_NAN,
@@ -224,7 +224,7 @@ fn eval_json_encode_append_float(
         output.push(b'0');
         return Ok(());
     }
-    let bytes = values.string_bytes(value)?;
+    let bytes = if float == 0.0 && float.is_sign_negative() { b"-0".to_vec() } else { values.string_bytes(value)? };
     output.extend_from_slice(&bytes);
     if flags & EVAL_JSON_PRESERVE_ZERO_FRACTION != 0
         && !bytes.iter().any(|byte| matches!(*byte, b'.' | b'e' | b'E'))
@@ -274,7 +274,7 @@ fn eval_json_encode_append_indexed_array(
             )?;
             eval_json_encode_append_colon(flags, output);
         }
-        let element = values.array_get(value, key)?;
+        let element = values.array_iter_value(value, position)?;
         eval_json_encode_append(
             element,
             values,
@@ -332,7 +332,7 @@ fn eval_json_encode_append_assoc(
             output,
         )?;
         eval_json_encode_append_colon(flags, output);
-        let element = values.array_get(value, key)?;
+        let element = values.array_iter_value(value, position)?;
         eval_json_encode_append(
             element,
             values,

@@ -195,12 +195,16 @@ impl Checker {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             // An unpack contributes its runtime entries, not one argument. Shared
             // validators accept unknown argument types and leave dynamic bounds to
-            // EIR binding. Legacy checker hooks still require their fixed AST shape.
-            let runtime_arity = args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
-                && !matches!(
-                    def.spec.semantics.validation,
-                    crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
-                );
+            // EIR binding. Mbstring checker hooks also accept dynamic spreads;
+            // other legacy hooks still require their fixed AST shape.
+            let runtime_arity = builtin_arg_plan.as_ref().is_some_and(|plan| plan.has_spread_args())
+                || args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
+            let runtime_arity = runtime_arity
+                && (builtin_key.starts_with("mb_")
+                    || !matches!(
+                        def.spec.semantics.validation,
+                        crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
+                    ));
             if !runtime_arity {
                 crate::builtins::registry::check_arity(name, args.len(), span)?;
             }

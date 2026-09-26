@@ -587,7 +587,96 @@ pub enum RuntimeFnId {
     Long2ip,
     Ltrim,
     MbEregMatch,
+    /// Searches a multibyte pattern with an optional live capture reference.
+    MbEreg,
+    /// Parses multibyte query input into a live output reference using Core INI settings.
+    MbParseStr,
+    /// Converts live variables, arrays, and object properties through shared mbstring policy.
+    MbConvertVariables,
+    /// Encodes and sends a message using shared mbstring language settings.
+    MbSendMail,
+    /// Searches a multibyte pattern without case sensitivity and preserves capture identity.
+    MbEregi,
+    /// Shared `mb_ereg_search_init` request operation.
+    MbEregSearchInit,
+    /// Shared `mb_ereg_search` request operation.
+    MbEregSearch,
+    /// Shared `mb_ereg_search_pos` request operation.
+    MbEregSearchPos,
+    /// Shared `mb_ereg_search_regs` request operation.
+    MbEregSearchRegs,
+    /// Shared `mb_ereg_search_getpos` request operation.
+    MbEregSearchGetpos,
+    /// Shared `mb_ereg_search_getregs` request operation.
+    MbEregSearchGetregs,
+    /// Shared `mb_ereg_search_setpos` request operation.
+    MbEregSearchSetpos,
+    /// Splits a multibyte subject through the shared regex engine.
+    MbSplit,
+    /// Replaces multibyte matches through the shared regex engine.
+    MbEregReplace,
+    /// Replaces multibyte regex matches through protected callback invocation.
+    MbEregReplaceCallback,
+    /// Replaces multibyte matches with case-insensitive shared regex semantics.
+    MbEregiReplace,
     MbStrlen,
+    MbStrwidth,
+    MbStrtoupper,
+    MbStrtolower,
+    MbConvertCase,
+    MbUcfirst,
+    MbLcfirst,
+    MbStrimwidth,
+    MbSubstr,
+    MbStrcut,
+    MbScrub,
+    MbTrim,
+    MbLtrim,
+    MbRtrim,
+    MbStrPad,
+    MbConvertKana,
+    MbSubstrCount,
+    MbOrd,
+    MbChr,
+    MbStrpos,
+    MbStripos,
+    MbStrrpos,
+    MbStrripos,
+    MbStrstr,
+    MbStristr,
+    MbStrrchr,
+    MbStrrichr,
+    MbLanguage,
+    MbInternalEncoding,
+    MbHttpOutput,
+    MbEncodingAliases,
+    MbStrSplit,
+    MbPreferredMimeName,
+    MbCheckEncoding,
+    MbSubstituteCharacter,
+    MbListEncodings,
+    MbDetectOrder,
+    MbDetectEncoding,
+    /// Converts strings and recursive arrays through the shared mbstring engine.
+    MbConvertEncoding,
+    MbEncodeNumericentity,
+    MbDecodeNumericentity,
+    /// Decodes MIME headers through the shared mbstring engine.
+    MbDecodeMimeheader,
+    /// Encodes MIME headers through the shared mbstring engine.
+    MbEncodeMimeheader,
+    /// Converts output-buffer phases through shared request codecs and response metadata.
+    MbOutputHandler,
+    /// Reads the shared request information as a scalar or heterogeneous array.
+    MbGetInfo,
+    /// Internal prelude access to shared INI state with protected diagnostic reentry.
+    SharedIni,
+    /// Reads recorded HTTP input identification and configured encoding names.
+    MbHttpInput,
+    /// Reads or changes the shared multibyte regex encoding.
+    MbRegexEncoding,
+    /// Reads or changes the shared multibyte regex option defaults.
+    MbRegexSetOptions,
     Md5,
     NumberFormat,
     Ord,
@@ -717,6 +806,11 @@ impl RuntimeFnId {
     /// cursor (and, for a seek, the seek mode) as extra operands. Declaring the real
     /// runtime arity here keeps EIR validation meaningful instead of switching it off.
     const fn lowering_owned_arity_bounds(self) -> Option<(usize, Option<usize>)> {
+        // The shared mbstring engine reports PHP arity errors at runtime, including calls
+        // through first-class callables whose argument count is only known when invoked.
+        if self.uses_mbstring_runtime() {
+            return Some((0, None));
+        }
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
@@ -931,6 +1025,11 @@ impl RuntimeFnId {
     /// Refines the PHP-ABI wrapper signature required by this runtime implementation.
     pub fn refine_runtime_callable_wrapper_sig(self, sig: &mut crate::types::FunctionSig) {
         use crate::types::PhpType;
+        if self.uses_mbstring_runtime() {
+            for (_, ty) in &mut sig.params { *ty = PhpType::Mixed; }
+            sig.declared_params = vec![true; sig.params.len()];
+            return;
+        }
         match self {
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
             RuntimeFnId::CloneWith => {
@@ -979,6 +1078,16 @@ impl RuntimeFnId {
 
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
+        if self.uses_mbstring_runtime() {
+            // Parameter conversion can invoke Stringable methods and destructors. Their
+            // global writes are observable; nested I/O keeps its own monitoring policy.
+            return crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::REFCOUNT_OP.bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            );
+        }
         match self {
             // Clone hooks and property hooks can execute arbitrary user code. I/O effects are
             // attributed to the nested operation that performs them.
@@ -1362,6 +1471,17 @@ impl RuntimeFnId {
                     | crate::ir::Effects::MAY_WARN.bits()
                     | crate::ir::Effects::MAY_THROW.bits(),
             ),
+            RuntimeFnId::MbSendMail => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::OUTPUT.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::BLOCKING_IO.bits()
+                    | crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
@@ -1416,6 +1536,11 @@ impl RuntimeFnId {
             IoKind, MonitoringPolicy, TraceContextPolicy, WaitPolicy,
         };
         match self {
+            RuntimeFnId::MbSendMail => MonitoringPolicy::Io {
+                kind: IoKind::Network,
+                wait: WaitPolicy::Measured,
+                trace_context: TraceContextPolicy::NotApplicable,
+            },
             RuntimeFnId::CurlEasyPerform => MonitoringPolicy::Io {
                 kind: IoKind::Network,
                 wait: WaitPolicy::Measured,
@@ -1520,6 +1645,71 @@ impl RuntimeFnId {
             | RuntimeFnId::IconvStrpos
             | RuntimeFnId::IconvStrrpos
             | RuntimeFnId::IconvSubstr
+            | RuntimeFnId::MbStrlen
+            | RuntimeFnId::MbStrwidth
+            | RuntimeFnId::MbStrtoupper
+            | RuntimeFnId::MbStrtolower
+            | RuntimeFnId::MbConvertCase
+            | RuntimeFnId::MbUcfirst
+            | RuntimeFnId::MbLcfirst
+            | RuntimeFnId::MbStrimwidth
+            | RuntimeFnId::MbSubstr
+            | RuntimeFnId::MbStrcut
+            | RuntimeFnId::MbScrub
+            | RuntimeFnId::MbTrim
+            | RuntimeFnId::MbLtrim
+            | RuntimeFnId::MbRtrim
+            | RuntimeFnId::MbStrPad
+            | RuntimeFnId::MbConvertKana
+            | RuntimeFnId::MbSubstrCount
+            | RuntimeFnId::MbOrd
+            | RuntimeFnId::MbChr
+            | RuntimeFnId::MbStrpos
+            | RuntimeFnId::MbStripos
+            | RuntimeFnId::MbStrrpos
+            | RuntimeFnId::MbStrripos
+            | RuntimeFnId::MbStrstr
+            | RuntimeFnId::MbStristr
+            | RuntimeFnId::MbStrrchr
+            | RuntimeFnId::MbStrrichr
+            | RuntimeFnId::MbLanguage
+            | RuntimeFnId::MbInternalEncoding
+            | RuntimeFnId::MbHttpOutput
+            | RuntimeFnId::MbEncodingAliases
+            | RuntimeFnId::MbStrSplit
+            | RuntimeFnId::MbSubstituteCharacter
+            | RuntimeFnId::MbListEncodings
+            | RuntimeFnId::MbDetectOrder
+            | RuntimeFnId::MbDetectEncoding
+            | RuntimeFnId::MbConvertEncoding
+            | RuntimeFnId::MbConvertVariables
+            | RuntimeFnId::MbEncodeNumericentity
+            | RuntimeFnId::MbDecodeMimeheader
+            | RuntimeFnId::MbEncodeMimeheader
+            | RuntimeFnId::MbOutputHandler
+            | RuntimeFnId::MbGetInfo
+            | RuntimeFnId::SharedIni
+            | RuntimeFnId::MbParseStr
+            | RuntimeFnId::MbHttpInput
+            | RuntimeFnId::MbRegexEncoding
+            | RuntimeFnId::MbRegexSetOptions
+            | RuntimeFnId::MbEregMatch
+            | RuntimeFnId::MbEreg
+            | RuntimeFnId::MbEregi
+            | RuntimeFnId::MbEregSearchInit
+            | RuntimeFnId::MbEregSearch
+            | RuntimeFnId::MbEregSearchPos
+            | RuntimeFnId::MbEregSearchRegs
+            | RuntimeFnId::MbEregSearchGetpos
+            | RuntimeFnId::MbEregSearchGetregs
+            | RuntimeFnId::MbEregSearchSetpos
+            | RuntimeFnId::MbSplit
+            | RuntimeFnId::MbEregReplace
+            | RuntimeFnId::MbEregReplaceCallback
+            | RuntimeFnId::MbEregiReplace
+            | RuntimeFnId::MbDecodeNumericentity
+            | RuntimeFnId::MbCheckEncoding
+            | RuntimeFnId::MbPreferredMimeName
             | RuntimeFnId::Md5
             | RuntimeFnId::Sha1
             | RuntimeFnId::StreamSocketEnableCrypto => MonitoringPolicy::GenericTiming,
@@ -1532,6 +1722,12 @@ impl RuntimeFnId {
         self,
     ) -> &'static [crate::builtins::semantics::BuiltinRequirement] {
         use crate::builtins::semantics::BuiltinRequirement;
+        if self.uses_mbregex_runtime() {
+            return &[
+                BuiltinRequirement::Bridge("elephc_mbstring"),
+                BuiltinRequirement::RuntimeFeature("oniguruma"),
+            ];
+        }
         match self {
             RuntimeFnId::BcAdd
             | RuntimeFnId::BcCeil
@@ -1640,7 +1836,58 @@ impl RuntimeFnId {
                 BuiltinRequirement::Bridge("elephc_iconv"),
                 BuiltinRequirement::MacOsLibrary("iconv"),
             ],
-            RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
+            RuntimeFnId::MbStrlen
+            | RuntimeFnId::MbStrwidth
+            | RuntimeFnId::MbStrtoupper
+            | RuntimeFnId::MbStrtolower
+            | RuntimeFnId::MbConvertCase
+            | RuntimeFnId::MbUcfirst
+            | RuntimeFnId::MbLcfirst
+            | RuntimeFnId::MbStrimwidth
+            | RuntimeFnId::MbSubstr
+            | RuntimeFnId::MbStrcut
+            | RuntimeFnId::MbScrub
+            | RuntimeFnId::MbTrim
+            | RuntimeFnId::MbLtrim
+            | RuntimeFnId::MbRtrim
+            | RuntimeFnId::MbStrPad
+            | RuntimeFnId::MbConvertKana
+            | RuntimeFnId::MbSubstrCount
+            | RuntimeFnId::MbOrd
+            | RuntimeFnId::MbChr
+            | RuntimeFnId::MbStrpos
+            | RuntimeFnId::MbStripos
+            | RuntimeFnId::MbStrrpos
+            | RuntimeFnId::MbStrripos
+            | RuntimeFnId::MbStrstr
+            | RuntimeFnId::MbStristr
+            | RuntimeFnId::MbStrrchr
+            | RuntimeFnId::MbStrrichr
+            | RuntimeFnId::MbLanguage
+            | RuntimeFnId::MbInternalEncoding
+            | RuntimeFnId::MbHttpOutput
+            | RuntimeFnId::MbEncodingAliases
+            | RuntimeFnId::MbStrSplit
+            | RuntimeFnId::MbSubstituteCharacter
+            | RuntimeFnId::MbListEncodings
+            | RuntimeFnId::MbDetectOrder
+            | RuntimeFnId::MbDetectEncoding
+            | RuntimeFnId::MbConvertEncoding
+            | RuntimeFnId::MbConvertVariables
+            | RuntimeFnId::MbEncodeNumericentity
+            | RuntimeFnId::MbDecodeMimeheader
+            | RuntimeFnId::MbEncodeMimeheader
+            | RuntimeFnId::MbOutputHandler
+            | RuntimeFnId::MbGetInfo
+            | RuntimeFnId::SharedIni
+            | RuntimeFnId::MbParseStr
+            | RuntimeFnId::MbSendMail
+            | RuntimeFnId::MbHttpInput
+            | RuntimeFnId::MbRegexEncoding
+            | RuntimeFnId::MbRegexSetOptions
+            | RuntimeFnId::MbDecodeNumericentity
+            | RuntimeFnId::MbCheckEncoding
+            | RuntimeFnId::MbPreferredMimeName => &[BuiltinRequirement::Bridge("elephc_mbstring")],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::StreamSocketEnableCrypto => &[BuiltinRequirement::Bridge("elephc_tls")],
@@ -1648,14 +1895,91 @@ impl RuntimeFnId {
         }
     }
 
+    /// Maps an EIR runtime identity to the shared mbstring engine operation.
+    pub const fn mbstring_operation(self) -> Option<elephc_builtin_contract::RuntimeBuiltinId> {
+        use elephc_builtin_contract::RuntimeBuiltinId;
+        match self {
+            Self::MbStrlen => Some(RuntimeBuiltinId::MbStrlen),
+            Self::MbStrwidth => Some(RuntimeBuiltinId::MbStrwidth),
+            Self::MbStrtoupper => Some(RuntimeBuiltinId::MbStrtoupper),
+            Self::MbStrtolower => Some(RuntimeBuiltinId::MbStrtolower),
+            Self::MbConvertCase => Some(RuntimeBuiltinId::MbConvertCase),
+            Self::MbUcfirst => Some(RuntimeBuiltinId::MbUcfirst),
+            Self::MbLcfirst => Some(RuntimeBuiltinId::MbLcfirst),
+            Self::MbStrimwidth => Some(RuntimeBuiltinId::MbStrimwidth),
+            Self::MbSubstr => Some(RuntimeBuiltinId::MbSubstr),
+            Self::MbStrcut => Some(RuntimeBuiltinId::MbStrcut),
+            Self::MbScrub => Some(RuntimeBuiltinId::MbScrub),
+            Self::MbTrim => Some(RuntimeBuiltinId::MbTrim),
+            Self::MbLtrim => Some(RuntimeBuiltinId::MbLtrim),
+            Self::MbRtrim => Some(RuntimeBuiltinId::MbRtrim),
+            Self::MbStrPad => Some(RuntimeBuiltinId::MbStrPad),
+            Self::MbConvertKana => Some(RuntimeBuiltinId::MbConvertKana),
+            Self::MbSubstrCount => Some(RuntimeBuiltinId::MbSubstrCount),
+            Self::MbOrd => Some(RuntimeBuiltinId::MbOrd),
+            Self::MbChr => Some(RuntimeBuiltinId::MbChr),
+            Self::MbStrpos => Some(RuntimeBuiltinId::MbStrpos),
+            Self::MbStripos => Some(RuntimeBuiltinId::MbStripos),
+            Self::MbStrrpos => Some(RuntimeBuiltinId::MbStrrpos),
+            Self::MbStrripos => Some(RuntimeBuiltinId::MbStrripos),
+            Self::MbStrstr => Some(RuntimeBuiltinId::MbStrstr),
+            Self::MbStristr => Some(RuntimeBuiltinId::MbStristr),
+            Self::MbStrrchr => Some(RuntimeBuiltinId::MbStrrchr),
+            Self::MbStrrichr => Some(RuntimeBuiltinId::MbStrrichr),
+            Self::MbLanguage => Some(RuntimeBuiltinId::MbLanguage),
+            Self::MbInternalEncoding => Some(RuntimeBuiltinId::MbInternalEncoding),
+            Self::MbHttpOutput => Some(RuntimeBuiltinId::MbHttpOutput),
+            Self::MbEncodingAliases => Some(RuntimeBuiltinId::MbEncodingAliases),
+            Self::MbStrSplit => Some(RuntimeBuiltinId::MbStrSplit),
+            Self::MbPreferredMimeName => Some(RuntimeBuiltinId::MbPreferredMimeName),
+            Self::MbCheckEncoding => Some(RuntimeBuiltinId::MbCheckEncoding),
+            Self::MbSubstituteCharacter => Some(RuntimeBuiltinId::MbSubstituteCharacter),
+            Self::MbListEncodings => Some(RuntimeBuiltinId::MbListEncodings),
+            Self::MbDetectOrder => Some(RuntimeBuiltinId::MbDetectOrder),
+            Self::MbDetectEncoding => Some(RuntimeBuiltinId::MbDetectEncoding),
+            Self::MbConvertEncoding => Some(RuntimeBuiltinId::MbConvertEncoding),
+            Self::MbConvertVariables => Some(RuntimeBuiltinId::MbConvertVariables),
+            Self::MbEncodeNumericentity => Some(RuntimeBuiltinId::MbEncodeNumericentity),
+            Self::MbDecodeNumericentity => Some(RuntimeBuiltinId::MbDecodeNumericentity),
+            Self::MbDecodeMimeheader => Some(RuntimeBuiltinId::MbDecodeMimeheader),
+            Self::MbEncodeMimeheader => Some(RuntimeBuiltinId::MbEncodeMimeheader),
+            Self::MbOutputHandler => Some(RuntimeBuiltinId::MbOutputHandler),
+            Self::MbGetInfo => Some(RuntimeBuiltinId::MbGetInfo),
+            Self::SharedIni => Some(RuntimeBuiltinId::SharedIni),
+            Self::MbParseStr => Some(RuntimeBuiltinId::MbParseStr),
+            Self::MbSendMail => Some(RuntimeBuiltinId::MbSendMail),
+            Self::MbHttpInput => Some(RuntimeBuiltinId::MbHttpInput),
+            Self::MbRegexEncoding => Some(RuntimeBuiltinId::MbRegexEncoding),
+            Self::MbRegexSetOptions => Some(RuntimeBuiltinId::MbRegexSetOptions),
+            Self::MbEregMatch => Some(RuntimeBuiltinId::MbEregMatch),
+            Self::MbEreg => Some(RuntimeBuiltinId::MbEreg),
+            Self::MbEregi => Some(RuntimeBuiltinId::MbEregi),
+            Self::MbEregSearchInit => Some(RuntimeBuiltinId::MbEregSearchInit),
+            Self::MbEregSearch => Some(RuntimeBuiltinId::MbEregSearch),
+            Self::MbEregSearchPos => Some(RuntimeBuiltinId::MbEregSearchPos),
+            Self::MbEregSearchRegs => Some(RuntimeBuiltinId::MbEregSearchRegs),
+            Self::MbEregSearchGetpos => Some(RuntimeBuiltinId::MbEregSearchGetpos),
+            Self::MbEregSearchGetregs => Some(RuntimeBuiltinId::MbEregSearchGetregs),
+            Self::MbEregSearchSetpos => Some(RuntimeBuiltinId::MbEregSearchSetpos),
+            Self::MbSplit => Some(RuntimeBuiltinId::MbSplit),
+            Self::MbEregReplace => Some(RuntimeBuiltinId::MbEregReplace),
+            Self::MbEregReplaceCallback => Some(RuntimeBuiltinId::MbEregReplaceCallback),
+            Self::MbEregiReplace => Some(RuntimeBuiltinId::MbEregiReplace),
+            _ => None,
+        }
+    }
+
     /// Returns whether the operation has a proven generic runtime-callable wrapper.
     pub const fn runtime_callable_supported(self) -> bool {
+        if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr) { return false; }
+        if self.uses_mbstring_runtime() { return true; }
         matches!(
             self,
             RuntimeFnId::Abs
                 | RuntimeFnId::ArraySum
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
+                | RuntimeFnId::Count
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
@@ -1665,6 +1989,7 @@ impl RuntimeFnId {
     /// Returns whether a dynamic source value can use this target's generic wrapper.
     pub fn callable_accepts(self, source: Option<&crate::types::PhpType>) -> bool {
         use crate::types::PhpType;
+        if self.uses_mbstring_runtime() { return true; }
         let source = source.map(PhpType::codegen_repr);
         match self {
             RuntimeFnId::CloneWith => source.is_none_or(|ty| {
@@ -1690,6 +2015,12 @@ impl RuntimeFnId {
         }
     }
 
+    /// Accepts a proven callback arity when a builtin's wrapper supports a narrower optional-argument subset.
+    pub fn callable_accepts_arity(self, source: Option<&crate::types::PhpType>, arity: Option<usize>) -> bool {
+        if self == Self::Count { return arity == Some(1); }
+        self.callable_accepts(source)
+    }
+
     /// Returns whether this operation requires the optional regex runtime family.
     pub const fn uses_regex_runtime(self) -> bool {
         matches!(
@@ -1702,9 +2033,19 @@ impl RuntimeFnId {
         )
     }
 
-    /// Returns whether this operation requires the optional multibyte-length runtime.
-    pub const fn uses_mb_strlen_runtime(self) -> bool {
-        matches!(self, RuntimeFnId::MbStrlen)
+    /// Returns whether this operation requires the optional shared mbstring runtime.
+    pub const fn uses_mbstring_runtime(self) -> bool {
+        self.mbstring_operation().is_some()
+    }
+
+    /// Selects the managed Oniguruma runtime separately from ordinary multibyte text and PCRE2.
+    pub const fn uses_mbregex_runtime(self) -> bool {
+        match self.mbstring_operation() { Some(operation) => operation.is_mbregex(), None => false }
+    }
+
+    /// Selects the managed PCRE2 MIME provider only for output MIME matching.
+    pub const fn uses_mbstring_mime_runtime(self) -> bool {
+        matches!(self, RuntimeFnId::MbOutputHandler)
     }
 
     /// Returns the scope-cleanup kind stamped into the resource this operation boxes.
@@ -1809,6 +2150,12 @@ impl RuntimeFnId {
         self,
     ) -> crate::builtins::semantics::BuiltinResultOwnership {
         use crate::builtins::semantics::BuiltinResultOwnership;
+        if self.uses_mbstring_runtime() {
+            return if matches!(self, Self::MbStrlen | Self::MbStrwidth | Self::MbSubstrCount | Self::MbCheckEncoding
+                | Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::MbSendMail | Self::MbEregSearchInit | Self::MbEregSearch | Self::MbEregSearchGetpos | Self::MbEregSearchSetpos) {
+                BuiltinResultOwnership::NonHeap
+            } else { BuiltinResultOwnership::Fresh };
+        }
         // `intval($value, $base)` hands back a raw machine integer, never storage. Leaving it
         // in the default `MayAliasArguments` bucket would keep an owned subject temporary
         // alive for the integer's whole lifetime, which is the leak shape already documented
@@ -2038,6 +2385,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
+                // These mixed-return helpers always allocate a new result cell. Date
+                // decomposition boxes a newly allocated hash, `strtotime` boxes its scalar
+                // answer, `hrtime` boxes either a scalar or a new hash, and grapheme reversal
+                // boxes both its string and false paths. None can alias an argument.
+                | RuntimeFnId::Getdate
+                | RuntimeFnId::Hrtime
                 // `getcwd()` takes NO arguments, so its result cannot alias one by
                 // construction; `__rt_getcwd` copies the kernel's buffer out through
                 // `__rt_str_persist`. The default `MayAliasArguments` bucket made
@@ -2045,6 +2398,7 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
+                | RuntimeFnId::GraphemeStrrev
                 // `getenv($name)` boxes `false` or an owned copy made by `__rt_str_persist`
                 // in a fresh Mixed cell. `getenv()` boxes a newly built environment hash.
                 // Neither result can alias an argument, so the default `MayAliasArguments`
@@ -2060,6 +2414,7 @@ impl RuntimeFnId {
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
                 // three siblings already documented below.
                 | RuntimeFnId::JsonEncode
+                | RuntimeFnId::Localtime
                 // `microtime()` formats into fresh storage from the clock; it has no string
                 // argument to alias. Its float mode is non-heap and unaffected.
                 | RuntimeFnId::Microtime
@@ -2095,12 +2450,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::PrintR
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
-                // `str_repeat()` allocates the repeated bytes independently of its subject.
-                // Marking it as possibly aliasing made closure return analysis conservative,
-                // so callers failed to publish the fresh result before argument cleanup that
-                // can run a throwing destructor.
-                | RuntimeFnId::StrRepeat
                 | RuntimeFnId::StrSplit
+                | RuntimeFnId::Strtotime
                 // Every `str_word_count()` shape allocates its own result: format 0 is a plain
                 // integer, format 1 pushes persisted copies into a brand-new indexed array, and
                 // format 2 persists each word before inserting it into a brand-new hash. Nothing
@@ -2164,6 +2515,8 @@ impl RuntimeFnId {
                 // but scratch-backed results still need ordinary string persistence.
                 | RuntimeFnId::StrReplace
                 | RuntimeFnId::StrIreplace
+                // Repetition uses separate concat storage and cannot alias its subject.
+                | RuntimeFnId::StrRepeat
         ) {
             BuiltinResultOwnership::Independent
         } else {
@@ -2624,7 +2977,71 @@ impl RuntimeFnId {
             RuntimeFnId::Long2ip => "long2ip",
             RuntimeFnId::Ltrim => "ltrim",
             RuntimeFnId::MbEregMatch => "mb_ereg_match",
+            RuntimeFnId::MbEreg => "mb_ereg",
+            RuntimeFnId::MbEregi => "mb_eregi",
+            RuntimeFnId::MbEregSearchInit => "mb_ereg_search_init",
+            RuntimeFnId::MbEregSearch => "mb_ereg_search",
+            RuntimeFnId::MbEregSearchPos => "mb_ereg_search_pos",
+            RuntimeFnId::MbEregSearchRegs => "mb_ereg_search_regs",
+            RuntimeFnId::MbEregSearchGetpos => "mb_ereg_search_getpos",
+            RuntimeFnId::MbEregSearchGetregs => "mb_ereg_search_getregs",
+            RuntimeFnId::MbEregSearchSetpos => "mb_ereg_search_setpos",
+            RuntimeFnId::MbSplit => "mb_split",
+            RuntimeFnId::MbEregReplace => "mb_ereg_replace",
+            RuntimeFnId::MbEregReplaceCallback => "mb_ereg_replace_callback",
+            RuntimeFnId::MbEregiReplace => "mb_eregi_replace",
             RuntimeFnId::MbStrlen => "mb_strlen",
+            RuntimeFnId::MbStrwidth => "mb_strwidth",
+            RuntimeFnId::MbStrtoupper => "mb_strtoupper",
+            RuntimeFnId::MbStrtolower => "mb_strtolower",
+            RuntimeFnId::MbConvertCase => "mb_convert_case",
+            RuntimeFnId::MbUcfirst => "mb_ucfirst",
+            RuntimeFnId::MbLcfirst => "mb_lcfirst",
+            RuntimeFnId::MbStrimwidth => "mb_strimwidth",
+            RuntimeFnId::MbSubstr => "mb_substr",
+            RuntimeFnId::MbStrcut => "mb_strcut",
+            RuntimeFnId::MbScrub => "mb_scrub",
+            RuntimeFnId::MbTrim => "mb_trim",
+            RuntimeFnId::MbLtrim => "mb_ltrim",
+            RuntimeFnId::MbRtrim => "mb_rtrim",
+            RuntimeFnId::MbStrPad => "mb_str_pad",
+            RuntimeFnId::MbConvertKana => "mb_convert_kana",
+            RuntimeFnId::MbSubstrCount => "mb_substr_count",
+            RuntimeFnId::MbOrd => "mb_ord",
+            RuntimeFnId::MbChr => "mb_chr",
+            RuntimeFnId::MbStrpos => "mb_strpos",
+            RuntimeFnId::MbStripos => "mb_stripos",
+            RuntimeFnId::MbStrrpos => "mb_strrpos",
+            RuntimeFnId::MbStrripos => "mb_strripos",
+            RuntimeFnId::MbStrstr => "mb_strstr",
+            RuntimeFnId::MbStristr => "mb_stristr",
+            RuntimeFnId::MbStrrchr => "mb_strrchr",
+            RuntimeFnId::MbStrrichr => "mb_strrichr",
+            RuntimeFnId::MbLanguage => "mb_language",
+            RuntimeFnId::MbInternalEncoding => "mb_internal_encoding",
+            RuntimeFnId::MbHttpOutput => "mb_http_output",
+            RuntimeFnId::MbEncodingAliases => "mb_encoding_aliases",
+            RuntimeFnId::MbStrSplit => "mb_str_split",
+            RuntimeFnId::MbPreferredMimeName => "mb_preferred_mime_name",
+            RuntimeFnId::MbCheckEncoding => "mb_check_encoding",
+            RuntimeFnId::MbSubstituteCharacter => "mb_substitute_character",
+            RuntimeFnId::MbListEncodings => "mb_list_encodings",
+            RuntimeFnId::MbDetectOrder => "mb_detect_order",
+            RuntimeFnId::MbDetectEncoding => "mb_detect_encoding",
+            RuntimeFnId::MbConvertEncoding => "mb_convert_encoding",
+            RuntimeFnId::MbConvertVariables => "mb_convert_variables",
+            RuntimeFnId::MbEncodeNumericentity => "mb_encode_numericentity",
+            RuntimeFnId::MbDecodeNumericentity => "mb_decode_numericentity",
+            RuntimeFnId::MbDecodeMimeheader => "mb_decode_mimeheader",
+            RuntimeFnId::MbEncodeMimeheader => "mb_encode_mimeheader",
+            RuntimeFnId::MbOutputHandler => "mb_output_handler",
+            RuntimeFnId::MbGetInfo => "mb_get_info",
+            RuntimeFnId::SharedIni => "__elephc_shared_ini",
+            RuntimeFnId::MbParseStr => "mb_parse_str",
+            RuntimeFnId::MbSendMail => "mb_send_mail",
+            RuntimeFnId::MbHttpInput => "mb_http_input",
+            RuntimeFnId::MbRegexEncoding => "mb_regex_encoding",
+            RuntimeFnId::MbRegexSetOptions => "mb_regex_set_options",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
             RuntimeFnId::Octdec => "octdec",
@@ -2747,5 +3164,44 @@ fn set_callable_param_type(
 ) {
     if let Some((_, param_ty)) = sig.params.get_mut(index) {
         *param_ty = php_type;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeFnId;
+    use crate::builtins::semantics::BuiltinResultOwnership;
+    use crate::types::PhpType;
+
+    /// The declared-array union is boxed, but `array_values()` always returns dense Mixed slots.
+    #[test]
+    fn array_values_fallback_normalizes_declared_array_union_result() {
+        assert_eq!(
+            RuntimeFnId::ArrayValues.fallback_result_type(
+                &[PhpType::php_array()],
+                &PhpType::Mixed,
+            ),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+    }
+
+    /// Pins the contracts used by argument cleanup and synthetic callable wrappers.
+    #[test]
+    fn runtime_result_ownership_distinguishes_fresh_boxes_from_concat_storage() {
+        for target in [
+            RuntimeFnId::Getdate,
+            RuntimeFnId::Localtime,
+            RuntimeFnId::Strtotime,
+            RuntimeFnId::Hrtime,
+            RuntimeFnId::GraphemeStrrev,
+        ] {
+            assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
+        }
+        for target in [RuntimeFnId::StrRepeat, RuntimeFnId::StrReplace] {
+            assert_eq!(
+                target.result_ownership(),
+                BuiltinResultOwnership::Independent
+            );
+        }
     }
 }

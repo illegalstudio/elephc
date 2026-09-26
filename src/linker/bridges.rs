@@ -114,6 +114,24 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_mbstring",
+        env_var: "ELEPHC_MBSTRING_LIB_DIR",
+        crate_name: "elephc-mbstring",
+        flag_name: "mbstring",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &["mbstring"],
+        // This bridge-level capability covers MbSendMail; individual text operations
+        // retain GenericTiming in RuntimeFnId::monitoring_policy().
+        monitoring: MonitoringPolicy::Io {
+            kind: IoKind::Network,
+            wait: WaitPolicy::Measured,
+            trace_context: TraceContextPolicy::NotApplicable,
+        },
+    },
+    BridgeStaticlib {
         lib_name: "elephc_iconv",
         env_var: "ELEPHC_ICONV_LIB_DIR",
         crate_name: "elephc-iconv",
@@ -1444,15 +1462,16 @@ mod tests {
         }
         let script = std::fs::read_to_string(root.join(probe))
             .unwrap_or_else(|_| panic!("cannot read {probe}"));
-        assert!(
-            script.contains("[ \"$name\" = \"curl\" ]") && script.contains("native add curl"),
-            "{probe} must run native add curl before --with-curl; curl is \
-             the packed-archive capability that also needs a catalog package"
-        );
-        assert!(
-            script.contains("adding managed native package curl before --with-curl"),
-            "{probe} must native-add curl first, not after a failed compile"
-        );
+        let curl_case = script.find("curl) native_packages=\"curl\" ;;")
+            .unwrap_or_else(|| panic!("{probe} must map curl to its managed native package"));
+        let native_loop = script.find("for native_package in $native_packages")
+            .unwrap_or_else(|| panic!("{probe} must iterate selected managed native packages"));
+        let native_add = script.find("native add \"$native_package\"")
+            .unwrap_or_else(|| panic!("{probe} must install the selected managed native package"));
+        let bridge_compile = script.find("\"--with-$name\" probe.php")
+            .unwrap_or_else(|| panic!("{probe} must compile each packed bridge probe"));
+        assert!(curl_case < native_loop && native_loop < native_add && native_add < bridge_compile,
+            "{probe} must select, install, then compile curl in that order");
         assert!(
             !script.contains("missing_native_package")
                 && !script.contains("requires managed native package")
@@ -1462,15 +1481,6 @@ mod tests {
         assert!(
             script.contains("needs no archive from this tarball"),
             "{probe} must keep the empty-archive skip for regex/mysqli"
-        );
-        let after_curl = script
-            .split_once("[ \"$name\" = \"curl\" ]")
-            .map(|(_, rest)| rest)
-            .unwrap_or("");
-        assert!(
-            after_curl.contains("native add curl")
-                && !after_curl.contains("needs no archive from this tarball"),
-            "{probe} must not skip curl the way regex is skipped"
         );
         // xml is the second packed-archive capability that also needs a catalog
         // package (`libxml2`: the bridge's parser is libxml2 itself, reached through

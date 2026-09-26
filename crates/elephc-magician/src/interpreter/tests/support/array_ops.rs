@@ -10,6 +10,24 @@
 use super::*;
 
 impl FakeOps {
+    /// Returns the next stored index and reports saturation independently of value allocation.
+    pub(super) fn runtime_array_next_index(&mut self, array: RuntimeCellHandle) -> Result<Option<i64>, EvalStatus> {
+        let mut receiver = array;
+        while let Some(current) = self.references.get(&(receiver.as_ptr() as usize)) { receiver = *current; }
+        match self.get(receiver) {
+            FakeValue::Array(elements) => Ok(Some(elements.len() as i64)),
+            FakeValue::Assoc(entries) => {
+                let next = *self.array_next_indices.get(&(receiver.as_ptr() as usize)).unwrap_or(&i64::MIN);
+                if next == i64::MAX && entries.iter().any(|(key, _)| *key == FakeKey::Int(i64::MAX)) {
+                    Ok(None)
+                } else {
+                    Ok(Some(if next == i64::MIN { 0 } else { next }))
+                }
+            }
+            _ => Err(EvalStatus::UnsupportedConstruct),
+        }
+    }
+
     /// Creates a fake indexed array cell.
     pub(super) fn runtime_array_new(
         &mut self,
@@ -51,8 +69,18 @@ impl FakeOps {
         array: RuntimeCellHandle,
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let result = self.runtime_array_get_preserving_references(array, index)?;
+        if self.is_reference(result)? { self.copy_value(result) } else { Ok(result) }
+    }
+
+    /// Reads a fake stored cell without discarding persistent reference identity.
+    pub(super) fn runtime_array_get_preserving_references(
+        &mut self,
+        array: RuntimeCellHandle,
+        index: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
         let key = self.key(index)?;
-        match self.get(array) {
+        let result = match self.get(array) {
             FakeValue::Array(elements) => {
                 let FakeKey::Int(index) = key else {
                     return self.null();
@@ -70,7 +98,8 @@ impl FakeOps {
                 .find_map(|(entry_key, value)| (entry_key == &key).then_some(*value))
                 .map_or_else(|| self.null(), Ok),
             _ => self.null(),
-        }
+        }?;
+        self.retain(result)
     }
     /// Checks whether a fake array has the requested key without reading its value.
     pub(super) fn runtime_array_key_exists(
@@ -122,7 +151,34 @@ impl FakeOps {
             return Err(EvalStatus::UnsupportedConstruct);
         }
         let key = self.key(index)?;
-        let id = array.as_ptr() as usize;
+        let mut receiver = array;
+        while let Some(current) = self.references.get(&(receiver.as_ptr() as usize)) {
+            receiver = *current;
+        }
+        let existing = match self.get(receiver) {
+            FakeValue::Array(elements) => match &key {
+                FakeKey::Int(index) if *index >= 0 => elements.get(*index as usize).copied(),
+                _ => None,
+            },
+            FakeValue::Assoc(entries) => entries.iter().find_map(|(entry_key, value)| (entry_key == &key).then_some(*value)),
+            _ => None,
+        };
+        if let Some(reference) = existing {
+            if self.is_reference(reference)? {
+                let previous = self.reference_replace(reference, value)?;
+                self.release(previous)?;
+                return Ok(array);
+            }
+        }
+        let id = receiver.as_ptr() as usize;
+        let prior_next = match self.get(receiver) {
+            FakeValue::Array(elements) if !elements.is_empty() => elements.len() as i64,
+            _ => *self.array_next_indices.get(&id).unwrap_or(&i64::MIN),
+        };
+        let next = match (&key, existing) {
+            (FakeKey::Int(key), None) if *key >= prior_next => key.saturating_add(1),
+            _ => prior_next,
+        };
         let Some(slot) = self.values.get_mut(&id) else {
             return Err(EvalStatus::UnsupportedConstruct);
         };
@@ -162,6 +218,7 @@ impl FakeOps {
             }
             _ => return Err(EvalStatus::UnsupportedConstruct),
         }
+        self.array_next_indices.insert(id, next);
         Ok(array)
     }
     /// Returns the visible element count for fake array values.

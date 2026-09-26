@@ -239,6 +239,7 @@ fn curl_php_surface_is_a_full_parity_citizen() {
         assert_signature_shape(
             name,
             eval_signature(contract),
+            contract.variadic_by_ref,
             &actual.params,
             actual.required_param_count,
             actual.default_param_count,
@@ -383,6 +384,7 @@ fn backend_signature_shapes_derive_from_shared_contracts() {
             assert_signature_shape(
                 contract.name,
                 contract.signature(),
+                contract.variadic_by_ref,
                 &actual.params,
                 actual.required_param_count,
                 actual.default_param_count,
@@ -401,6 +403,7 @@ fn backend_signature_shapes_derive_from_shared_contracts() {
             assert_signature_shape(
                 contract.name,
                 eval_signature(contract),
+                contract.variadic_by_ref,
                 &actual.params,
                 actual.required_param_count,
                 actual.default_param_count,
@@ -471,6 +474,7 @@ fn eval_registry_coverage_matches_shared_support_records() {
 fn assert_signature_shape(
     name: &str,
     expected: BuiltinSignature,
+    variadic_by_ref: bool,
     actual_params: &[String],
     actual_required: usize,
     actual_defaults: usize,
@@ -489,12 +493,15 @@ fn assert_signature_shape(
         .filter(|param| param.default.is_some())
         .count()
         + usize::from(expected.variadic.is_some());
-    let expected_by_ref = expected
+    let mut expected_by_ref = expected
         .params
         .iter()
         .filter(|param| param.by_ref)
         .map(|param| param.name)
         .collect::<Vec<_>>();
+    if variadic_by_ref {
+        expected_by_ref.extend(expected.variadic);
+    }
 
     assert_eq!(actual_params, expected_params, "{name} parameter names");
     assert_eq!(

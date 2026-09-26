@@ -15,6 +15,18 @@ use elephc_builtin_contract::{
     BuiltinContract, DefaultSpec, TypeSpec,
 };
 
+/// Keeps variadic passing modes in the AOT signature aligned with the shared contract.
+#[test]
+fn builtin_variadic_reference_modes_match_contracts() {
+    for name in registry::names() {
+        let def = registry::lookup(name).expect("registered builtin");
+        if def.spec.variadic.is_some() {
+            assert_eq!(def.ref_params.last().copied(), Some(def.spec.variadic_by_ref),
+                "{name} variadic passing mode");
+        }
+    }
+}
+
 /// Returns the PHP-visible extension builtins a prelude must never call directly.
 fn php_visible_extension_builtins() -> Vec<String> {
     let mut names: Vec<String> = vec!["buffer_new".to_string()];
@@ -558,6 +570,16 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Ptr => "ptr",
         TypeSpec::Callable => "callable",
         TypeSpec::Array => "array",
+        TypeSpec::False => "false",
+        TypeSpec::Null => "null",
+        TypeSpec::Union(members) => {
+            let declared_members = declared.split('|').map(str::trim).collect::<Vec<_>>();
+            return declared_members.len() == members.len()
+                && declared_members.iter().all(|part|
+                    members.iter().any(|member| php_type_matches(*member, part)))
+                && members.iter().all(|member|
+                    declared_members.iter().any(|part| php_type_matches(*member, part)));
+        }
         // `declared` already had its `?` stripped above, so compare the inner type.
         TypeSpec::Nullable(inner) => return php_type_matches(*inner, declared),
         TypeSpec::Mixed => {
@@ -801,6 +823,7 @@ fn dump_prelude_contract_seed_on_request() {
     };
     use crate::parser::ast::{Expr, Stmt, StmtKind, TypeExpr};
 
+    /// Serializes a parsed PHP type into the seed catalog spelling.
     fn type_text(ty: &TypeExpr) -> String {
         match ty {
             TypeExpr::Int => "int".to_string(),
@@ -822,9 +845,11 @@ fn dump_prelude_contract_seed_on_request() {
             }
         }
     }
+    /// Serializes one parsed default expression for the catalog seed.
     fn default_text(expr: &Expr) -> String {
         crate::synthetic_class::print::print_expr(expr)
     }
+    /// Collects function signatures recursively from the injected prelude statements.
     fn collect(stmts: &[Stmt], prelude: &str, out: &mut Vec<serde_json::Value>) {
         for stmt in stmts {
             match &stmt.kind {

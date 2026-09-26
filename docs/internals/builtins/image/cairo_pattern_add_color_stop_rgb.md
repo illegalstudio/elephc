@@ -38,7 +38,7 @@ function cairo_pattern_add_color_stop_rgb(mixed $pattern, float $offset, float $
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

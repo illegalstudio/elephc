@@ -18,21 +18,37 @@ pub(in crate::interpreter) fn eval_builtin_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
-        eval_bound_builtin_call(name, arguments, context, values)
+    // Direct count/strlen reads need no writable array-element target. Capture the value
+    // itself so its temporary key is released with source evaluation.
+    if matches!(name, "count" | "strlen") || eval_builtin_uses_owned_arguments(name) {
+        return eval_owned_builtin_call(name, args, false, context, scope, values);
+    }
+    with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+        eval_bound_builtin_call_from_scope(name, arguments, Some(scope), context, values)
     })
 }
 
 /// Invokes borrowed source arguments and releases only defaults allocated during named binding.
 pub(in crate::interpreter) fn eval_bound_builtin_call(
     name: &str,
+    arguments: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_bound_builtin_call_from_scope(name, arguments, None, context, values)
+}
+
+/// Retains the caller's lexical scope when a direct builtin consumes callback values.
+fn eval_bound_builtin_call_from_scope(
+    name: &str,
     mut arguments: Vec<EvaluatedCallArg>,
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     for argument in &mut arguments { argument.value = argument.value.borrowed(); }
     let bound = bind_evaluated_builtin_args(name, arguments, values)?;
-    let result = eval_builtin_with_values(name, &bound, context, values)
+    let result = eval_builtin_with_values_from_scope(name, &bound, lexical_scope, context, values)
         .and_then(|result| result.ok_or(EvalStatus::UnsupportedConstruct));
     finish_eval_argument_values(result, bound, context, values)
 }
@@ -42,6 +58,14 @@ pub(in crate::interpreter) fn bind_evaluated_builtin_args(
     name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
     values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    bind_builtin_arguments(name, evaluated_args, values, None)
+}
+
+/// Applies the same builtin parameter planner while tracking defaults created for named gaps.
+pub(super) fn bind_builtin_arguments(
+    name: &str, evaluated_args: Vec<EvaluatedCallArg>, values: &mut impl RuntimeValueOps,
+    owners: Option<&mut Vec<RuntimeCellHandle>>,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if evaluated_args.iter().all(|arg| arg.name.is_none()) {
         return Ok(evaluated_args.into_iter().map(|arg| arg.value).collect());
@@ -59,7 +83,7 @@ pub(in crate::interpreter) fn bind_evaluated_builtin_args(
         }
     }
 
-    collect_bound_builtin_args(name, bound_args, values)
+    collect_builtin_arguments(name, bound_args, values, owners)
 }
 
 /// Binds one named builtin-call value to the matching PHP parameter slot.
@@ -79,11 +103,10 @@ pub(in crate::interpreter) fn bind_builtin_named_arg(
     Ok(())
 }
 
-/// Collects ordered builtin arguments, applying PHP defaults for named-call gaps.
-pub(in crate::interpreter) fn collect_bound_builtin_args(
-    name: &str,
-    bound_args: Vec<Option<RuntimeCellHandle>>,
-    values: &mut impl RuntimeValueOps,
+/// Materializes named-call gaps and optionally transfers each new default to call-boundary cleanup.
+fn collect_builtin_arguments(
+    name: &str, bound_args: Vec<Option<RuntimeCellHandle>>, values: &mut impl RuntimeValueOps,
+    owners: Option<&mut Vec<RuntimeCellHandle>>,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if !bound_args.iter().any(Option::is_some) {
         return Ok(Vec::new());
@@ -116,6 +139,8 @@ pub(in crate::interpreter) fn collect_bound_builtin_args(
         return Err(status);
     }
 
+    if let Some(owners) = owners { owners.extend(defaults); }
+
     Ok(args)
 }
 
@@ -147,4 +172,12 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
     }
 
     None
+}
+
+/// Selects shared runtime builtins and callback wrappers that own their argument values through invocation.
+pub(in crate::interpreter) fn eval_builtin_uses_owned_arguments(name: &str) -> bool {
+    eval_declared_builtin_spec(name).is_some_and(|spec|
+        spec.runtime_builtin.is_some_and(|id| id.is_mbstring())
+            || matches!(spec.name, "call_user_func" | "call_user_func_array" | "var_dump"
+                | "bin2hex" | "header" | "ob_start"))
 }

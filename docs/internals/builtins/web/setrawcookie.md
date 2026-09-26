@@ -2,7 +2,7 @@
 title: "setrawcookie() - internals"
 description: "Compiler internals for setrawcookie(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 939
+  order: 1002
 ---
 
 ## `setrawcookie()` - internals
@@ -38,7 +38,7 @@ function setrawcookie(mixed $name, mixed $value = '', mixed $expires = 0, mixed 
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

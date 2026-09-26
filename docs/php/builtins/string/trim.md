@@ -2,20 +2,20 @@
 title: "trim()"
 description: "Strips whitespace (or other characters) from the beginning and end of a string."
 sidebar:
-  order: 874
+  order: 937
 ---
 
 ## trim()
 
 ```php
-function trim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string
+function trim(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string
 ```
 
 Strips whitespace (or other characters) from the beginning and end of a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$characters` (`string`), default `' \n\r\t\x0b\x0c\x00'`, optional
+- `$characters` (`string`), default `" \n\r\t\x0B\x0C\x00"`, optional
 
 **Returns**: `string`
 

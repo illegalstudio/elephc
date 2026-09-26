@@ -16,6 +16,17 @@ pub(in crate::interpreter) fn eval_property_get_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_property_get_result_with_ownership(object, property_name, context, values, None)
+}
+
+/// Reads a property while optionally retaining reference-backed values for a native caller.
+pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    owned: Option<&mut Vec<RuntimeCellHandle>>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
     };
@@ -154,7 +165,10 @@ pub(in crate::interpreter) fn eval_property_get_result(
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
     {
-        return eval_reference_target_value(&target, context, values);
+        return match owned {
+                Some(owners) => eval_owned_reference_target_value(&target, context, values, owners),
+                None => eval_reference_target_value(&target, context, values),
+            };
     }
     eval_with_native_property_storage_scope(
         &object_class_name, &storage_property_name, context, values,
@@ -581,6 +595,31 @@ fn validate_native_readonly_property_write(
 }
 
 /// Binds one eval object property to a by-reference source parameter.
+/// Checks an AOT array property before forwarding a write to its native setter.
+pub(super) fn validate_eval_native_array_property_assignment(
+    declaring_class: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(property_type) = context.native_property_type(declaring_class, property_name) else {
+        return Ok(());
+    };
+    let requires_array = !property_type.allows_null()
+        && !property_type.is_intersection()
+        && !property_type.variants().is_empty()
+        && property_type.variants().iter().all(|variant| matches!(variant, EvalParameterTypeVariant::Array));
+    if !requires_array || matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Ok(());
+    }
+    eval_throw_type_error(
+        &format!("Cannot assign value to property {}::{} of type array", declaring_class, property_name),
+        context,
+        values,
+    )
+}
+
 pub(super) fn eval_property_reference_bind_result(
     object: RuntimeCellHandle,
     property_name: &str,

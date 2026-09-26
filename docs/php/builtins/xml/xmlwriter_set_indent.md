@@ -2,7 +2,7 @@
 title: "xmlwriter_set_indent()"
 description: "Toggles indentation of the output."
 sidebar:
-  order: 977
+  order: 1040
 ---
 
 ## xmlwriter_set_indent()

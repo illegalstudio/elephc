@@ -83,7 +83,9 @@ impl FunctionSig {
     /// `privatize_container_param`. Mixed parameters own a detached value cell, except resources
     /// whose shared identity receives an independent reference instead.
     ///
-    /// The repr matters, not the surface type: `iterable` keeps its own runtime shape (a raw heap
+    /// Exact PHP `array` is a surface-type exception: its codegen representation is a boxed Mixed
+    /// cell, so `is_php_array()` decides privatization rather than `codegen_repr()`. For other
+    /// surface types the representation decides. `iterable` keeps its own runtime shape (a raw heap
     /// pointer dispatched on the heap-kind tag), so an `iterable` parameter is NOT privatized and
     /// the callee can still hand its argument's payload straight back. The caller must keep its
     /// pass-through alias guard for those, or it frees a value the result still points at.

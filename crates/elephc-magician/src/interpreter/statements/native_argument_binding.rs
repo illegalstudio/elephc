@@ -159,8 +159,11 @@ fn write_back_native_ref_target(
     let Some(scope) = (unsafe { scope.as_mut() }) else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    if visible_scope_cell(context, scope, name) == Some(value) {
+        return Ok(());
+    }
     let retained = values.retain(value)?;
-    let replaced = match set_owned_scope_cell(context, scope, name.clone(), retained) {
+    let replaced = match set_owned_scope_cell(context, scope, name.clone(), retained, values) {
         Ok(replaced) => replaced,
         Err(status) => {
             let _ = eval_release_value(context, values, retained);

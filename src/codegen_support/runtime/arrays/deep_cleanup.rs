@@ -75,7 +75,16 @@ mod tests {
             abi::emit_call_label(&mut emitter, "__rt_heap_free");
             finish(&mut emitter, "__rt_deep_cleanup_test_return");
             assert_ne!(pending_offset(&emitter), suppression_offset(&emitter), "{name}");
+            if target.arch == Arch::AArch64 {
+                // The 64-byte prologue places x29 at sp+48, while container locals use sp+0..24.
+                assert_eq!(48 - pending_offset(&emitter), 32, "{name}");
+                assert_eq!(48 - suppression_offset(&emitter), 40, "{name}");
+            }
             let asm = emitter.output();
+            if target.arch == Arch::AArch64 {
+                assert!(asm.contains("stur x10, [x29, #-16]"), "{name}: pending slot");
+                assert!(asm.contains("stur x10, [x29, #-8]"), "{name}: suppression slot");
+            }
             assert_eq!(asm.matches("__rt_cleanup_invoke").count(), 2, "{name}");
             let first = asm.find("__rt_decref_any").unwrap();
             let second = asm.find("__rt_callable_descriptor_release").unwrap();

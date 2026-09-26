@@ -1,0 +1,23 @@
+Error:No pattern was provided
+ValueError:Option "Q" is not supported
+int(0)
+bool(false)
+Error:No string was provided
+ValueError:Option "Q" is not supported
+ValueError:mb_ereg_search_init(): Argument #2 ($pattern) must not be empty
+ValueError:Option "Q" is not supported
+int(2)
+array(3) {
+  [0]=>
+  string(2) "ab"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(1) "b"
+}
+ValueError:mb_ereg_search_setpos(): Argument #1 ($offset) is out of range
+int(2)
+bool(false)
+bool(false)
+mb_ereg_search_init() expects at least 1 argument, 0 given
+mb_ereg_search_init(): Argument #1 ($string) must be of type string, array given

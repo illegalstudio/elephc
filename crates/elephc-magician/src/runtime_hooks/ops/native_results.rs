@@ -12,6 +12,19 @@ use super::*;
 
 #[cfg(not(test))]
 impl ElephcRuntimeOps {
+    /// Propagates a protected native cleanup status through eval's throwable state.
+    pub(super) fn handle_native_cleanup_status(&self, status: u64) -> Result<(), EvalStatus> {
+        match status {
+            0 => Ok(()),
+            2 => {
+                let thrown = self.take_pending_native_throwable().ok_or(EvalStatus::RuntimeFatal)?;
+                self.schedule_pending_throw(thrown)?;
+                Err(EvalStatus::UncaughtThrowable)
+            }
+            _ => Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
     /// Cleans native arguments and discards an interrupted result without replacing a pending throw.
     pub(super) fn finish_native_call(
         &mut self,

@@ -82,6 +82,7 @@ impl Clone for InterfaceDeclInfo {
 /// "is a builtin throwable" and has to be stated.
 pub(crate) const RESERVED_FOR_INTERNAL_USE: [&str; 1] = ["FiberError"];
 
+/// Declares the builtin throwable hierarchy, rejects user redeclarations, and retains required runtime classes.
 pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
@@ -443,14 +444,14 @@ pub(crate) fn inject_builtin_throwables(
         },
     );
 
-    // Drop the four the program cannot reach, AFTER the redeclaration check above has run over
+    // Drop optional classes the program cannot reach after the redeclaration check has run over
     // the whole list — so `class ArgumentCountError {}` in user code is still rejected exactly as
     // before, whether or not the gate wanted ours. Removing here rather than gating each literal
     // block keeps the fourteen declarations reading as one table; building four `FlattenedClass`
     // values and dropping them costs nothing measurable next to flattening them.
     //
-    // `builtin_throwable_gate` carries the reasoning for why these four and no others: three have
-    // no producer anywhere in elephc, and `ReflectionException` has one only inside the Reflection
+    // `builtin_throwable_gate` retains ArgumentCountError for dynamic calls. AssertionError and
+    // UnhandledMatchError have no implicit producer, and ReflectionException is raised inside the Reflection
     // surface that its own gate decides.
     // `RuntimeException` is in this list because nothing raises it outside the SPL surface:
     // `_spl_runtime_exception_class_id` is read only by `runtime/spl/doubly_linked_list.rs`. It
@@ -462,7 +463,6 @@ pub(crate) fn inject_builtin_throwables(
     // `_fiber_class_id` and `_fiber_error_class_id` are emitted as `u64::MAX`, which no object
     // header carries, so the runtime comparisons never match.
     for builtin_name in [
-        "ArgumentCountError",
         "AssertionError",
         "UnhandledMatchError",
         "ReflectionException",

@@ -16,7 +16,7 @@ Binds variables to a prepared statement's placeholders.
 **Parameters**:
 - `$statement` (`mixed`)
 - `$types` (`string`)
-- `...$vars` — variadic: collects excess arguments into `$vars`.
+- `...$vars` - variadic: collects excess arguments into `$vars`.
 
 **Returns**: `bool`
 

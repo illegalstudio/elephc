@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Ownership retention and missing-entry fallbacks remain type-aware.
+//! - Global reload publishes the replacement before releasing the prior owner.
 
 use super::*;
 
@@ -208,6 +209,8 @@ pub(super) fn store_missing_scope_entry_to_local(
 ) -> Result<()> {
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
+            ensure_eval_local_writeback_owns_value(ctx, local)?;
+            ctx.release_local_before_refcounted_writeback(local.slot)?;
             let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol);
             replace_owned_eval_local(ctx, local, pending_throw)?;
@@ -242,6 +245,22 @@ pub(super) fn store_missing_scope_entry_to_local(
     }
     Ok(())
 }
+
+/// Rejects a reload whose destination has no owner for its stored Mixed value.
+fn ensure_eval_local_writeback_owns_value(
+    ctx: &FunctionContext<'_>,
+    local: &EvalSyncLocal,
+) -> Result<()> {
+    if ctx.owns_eval_local_writeback_target(local.slot) {
+        return Ok(());
+    }
+    Err(CodegenIrError::invalid_module(format!(
+        "eval scope reload target ${} has no local owner",
+        local.name
+    )))
+}
+
+
 
 /// Stores the program-global fallback for a missing eval global entry.
 pub(super) fn store_missing_scope_entry_to_global(

@@ -261,7 +261,7 @@ fn publish_native_function_ref_value(
     if let EvalReferenceTarget::Variable { scope, name } = target {
         let replaced = unsafe { scope.as_mut() }
             .ok_or(EvalStatus::RuntimeFatal)
-            .and_then(|scope| set_owned_scope_cell(context, scope, name.clone(), value));
+            .and_then(|scope| set_owned_scope_cell(context, scope, name.clone(), value, values));
         let replaced = match replaced {
             Ok(replaced) => replaced,
             Err(status) => {

@@ -2,7 +2,7 @@
 title: "setcookie() - internals"
 description: "Compiler internals for setcookie(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 938
+  order: 1001
 ---
 
 ## `setcookie()` - internals
@@ -38,7 +38,7 @@ function setcookie(mixed $name, mixed $value = '', mixed $expires = 0, mixed $pa
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

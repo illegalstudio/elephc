@@ -11,6 +11,26 @@
 use super::super::*;
 use super::support::*;
 
+/// Accepts eval closure objects through Closure, callable, and object parameter declarations.
+#[test]
+fn execute_program_accepts_closure_parameter_types() {
+    let program = parse_fragment(br#"
+class ClosureHolder {
+    public function __construct(public Closure $callback) {}
+}
+function accepts_closure(Closure $callback) { return $callback(); }
+function accepts_callable(callable $callback) { return $callback(); }
+function accepts_object(object $callback) { return $callback(); }
+$callback = function() { return 7; };
+$holder = new ClosureHolder($callback);
+echo accepts_closure($holder->callback), accepts_callable($callback), accepts_object($callback);
+"#).expect("parse typed closure fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("bind eval closure parameter types");
+    assert_eq!(values.output, "777");
+}
+
 /// Verifies eval closure literals dispatch through direct variable calls and call_user_func_array.
 #[test]
 fn execute_program_dispatches_eval_closure_literal() {

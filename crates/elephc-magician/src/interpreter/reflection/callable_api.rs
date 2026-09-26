@@ -77,6 +77,9 @@ pub(in crate::interpreter) fn eval_reflection_function_invoke_result(
         .into_iter()
         .map(eval_reflection_method_forwarded_value_arg)
         .collect();
+    if eval_builtin_uses_owned_arguments(&function_name) {
+        return eval_builtin_callback_with_arguments(&function_name, function_args, false, context, values).map(Some);
+    }
     eval_reflection_function_invoke_dispatch(&function_name, function_args, context, values)
         .map(Some)
 }

@@ -1,11 +1,12 @@
 //! Purpose:
-//! Declarative eval registry entry for `iterator_apply`.
+//! Implements eval iterator traversal and callback invocation for `iterator_apply`.
+//! Argument arrays keep their owners through the complete traversal.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::array`.
 //!
 //! Key details:
-//! - Runtime behavior stays delegated to the non-mutating array hook.
+//! - Callback arguments preserve PHP references until final writeback and cleanup.
 
 use super::super::super::*;
 
@@ -38,8 +39,9 @@ pub(in crate::interpreter) fn eval_iterator_apply_declared_values_result(
         }
         [iterator, callback, args] => {
             let callback = eval_callable(*callback, context, values)?;
-            let callback_args = eval_iterator_apply_arg_values(*args, context, values)?;
-            eval_iterator_apply_result(*iterator, &callback, callback_args, context, values)
+            with_iterator_apply_arguments(*args, context, values, |arguments, context, values| {
+                eval_iterator_apply_result(*iterator, &callback, arguments, context, values)
+            })
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -64,26 +66,23 @@ pub(in crate::interpreter) fn eval_builtin_iterator_apply(
             let callback = eval_expr(callback, context, scope, values)?;
             let callback = eval_callable_from_scope(callback, context, scope, values)?;
             let callback_args = eval_expr(callback_args, context, scope, values)?;
-            let callback_args = eval_iterator_apply_arg_values(callback_args, context, values)?;
-            eval_iterator_apply_result(iterator, &callback, callback_args, context, values)
+            with_iterator_apply_arguments(callback_args, context, values, |arguments, context, values| {
+                eval_iterator_apply_result(iterator, &callback, arguments, context, values)
+            })
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 
-/// Converts the optional `iterator_apply()` callback-args value into call arguments.
-pub(in crate::interpreter) fn eval_iterator_apply_arg_values(
+/// Keeps optional iterator callback arguments owned through the complete traversal.
+fn with_iterator_apply_arguments<V: RuntimeValueOps>(
     args: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    if values.is_null(args)? {
-        return Ok(Vec::new());
-    }
-    if !values.is_array_like(args)? {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    eval_array_call_arg_values(args, context, values)
+    values: &mut V,
+    invoke: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.is_null(args)? { return invoke(Vec::new(), context, values); }
+    with_array_call_arguments(args, context, values, invoke)
 }
 
 /// Applies a callback to each valid position of an eval-supported Traversable object.

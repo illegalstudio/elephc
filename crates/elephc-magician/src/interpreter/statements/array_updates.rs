@@ -166,7 +166,7 @@ pub(super) fn eval_array_unset_element_stmt(
             if let Some(array) =
                 eval_array_unset_target_result(array, index, context, scope, values)?
             {
-                for replaced in set_scope_cell(context, scope, name.clone(), array, ownership)? {
+                for replaced in set_scope_cell(context, scope, name.clone(), array, ownership, values)? {
                     values.release(replaced)?;
                 }
             }
@@ -305,19 +305,15 @@ pub(super) fn eval_array_access_unset_result(
     })
 }
 
-/// Rebuilds an array without the strict-equal key requested by `unset($array[$key])`.
+/// Rebuilds an unset array with preserved keys, append history, and balanced temporary ownership.
 pub(super) fn eval_array_without_key_result(
     array: RuntimeCellHandle,
     index: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let tag = values.type_tag(array)?;
-    let mut result = if tag == EVAL_TAG_ASSOC {
-        builtins::collection_builder::EvalArrayBuilder::assoc(values, len.saturating_sub(1))?
-    } else {
-        builtins::collection_builder::EvalArrayBuilder::indexed(values, len.saturating_sub(1))?
-    };
+    // Unset can leave a hole in a dense array, so preserve keys and append history in a hash.
+    let mut result = builtins::collection_builder::EvalArrayBuilder::assoc(values, len.saturating_sub(1))?;
     for position in 0..len {
         let key = result.values().array_iter_key(array, position)?;
         let copied = (|| {
@@ -327,7 +323,7 @@ pub(super) fn eval_array_without_key_result(
             let matches = matches?;
             released?;
             if !matches {
-                result.entry(|values| values.array_get(array, key), |values, _| values.retain(key))?;
+                result.entry(|values| values.array_get_preserving_references(array, key), |values, _| values.retain(key))?;
             }
             Ok(())
         })();
@@ -335,7 +331,12 @@ pub(super) fn eval_array_without_key_result(
         copied?;
         released?;
     }
-    Ok(result.finish())
+    let rebuilt = result.finish();
+    if let Err(status) = values.array_copy_index_history(array, rebuilt) {
+        let _ = values.release(rebuilt);
+        return Err(status);
+    }
+    Ok(rebuilt)
 }
 
 /// Executes `$var[] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.
@@ -393,10 +394,8 @@ pub(super) fn eval_non_object_array_append_var_stmt(
     } else {
         values.array_new(1)?
     };
-    let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
-    let array = values.array_set(array, index, value)?;
-    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
+    let array = eval_array_append_value(array, value, context, scope, values)?;
+    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership, values)? {
         values.release(replaced)?;
     }
     Ok(())
@@ -495,6 +494,9 @@ fn eval_array_element_reference_write(
         EvalReferenceTarget::Variable { scope, name } => {
             let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
             write_back_owned_variable_ref_target(scope, &name, value, context, values)
+        }
+        EvalReferenceTarget::Cell { cell } if values.reference_is_shared(cell)? => {
+            write_back_method_ref_target(&target, value, context, values)
         }
         EvalReferenceTarget::Cell { .. } => {
             context.bind_array_element_alias(array, key, EvalReferenceTarget::Cell { cell: value });
@@ -623,9 +625,7 @@ pub(super) fn eval_static_property_array_append_result(
     } else {
         values.array_new(1)?
     };
-    let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
-    let array = values.array_set(array, index, value)?;
+    let array = eval_array_append_value(array, value, context, scope, values)?;
     eval_static_property_set_result(class_name, property, array, context, values)
 }
 
@@ -715,7 +715,7 @@ pub(super) fn eval_array_set_target_for_index(
     for position in 0..len {
         let key = assoc.values().array_iter_key(array, position)?;
         let inserted = assoc.entry(
-            |values| values.array_get(array, key),
+            |values| values.array_get_preserving_references(array, key),
             |values, _| values.retain(key),
         );
         let released = assoc.values().release(key);

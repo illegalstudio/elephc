@@ -2,20 +2,20 @@
 title: "ucwords()"
 description: "Uppercases the first character of each word in a string."
 sidebar:
-  order: 876
+  order: 939
 ---
 
 ## ucwords()
 
 ```php
-function ucwords(string $string, string $separators = ' \t\r\n\x0c\x0b'): string
+function ucwords(string $string, string $separators = " \t\r\n\x0C\x0B"): string
 ```
 
 Uppercases the first character of each word in a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$separators` (`string`), default `' \t\r\n\x0c\x0b'`, optional
+- `$separators` (`string`), default `" \t\r\n\x0C\x0B"`, optional
 
 **Returns**: `string`
 

@@ -28,7 +28,8 @@ use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
     emit_call_arg_temp_cleanups, emit_direct_resolved_method_call,
     emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
-    emit_runtime_builtin_wrapper_inline, emit_runtime_callable_invoker_inline,
+    emit_runtime_builtin_wrapper_inline, emit_runtime_builtin_invoker_inline,
+    emit_runtime_callable_invoker_inline,
     emit_runtime_callable_invoker_with_string_owner,
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
@@ -383,11 +384,12 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
         retain_existing_descriptor,
         None,
         None,
+        None,
     )
 }
 
 /// Materializes a boxed callable descriptor while turning an unknown string name into `TypeError`.
-pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_string_type_error(
+pub(in crate::codegen) fn emit_runtime_mixed_callable_descriptor_value_with_string_type_error(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
     op_name: &str,
@@ -401,6 +403,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_string_type_erro
         retain_existing_descriptor,
         Some(message),
         None,
+        None,
     )
 }
 
@@ -412,8 +415,15 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_type_error(
     message: &'static str,
 ) -> Result<()> {
     emit_runtime_mixed_callable_descriptor_value_impl(
-        ctx, callable, op_name, true, Some(message), Some(message),
+        ctx, callable, op_name, true, Some(message), Some(message), None,
     )
+}
+
+/// Resolves a boxed callback whose host always invokes it with one PHP argument.
+pub(in crate::codegen) fn emit_runtime_unary_callback_descriptor_value(
+    ctx: &mut FunctionContext<'_>, callable: ValueId, op_name: &str, message: &'static str,
+) -> Result<()> {
+    emit_runtime_mixed_callable_descriptor_value_impl(ctx, callable, op_name, true, Some(message), Some(message), Some(1))
 }
 
 /// Implements boxed callable descriptor selection with a configurable string-name miss path.
@@ -424,6 +434,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     retain_existing_descriptor: bool,
     string_type_error: Option<&'static str>,
     invalid_type_error: Option<&'static str>,
+    arity: Option<usize>,
 ) -> Result<()> {
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
     let invokable_targets = instance_targets
@@ -503,6 +514,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         op_name,
         string_type_error,
         candidate_names.as_deref(),
+        arity,
     )?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -757,19 +769,33 @@ pub(super) fn runtime_string_descriptor_cases(
     candidate_names: Option<&[String]>,
     strict_php: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
+    runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, candidate_names, strict_php, None)
+}
+
+/// Builds descriptor cases for a host with an optional known callback arity.
+fn runtime_string_descriptor_cases_at_arity(
+    ctx: &mut FunctionContext<'_>,
+    source_arg_ty: Option<&PhpType>,
+    candidate_names: Option<&[String]>,
+    strict_php: bool,
+    arity: Option<usize>,
+) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let cache_ty = source_arg_ty.map(PhpType::codegen_repr);
-    if let Some(cases) = ctx
-        .shared
-        .runtime_string_descriptor_cases(cache_ty.as_ref(), candidate_names, strict_php)
-    {
-        return Ok(cases);
+    if arity.is_none() {
+        if let Some(cases) = ctx
+            .shared
+            .runtime_string_descriptor_cases(cache_ty.as_ref(), candidate_names, strict_php)
+        {
+            return Ok(cases);
+        }
     }
     let mut cases = runtime_extern_descriptor_cases(ctx, candidate_names)?;
-    cases.extend(runtime_builtin_descriptor_cases(
+    cases.extend(runtime_builtin_descriptor_cases_at_arity(
         ctx,
         source_arg_ty,
         candidate_names,
         strict_php,
+        arity,
     )?);
     cases.extend(runtime_user_function_descriptor_cases(
         ctx,
@@ -785,22 +811,19 @@ pub(super) fn runtime_string_descriptor_cases(
     cases.sort_by(|left, right| left.label.cmp(&right.label));
     cases.dedup_by(|left, right| left.label == right.label);
     if cases.is_empty() && candidate_names.is_some() {
-        let fallback = runtime_string_descriptor_cases(ctx, source_arg_ty, None, strict_php)?;
-        ctx.shared.cache_runtime_string_descriptor_cases(
-            cache_ty.as_ref(),
-            candidate_names,
-            strict_php,
-            &fallback,
-        );
+        let fallback = runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, None, strict_php, arity)?;
+        if arity.is_none() {
+            ctx.shared.cache_runtime_string_descriptor_cases(
+                cache_ty.as_ref(), candidate_names, strict_php, &fallback,
+            );
+        }
         return Ok(fallback);
     }
-    ctx.shared
-        .cache_runtime_string_descriptor_cases(
-            cache_ty.as_ref(),
-            candidate_names,
-            strict_php,
-            &cases,
+    if arity.is_none() {
+        ctx.shared.cache_runtime_string_descriptor_cases(
+            cache_ty.as_ref(), candidate_names, strict_php, &cases,
         );
+    }
     Ok(cases)
 }
 
@@ -877,19 +900,22 @@ fn extern_decl_signature(decl: &crate::ir::ExternDecl) -> FunctionSig {
     }
 }
 
-/// Builds runtime descriptor cases for PHP builtins that support callable dispatch.
-fn runtime_builtin_descriptor_cases(
-    ctx: &mut FunctionContext<'_>,
-    source_arg_ty: Option<&PhpType>,
-    candidate_names: Option<&[String]>,
-    strict_php: bool,
+
+/// Builds descriptor cases with an optional host-proven callback arity.
+fn runtime_builtin_descriptor_cases_at_arity(
+    ctx: &mut FunctionContext<'_>, source_arg_ty: Option<&PhpType>, candidate_names: Option<&[String]>,
+    strict_php: bool, arity: Option<usize>,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let mut cases = Vec::new();
     for name in crate::types::checker::builtins::supported_builtin_function_names_for_profile(
         strict_php,
     ) {
         if !runtime_callable_name_is_reachable(name, candidate_names)
-            || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)
+            || !if arity.is_some() {
+                callable_dispatch::runtime_builtin_wrapper_supported_at_arity(name, source_arg_ty, ctx.module.required_runtime_features, arity)
+            } else {
+                callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty, ctx.module.required_runtime_features)
+            }
             || ctx
                 .module
                 .extern_decls
@@ -906,7 +932,7 @@ fn runtime_builtin_descriptor_cases(
         let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
         let entry_label =
             emit_runtime_builtin_wrapper_inline(ctx, name, &case_sig, strict_php)?;
-        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &case_sig, &[]);
+        let invoker_label = emit_runtime_builtin_invoker_inline(ctx, name, &case_sig);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &entry_label,
@@ -964,7 +990,7 @@ fn runtime_user_function_descriptor_cases(
             crate::types::callable_wrapper_sig(&function_signature_from_eir(function));
         let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
         let owns_string_return = crate::codegen::runtime_callable_invoker::function_returns_owned_string(function);
-        let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &case_sig, &[], owns_string_return);
+        let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &case_sig, &[], owns_string_return, true);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &function_symbol(&function.name),
@@ -1085,12 +1111,14 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     op_name: &str,
     type_error: Option<&'static str>,
     candidate_names: Option<&[String]>,
+    arity: Option<usize>,
 ) -> Result<()> {
-    let cases = runtime_string_descriptor_cases(
+    let cases = runtime_string_descriptor_cases_at_arity(
         ctx,
         None,
         candidate_names,
         crate::strict_php::is_enabled(),
+        arity,
     )?;
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
@@ -1244,7 +1272,7 @@ fn runtime_instance_method_descriptor_template(
     let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
         ctx.module, impl_class, method_key, false,
     );
-    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, sig, &captures, owns_string_return);
+    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, sig, &captures, owns_string_return, true);
     let php_name = format!("{}::{}", class_name, method_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
@@ -1705,7 +1733,7 @@ fn runtime_static_method_descriptor_cases(
         let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
             ctx.module, &impl_class, &method_key, true,
         );
-        let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &wrapper_sig, &[], owns_string_return);
+        let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &wrapper_sig, &[], owns_string_return, true);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &entry_label,
@@ -2580,6 +2608,7 @@ fn emit_descriptor_reg_invoker_call_with_mixed_arg(
         arg_mixed,
         op_name,
         release_runtime_descriptor,
+        true,
     )?;
     store_descriptor_invoker_result(ctx, inst)
 }
@@ -2591,8 +2620,11 @@ pub(super) fn emit_descriptor_reg_invoker_mixed_result_with_arg_container(
     arg_mixed: ValueId,
     op_name: &str,
     release_runtime_descriptor: bool,
+    argument_owned_by_eir: bool,
 ) -> Result<()> {
-    if descriptor_arg_is_prebuilt_mixed_box(ctx, arg_mixed)? {
+    // An EIR owner guards and releases its source around the enclosing call, so the backend only
+    // owns its normalized copy. Legacy runtime-only consumers can still transfer a prebuilt box.
+    if !argument_owned_by_eir && descriptor_arg_is_prebuilt_mixed_box(ctx, arg_mixed)? {
         return emit_descriptor_reg_invoker_mixed_result_with_prebuilt_mixed_arg(
             ctx,
             descriptor_reg,

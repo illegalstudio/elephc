@@ -76,16 +76,31 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     if crate::types::call_args::has_named_args(args)
         || descriptor_args_need_runtime_unpack_keys(args)
     {
-        return lower_untyped_descriptor_invoker_hash_container(ctx, args, span);
+        return lower_untyped_descriptor_invoker_hash_container(ctx, args, span, false);
     }
-    lower_untyped_descriptor_invoker_indexed_container(ctx, args, span)
+    lower_untyped_descriptor_invoker_indexed_container(ctx, args, span, false)
+}
+
+/// Registers exceptional cleanup for an owning descriptor or argument container.
+pub(super) fn guard_descriptor_container(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
+    ctx.begin_argument_guard_scope();
+    ctx.guard_call_argument(value, 0, span);
+    ctx.end_argument_guard_scope();
+}
+
+/// Protects an owned callback while its arguments are evaluated.
+pub(super) fn guard_owned_descriptor_callback(ctx: &mut LoweringContext<'_, '_>, callback: LoweredValue, span: Span) {
+    if ctx.value_is_owning_temporary(callback) && !ctx.has_call_argument_guard(callback.value) {
+        guard_descriptor_container(ctx, callback, span);
+    }
 }
 
 /// Builds an indexed descriptor-invoker container for signature-unknown calls.
-pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
+fn lower_untyped_descriptor_invoker_indexed_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
+    _guarded: bool,
 ) -> LoweredValue {
     let elem_ty = PhpType::Mixed;
     let array_ty = PhpType::Array(Box::new(elem_ty.clone()));
@@ -113,16 +128,18 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
+        ctx.refresh_argument_array_guard(array, arg.span);
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
     }
     take_published_container(ctx, owner, array_ty, span)
 }
 
 /// Builds an associative descriptor-invoker container for named or named/spread calls.
-pub(super) fn lower_untyped_descriptor_invoker_hash_container(
+fn lower_untyped_descriptor_invoker_hash_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
+    _guarded: bool,
 ) -> LoweredValue {
     let hash_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
@@ -147,7 +164,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             }
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
-                lower_descriptor_unpack_source(ctx, &state, source, arg.span);
+                lower_descriptor_unpack_source(ctx, &state, source, arg.span, None);
             }
             _ => {
                 let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
@@ -232,6 +249,7 @@ pub(super) fn lower_first_class_callable_expr_call(
 ) -> Option<LoweredValue> {
     match &callee.kind {
         ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            if builtin_callable_needs_runtime_arity(name, args) { return None; }
             Some(lower_function_call(ctx, name, args, expr))
         }
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
@@ -241,6 +259,7 @@ pub(super) fn lower_first_class_callable_expr_call(
             let signature = static_callable_binding_for_expr(ctx, callee)
                 .and_then(|target| signature_for_static_callable_binding(ctx, target));
             let callable = lower_first_class_callable(ctx, target, callee);
+            guard_owned_descriptor_callback(ctx, callable, expr.span);
             let result_type = signature
                 .as_ref()
                 .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))

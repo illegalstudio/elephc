@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Dynamic constructor conversion owners stay guarded until each normal cleanup consumes it.
 
 use super::*;
 
@@ -277,6 +278,7 @@ pub(super) fn emit_call_arg_temp_cleanups(
         }
     }
     abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_guard_bytes);
     Ok(())
 }
 

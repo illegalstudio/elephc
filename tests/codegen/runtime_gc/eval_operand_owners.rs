@@ -54,11 +54,11 @@ echo 'done';
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "done");
-    // The eval-created reflection owner retains five fixed metadata blocks beyond the AOT object;
+    // Eval retains four metadata blocks and three boxed array owners beyond the AOT object;
     // the public-name slot must not retain another string allocation after the object is unset.
     assert_eq!(
         eval_operand_owner_live_blocks(&out.stderr),
-        baseline_live_blocks + 5,
+        baseline_live_blocks + 7,
         "discarded ReflectionParameter objects must release their public-name string: {}",
         out.stderr,
     );

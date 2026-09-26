@@ -13,6 +13,7 @@
 //! - A missing key (or null/empty table) is a no-op. Callers must not republish the returned
 //!   pointer: a destructor may already have replaced or freed the receiver's table.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -79,12 +80,10 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x6");                                         // probed every slot yet?
     emitter.instruction("b.ge __rt_hash_unset_done");                           // full table without a match: no-op
 
-    // -- compute entry address: base + 40 + index * 64 --
+    // -- compute entry address: entries + index * 64 --
     emitter.instruction("ldr x9, [sp, #24]");                                   // load current probe index
     emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes per slot
-    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 64
-    emitter.instruction("add x12, x5, x12");                                    // x12 = table base + index * 64
-    emitter.instruction("add x12, x12, #40");                                   // x12 = entry address (skip 40-byte header)
+    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
 
     // -- inspect the occupied marker --
     emitter.instruction("ldr x13, [x12]");                                      // x13 = occupied flag
@@ -116,12 +115,15 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
 
     // -- key found: release the key, unlink the entry, then release its value --
     emitter.label("__rt_hash_unset_found");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // claim the value owner in the actual separated hash
+    emitter.instruction("ldr x1, [sp, #8]");                                    // recover the key before releasing its owned bytes
+    emitter.instruction("ldr x2, [sp, #16]");                                   // recover normalized integer or string key identity
+    emitter.instruction("bl __rt_hash_write_guard_claim");                      // skip an owner already being destroyed by capture construction
+    emitter.instruction("str x0, [sp, #32]");                                   // reuse the finished probe counter for value ownership
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload table pointer (key_eq clobbered registers)
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload matched probe index
     emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes per slot
-    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 64
-    emitter.instruction("add x12, x5, x12");                                    // x12 = table base + index * 64
-    emitter.instruction("add x12, x12, #40");                                   // x12 = matched entry address
+    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
     emitter.instruction("str x12, [sp, #40]");                                  // save the matched entry address
 
     // -- release the owned string key (integer keys have key_hi == -1 and own nothing) --
@@ -149,9 +151,7 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_unset_prev_entry");
     emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes per slot
-    emitter.instruction("mul x9, x6, x11");                                     // x9 = prev_index * 64
-    emitter.instruction("add x9, x5, x9");                                      // x9 = table base + prev_index * 64
-    emitter.instruction("add x9, x9, #40");                                     // x9 = predecessor entry address
+    hash_layout::emit_entry_address(emitter, "x9", "x5", "x6");
     emitter.instruction("str x7, [x9, #56]");                                   // predecessor.next = our next, skipping us
 
     emitter.label("__rt_hash_unset_fix_next");
@@ -162,9 +162,7 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_unset_next_entry");
     emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes per slot
-    emitter.instruction("mul x9, x7, x11");                                     // x9 = next_index * 64
-    emitter.instruction("add x9, x5, x9");                                      // x9 = table base + next_index * 64
-    emitter.instruction("add x9, x9, #40");                                     // x9 = successor entry address
+    hash_layout::emit_entry_address(emitter, "x9", "x5", "x7");
     emitter.instruction("str x6, [x9, #48]");                                   // successor.prev = our prev, skipping us
 
     // -- tombstone the slot and decrement the live count --
@@ -183,6 +181,8 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
     emitter.instruction("stp xzr, xzr, [x12, #8]");                             // clear the released key pointer and key length
     emitter.instruction("stp xzr, xzr, [x12, #24]");                            // clear the removed payload words before callback entry
     emitter.instruction("str xzr, [x12, #40]");                                 // retire the old value tag with its payload
+    emitter.instruction("ldr x15, [sp, #32]");                                 // a capture guard may already own the detached payload
+    emitter.instruction("cbz x15, __rt_hash_unset_done");                      // leave that owner for the outer release
     emitter.instruction("cmp x14, #8");                                         // null values have no heap owner
     emitter.instruction("b.eq __rt_hash_unset_done");                           // return with the removal already committed
     emitter.instruction("cmp x14, #1");                                         // string values release through the uniform dispatcher
@@ -263,10 +263,7 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, r11");                                        // probed every slot yet?
     emitter.instruction("jae __rt_hash_unset_done");                            // full table without a match: no-op
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // load current probe index
-    emitter.instruction("mov r8, r11");                                         // copy index before scaling it
-    emitter.instruction("shl r8, 6");                                           // index * 64 = byte offset
-    emitter.instruction("add r8, r10");                                         // table base + offset
-    emitter.instruction("add r8, 40");                                          // skip the 40-byte header to the entry
+    hash_layout::emit_entry_address(emitter, "r8", "r10", "r11");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the occupied marker
     emitter.instruction("test r9, r9");                                         // empty slot (0)?
     emitter.instruction("jz __rt_hash_unset_done");                             // key absent: no-op
@@ -299,12 +296,14 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
 
     // -- key found: release the key, unlink the entry, then release its value --
     emitter.label("__rt_hash_unset_found");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // claim the value owner in the actual separated hash
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // recover the key before releasing its owned bytes
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // recover normalized integer or string key identity
+    emitter.instruction("call __rt_hash_write_guard_claim");                    // skip a value owner already held by an outer release
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // reuse the finished probe counter for value ownership
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload table pointer (key_eq clobbered it)
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload matched probe index
-    emitter.instruction("mov r8, r11");                                         // copy index before scaling it
-    emitter.instruction("shl r8, 6");                                           // index * 64 = byte offset
-    emitter.instruction("add r8, r10");                                         // table base + offset
-    emitter.instruction("add r8, 40");                                          // skip the 40-byte header to the entry
+    hash_layout::emit_entry_address(emitter, "r8", "r10", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // save the matched entry address
 
     // -- release the owned string key (integer keys have key_hi == -1 and own nothing) --
@@ -336,10 +335,7 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_unset_fix_next");                        // continue to fix the successor's back link
 
     emitter.label("__rt_hash_unset_prev_entry");
-    emitter.instruction("mov rcx, rsi");                                        // copy prev index before scaling it
-    emitter.instruction("shl rcx, 6");                                          // prev_index * 64 = byte offset
-    emitter.instruction("add rcx, r10");                                        // table base + offset
-    emitter.instruction("add rcx, 40");                                         // skip the header to the predecessor entry
+    hash_layout::emit_entry_address(emitter, "rcx", "r10", "rsi");
     emitter.instruction("mov QWORD PTR [rcx + 56], rdi");                       // predecessor.next = our next, skipping us
 
     emitter.label("__rt_hash_unset_fix_next");
@@ -349,10 +345,7 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_unset_tombstone");                       // continue to tombstone the slot
 
     emitter.label("__rt_hash_unset_next_entry");
-    emitter.instruction("mov rcx, rdi");                                        // copy next index before scaling it
-    emitter.instruction("shl rcx, 6");                                          // next_index * 64 = byte offset
-    emitter.instruction("add rcx, r10");                                        // table base + offset
-    emitter.instruction("add rcx, 40");                                         // skip the header to the successor entry
+    hash_layout::emit_entry_address(emitter, "rcx", "r10", "rdi");
     emitter.instruction("mov QWORD PTR [rcx + 48], rsi");                       // successor.prev = our prev, skipping us
 
     // -- tombstone the slot and decrement the live count --
@@ -372,6 +365,8 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r8 + 24], 0");                          // detach the payload before callback entry
     emitter.instruction("mov QWORD PTR [r8 + 32], 0");                          // clear the payload high word
     emitter.instruction("mov QWORD PTR [r8 + 40], 0");                          // retire the old value tag with its payload
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                         // a capture guard may already own the detached payload
+    emitter.instruction("je __rt_hash_unset_done");                            // leave that owner for the outer release
     emitter.instruction("cmp r9, 8");                                           // null values have no heap owner
     emitter.instruction("je __rt_hash_unset_done");                             // return with the removal already committed
     emitter.instruction("cmp r9, 1");                                           // string values release through the uniform dispatcher
@@ -423,19 +418,22 @@ mod tests {
             let unlink = asm.find("__rt_hash_unset_unlink:").unwrap();
             let tombstone = asm.find("__rt_hash_unset_tombstone:").unwrap();
             let release = asm.find("__rt_hash_unset_release_any:").unwrap();
-            let (count_write, tag_clear, heap_call, descriptor_call) = match target.arch {
+            let (count_write, tag_clear, guard_skip, heap_call, descriptor_call) = match target.arch {
                 Arch::AArch64 => (
                     "str x14, [x5, #0]", "str xzr, [x12, #40]",
+                    "cbz x15, __rt_hash_unset_done",
                     "bl __rt_decref_any", "bl __rt_callable_descriptor_release",
                 ),
                 Arch::X86_64 => (
                     "mov QWORD PTR [r10], rax", "mov QWORD PTR [r8 + 40], 0",
+                    "je __rt_hash_unset_done",
                     "call __rt_decref_any", "call __rt_callable_descriptor_release",
                 ),
             };
             let count = asm.find(count_write).unwrap();
             let clear = asm.find(tag_clear).unwrap();
-            assert!(unlink < tombstone && tombstone < count && count < clear && clear < release,
+            let guard = asm[clear..].find(guard_skip).unwrap() + clear;
+            assert!(unlink < tombstone && tombstone < count && count < clear && clear < guard && guard < release,
                 "removal must be visible before callbacks on {target:?}: {asm}");
             assert!(asm.find(heap_call).unwrap() > release, "{target:?}: {asm}");
             assert!(asm.find(descriptor_call).unwrap() > release, "{target:?}: {asm}");

@@ -128,9 +128,11 @@ pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
     if context.has_abi_owners() {
         return;
     }
-    #[cfg(all(feature = "curl", not(test)))]
+    #[cfg(not(test))]
     {
         let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
+        context.release_pcntl_foreign_callables(&mut values);
+        #[cfg(feature = "curl")]
         context
             .stream_resources_mut()
             .release_curl_easy_private_values(&mut values);

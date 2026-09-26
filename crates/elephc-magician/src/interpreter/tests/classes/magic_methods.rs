@@ -285,7 +285,9 @@ fn execute_context_function_binding_error_restores_calling_class_scopes() {
     )
     .expect_err("missing required argument must fail binding");
 
-    assert_eq!(error, EvalStatus::RuntimeFatal);
+    assert_eq!(error, EvalStatus::UncaughtThrowable);
+    let throwable = context.take_pending_throw().expect("missing argument is a PHP throwable");
+    values.release(throwable).unwrap();
     assert_eq!(context.current_class_scope(), Some("EvalCallingScope"));
     assert_eq!(context.current_called_class_scope(), Some("EvalCalledScope"));
     context.pop_called_class_scope();

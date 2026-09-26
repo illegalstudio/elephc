@@ -38,7 +38,7 @@ function imagedashedline(mixed $image, int $x1, int $y1, int $x2, int $y2, int $
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

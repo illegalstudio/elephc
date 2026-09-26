@@ -2,7 +2,7 @@
 title: "session_set_cookie_params()"
 description: "Sets the session cookie's lifetime, path, domain, and flags."
 sidebar:
-  order: 932
+  order: 995
 ---
 
 ## session_set_cookie_params()
@@ -14,7 +14,7 @@ function session_set_cookie_params(...$args): bool
 Sets the session cookie's lifetime, path, domain, and flags.
 
 **Parameters**:
-- `...$args` — variadic: collects excess arguments into `$args`.
+- `...$args` - variadic: collects excess arguments into `$args`.
 
 **Returns**: `bool`
 

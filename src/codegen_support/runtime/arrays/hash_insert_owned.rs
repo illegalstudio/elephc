@@ -8,6 +8,7 @@
 //! Key details:
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -64,9 +65,7 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload current probe index
     emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x12, x9, x11");                                    // compute byte offset for this slot
-    emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
-    emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
+    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
     emitter.instruction("ldr x13, [x12]");                                      // load occupied flag
     emitter.instruction("cmp x13, #1");                                         // is the slot already occupied?
     emitter.instruction("b.ne __rt_hash_insert_owned_write");                   // empty or tombstone means we can write here
@@ -82,9 +81,7 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [x5, #8]");                                    // reload capacity after call clobbers regs
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after call clobbers regs
     emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
-    emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
-    emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
+    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
     emitter.instruction("cbnz x0, __rt_hash_insert_owned_overwrite");           // overwrite if this key already exists
 
     // -- advance to the next probe slot --
@@ -121,9 +118,7 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_insert_owned_count");                      // skip the tail-link update for the first entry
     emitter.label("__rt_hash_insert_owned_link_tail");
     emitter.instruction("mov x16, #64");                                        // x16 = hash entry size for tail-slot addressing
-    emitter.instruction("mul x17, x14, x16");                                   // x17 = previous tail slot byte offset
-    emitter.instruction("add x17, x5, x17");                                    // advance from table base to the previous tail slot
-    emitter.instruction("add x17, x17, #40");                                   // skip the hash header to the previous tail entry
+    hash_layout::emit_entry_address(emitter, "x17", "x5", "x14");
     emitter.instruction("str x9, [x17, #56]");                                  // link old tail.next = inserted slot
     emitter.instruction("str x9, [x5, #32]");                                   // update tail = inserted slot
     emitter.label("__rt_hash_insert_owned_count");
@@ -131,6 +126,7 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [x5]");                                       // load current entry count
     emitter.instruction("add x13, x13, #1");                                    // count the newly inserted slot
     emitter.instruction("str x13, [x5]");                                       // store updated entry count
+    super::hash_next_index::record_insert(emitter, "x5", "x12", "__rt_hash_insert_owned");
     emitter.instruction("b __rt_hash_insert_owned_done");                       // insertion is complete
 
     // -- duplicate key during grow: overwrite value in place --
@@ -181,10 +177,7 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_insert_owned_probe");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the destination hash-table pointer at the top of every probe iteration
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index before deriving the slot address
-    emitter.instruction("mov r12, r11");                                        // copy the current probe index before scaling it into a byte offset
-    emitter.instruction("shl r12, 6");                                          // convert the probe index into a 64-byte entry offset
-    emitter.instruction("add r12, r10");                                        // advance from the hash-table base pointer to the selected entry block
-    emitter.instruction("add r12, 40");                                         // skip the fixed 40-byte hash header to land on the selected entry
+    hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
     emitter.instruction("mov r13, QWORD PTR [r12]");                            // load the occupied marker for the probed hash-entry slot
     emitter.instruction("cmp r13, 1");                                          // check whether the current probe landed on an occupied entry
     emitter.instruction("jne __rt_hash_insert_owned_write");                    // empty or tombstone entries can be claimed immediately for insertion
@@ -231,10 +224,7 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_insert_owned_bump_count");               // skip the previous-tail forward-link update on the very first insertion
 
     emitter.label("__rt_hash_insert_owned_link_tail");
-    emitter.instruction("mov r14, r13");                                        // copy the previous tail slot index before scaling it into a byte offset
-    emitter.instruction("shl r14, 6");                                          // convert the previous tail slot index into a 64-byte entry offset
-    emitter.instruction("add r14, r10");                                        // advance from the hash-table base pointer to the previous tail entry block
-    emitter.instruction("add r14, 40");                                         // skip the fixed hash header to land on the previous tail entry
+    hash_layout::emit_entry_address(emitter, "r14", "r10", "r13");
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the inserted slot index for the previous-tail forward-link store
     emitter.instruction("mov QWORD PTR [r14 + 56], r11");                       // update the previous tail entry to point at the inserted slot as its logical successor
     emitter.instruction("mov QWORD PTR [r10 + 32], r11");                       // publish the inserted slot as the new insertion-order tail in the hash header
@@ -243,6 +233,7 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current live-entry count from the hash header before incrementing it
     emitter.instruction("add r11, 1");                                          // increment the live-entry count after claiming a previously empty hash slot
     emitter.instruction("mov QWORD PTR [r10], r11");                            // store the updated live-entry count back into the hash header
+    super::hash_next_index::record_insert(emitter, "r10", "r12", "__rt_hash_insert_owned");
     emitter.instruction("mov rax, r10");                                        // return the destination hash-table pointer after a successful owned insertion
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the owned-insert helper
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the owned-insert helper
