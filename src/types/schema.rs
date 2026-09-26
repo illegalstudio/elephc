@@ -239,6 +239,9 @@ pub struct InterfaceInfo {
     pub static_method_order: Vec<String>,
     /// Interface constants (PHP 5.0+). Inherited from parent interfaces.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// The names in `constants` in PHP's order: the interface's own in declaration order, then
+    /// each parent interface's.
+    pub constant_order: Vec<String>,
     /// PHP 8.3 declared types for visible interface constants.
     pub constant_types: HashMap<String, TypeExpr>,
     /// Declaring interface for each visible constant, keyed by case-sensitive constant name.
@@ -284,6 +287,9 @@ pub struct ClassInfo {
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// The names in `constants`, in declaration order (trait constants after the class's own).
+    /// `constants` is a map and has no order; `ReflectionClass::getConstants()` needs PHP's.
+    pub constant_order: Vec<String>,
     /// Deprecation reason for class constants carrying `#[\Deprecated]`, keyed
     /// by the case-sensitive constant name. An empty string means no reason.
     pub constant_deprecations: HashMap<String, String>,

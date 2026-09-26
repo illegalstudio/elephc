@@ -151,6 +151,7 @@ impl ClassBuildState {
                     ))
                 })
                 .collect::<Result<HashMap<_, _>, CompileError>>()?,
+            constant_order: class.constants.iter().map(|c| c.name.clone()).collect(),
             constant_deprecations: class
                 .constants
                 .iter()

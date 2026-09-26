@@ -177,6 +177,17 @@ pub(super) fn merge_constants(
             true,
         )?;
     }
+    // PHP lists the owner's own constants, in declaration order, before the ones its traits
+    // bring in (`ReflectionClass::getConstants()` on 8.5.10). The merge above appends a new
+    // local after the imported set but replaces a compatible redeclaration IN PLACE, so a
+    // redeclared constant would stay ahead of earlier locals. Sorting by each local's own
+    // position (imported ones after, stably) restores PHP's order without touching the check.
+    merged.sort_by_key(|constant| {
+        local
+            .iter()
+            .position(|own| own.name == constant.name)
+            .map_or((1, 0), |index| (0, index))
+    });
     Ok(merged)
 }
 

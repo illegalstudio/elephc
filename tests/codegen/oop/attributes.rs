@@ -4409,3 +4409,76 @@ echo "built\n";
     );
     assert_eq!(out, "built\n");
 }
+
+/// `ReflectionClass::getConstants()` and `getReflectionConstants()` list constants in PHP's
+/// order: the class's own in declaration order, then its traits', then its parent's whole list,
+/// then each interface's; an enum interleaves cases and constants as declared. The constants map
+/// used to be iterated directly, so the order changed from one build to the next.
+/// Expected output measured on PHP 8.5.10.
+#[test]
+fn test_reflection_class_constants_follow_php_declaration_order() {
+    let out = compile_and_run(
+        r#"<?php
+interface J0 { const J0A = 1; }
+interface J extends J0 { const JA = 1; }
+interface I { const I2 = 'i2'; const I1 = 'i1'; }
+trait T { const T2 = 't2'; const T1 = 't1'; }
+class G { const GA = 1; }
+class P extends G implements J { const PB = 1; const PA = 1; }
+class C extends P implements I {
+    use T;
+    const Z = 'z';
+    const K = self::A . '!';
+    const A = 'a';
+    const M = 3.5;
+}
+enum E: string { case B = 'b'; const X = 'x'; case A = 'a'; }
+echo implode(',', array_keys((new ReflectionClass('C'))->getConstants())), "\n";
+$names = [];
+foreach ((new ReflectionClass('C'))->getReflectionConstants() as $constant) { $names[] = $constant->getName(); }
+echo implode(',', $names), "\n";
+echo implode(',', array_keys((new ReflectionClass('P'))->getConstants())), "\n";
+echo implode(',', array_keys((new ReflectionClass('J'))->getConstants())), "\n";
+echo implode(',', array_keys((new ReflectionClass('E'))->getConstants())), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Z,K,A,M,T2,T1,PB,PA,GA,JA,J0A,I2,I1\n\
+         Z,K,A,M,T2,T1,PB,PA,GA,JA,J0A,I2,I1\n\
+         PB,PA,GA,JA,J0A\n\
+         JA,J0A\n\
+         B,X,A\n"
+    );
+}
+
+/// The same order holds where the first version of the fix missed it: a class that compatibly
+/// redeclares trait constants after an earlier own one, a trait reflected directly, and the eval
+/// bridge, which served the same API alphabetically. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_reflection_constant_order_for_redeclarations_traits_and_eval() {
+    let out = compile_and_run(
+        r#"<?php
+trait T { const P = 1; const Q = 2; const TB = 4; const TA = 5; }
+class C { use T; const A = 3; const P = 1; const Q = 2; }
+echo implode(',', array_keys((new ReflectionClass('C'))->getConstants())), "\n";
+echo implode(',', array_keys((new ReflectionClass('T'))->getConstants())), "\n";
+interface J0 { const J0A = 1; }
+interface J extends J0 { const JA = 1; }
+class P implements J { const PB = 1; const PA = 1; }
+class D extends P { const Z = 1; const K = 2; }
+enum E: string { case B = 'b'; const X = 'x'; case A = 'a'; }
+eval('echo implode(",", array_keys((new ReflectionClass("D"))->getConstants())), "\n";');
+eval('echo implode(",", array_keys((new ReflectionClass("C"))->getConstants())), "\n";');
+eval('echo implode(",", array_keys((new ReflectionClass("E"))->getConstants())), "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "A,P,Q,TB,TA\n\
+         P,Q,TB,TA\n\
+         Z,K,PB,PA,JA,J0A\n\
+         A,P,Q,TB,TA\n\
+         B,X,A\n"
+    );
+}

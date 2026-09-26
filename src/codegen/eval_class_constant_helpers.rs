@@ -166,12 +166,17 @@ fn collect_reflected_trait_constant_slots(
     let Some(constants) = module.declared_trait_constants.get(trait_name) else {
         return;
     };
-    let mut names = module
+    // The recorded names are in declaration order, which is PHP's; only the fallback built from
+    // the map's keys needs sorting to be deterministic.
+    let names = module
         .declared_trait_constant_names
         .get(trait_name)
         .cloned()
-        .unwrap_or_else(|| constants.keys().cloned().collect());
-    names.sort();
+        .unwrap_or_else(|| {
+            let mut keys = constants.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            keys
+        });
     for constant_name in names {
         if let Some(mut slot) = trait_constant_slot(module, trait_name, &constant_name) {
             slot.reflected_class = trait_name.to_string();
@@ -180,19 +185,27 @@ fn collect_reflected_trait_constant_slots(
     }
 }
 
-/// Returns class constant names in the same order as eval-backed ReflectionClass.
+/// Returns class constant names in PHP's order, the one the compiled `ReflectionClass` uses too.
+///
+/// Measured on PHP 8.5.10: the class's own constants as declared (trait constants after them),
+/// then the parent's whole list, then each implemented interface's; a user enum interleaves its
+/// cases and constants as declared. Each class's own names come from `constant_order`.
 fn class_constant_names(module: &Module, class_name: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
     if let Some(enum_info) = module.enum_infos.get(class_name) {
-        for case in &enum_info.cases {
-            push_unique_constant_name(&case.name, &mut names, &mut seen);
+        let ordered = resolve_class(module, class_name).is_some_and(|(_, info)| {
+            enum_info.cases.iter().all(|case| info.constant_order.contains(&case.name))
+        });
+        if !ordered {
+            for case in &enum_info.cases {
+                push_unique_constant_name(&case.name, &mut names, &mut seen);
+            }
         }
     }
-    for (declaring_class, class_info) in class_chain(module, class_name) {
-        let mut own = class_info.constants.keys().cloned().collect::<Vec<_>>();
-        own.sort();
-        for constant_name in own {
+    let chain = class_chain(module, class_name);
+    for (declaring_class, class_info) in &chain {
+        for constant_name in declared_then_remaining(&class_info.constant_order, &class_info.constants) {
             if is_private_inherited_class_constant(
                 class_name,
                 declaring_class,
@@ -203,6 +216,10 @@ fn class_constant_names(module: &Module, class_name: &str) -> Vec<String> {
             }
             push_unique_constant_name(&constant_name, &mut names, &mut seen);
         }
+    }
+    // Interfaces come after the whole parent chain, deepest ancestor's first: PHP's order is
+    // own ++ order(parent) ++ interfaces(own), which unrolls to exactly this.
+    for (_, class_info) in chain.iter().rev() {
         for interface_name in &class_info.interfaces {
             for constant_name in interface_constant_names(module, interface_name) {
                 push_unique_constant_name(&constant_name, &mut names, &mut seen);
@@ -210,6 +227,21 @@ fn class_constant_names(module: &Module, class_name: &str) -> Vec<String> {
         }
     }
     names
+}
+
+/// Returns the names of `order` first, then any other key of `constants` sorted, so a constant
+/// missing from the recorded order still appears, deterministically.
+fn declared_then_remaining(
+    order: &[String],
+    constants: &std::collections::HashMap<String, crate::parser::ast::Expr>,
+) -> Vec<String> {
+    let mut remaining = constants
+        .keys()
+        .filter(|key| !order.contains(key))
+        .cloned()
+        .collect::<Vec<_>>();
+    remaining.sort();
+    order.iter().cloned().chain(remaining).collect()
 }
 
 /// Returns whether a parent private constant is hidden from a reflected child.
@@ -244,7 +276,7 @@ fn class_chain<'a>(module: &'a Module, class_name: &'a str) -> Vec<(&'a str, &'a
     result
 }
 
-/// Returns interface constant names with parent interfaces first.
+/// Returns interface constant names in PHP's order: the interface's own, then its parents'.
 fn interface_constant_names(module: &Module, interface_name: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
@@ -262,13 +294,12 @@ fn collect_interface_constant_names(
     let Some((_, interface_info)) = resolve_interface(module, interface_name) else {
         return;
     };
+    // `constant_order` already lists the interface's own constants, then its parents'.
+    for constant_name in declared_then_remaining(&interface_info.constant_order, &interface_info.constants) {
+        push_unique_constant_name(&constant_name, names, seen);
+    }
     for parent in &interface_info.parents {
         collect_interface_constant_names(module, parent, names, seen);
-    }
-    let mut own = interface_info.constants.keys().cloned().collect::<Vec<_>>();
-    own.sort();
-    for constant_name in own {
-        push_unique_constant_name(&constant_name, names, seen);
     }
 }
 
