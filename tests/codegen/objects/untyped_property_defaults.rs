@@ -317,3 +317,66 @@ $k = new K(); echo count($k->x), ":", $k->x["k"], "\n";
         )
     );
 }
+
+/// `Foo::class` is a compile-time string, so it is a legal property default: a static or an
+/// instance property, typed or `mixed`, an array value or an array key, through an import
+/// alias. Each of these failed in the backend, e.g. `static property initializer for default
+/// value of static property ... with PHP type Str`.
+#[test]
+fn test_named_class_constant_is_a_literal_property_default() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Shapes;
+
+use App\Shapes\Circle as Round;
+
+final class Circle {}
+final class Square {}
+
+final class Holder
+{
+    public static string $fallback = Circle::class;
+    public static ?string $maybe = Round::class;
+    public string $name = Square::class;
+    public mixed $any = \stdClass::class;
+    public array $classes = ['sq' => Square::class, 'ci' => Circle::class];
+    public array $list = [Square::class, Circle::class];
+    public array $byClass = [Square::class => 4, Circle::class => 0];
+    public static array $registry = [Circle::class => 'round'];
+    public const KIND = Square::class;
+
+    public function describe(string $default = Circle::class): string
+    {
+        return $default;
+    }
+}
+
+echo Holder::$fallback, "\n";
+echo Holder::$maybe, "\n";
+$h = new Holder();
+echo $h->name, "\n";
+echo $h->any, "\n";
+echo $h->classes['ci'], "\n";
+echo implode(',', $h->list), "\n";
+echo $h->byClass[Square::class], "\n";
+echo Holder::$registry[Circle::class], "\n";
+echo Holder::KIND, "\n";
+echo $h->describe(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "App\\Shapes\\Circle\n",
+            "App\\Shapes\\Circle\n",
+            "App\\Shapes\\Square\n",
+            "stdClass\n",
+            "App\\Shapes\\Circle\n",
+            "App\\Shapes\\Square,App\\Shapes\\Circle\n",
+            "4\n",
+            "round\n",
+            "App\\Shapes\\Square\n",
+            "App\\Shapes\\Circle\n",
+        )
+    );
+}
