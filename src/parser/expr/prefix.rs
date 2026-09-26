@@ -59,6 +59,8 @@ pub(super) fn parse_prefix(
                         ));
                     }
                 }
+                // The expression starts at the `\`, so diagnostics point at the whole name.
+                expr.span = Span::with_end_from(span, expr.span);
                 return Ok(expr);
             }
         }
