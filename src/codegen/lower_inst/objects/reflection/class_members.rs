@@ -52,6 +52,19 @@ pub(super) fn reflection_class_property_names(
     names
 }
 
+/// Sorts members into the position their name has in `order`; a name missing from it goes last.
+///
+/// The positions are indexed once, so ordering stays linear in the number of constants rather
+/// than scanning the whole name list for every member.
+fn sort_by_name_order<T>(members: &mut [T], order: &[String], name: impl Fn(&T) -> &String) {
+    let positions: std::collections::HashMap<&str, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(position, name)| (name.as_str(), position))
+        .collect();
+    members.sort_by_key(|member| positions.get(name(member).as_str()).copied().unwrap_or(usize::MAX));
+}
+
 /// Returns PHP case-sensitive class constant names visible to `ReflectionClass::hasConstant()`.
 pub(super) fn reflection_class_constant_names(
     ctx: &FunctionContext<'_>,
@@ -169,7 +182,7 @@ pub(super) fn reflection_class_constant_members(
     // The values are gathered walking up the hierarchy; the ORDER is PHP's, which puts a
     // parent's constants before the class's interfaces, so sort by the name order.
     let order = reflection_class_constant_names(ctx, class_name, _info);
-    members.sort_by_key(|member| order.iter().position(|name| *name == member.name).unwrap_or(usize::MAX));
+    sort_by_name_order(&mut members, &order, |member| &member.name);
     Ok(members)
 }
 
@@ -266,7 +279,7 @@ pub(super) fn reflection_trait_constant_members(
     }
     // `declared_trait_constants` is a map; the trait's declaration order is the name list.
     let order = reflection_trait_constant_names(ctx, trait_name);
-    members.sort_by_key(|member| order.iter().position(|name| *name == member.name).unwrap_or(usize::MAX));
+    sort_by_name_order(&mut members, &order, |member| &member.name);
     Ok(members)
 }
 
@@ -351,7 +364,7 @@ pub(super) fn reflection_class_constant_reflection_members(
     }
     // Same ordering as `reflection_class_constant_members`: PHP's, not the walk's.
     let order = reflection_class_constant_names(ctx, class_name, _info);
-    members.sort_by_key(|member| order.iter().position(|name| *name == member.name).unwrap_or(usize::MAX));
+    sort_by_name_order(&mut members, &order, |member| &member.name);
     Ok(members)
 }
 
@@ -488,7 +501,7 @@ pub(super) fn reflection_trait_constant_reflection_members(
     }
     // `declared_trait_constants` is a map; the trait's declaration order is the name list.
     let order = reflection_trait_constant_names(ctx, trait_name);
-    members.sort_by_key(|member| order.iter().position(|name| *name == member.name).unwrap_or(usize::MAX));
+    sort_by_name_order(&mut members, &order, |member| &member.name);
     Ok(members)
 }
 
