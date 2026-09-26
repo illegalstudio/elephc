@@ -603,6 +603,9 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
         // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
         PhpType::Bool => Ok("__rt_implode_bool"),
         PhpType::Int => Ok("__rt_implode_int"),
+        // A float array stores raw doubles, which neither the string-slot nor the integer walk
+        // can read (#640); each element is rendered through `__rt_ftoa`.
+        PhpType::Float => Ok("__rt_implode_float"),
         // An empty array literal carries an uninhabited element type (`Never`, or
         // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
         // dereference an element, so the generic string helper is the safe choice and
