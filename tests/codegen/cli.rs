@@ -2276,3 +2276,74 @@ fn test_cli_bridge_override_miss_reports_the_override_not_the_fallbacks() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A line past column 65,535 in an INCLUDED file compiles, and `--source-map` gives its tokens the
+/// same exact positions as the same line in the root file.
+///
+/// The included file's end columns are packed into 16 bits: past that the compile aborted
+/// ("included-source column exceeds packed span range", #1292), and a saturated end made every
+/// token starting past column 65535 lose its end in the map (`php_end_col: null`, #1306).
+#[test]
+fn test_cli_source_map_keeps_long_included_line_ends() {
+    // `strlen($x)` sits after column 70,000 on line 2.
+    let body = format!("<?php\n$x = '{}'; echo strlen($x), \"\\n\";\n", "a".repeat(70_000));
+    let map_of = |label: &str, files: &[(&str, &str)]| -> Vec<serde_json::Value> {
+        let dir = make_cli_test_dir(label);
+        for (name, source) in files {
+            fs::write(dir.join(name), source).unwrap();
+        }
+        let output = elephc_cli_command(&dir)
+            .arg("--emit-asm")
+            .arg("--source-map")
+            .arg(dir.join("main.php"))
+            .output()
+            .expect("failed to run elephc CLI with --source-map");
+        assert!(
+            output.status.success(),
+            "{label}: elephc --source-map failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let raw = fs::read_to_string(dir.join("main.map")).expect("failed to read source map");
+        let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+        let mut wide: Vec<serde_json::Value> = Vec::new();
+        let mut collect = |value: &serde_json::Value| {
+            if value.get("php_line").and_then(|v| v.as_u64()) == Some(2)
+                && value.get("php_col").and_then(|v| v.as_u64()).is_some_and(|col| col > 65_535)
+            {
+                let mut entry = value.clone();
+                if let Some(object) = entry.as_object_mut() {
+                    object.remove("asm_line");
+                }
+                wide.push(entry);
+            }
+        };
+        fn walk(value: &serde_json::Value, visit: &mut dyn FnMut(&serde_json::Value)) {
+            visit(value);
+            match value {
+                serde_json::Value::Array(items) => items.iter().for_each(|item| walk(item, visit)),
+                serde_json::Value::Object(fields) => fields.values().for_each(|item| walk(item, visit)),
+                _ => {}
+            }
+        }
+        walk(&doc, &mut collect);
+        let _ = fs::remove_dir_all(&dir);
+        wide
+    };
+
+    let included = map_of(
+        "elephc_cli_source_map_long_include",
+        &[("long.php", body.as_str()), ("main.php", "<?php\ninclude __DIR__ . '/long.php';\n")],
+    );
+    let root = map_of("elephc_cli_source_map_long_root", &[("main.php", body.as_str())]);
+
+    assert!(!root.is_empty(), "the root map has no entry past column 65,535");
+    // `strlen($x)` starts at column 70,015: with a saturated end it mapped as a point span.
+    // (The `"\n"` literal maps as a point span in BOTH files, so it is not the oracle.)
+    let strlen = included
+        .iter()
+        .find(|entry| entry["op"] == "str_len")
+        .unwrap_or_else(|| panic!("no str_len entry past column 65,535: {included:#?}"));
+    assert_eq!(strlen["php_col"], 70_015);
+    assert_eq!(strlen["php_end_col"], 70_025, "the included strlen() lost its end: {strlen}");
+    assert_eq!(included, root, "the included line maps differently from the same root line");
+}

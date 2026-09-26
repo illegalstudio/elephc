@@ -12,6 +12,8 @@
 //!   is unknown and only the start position is meaningful.
 //! - Spans stay 16 bytes: included-file identity is packed into unused high bits of `end_col`,
 //!   preserving the AST and parser-frame size while distinguishing equal source coordinates.
+//! - An included-file end column too wide for the packed field is kept exactly in a
+//!   process-wide side table (`OverflowEnds`); the packed word then holds its index.
 
 /// The first line number handed out to synthetically built nodes.
 ///
@@ -26,6 +28,51 @@ static NEXT_SYNTHETIC_LINE: std::sync::atomic::AtomicU32 = std::sync::atomic::At
 const PACKED_SOURCE_SPAN: u32 = 1 << 31;
 const SOURCE_ID_MASK: u32 = 0x7fff;
 const PACKED_END_COL_MASK: u32 = 0xffff;
+/// How many distinct overflowing `(source identity, end column)` pairs the side table holds:
+/// one per value of the packed word's 16 low bits.
+const OVERFLOW_CAPACITY: usize = 1 << 16;
+
+/// Exact end columns of included-file spans that do not fit the packed 16-bit field.
+///
+/// A packed word marks such a span with the flag set and a ZERO identity field — a combination
+/// that never occurs otherwise, because included sources are numbered from 1 — and its low 16
+/// bits index this table, which holds the real `(source identity, end column)`. Entries are
+/// deduplicated, so two spans that end at the same place still compare equal; the table only
+/// grows, so an index stays valid for the whole process whatever thread created the span.
+///
+/// Before this table the end column was asserted to fit (a compiler panic on a valid include,
+/// #1292), and then saturated — which put a token starting past column 65535 BEFORE its own end,
+/// so `--source-map` dropped its end position (#1306).
+struct OverflowEnds {
+    entries: Vec<(u32, u32)>,
+    index: std::collections::BTreeMap<(u32, u32), u16>,
+}
+
+impl OverflowEnds {
+    /// Returns the index of `(source_id, end_col)`, adding it while there is room.
+    fn intern(&mut self, source_id: u32, end_col: u32, capacity: usize) -> Option<u16> {
+        if let Some(&index) = self.index.get(&(source_id, end_col)) {
+            return Some(index);
+        }
+        if self.entries.len() >= capacity {
+            return None;
+        }
+        let index = u16::try_from(self.entries.len()).ok()?;
+        self.entries.push((source_id, end_col));
+        self.index.insert((source_id, end_col), index);
+        Some(index)
+    }
+
+    /// Returns the `(source identity, end column)` recorded at `index`.
+    fn get(&self, index: u16) -> (u32, u32) {
+        self.entries[usize::from(index)]
+    }
+}
+
+static OVERFLOW_ENDS: std::sync::Mutex<OverflowEnds> = std::sync::Mutex::new(OverflowEnds {
+    entries: Vec::new(),
+    index: std::collections::BTreeMap::new(),
+});
 
 std::thread_local! {
     static NEXT_SOURCE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
@@ -98,30 +145,51 @@ impl Span {
 
     /// Returns the source end column without the included-file identity bits.
     pub fn end_column(self) -> u32 {
-        if self.end_col & PACKED_SOURCE_SPAN == 0 {
-            self.end_col
-        } else {
-            self.end_col & PACKED_END_COL_MASK
+        match self.overflow_entry() {
+            Some((_, end_col)) => end_col,
+            None if self.end_col & PACKED_SOURCE_SPAN == 0 => self.end_col,
+            None => self.end_col & PACKED_END_COL_MASK,
         }
     }
 
     /// Returns the included-file identity, or zero for the root/default source.
     pub fn source_id(self) -> u32 {
-        if self.end_col & PACKED_SOURCE_SPAN == 0 {
-            0
-        } else {
-            (self.end_col >> 16) & SOURCE_ID_MASK
+        match self.overflow_entry() {
+            Some((source_id, _)) => source_id,
+            None if self.end_col & PACKED_SOURCE_SPAN == 0 => 0,
+            None => (self.end_col >> 16) & SOURCE_ID_MASK,
         }
     }
 
-    /// Packs an included-file source identity with its end column, asserting both fit.
+    /// Returns the side-table entry of a span whose end column overflowed the packed field.
+    fn overflow_entry(self) -> Option<(u32, u32)> {
+        if self.end_col & PACKED_SOURCE_SPAN == 0 || (self.end_col >> 16) & SOURCE_ID_MASK != 0 {
+            return None;
+        }
+        let index = (self.end_col & PACKED_END_COL_MASK) as u16;
+        let table = OVERFLOW_ENDS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        Some(table.get(index))
+    }
+
+    /// Packs an included-file source identity with its end column.
+    ///
+    /// A column that fits 16 bits is stored inline. A wider one — a valid line in an included
+    /// file can run past column 65535, as the root file's can — goes to `OVERFLOW_ENDS`, keeping
+    /// the exact end and identity. Only if that table is full does the end saturate at 65535,
+    /// which keeps the compile going at the cost of that span's end position.
     fn pack_end_column(end_col: u32, source_id: u32) -> u32 {
         if source_id == 0 {
             return end_col;
         }
         assert!(source_id <= SOURCE_ID_MASK, "source identity exceeds packed span range");
-        assert!(end_col <= PACKED_END_COL_MASK, "included-source column exceeds packed span range");
-        PACKED_SOURCE_SPAN | (source_id << 16) | end_col
+        if end_col <= PACKED_END_COL_MASK {
+            return PACKED_SOURCE_SPAN | (source_id << 16) | end_col;
+        }
+        let mut table = OVERFLOW_ENDS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match table.intern(source_id, end_col, OVERFLOW_CAPACITY) {
+            Some(index) => PACKED_SOURCE_SPAN | u32::from(index),
+            None => PACKED_SOURCE_SPAN | (source_id << 16) | PACKED_END_COL_MASK,
+        }
     }
 
     /// Creates a dummy span at line 0, column 0.
@@ -254,6 +322,60 @@ mod tests {
         assert_eq!(extended.source_id(), 7);
         assert_eq!(extended.end_column(), 20);
         assert!(extended.has_extent());
+    }
+
+    /// An included-file end past the packed 16-bit field keeps its exact column and identity.
+    ///
+    /// It used to abort the compile (#1292), then saturated at 65535 — which put a token that
+    /// STARTS past that column before its own end, so `has_extent()` was false and source maps
+    /// dropped the end (#1306).
+    #[test]
+    fn an_included_end_past_the_packed_field_stays_exact() {
+        let point = Span::new_in_source(2, 70_000, 5);
+        assert_eq!(point.source_id(), 5);
+        assert_eq!(point.end_column(), 70_000);
+        assert!(!point.has_extent());
+
+        let token = Span::with_end_from(point, Span::new_in_source(2, 70_010, 5));
+        assert_eq!(token.source_id(), 5);
+        assert_eq!(token.end_column(), 70_010);
+        assert!(token.has_extent(), "an end past the start is an extent");
+
+        let wide = Span::with_end_from(Span::new_in_source(2, 6, 5), Span::new_in_source(2, 70_008, 5));
+        assert_eq!(wide.end_column(), 70_008, "a span straddling column 65535 keeps its end");
+
+        let merged = Span::new_in_source(2, 6, 5).merge(token);
+        assert_eq!(merged.end_column(), 70_010);
+        assert_eq!(merged.source_id(), 5);
+    }
+
+    /// Overflowing ends stay distinct map keys exactly as inline ones do.
+    #[test]
+    fn overflowing_ends_keep_spans_distinct_and_equal_where_they_should() {
+        let a = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_004, 9));
+        let same = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_004, 9));
+        let longer = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_009, 9));
+        let other_file = Span::with_end_from(Span::new_in_source(3, 70_000, 10), Span::new_in_source(3, 70_004, 10));
+        assert_eq!(a, same, "equal ends are one table entry, so the spans compare equal");
+        assert_ne!(a, longer);
+        assert_ne!(a, other_file, "the same coordinates in another included file stay distinct");
+        assert_eq!(other_file.source_id(), 10);
+        assert_ne!(a, Span::with_end(3, 70_000, 3, 70_004), "an included span is never a root one");
+    }
+
+    /// A full side table falls back to saturating the end rather than aborting, and interning
+    /// the same pair twice returns the same index.
+    #[test]
+    fn a_full_overflow_table_degrades_instead_of_aborting() {
+        let mut table = OverflowEnds {
+            entries: Vec::new(),
+            index: std::collections::BTreeMap::new(),
+        };
+        assert_eq!(table.intern(1, 70_000, 2), Some(0));
+        assert_eq!(table.intern(1, 70_001, 2), Some(1));
+        assert_eq!(table.intern(1, 70_000, 2), Some(0), "an existing pair is found, not re-added");
+        assert_eq!(table.intern(1, 70_002, 2), None, "no room left");
+        assert_eq!(table.get(1), (1, 70_001));
     }
 
     /// Verifies merge takes the earlier start and later end across lines.
