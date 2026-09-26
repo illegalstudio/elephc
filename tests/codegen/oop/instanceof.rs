@@ -393,3 +393,62 @@ echo ($value instanceof $target) ? "T" : "F";
         out.stderr
     );
 }
+
+/// The class operand of `instanceof` may be any variable expression holding a class name:
+/// a property of `$this`, an array element read through it, or a static property. The
+/// property form failed with `Expected class or interface name after 'instanceof'`, and the
+/// static form parsed only `self` and left `::$fallback` behind. Regression for #829.
+#[test]
+fn test_instanceof_accepts_property_element_and_static_property_targets() {
+    let out = compile_and_run(
+        r#"<?php
+interface Shape {}
+final class Square implements Shape {}
+final class Circle implements Shape {}
+
+final class Rule
+{
+    public static string $fallback = '';
+    public array $classes = [];
+
+    public function __construct(public string $className) { $this->classes['sq'] = Square::class; }
+
+    public function test(mixed $value): bool
+    {
+        return $value instanceof $this->className;
+    }
+
+    public function testKey(mixed $value, string $key): bool
+    {
+        return $value instanceof $this->classes[$key];
+    }
+
+    public function testStatic(mixed $value): bool
+    {
+        return $value instanceof self::$fallback;
+    }
+}
+
+Rule::$fallback = Circle::class;
+$rule = new Rule(Shape::class);
+var_dump($rule->test(new Square()));
+var_dump($rule->test("not an object"));
+$square = new Rule(Square::class);
+var_dump($square->test(new Circle()));
+var_dump($square->testKey(new Square(), 'sq'));
+var_dump($square->testStatic(new Circle()));
+var_dump(!$rule->test(new Circle()) || $rule->test(new Square()));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        )
+    );
+}
