@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the `__rt_itoa`, `__rt_itoa_positive` runtime helper assembly for integer-to-string conversion.
+//! Emits integer-to-string helpers, including concat-buffer and caller-destination formatters.
 //! Keeps PHP byte-string pointer/length behavior and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
@@ -9,6 +9,78 @@
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+
+/// Emits __rt_itoa_into, formatting a signed 64-bit integer inside a caller-provided 21-byte
+/// destination window. The result is right-aligned in that window so callers can copy the returned
+/// slice to its start without touching _concat_buf or changing _concat_off.
+///
+/// AArch64 inputs are x0=value, x1=destination, and outputs are x0=pointer, x1=length.
+/// x86_64 inputs are rdi=value, rsi=destination, and outputs are rax=pointer, rdx=length.
+pub fn emit_itoa_into(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: itoa_into ---");
+    emitter.label_global("__rt_itoa_into");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #0");                                  // determine whether the input needs a minus sign
+            emitter.instruction("cneg x12, x0, lt");                            // unsigned magnitude also handles i64::MIN
+            emitter.instruction("cset x13, lt");                                // remember the original sign
+            emitter.instruction("mov x14, #10");                                // decimal radix
+            emitter.instruction("mov x11, #0");                                 // initialize the output digit count
+            emitter.instruction("add x9, x1, #20");                             // start at the end of the caller's 21-byte output window
+            emitter.label("__rt_itoa_into_loop");
+            emitter.instruction("udiv x15, x12, x14");                          // divide the remaining magnitude by ten
+            emitter.instruction("msub x8, x15, x14, x12");                      // compute the current decimal remainder
+            emitter.instruction("add x8, x8, #48");                             // convert the remainder to an ASCII digit
+            emitter.instruction("strb w8, [x9]");                               // write one digit from right to left
+            emitter.instruction("sub x9, x9, #1");                              // move to the next byte in the window
+            emitter.instruction("add x11, x11, #1");                            // count the digit just written
+            emitter.instruction("mov x12, x15");                                // continue with the quotient
+            emitter.instruction("cbnz x12, __rt_itoa_into_loop");               // stop after the most significant digit
+            emitter.instruction("cbz x13, __rt_itoa_into_done");                // only negative inputs need a sign byte
+            emitter.instruction("mov w8, #45");                                 // ASCII minus sign
+            emitter.instruction("strb w8, [x9]");                               // prepend the sign
+            emitter.instruction("sub x9, x9, #1");                              // include the sign in the returned slice
+            emitter.instruction("add x11, x11, #1");                            // count the sign byte
+            emitter.label("__rt_itoa_into_done");
+            emitter.instruction("add x0, x9, #1");                              // return the first output byte
+            emitter.instruction("mov x1, x11");                                 // return the formatted byte length
+            emitter.instruction("ret");                                         // return without touching shared scratch state
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r10, rdi");                                // keep the magnitude being converted
+            emitter.instruction("xor r11d, r11d");                              // initialize the negative flag
+            emitter.instruction("test r10, r10");                               // inspect the sign before taking an unsigned magnitude
+            emitter.instruction("jns __rt_itoa_into_positive");                 // non-negative values need no magnitude conversion
+            emitter.instruction("neg r10");                                     // unsigned magnitude also handles i64::MIN
+            emitter.instruction("mov r11d, 1");                                 // remember the original sign
+            emitter.label("__rt_itoa_into_positive");
+            emitter.instruction("mov r9, 10");                                  // decimal radix
+            emitter.instruction("xor ecx, ecx");                                // initialize the output digit count
+            emitter.instruction("lea r8, [rsi + 20]");                          // start at the end of the caller's 21-byte output window
+            emitter.label("__rt_itoa_into_loop_x86");
+            emitter.instruction("mov rax, r10");                                // dividend low word
+            emitter.instruction("xor edx, edx");                                // dividend high word
+            emitter.instruction("div r9");                                      // divide the remaining magnitude by ten
+            emitter.instruction("add dl, 48");                                  // convert the decimal remainder to an ASCII digit
+            emitter.instruction("mov BYTE PTR [r8], dl");                       // write one digit from right to left
+            emitter.instruction("sub r8, 1");                                   // move to the next byte in the window
+            emitter.instruction("add rcx, 1");                                  // count the digit just written
+            emitter.instruction("mov r10, rax");                                // continue with the quotient
+            emitter.instruction("test r10, r10");                               // stop after the most significant digit
+            emitter.instruction("jne __rt_itoa_into_loop_x86");                 // format remaining digits
+            emitter.instruction("test r11d, r11d");                             // does the original value need a minus sign?
+            emitter.instruction("jz __rt_itoa_into_done_x86");                  // positive values are complete
+            emitter.instruction("mov BYTE PTR [r8], 45");                       // prepend the sign
+            emitter.instruction("sub r8, 1");                                   // include the sign in the returned slice
+            emitter.instruction("add rcx, 1");                                  // count the sign byte
+            emitter.label("__rt_itoa_into_done_x86");
+            emitter.instruction("lea rax, [r8 + 1]");                           // return the first output byte
+            emitter.instruction("mov rdx, rcx");                                // return the formatted byte length
+            emitter.instruction("ret");                                         // return without touching shared scratch state
+        }
+    }
+}
 
 /// Emits the `__rt_itoa` runtime helper: converts a signed 64-bit integer to a decimal string.
 /// Uses a 21-byte scratch area in `_concat_buf` written right-to-left, then returns a pointer to
