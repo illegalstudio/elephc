@@ -126,11 +126,12 @@ fn reflection_callable_body(
     parameters: &[ReflectionParameterMember],
     return_type: Option<&ReflectionParameterTypeMetadata>,
 ) -> String {
-    // Every callable carries a synthesized `mixed ...$__elephc_func_args` so `func_get_args()`
-    // can read surplus positional arguments. It is an ABI slot, not a PHP parameter: PHP never
-    // prints it, `getParameters()` already omits it, and printing it here made the compiled dump
-    // disagree with the eval one for the same method. `is_generated_local_name` is the predicate
-    // the rest of the compiler uses to keep these out of `get_defined_vars()` and eval scopes.
+    // A scope that calls `func_get_args()` carries a synthesized `mixed ...$__elephc_func_args`
+    // so it can read surplus positional arguments. It is an ABI slot, not a PHP parameter, and
+    // `reflection_parameter_members_with_declaring_function` already drops it, so neither the dump
+    // nor `getParameters()` sees it. This filter only keeps the dump honest should a member list
+    // ever be built another way. `is_generated_local_name` is the predicate the rest of the
+    // compiler uses to keep these out of `get_defined_vars()` and eval scopes.
     let parameters: Vec<&ReflectionParameterMember> = parameters
         .iter()
         .filter(|parameter| !is_generated_local_name(&parameter.name))
