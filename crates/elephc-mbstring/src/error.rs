@@ -15,6 +15,8 @@ pub enum MbError {
     Value(String),
     /// PHP `ValueError` whose original diagnostic contains non-UTF-8 argument bytes.
     ValueBytes(Vec<u8>),
+    /// PHP `TypeError` with the original bytes of a rejected value or header name.
+    TypeBytes(Vec<u8>),
     /// PHP `Error`, for example an overflowing requested string allocation.
     Runtime(String),
 }

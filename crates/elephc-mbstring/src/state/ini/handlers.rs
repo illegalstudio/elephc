@@ -110,7 +110,8 @@ fn encoding_list(state: &mut impl Access, value: &[u8], caller: &str, emit: &mut
     match parsed {
         Ok(values) => Some(values),
         Err(error) => {
-            let message = match error { MbError::Value(message) | MbError::Runtime(message) => message.into_bytes(), MbError::ValueBytes(message) => message };
+            let message = match error { MbError::Value(message) | MbError::Runtime(message) => message.into_bytes(),
+                MbError::ValueBytes(message) | MbError::TypeBytes(message) => message };
             emit(Diagnostic { level: 2, message });
             None
         },

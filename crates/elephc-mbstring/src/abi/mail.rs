@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - MIME conversion uses the existing codec catalog with PHP's mail substitution policy.
+//! - Array headers use PHP's field-name, value, and key validation before delivery.
 //! - The transport receives arguments directly, so header and parameter bytes never enter a shell.
 //! - Failed process creation and nonzero exits return false with a PHP warning.
 
@@ -186,7 +187,7 @@ fn safe_to(to: &[u8]) -> Vec<u8> {
     result
 }
 
-/// Copies string and array header forms without allowing embedded NUL bytes.
+/// Parses string headers and applies PHP's structured array-header checks.
 fn headers(args: &Arguments<'_>) -> Result<Vec<(Vec<u8>, Vec<u8>)>, MbError> {
     if !args.supplied(3) { return Ok(Vec::new()); }
     if args.kind(3) != ARG_ARRAY {
@@ -201,27 +202,94 @@ fn headers(args: &Arguments<'_>) -> Result<Vec<(Vec<u8>, Vec<u8>)>, MbError> {
         }).collect();
     }
     let graph = args.array(3).expect("validated mail header array");
-    graph.arrays()[graph.root()].iter().map(|(key, value)| {
-        let Value::String(value) = value else {
-            return Err(MbError::argument("mb_send_mail", 4, "additional_headers", "must contain only string values"));
-        };
-        no_nul(value, 4, "additional_headers")?;
+    let mut result = Vec::new();
+    for (key, value) in &graph.arrays()[graph.root()] {
         let name = match key {
-            Key::String(name) => name.clone(),
-            Key::Int(_) => {
-                let Some((name, _)) = split_once_byte(value, b':') else {
-                    return Err(MbError::argument("mb_send_mail", 4, "additional_headers", "contains a header without a colon"));
-                };
-                name.to_vec()
-            }
+            Key::String(name) => name,
+            Key::Int(index) => return Err(MbError::TypeBytes(
+                format!("Header name cannot be numeric, {index} given").into_bytes())),
         };
-        let value = if matches!(key, Key::Int(_)) {
-            split_once_byte(value, b':').expect("validated header").1.trim_ascii().to_vec()
-        } else { value.clone() };
-        no_nul(&name, 4, "additional_headers")?;
-        Ok((name, value))
-    }).collect()
+        if name.eq_ignore_ascii_case(b"to") || name.eq_ignore_ascii_case(b"subject") {
+            let reserved = if name.eq_ignore_ascii_case(b"to") { "To" } else { "Subject" };
+            return Err(MbError::Value(format!("The additional headers cannot contain the \"{reserved}\" header")));
+        }
+        match value {
+            Value::String(value) => checked_header(&mut result, name, value)?,
+            Value::Array(index) => {
+                if let Some(standard) = single_value_header(name) {
+                    return Err(MbError::TypeBytes(format!("Header \"{standard}\" must be of type string, array given").into_bytes()));
+                }
+                for (nested_key, nested_value) in &graph.arrays()[*index] {
+                    if let Key::String(nested_name) = nested_key {
+                        return Err(MbError::TypeBytes(named_header(b"Header ", name,
+                            &[b"\" must only contain numeric keys, \"", php_c_string(nested_name), b"\" found"].concat())));
+                    }
+                    let Value::String(nested_value) = nested_value else {
+                        return Err(MbError::TypeBytes(named_header(b"Header ", name,
+                            &[b"\" must only contain values of type string, ", php_value_name(nested_value), b" found"].concat())));
+                    };
+                    checked_header(&mut result, name, nested_value)?;
+                }
+            }
+            other => return Err(MbError::TypeBytes(named_header(b"Header ", name,
+                &[b"\" must be of type array|string, ", php_value_name(other), b" given"].concat()))),
+        }
+    }
+    Ok(result)
 }
+
+/// Appends one already typed header after checking its name and folded value.
+fn checked_header(headers: &mut Vec<(Vec<u8>, Vec<u8>)>, name: &[u8], value: &[u8]) -> Result<(), MbError> {
+    if name.iter().any(|byte| *byte < 33 || *byte > 126 || *byte == b':') {
+        return Err(MbError::ValueBytes(named_header(b"Header name ", name, b"\" contains invalid characters")));
+    }
+    let mut index = 0;
+    while index < value.len() {
+        match value[index] {
+            b'\r' if value.get(index + 1) != Some(&b'\n') => return Err(header_value_error(name,
+                b" contains CR character that is not allowed in the header")),
+            b'\r' if matches!(value.get(index + 2), Some(b' ' | b'\t')) => index += 3,
+            b'\r' => return Err(header_value_error(name,
+                b" contains CRLF characters that are used as a line separator and are not allowed in the header")),
+            b'\n' if matches!(value.get(index + 1), Some(b' ' | b'\t')) => index += 2,
+            b'\n' => return Err(header_value_error(name,
+                b" contains LF character that is not allowed in the header")),
+            0 => return Err(header_value_error(name,
+                b" contains NULL character that is not allowed in the header")),
+            _ => index += 1,
+        }
+    }
+    headers.push((name.to_vec(), value.to_vec()));
+    Ok(())
+}
+
+/// Identifies standard fields for which PHP forbids a list of repeated values.
+fn single_value_header(name: &[u8]) -> Option<&'static str> {
+    ["orig-date", "from", "sender", "reply-to", "cc", "bcc", "message-id", "references", "in-reply-to"]
+        .into_iter().find(|field| name.eq_ignore_ascii_case(field.as_bytes()))
+}
+
+/// Builds a binary-safe PHP error around a NUL-terminated displayed header name.
+fn named_header(prefix: &[u8], name: &[u8], suffix: &[u8]) -> Vec<u8> {
+    [prefix, b"\"", php_c_string(name), suffix].concat()
+}
+
+/// Formats an invalid header value without losing non-UTF-8 field-name bytes.
+fn header_value_error(name: &[u8], suffix: &[u8]) -> MbError {
+    MbError::ValueBytes(named_header(b"Header ", name, &[b"\"", suffix].concat()))
+}
+
+/// Matches the PHP value names used in structured-header TypeErrors.
+fn php_value_name(value: &Value) -> &'static [u8] {
+    match value {
+        Value::Null => b"null", Value::Bool(false) => b"false", Value::Bool(true) => b"true",
+        Value::Int(_) => b"int", Value::Float(_) => b"float", Value::String(_) => b"string",
+        Value::Array(_) => b"array", Value::Unsupported => b"object",
+    }
+}
+
+/// Stops `%s`-style PHP diagnostics at the first embedded NUL byte.
+fn php_c_string(value: &[u8]) -> &[u8] { value.split(|byte| *byte == 0).next().unwrap_or_default() }
 
 /// Emits PHP's path/string NUL diagnostic before any transport is opened.
 fn no_nul(bytes: &[u8], index: usize, name: &str) -> Result<(), MbError> {
@@ -238,7 +306,88 @@ fn split_once_byte(bytes: &[u8], delimiter: u8) -> Option<(&[u8], &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use elephc_builtin_contract::{RuntimeBuiltinId, mbstring_abi::MbArgV1};
+    use elephc_builtin_contract::{RuntimeBuiltinId, mbstring_abi::{MbArgV1, array::ArrayGraph}};
+
+    /// Prepares one structured header graph without opening a configured transport.
+    fn array_mail(graph: ArrayGraph) -> Result<PreparedMail, MbError> {
+        let encoded = graph.encode();
+        let slots = [MbArgV1::string(b"to@example.test"), MbArgV1::string(b"S"),
+            MbArgV1::string(b"body"), MbArgV1::array(&encoded)];
+        let args = unsafe { Arguments::new(RuntimeBuiltinId::MbSendMail, &slots) }.expect("mail arguments");
+        prepare(&args, &State::default())
+    }
+
+    /// Rejects each forbidden line break and NUL with PHP's field-specific ValueError.
+    #[test]
+    fn mail_array_header_values_match_php_validation() {
+        for (value, detail) in [
+            (b"hello\r\nBcc: attacker@example.test".as_slice(),
+                b"CRLF characters that are used as a line separator and are not allowed in the header".as_slice()),
+            (b"hello\nBcc: attacker@example.test", b"LF character that is not allowed in the header"),
+            (b"hello\rBcc: attacker@example.test", b"CR character that is not allowed in the header"),
+            (b"hello\0Bcc: attacker@example.test", b"NULL character that is not allowed in the header"),
+        ] {
+            let graph = ArrayGraph::new(0, vec![vec![(Key::String(b"Reply-To".to_vec()),
+                Value::String(value.to_vec()))]]).expect("header graph");
+            let expected = [b"Header \"Reply-To\" contains ".as_slice(), detail].concat();
+            assert_eq!(array_mail(graph).err(), Some(MbError::ValueBytes(expected)));
+        }
+        let graph = ArrayGraph::new(0, vec![vec![(Key::String(b"X-Test".to_vec()),
+            Value::String(b"hello\r\n folded\n\tmore".to_vec()))]]).expect("folded header");
+        assert!(array_mail(graph).expect("folded header").bytes.windows(b"X-Test: hello\r\n folded\n\tmore".len())
+            .any(|part| part == b"X-Test: hello\r\n folded\n\tmore"));
+    }
+
+    /// Rejects invalid names, numeric keys, reserved fields, and typed array members.
+    #[test]
+    fn mail_array_header_names_and_types_match_php_validation() {
+        for (key, value, error) in [
+            (Key::String(b"Bad Name".to_vec()), Value::String(b"value".to_vec()),
+                MbError::ValueBytes(b"Header name \"Bad Name\" contains invalid characters".to_vec())),
+            (Key::String(b"Bad:Name".to_vec()), Value::String(b"value".to_vec()),
+                MbError::ValueBytes(b"Header name \"Bad:Name\" contains invalid characters".to_vec())),
+            (Key::String(b"Bad\0Name".to_vec()), Value::String(b"value".to_vec()),
+                MbError::ValueBytes(b"Header name \"Bad\" contains invalid characters".to_vec())),
+            (Key::Int(42), Value::String(b"X-Test: value".to_vec()),
+                MbError::TypeBytes(b"Header name cannot be numeric, 42 given".to_vec())),
+            (Key::String(b"To".to_vec()), Value::String(b"other@example.test".to_vec()),
+                MbError::Value("The additional headers cannot contain the \"To\" header".into())),
+            (Key::String(b"SUBJECT".to_vec()), Value::String(b"new".to_vec()),
+                MbError::Value("The additional headers cannot contain the \"Subject\" header".into())),
+            (Key::String(b"X-Test".to_vec()), Value::Int(12),
+                MbError::TypeBytes(b"Header \"X-Test\" must be of type array|string, int given".to_vec())),
+            (Key::String(b"Cc".to_vec()), Value::Array(1),
+                MbError::TypeBytes(b"Header \"cc\" must be of type string, array given".to_vec())),
+        ] {
+            let graph = ArrayGraph::new(0, vec![vec![(key, value)], vec![]]).expect("header graph");
+            assert_eq!(array_mail(graph).err(), Some(error));
+        }
+        let invalid_key = ArrayGraph::new(0, vec![
+            vec![(Key::String(b"X-Test".to_vec()), Value::Array(1))],
+            vec![(Key::String(b"named".to_vec()), Value::String(b"one".to_vec()))],
+        ]).expect("nested header");
+        assert_eq!(array_mail(invalid_key).err(), Some(MbError::TypeBytes(
+            b"Header \"X-Test\" must only contain numeric keys, \"named\" found".to_vec())));
+        let invalid_value = ArrayGraph::new(0, vec![
+            vec![(Key::String(b"X-Test".to_vec()), Value::Array(1))],
+            vec![(Key::Int(0), Value::Int(12))],
+        ]).expect("nested header");
+        assert_eq!(array_mail(invalid_value).err(), Some(MbError::TypeBytes(
+            b"Header \"X-Test\" must only contain values of type string, int found".to_vec())));
+        let nested_injection = ArrayGraph::new(0, vec![
+            vec![(Key::String(b"X-Test".to_vec()), Value::Array(1))],
+            vec![(Key::Int(0), Value::String(b"one\r\nBcc: attacker@example.test".to_vec()))],
+        ]).expect("nested header");
+        assert_eq!(array_mail(nested_injection).err(), Some(MbError::ValueBytes(
+            b"Header \"X-Test\" contains CRLF characters that are used as a line separator and are not allowed in the header".to_vec())));
+        let repeated = ArrayGraph::new(0, vec![
+            vec![(Key::String(b"X-Test".to_vec()), Value::Array(1))],
+            vec![(Key::Int(0), Value::String(b"one".to_vec())),
+                (Key::Int(1), Value::String(b"two".to_vec()))],
+        ]).expect("nested header");
+        assert!(array_mail(repeated).expect("repeated header").bytes.windows(b"X-Test: one\r\nX-Test: two\r\n".len())
+            .any(|part| part == b"X-Test: one\r\nX-Test: two\r\n"));
+    }
 
     /// Matches PHP's neutral-language MIME bytes for non-ASCII subject and body text.
     #[test]

@@ -22,6 +22,25 @@ catch (ValueError $error) { echo $error->getMessage(); }
     }
 }
 
+/// Rejects array header injection, malformed names, and numeric keys before transport dispatch.
+#[test]
+fn test_mbstring_send_mail_validates_array_headers() {
+    let body = r#"
+try { mb_send_mail("to@example.test", "S", "body", ["Reply-To" => "hello\r\nBcc: attacker@example.test"]); }
+catch (Throwable $error) { echo get_class($error), ":", $error->getMessage(), "\n"; }
+try { mb_send_mail("to@example.test", "S", "body", ["Bad Name" => "value"]); }
+catch (Throwable $error) { echo get_class($error), ":", $error->getMessage(), "\n"; }
+try { mb_send_mail("to@example.test", "S", "body", [42 => "X-Test: value"]); }
+catch (Throwable $error) { echo get_class($error), ":", $error->getMessage(), "\n"; }
+"#;
+    let expected = "ValueError:Header \"Reply-To\" contains CRLF characters that are used as a line separator and are not allowed in the header\n\
+ValueError:Header name \"Bad Name\" contains invalid characters\n\
+TypeError:Header name cannot be numeric, 42 given\n";
+    for eval in [false, true] {
+        assert_eq!(compile_and_run(&program(body, eval)), expected, "eval={eval}");
+    }
+}
+
 /// Wraps the same PHP body as a native program or a runtime-unknown eval source.
 fn program(body: &str, eval: bool) -> String {
     if !eval { return format!("<?php {body}"); }

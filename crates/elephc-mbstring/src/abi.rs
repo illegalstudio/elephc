@@ -127,6 +127,7 @@ impl Outcome {
         let (kind, bytes) = match error {
             MbError::Value(message) => (RESULT_VALUE_ERROR, message.into_bytes()),
             MbError::ValueBytes(message) => (RESULT_VALUE_ERROR, message),
+            MbError::TypeBytes(message) => (RESULT_TYPE_ERROR, message),
             MbError::Runtime(message) => (RESULT_ERROR, message.into_bytes()),
         };
         Self { bytes, ..Self::empty(kind) }
