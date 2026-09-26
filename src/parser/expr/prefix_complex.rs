@@ -14,7 +14,7 @@ use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
 use crate::parser::ast::{
-    CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
+    CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr,
 };
 use crate::parser::stmt::{
     looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_expr,
@@ -378,6 +378,7 @@ fn collect_arrow_expr_captures(
         }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. }
         | ExprKind::StaticMethodCall { args, .. } => {
             for arg in args {
@@ -648,6 +649,17 @@ pub(super) fn parse_function_call_or_callable(
     }
 }
 
+/// Returns true for the construct-like names whose `<T>` is part of their own grammar.
+///
+/// `buffer_new<int>(8)` and `ptr_cast<Foo>($p)` take a type argument the way `new` takes a class
+/// name: it belongs to the construct and produces a dedicated AST node, not an instantiation of
+/// a template. They are matched unqualified because that is how they are declared — neither is
+/// namespaced, and a userland `App\buffer_new` is an ordinary function.
+fn has_dedicated_type_argument_grammar(name: &Name) -> bool {
+    name.parts.len() == 1
+        && matches!(name.parts[0].as_str(), "buffer_new" | "ptr_cast")
+}
+
 /// Parses a named expression that could be a constant reference, function call, buffer_new<T>, ptr_cast<T>, or static/class method access.
 /// Disambiguates based on the token that follows the name: `(` for calls, `<T>` for buffer_new/ptr_cast, `::` for static access.
 /// On `new` after a name, delegates to `parse_new_object`; otherwise returns a `ConstRef` if no suffix matches.
@@ -657,6 +669,44 @@ pub(super) fn parse_named_expr(
     span: Span,
 ) -> Result<Expr, CompileError> {
     let name = parse_name(tokens, pos, span, "Expected name")?;
+    // `Box<int>::of(1)` — static access through a generic class. The type arguments are read
+    // here rather than where `::` is handled, because `Name<...>` has to be told apart from a
+    // comparison chain FIRST: `::` cannot follow a comparison, so the `::` after a balanced
+    // argument list is what makes this unambiguous. Without the lookahead the expression parser
+    // reads `Box < int > ::` as two comparisons and fails on a stray `::` several tokens later.
+    let mut static_type_args: Vec<TypeExpr> = Vec::new();
+    // `identity<int>(41)` — a call that WRITES its type arguments instead of leaving them to
+    // inference. Disambiguated exactly like the `::` form above: a balanced argument list
+    // followed by `(`. The comparison reading of the same tokens is `(identity < int) > (41)`,
+    // which php-src rejects outright — `<` is non-associative in PHP 8 — so nothing a PHP
+    // program could have meant is claimed here.
+    //
+    // The arguments go into the NAME, because the instantiated name is this compiler's encoding
+    // for an instantiation everywhere else too (`Box<int>` is a real class). The checker splits
+    // it back with `generics::instantiated_type`, so the two spellings cannot drift.
+    let mut name = name;
+    if let Some(after_args) = crate::parser::stmt::type_arguments_end(tokens, *pos) {
+        match tokens.get(after_args).map(|(token, _)| token) {
+            Some(&Token::DoubleColon) => {
+                let (_, args) =
+                    crate::parser::stmt::parse_inherited_name_at(tokens, pos, span, &name)?;
+                static_type_args = args;
+            }
+            // `buffer_new<int>(8)` and `ptr_cast<Foo>($p)` are the same token shape with their
+            // own grammar and their own AST nodes, parsed a few lines below. Their type argument
+            // is part of the CONSTRUCT, not an instantiation of a template, so this branch must
+            // leave them alone.
+            Some(&Token::LParen) if !has_dedicated_type_argument_grammar(&name) => {
+                let (_, args) =
+                    crate::parser::stmt::parse_inherited_name_at(tokens, pos, span, &name)?;
+                if !args.is_empty() {
+                    name = name.with_type_arguments(&args);
+                }
+            }
+            _ => {}
+        }
+    }
+    let name = name;
     // PHP's legacy `array(...)` construct is an array literal, not a call:
     // its elements may use `key => value` pairs that call arguments reject.
     if name.parts.len() == 1
@@ -757,6 +807,9 @@ pub(super) fn parse_named_expr(
         parse_function_call_or_callable(tokens, pos, span, name)
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
         *pos += 1;
+        // Built once so every form below — method call, property, constant, `::class` — agrees
+        // about whether this receiver is generic.
+        let receiver = static_receiver(name, static_type_args);
         let member = match tokens.get(*pos).map(|(token, _)| token) {
             Some(Token::Variable(property)) => {
                 let property = property.clone();
@@ -774,7 +827,7 @@ pub(super) fn parse_named_expr(
                     )?;
                     let receiver = Expr::new(
                         ExprKind::ClassConstant {
-                            receiver: StaticReceiver::Named(name),
+                            receiver: receiver.clone(),
                         },
                         span,
                     );
@@ -792,7 +845,7 @@ pub(super) fn parse_named_expr(
                 }
                 return Ok(Expr::new(
                     ExprKind::StaticPropertyAccess {
-                        receiver: StaticReceiver::Named(name),
+                        receiver: receiver.clone(),
                         property,
                     },
                     span,
@@ -802,7 +855,7 @@ pub(super) fn parse_named_expr(
                 *pos += 1;
                 return Ok(Expr::new(
                     ExprKind::ClassConstant {
-                        receiver: StaticReceiver::Named(name),
+                        receiver: receiver.clone(),
                     },
                     span,
                 ));
@@ -826,7 +879,7 @@ pub(super) fn parse_named_expr(
             if parse_first_class_callable_parens(tokens, pos)? {
                 Ok(Expr::new(
                     ExprKind::FirstClassCallable(CallableTarget::StaticMethod {
-                        receiver: StaticReceiver::Named(name),
+                        receiver: receiver.clone(),
                         method: member,
                     }),
                     span,
@@ -836,7 +889,7 @@ pub(super) fn parse_named_expr(
                 let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 Ok(Expr::new(
                     ExprKind::StaticMethodCall {
-                        receiver: StaticReceiver::Named(name),
+                        receiver: receiver.clone(),
                         method: member,
                         args,
                     },
@@ -849,7 +902,7 @@ pub(super) fn parse_named_expr(
             // type checker, which falls back from enum lookup to class const.
             Ok(Expr::new(
                 ExprKind::ScopedConstantAccess {
-                    receiver: StaticReceiver::Named(name),
+                    receiver: receiver.clone(),
                     name: member,
                 },
                 span,
@@ -935,15 +988,54 @@ pub(super) fn parse_new_object(
         ));
     }
 
-    let class_name = parse_name(tokens, pos, span, "Expected class name after 'new'")?;
+    let (class_name, type_args) = crate::parser::stmt::parse_inherited_name(
+        tokens,
+        pos,
+        span,
+        "Expected class name after 'new'",
+    )?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
         reject_parenthesis_free_new_postfix(tokens, *pos)?;
-        return Ok(Expr::new(ExprKind::NewObject { class_name, args: Vec::new() }, span));
+        return Ok(Expr::new(
+            new_object_kind(class_name, type_args, Vec::new()),
+            span,
+        ));
     }
     *pos += 1;
     let args = parse_args(tokens, pos, span)?;
     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
-    Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
+    Ok(Expr::new(new_object_kind(class_name, type_args, args), span))
+}
+
+/// Builds a static receiver, generic or not.
+///
+/// Written once so `Box<int>::of()`, `Box<int>::COUNT` and `Box<int>::class` cannot disagree
+/// about when a receiver carries type arguments.
+fn static_receiver(name: Name, type_args: Vec<TypeExpr>) -> StaticReceiver {
+    if type_args.is_empty() {
+        return StaticReceiver::Named(name);
+    }
+    StaticReceiver::Generic(TypeExpr::GenericClass {
+        name,
+        args: type_args,
+    })
+}
+
+/// Builds the construction node for `new Name(...)`, generic or not.
+///
+/// Written once so the parenthesis-free form and the ordinary form cannot disagree about when a
+/// construction is generic.
+fn new_object_kind(class_name: Name, type_args: Vec<TypeExpr>, args: Vec<Expr>) -> ExprKind {
+    if type_args.is_empty() {
+        return ExprKind::NewObject { class_name, args };
+    }
+    ExprKind::NewGeneric {
+        class_type: TypeExpr::GenericClass {
+            name: class_name,
+            args: type_args,
+        },
+        args,
+    }
 }
 
 /// Rejects postfix access that would otherwise bind to `new Foo` without constructor parentheses.

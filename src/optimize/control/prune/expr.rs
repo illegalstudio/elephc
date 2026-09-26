@@ -169,6 +169,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             class_name,
             args: args.into_iter().map(prune_expr).collect(),
         },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type,
+            args: args.into_iter().map(prune_expr).collect(),
+        },
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
             name_expr: Box::new(prune_expr(*name_expr)),
             args: args.into_iter().map(prune_expr).collect(),
@@ -286,6 +290,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
 fn prune_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        InstanceOfTarget::Generic(class_type) => InstanceOfTarget::Generic(class_type),
         InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(prune_expr(*expr))),
     }
 }

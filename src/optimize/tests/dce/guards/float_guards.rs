@@ -18,6 +18,7 @@ fn eliminate_nested_float_guard(outer: Expr, inner: Expr) -> Vec<Stmt> {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "probe".into(),
+            type_params: Vec::new(),
             params: vec![("x".to_string(), None, None, false)],
             param_attributes: vec![Vec::new()],
             variadic: None,
@@ -91,6 +92,7 @@ fn test_signed_zero_exclusion_guard_prunes_impossible_branch() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "probe".into(),
+            type_params: Vec::new(),
             params: vec![("x".to_string(), None, None, false)],
             param_attributes: vec![Vec::new()],
             variadic: None,

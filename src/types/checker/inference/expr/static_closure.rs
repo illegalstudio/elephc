@@ -215,6 +215,7 @@ fn callable_target_uses_this(target: &CallableTarget) -> bool {
 fn instanceof_target_uses_this(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_uses_this(expr),
     }
 }
@@ -518,6 +519,7 @@ fn instanceof_target_must_not_use_this(
 ) -> Result<(), CompileError> {
     match target {
         InstanceOfTarget::Name(_) => Ok(()),
+        InstanceOfTarget::Generic(_) => Ok(()),
         InstanceOfTarget::Expr(expr) => expr_must_not_use_this(expr, span),
     }
 }

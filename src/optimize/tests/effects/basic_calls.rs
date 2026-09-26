@@ -294,6 +294,7 @@ fn test_program_function_effects_recognize_pure_user_functions() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "len3".to_string(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -329,6 +330,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: "boom".to_string(),
+                type_params: Vec::new(),
                 params: Vec::new(),
                 param_attributes: Vec::new(),
                 variadic: None,
@@ -352,6 +354,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: "wrapper".to_string(),
+                type_params: Vec::new(),
                 params: Vec::new(),
                 param_attributes: Vec::new(),
                 variadic: None,

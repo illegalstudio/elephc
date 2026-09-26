@@ -158,6 +158,7 @@ fn synthesise_alias_decl(orig: &str, alias: &str, span: crate::span::Span) -> St
 
     let class_stmt = Stmt::new(
         StmtKind::ClassDecl {
+            generics: None,
             name: alias_local,
             extends: Some(extends_name),
             implements: Vec::new(),

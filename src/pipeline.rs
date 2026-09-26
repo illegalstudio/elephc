@@ -540,8 +540,12 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
     let check_options = types::CheckOptions { strict_locals };
-    let mut check_result = match types::check_with_target_and_options(&ast, target, check_options) {
-        Ok(result) => result,
+    // Type checking runs to a generic-instantiation fixpoint, so every reachable template has
+    // become an ordinary monomorphic declaration before anything downstream sees the program.
+    let (ast, mut check_result) = match crate::generics::monomorphize(ast, |program, bounds| {
+        types::check_with_target_and_options(program, target, check_options, bounds)
+    }) {
+        Ok(pair) => pair,
         Err(e) => {
             crate::progress::clear();
             errors::report(&e);
@@ -631,7 +635,14 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("decl-reach");
     let phase_started = Instant::now();
-    let exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
+    let mut exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
+    // A generic instantiation is reachable by construction — it exists only because a call
+    // site asked for it — but no call site NAMES it: the source still says `identity(5)` and
+    // lowering is what resolves that to `identity<int>`. Without this the pruner drops every
+    // instantiation as unreferenced and lowering finds nothing to call.
+    exported_function_names.extend(crate::generics::instantiation_roots(
+        &check_result.requested_instantiations,
+    ));
     let ast = optimize::prune_unreachable_declarations(
         ast,
         &mut check_result,

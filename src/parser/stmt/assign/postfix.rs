@@ -604,6 +604,7 @@ pub(crate) fn update_index_needs_snapshot(index: &Expr) -> bool {
 fn can_replay_instanceof_target(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => true,
+        InstanceOfTarget::Generic(_) => true,
         InstanceOfTarget::Expr(expr) => can_replay_assignment_target(expr),
     }
 }

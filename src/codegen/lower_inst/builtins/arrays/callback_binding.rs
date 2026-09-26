@@ -118,7 +118,6 @@ pub(super) fn adapt_direct_callback_visible_args(
     }
 
     let wrapper_label = ctx.next_label("direct_callback_arg_adapter");
-    let done_label = ctx.next_label("direct_callback_after_arg_adapter");
     let wrapper = DeferredCallbackWrapper {
         label: wrapper_label.clone(),
         visible_arg_types: visible_arg_types.to_vec(),
@@ -128,9 +127,10 @@ pub(super) fn adapt_direct_callback_visible_args(
         descriptor_return_type: None,
         invocation_scope_class_id: ctx.lexical_class_id(),
     };
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`.
+    let scope = ctx.emitter.begin_out_of_line();
     crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     Ok((
         wrapper_label,
         Some(StaticCallbackEnvSource::FunctionLabel(target_label)),

@@ -82,7 +82,7 @@ fn test_error_closure_ref_param_requires_variable() {
 fn test_error_function_typed_param_rejects_wrong_argument() {
     expect_error(
         "<?php function foo(int $x) { echo $x; } foo(\"hello\");",
-        "Function 'foo' parameter $x expects Int, got Str",
+        "Function 'foo' parameter $x expects int, got string — PHP throws `TypeError` for the non-numeric string \"hello\" at an `int` parameter",
     );
 }
 
@@ -91,7 +91,7 @@ fn test_error_function_typed_param_rejects_wrong_argument() {
 fn test_error_generic_object_parameter_rejects_int() {
     expect_error(
         "<?php function require_object(object $value): void {} require_object(1);",
-        "expects Object(\"\"), got Int",
+        "Function 'require_object' parameter $value expects object, got int",
     );
 }
 
@@ -100,7 +100,7 @@ fn test_error_generic_object_parameter_rejects_int() {
 fn test_error_generic_object_parameter_rejects_string() {
     expect_error(
         "<?php function require_object(object $value): void {} require_object(\"no\");",
-        "expects Object(\"\"), got Str",
+        "Function 'require_object' parameter $value expects object, got string",
     );
 }
 
@@ -109,7 +109,7 @@ fn test_error_generic_object_parameter_rejects_string() {
 fn test_error_generic_object_parameter_rejects_array() {
     expect_error(
         "<?php function require_object(object $value): void {} require_object([]);",
-        "expects Object(\"\"), got Array",
+        "Function 'require_object' parameter $value expects object, got array<never>",
     );
 }
 
@@ -169,7 +169,7 @@ fn test_error_user_constants_are_case_sensitive() {
 fn test_error_typed_default_parameter_rejects_mismatched_default() {
     expect_error(
         "<?php function foo(int $x = \"hello\") { echo $x; }",
-        "Function 'foo' parameter $x expects Int, got Str",
+        "Function 'foo' parameter $x expects int, got string",
     );
 }
 
@@ -402,7 +402,7 @@ fn test_error_named_arguments_reject_unknown_extern_parameter() {
 fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
     expect_error(
         "<?php function foo(): string { return 1; }",
-        "Function 'foo' return type expects Str, got Int",
+        "Function 'foo' return type expects string, got int",
     );
 }
 
@@ -412,7 +412,7 @@ fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
 fn test_error_function_declared_return_type_rejects_mismatch_via_first_class_callable() {
     expect_error(
         "<?php function foo(): string { return 1; } $f = foo(...);",
-        "Function 'foo' return type expects Str, got Int",
+        "Function 'foo' return type expects string, got int",
     );
 }
 
@@ -472,7 +472,7 @@ fn test_error_method_declared_return_type_requires_return_value() {
 fn test_error_typed_closure_param_rejects_wrong_argument() {
     expect_error(
         "<?php $f = function (int $x) { echo $x; }; $f(\"hello\");",
-        "callable $f parameter $x expects Int, got Str",
+        "callable $f parameter $x expects int, got string",
     );
 }
 
@@ -482,7 +482,7 @@ fn test_error_typed_closure_param_rejects_wrong_argument() {
 fn test_error_typed_first_class_callable_rejects_wrong_argument() {
     expect_error(
         "<?php function foo(int $x) { echo $x; } $f = foo(...); $f(\"hello\");",
-        "callable $f parameter $x expects Int, got Str",
+        "callable $f parameter $x expects int, got string",
     );
 }
 
@@ -508,7 +508,7 @@ fn test_typed_variadic_parameter_is_accepted() {
 fn test_error_typed_variadic_rejects_wrong_argument_type() {
     expect_error(
         "<?php function sum(int ...$nums): int { return array_sum($nums); } sum(\"a\", \"b\");",
-        "variadic parameter $nums expects Int, got Str",
+        "Function 'sum' variadic parameter $nums expects int, got string",
     );
 }
 
@@ -517,7 +517,7 @@ fn test_error_typed_variadic_rejects_wrong_argument_type() {
 fn test_error_typed_variadic_method_rejects_wrong_argument_type() {
     expect_error(
         "<?php class C { public function add(int ...$n): int { return count($n); } } $c = new C(); $c->add(\"x\");",
-        "variadic parameter $n expects Int, got Str",
+        "Method C::add variadic parameter $n expects int, got string",
     );
 }
 

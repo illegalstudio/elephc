@@ -112,6 +112,14 @@ impl Checker {
                     if method.is_abstract {
                         continue;
                     }
+                    // A generic method is a TEMPLATE: its parameter and return types name type
+                    // parameters only a call site can bind, so checking its body here reports
+                    // `Unknown type: U`. Its instantiations are ordinary methods on this class
+                    // and this same loop checks them. Mirrors the generic-function skip in
+                    // `resolve_unchecked_functions`.
+                    if !method.type_params.is_empty() {
+                        continue;
+                    }
                     let method_key = php_symbol_key(&method.name);
                     let mut method_env = Self::seed_method_env();
                     if !method.is_static {
@@ -173,6 +181,19 @@ impl Checker {
                         } else {
                             ty
                         };
+                        // A DECLARED `callable(A): B` parameter also types its own invocation.
+                        // Methods never populated this channel at all, so `$f($this->value)`
+                        // inside a generic method answered `mixed` and the value it produced was
+                        // boxed back into a field the instantiation had pinned — monomorphic on
+                        // the outside, erased on the inside.
+                        if let Some(sig) = type_ann
+                            .as_ref()
+                            .and_then(|t| self.declared_callable_signature(t, method.span))
+                        {
+                            self.closure_return_types
+                                .insert(pname.clone(), sig.return_type.clone());
+                            self.callable_sigs.insert(pname.clone(), sig);
+                        }
                         method_env.insert(pname.clone(), ty);
                     }
                     if let Some(variadic_name) = &method.variadic {

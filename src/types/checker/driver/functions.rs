@@ -59,6 +59,7 @@ impl Checker {
             }
             if let StmtKind::FunctionDecl {
                 name,
+                type_params,
                 params,
                 param_attributes,
                 variadic,
@@ -106,6 +107,7 @@ impl Checker {
                 self.fn_decls.insert(
                     name.clone(),
                     FnDecl {
+                        type_params: type_params.clone(),
                         params: param_names,
                         param_types: param_type_anns,
                         param_attributes: param_attributes.clone(),
@@ -164,9 +166,15 @@ impl Checker {
     pub(super) fn resolve_unchecked_functions(&mut self, errors: &mut Vec<CompileError>) {
         let unchecked: Vec<String> = self
             .fn_decls
-            .keys()
-            .filter(|name| !self.functions.contains_key(*name))
-            .cloned()
+            .iter()
+            // A TEMPLATE has no signature of its own: its parameter types name type parameters
+            // that only a call site can bind, so resolving it here would check the body against
+            // `T` and report `Unknown type: T`. Its instantiations are ordinary entries in
+            // `fn_decls` and are resolved by this same loop.
+            .filter(|(name, decl)| {
+                decl.type_params.is_empty() && !self.functions.contains_key(*name)
+            })
+            .map(|(name, _)| name.clone())
             .collect();
         for name in unchecked {
             if let Some(decl) = self.fn_decls.get(&name).cloned() {

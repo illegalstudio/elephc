@@ -415,6 +415,7 @@ return $o->setMicrosecond($umicro);
 pub(super) fn datetime_create_from_format(class_name: &str) -> ClassMethod {
     let body = super::bodies::create_from_format(class_name);
     ClassMethod {
+        type_params: Vec::new(),
         name: "createFromFormat".to_string(),
         visibility: Visibility::Public,
         is_static: true,

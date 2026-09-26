@@ -17,6 +17,7 @@ pub(super) fn builtin_reflection_class_array_method(
 ) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -80,6 +81,7 @@ pub(super) fn builtin_reflection_class_filtered_array_method(
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -240,6 +242,7 @@ pub(super) fn builtin_reflection_class_get_member_method(
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -287,6 +290,7 @@ pub(super) fn builtin_reflection_class_nullable_object_method(
 ) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -323,6 +327,7 @@ pub(super) fn builtin_reflection_class_object_method(
 ) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -355,6 +360,7 @@ pub(super) fn builtin_reflection_class_object_method(
 pub(super) fn builtin_reflection_class_mixed_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -387,6 +393,7 @@ pub(super) fn builtin_reflection_class_mixed_method(method_name: &str, property:
 pub(super) fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,

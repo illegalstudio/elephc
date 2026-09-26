@@ -267,7 +267,16 @@ pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Opti
 
 /// Returns the PHP source-visible receiver label for ReflectionParameter constant defaults.
 pub(super) fn reflection_static_receiver_label(receiver: &StaticReceiver) -> String {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => name.as_str().trim_start_matches('\\').to_string(),
         StaticReceiver::Self_ => "self".to_string(),
         StaticReceiver::Static => "static".to_string(),

@@ -120,6 +120,12 @@ fn dummy_check_result() -> CheckResult {
     );
 
     CheckResult {
+        requested_instantiations: Vec::new(),
+        requested_class_instantiations: Vec::new(),
+        requested_method_instantiations: Vec::new(),
+        generic_method_sites: std::collections::HashMap::new(),
+        generic_new_sites: Default::default(),
+        generic_call_sites: HashMap::new(),
         global_env: HashMap::new(),
         functions,
         function_attribute_names: HashMap::new(),
@@ -458,7 +464,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::Synthetic(vec![stmt(StmtKind::Echo(str_lit("synthetic")))])),
         stmt(StmtKind::Try {
             try_body: vec![stmt(StmtKind::Echo(str_lit("try")))],
-            catches: vec![CatchClause { exception_types: vec![name("Exception")], variable: Some("e".to_string()), body: vec![stmt(StmtKind::Echo(str_lit("catch")))] }],
+            catches: vec![CatchClause { exception_type_args: Vec::new(), exception_types: vec![name("Exception")], variable: Some("e".to_string()), body: vec![stmt(StmtKind::Echo(str_lit("catch")))] }],
             finally_body: Some(vec![stmt(StmtKind::Echo(str_lit("finally")))]),
         }),
         stmt(StmtKind::ExprStmt(int(0))),
@@ -469,6 +475,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::UseDecl { imports: vec![UseItem { kind: UseKind::Const, name: name("CONST_NAME"), alias: "CONST_NAME".to_string() }] }),
         stmt(StmtKind::FunctionDecl {
             name: "f".to_string(),
+            type_params: Vec::new(),
             params: vec![("x".to_string(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -486,6 +493,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::Global { vars: vec!["g".to_string()] }),
         stmt(StmtKind::StaticVar { name: "sv".to_string(), init: int(1) }),
         stmt(StmtKind::ClassDecl {
+            generics: None,
             name: "C".to_string(),
             extends: None,
             implements: Vec::new(),
@@ -497,9 +505,9 @@ fn lowers_every_stmt_variant_smoke() {
             methods: vec![method.clone(), static_method.clone()],
             constants: vec![class_const.clone()],
         }),
-        stmt(StmtKind::EnumDecl { name: "E".to_string(), backing_type: Some(TypeExpr::Int), cases: vec![EnumCaseDecl { name: "A".to_string(), value: Some(int(1)), span: sp(), attributes: Vec::new() }], implements: Vec::new(), trait_uses: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
+        stmt(StmtKind::EnumDecl { name: "E".to_string(), generics: None, backing_type: Some(TypeExpr::Int), cases: vec![EnumCaseDecl { name: "A".to_string(), value: Some(int(1)), span: sp(), attributes: Vec::new() }], implements: Vec::new(), trait_uses: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
         stmt(StmtKind::PackedClassDecl { name: "P".to_string(), fields: vec![PackedField { name: "x".to_string(), type_expr: TypeExpr::Int, span: sp() }] }),
-        stmt(StmtKind::InterfaceDecl { name: "I".to_string(), extends: Vec::new(), properties: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
+        stmt(StmtKind::InterfaceDecl { generics: None, name: "I".to_string(), extends: Vec::new(), properties: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
         stmt(StmtKind::TraitDecl { name: "T".to_string(), trait_uses: Vec::new(), properties: Vec::new(), methods: vec![method], constants: vec![class_const] }),
         stmt(StmtKind::PropertyAssign { object: Box::new(object.clone()), property: "p".to_string(), value: int(1) }),
         stmt(StmtKind::StaticPropertyAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), value: int(1) }),
@@ -521,6 +529,7 @@ fn lowers_every_stmt_variant_smoke() {
 /// Constructs a concrete class method declaration for synthetic class-like AST nodes.
 fn class_method(name: &str, is_static: bool) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static,

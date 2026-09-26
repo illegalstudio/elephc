@@ -157,7 +157,15 @@ fn normalize_signature_default_receivers(
         else {
             continue;
         };
-        let resolved = match receiver {
+        // This site REWRITES the receiver, so the normalized copy is a separate binding: a
+        // generic receiver keeps its type arguments, and only the relative keywords below are
+        // replaced. A receiver written `Box<int>::of()` names `Box`, which is already the
+        // `Named(_) => None` case — nothing to substitute.
+        let written = receiver.written_class_receiver();
+        let resolved = match &written {
+            StaticReceiver::Generic(_) => unreachable!(
+                "written_class_receiver leaves no generic receiver behind"
+            ),
             StaticReceiver::Named(_) => None,
             StaticReceiver::Self_ | StaticReceiver::Static => Some(owner_class),
             StaticReceiver::Parent => parent_class,

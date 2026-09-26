@@ -213,6 +213,7 @@ return false;
 pub(super) fn datetime_tz_name_from_abbr() -> ClassMethod {
     let body = super::bodies::tz_name_from_abbr();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_timezone_name_from_abbr".to_string(),
         visibility: Visibility::Public,
         is_static: true,

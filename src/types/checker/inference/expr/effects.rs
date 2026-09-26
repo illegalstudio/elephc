@@ -17,6 +17,26 @@ use super::super::super::null_probe;
 use super::super::super::Checker;
 use super::{merge_match_arm_result_type, merge_null_coalesce_result_type};
 
+/// Returns what a local holds after `++`/`--`, or `None` when the update cannot retype it.
+///
+/// An `int` becomes `int|float`, because PHP promotes at the boundary — `PHP_INT_MAX++` is
+/// `float(9.223372036854776E+18)` in php-src and in elephc — and NOT `mixed`, which is what this
+/// used to say. The difference is not cosmetic: `mixed` is the top type, so every value derived
+/// from a counter became `mixed` too, and `for ($i = 0; …) { $out[] = $i; }` could not even be
+/// DESCRIBED as a list of numbers. `int|float` keeps the same boxed storage (`codegen_repr` maps
+/// both to `Mixed`) while saying something true, which is what a diagnostic and a downstream
+/// inference can both use.
+///
+/// A `string` stays `mixed`: `"9"++` is `int(10)`, `"a"++` is `"b"` and `""++` is `"1"`, so the
+/// result genuinely spans three types and none of them is knowable here.
+fn incremented_local_type(current: Option<&PhpType>) -> Option<PhpType> {
+    match current {
+        Some(PhpType::Int) => Some(PhpType::Union(vec![PhpType::Int, PhpType::Float])),
+        Some(PhpType::Str) => Some(PhpType::Mixed),
+        _ => None,
+    }
+}
+
 impl Checker {
     /// Infers the type of an expression while tracking assignment effects through the environment.
     ///
@@ -82,10 +102,8 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                // `int` can overflow to float and `string` can become int/float
-                // (`"9"++` is `int(10)`), so the local is dynamically typed afterwards.
-                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
-                    env.insert(name.clone(), PhpType::Mixed);
+                if let Some(updated) = incremented_local_type(old_ty.as_ref()) {
+                    env.insert(name.clone(), updated);
                 }
                 Ok(result_ty)
             }
@@ -94,8 +112,8 @@ impl Checker {
                 let result_ty = self.infer_type(expr, env)?;
                 // Same retype as the pre-form: only the RESULT differs, and it was already
                 // computed above against the type the local held before the update.
-                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
-                    env.insert(name.clone(), PhpType::Mixed);
+                if let Some(updated) = incremented_local_type(old_ty.as_ref()) {
+                    env.insert(name.clone(), updated);
                 }
                 Ok(result_ty)
             }

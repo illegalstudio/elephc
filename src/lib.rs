@@ -30,7 +30,11 @@ mod eval_aot;
 /// `#[Export]` attribute scan for cdylib emission.
 pub mod exports;
 /// PHP variadic-argument introspection (`func_num_args`/`func_get_args`/`func_get_arg`) desugaring.
+/// PHPStan/Psalm generic annotations read out of doc comments.
+pub mod docblock;
 pub mod func_args;
+/// Monomorphization support for generic function declarations.
+pub mod generics;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 mod progress;

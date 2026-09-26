@@ -36,12 +36,39 @@ pub(super) fn resolve_type_expr(
         TypeExpr::Void => TypeExpr::Void,
         TypeExpr::Never => TypeExpr::Never,
         TypeExpr::Iterable => TypeExpr::Iterable,
+        // A signature NAMES classes, and they resolve through the same namespace and imports as
+        // any other mention: `callable(User): Order` inside a namespace means that namespace's
+        // `User`, not the global one.
+        TypeExpr::CallableSig { params, ret } => TypeExpr::CallableSig {
+            params: params
+                .iter()
+                .map(|param| resolve_type_expr(param, current_namespace, imports, symbols))
+                .collect(),
+            ret: Box::new(resolve_type_expr(ret, current_namespace, imports, symbols)),
+        },
         TypeExpr::Array(inner) => TypeExpr::Array(Box::new(resolve_type_expr(
             inner,
             current_namespace,
             imports,
             symbols,
         ))),
+        // Both halves are resolved: `array<string, Foo>` names a class in its VALUE, and a
+        // key may name an enum or a class constant's type, so resolving only one would leave
+        // an unqualified name for a later pass to mistake for a global.
+        TypeExpr::AssocArray { key, value } => TypeExpr::AssocArray {
+            key: Box::new(resolve_type_expr(
+                key,
+                current_namespace,
+                imports,
+                symbols,
+            )),
+            value: Box::new(resolve_type_expr(
+                value,
+                current_namespace,
+                imports,
+                symbols,
+            )),
+        },
         TypeExpr::Buffer(inner) => {
             TypeExpr::Buffer(Box::new(resolve_type_expr(
                 inner,
@@ -84,6 +111,22 @@ pub(super) fn resolve_type_expr(
                 ))))
             }
         }
+        // The HEAD is a class name and the ARGUMENTS are types: `Repository<User>` in a
+        // namespace names that namespace's `Repository` holding that namespace's `User`, and
+        // resolving only one of the two would instantiate a template under a name no
+        // declaration matches.
+        TypeExpr::GenericClass { name, args } => TypeExpr::GenericClass {
+            name: resolved_name(resolve_special_or_class_name(
+                name,
+                current_namespace,
+                imports,
+                symbols,
+            )),
+            args: args
+                .iter()
+                .map(|arg| resolve_type_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
         TypeExpr::Named(name) => {
             let raw = name.as_str();
             if matches!(raw, "array" | "mixed" | "callable" | "void")

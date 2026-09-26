@@ -871,7 +871,16 @@ fn resolve_static_receiver_class(
     receiver: &StaticReceiver,
     span: crate::span::Span,
 ) -> Result<String, CompileError> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => resolve_class_name(checker, name.as_str())
             .map(str::to_string)
             .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", name))),

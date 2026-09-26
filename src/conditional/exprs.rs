@@ -172,6 +172,13 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
                 .map(|arg| rewrite_expr(arg, defines))
                 .collect(),
         },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type,
+            args: args
+                .into_iter()
+                .map(|arg| rewrite_expr(arg, defines))
+                .collect(),
+        },
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(rewrite_expr(*object, defines)),
             property,

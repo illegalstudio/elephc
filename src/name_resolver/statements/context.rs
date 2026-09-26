@@ -61,6 +61,12 @@ impl<'a> ResolveContext<'a> {
         catch_clause: &CatchClause,
     ) -> Result<CatchClause, CompileError> {
         Ok(CatchClause {
+            // The type arguments name classes and must canonicalize with everything else.
+            exception_type_args: catch_clause
+                .exception_type_args
+                .iter()
+                .map(|args| args.iter().map(|ty| self.type_expr(ty)).collect())
+                .collect(),
             exception_types: catch_clause
                 .exception_types
                 .iter()
@@ -88,6 +94,13 @@ impl<'a> ResolveContext<'a> {
         match receiver {
             StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
                 resolve_special_or_class_name(name, self.namespace, self.imports, self.symbols),
+            )),
+            // A generic receiver's type arguments are class names too.
+            StaticReceiver::Generic(class_type) => StaticReceiver::Generic(resolve_type_expr(
+                class_type,
+                self.namespace,
+                self.imports,
+                self.symbols,
             )),
             _ => receiver.clone(),
         }

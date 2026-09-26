@@ -123,6 +123,43 @@ impl Checker {
             self.functions_called_directly.insert(canonical_name.clone());
         }
 
+        // A generic declaration is a template and never has a signature of its own. Resolve
+        // the call against the instantiation its arguments select, creating that instantiation
+        // on first use; from there it is an ordinary monomorphic function and every existing
+        // path below applies to it unchanged.
+        if self
+            .fn_decls
+            .get(name)
+            .is_some_and(|decl| !decl.type_params.is_empty())
+        {
+            let instantiated = self.instantiate_generic_call(name, args, span, caller_env)?;
+            return self.check_function_call(&instantiated, args, span, caller_env);
+        }
+
+        // `identity<int>(41)` — the type arguments were WRITTEN, and the parser put them in the
+        // name. Decoding them back out of the name is what keeps one spelling: the same string
+        // the inferred path builds with `instantiated_name`, and the same one every diagnostic
+        // prints. The request is recorded on every call, exactly as the inferred path does, so
+        // the splice fixpoint and the reachability pruner both see it.
+        if let Some((base, written)) = written_generic_call(name) {
+            if self
+                .fn_decls
+                .get(base.as_str())
+                .is_some_and(|decl| !decl.type_params.is_empty())
+            {
+                let instantiated =
+                    self.instantiate_written_generic_call(&base, &written, span)?;
+                // Unlike the inferred path, the name that arrived here IS the instantiated one,
+                // so resolving it again would re-enter this branch forever. Falling through
+                // instead lands on the declaration this call just created, which is ordinary and
+                // monomorphic. A differing spelling — the arguments normalized to something the
+                // programmer did not write — is the only case with somewhere else to go.
+                if instantiated != name {
+                    return self.check_function_call(&instantiated, args, span, caller_env);
+                }
+            }
+        }
+
         if let Some(mut sig) = self.functions.get(name).cloned() {
             if let Some(reason) = sig.deprecation.as_deref() {
                 let message = if reason.is_empty() {
@@ -614,6 +651,26 @@ impl Checker {
         }
 
         self.resolve_function_signature(name, &decl, param_types)
+    }
+}
+
+/// Splits a call name that carries WRITTEN type arguments into its template and its arguments.
+///
+/// `identity<int>` is what the parser produces for `identity<int>(41)`, and it is the same
+/// spelling `generics::instantiated_name` produces for the inferred form — so decoding it with
+/// the language's own type grammar (`generics::instantiated_type`) is exact, including for
+/// nested arguments like `wrap<Box<int>>`.
+///
+/// Returns `None` for an ordinary name, which costs one `contains` on the common path.
+fn written_generic_call(name: &str) -> Option<(String, Vec<crate::parser::ast::TypeExpr>)> {
+    if !name.contains('<') {
+        return None;
+    }
+    match crate::generics::instantiated_type(name)? {
+        crate::parser::ast::TypeExpr::GenericClass { name, args } => {
+            Some((name.as_str().to_string(), args))
+        }
+        _ => None,
     }
 }
 

@@ -492,3 +492,67 @@ fn test_the_remaining_sorts_refuse_an_associative_receiver() {
         );
     }
 }
+
+
+/// Sorting a hash whose local slot widened to boxed `Mixed` must not free it mid-sort.
+///
+/// A local that starts as `[]` and becomes a hash INSIDE a loop has no single array storage
+/// shape, so its frame slot widens to `Mixed`. Loading the hash out of that slot unboxes it with
+/// its own reference; storing it back boxed it and released that reference, and the pending EIR
+/// `release` then dropped the same one again. The block went back to the allocator while
+/// `__rt_hash_ksort` was still relinking it, which left the entry COUNT intact and every key and
+/// value reading back as garbage — `{"\u0000":"`"}` for this one-entry fixture.
+///
+/// One entry is the point: there is nothing to reorder, so this cannot pass by accident.
+#[test]
+fn test_ksort_on_a_hash_from_a_loop_widened_slot_keeps_its_entry() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+foreach ([1] as $v) { $a["q"] = "y"; }
+ksort($a);
+echo json_encode($a), "|", count($a), "|", var_export(array_key_exists("q", $a), true);
+"#,
+    );
+    assert_eq!(out, "{\"q\":\"y\"}|1|true");
+}
+
+/// The same slot shape with several entries, so the relinking itself is exercised too, and
+/// through every one of the four helpers that share this lowering.
+#[test]
+fn test_every_hash_sort_survives_a_loop_widened_slot() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+foreach ([1] as $v) { $a["c"] = "3"; $a["a"] = "1"; $a["b"] = "2"; }
+ksort($a);
+echo json_encode($a), "|";
+krsort($a);
+echo json_encode($a), "|";
+asort($a);
+echo json_encode($a), "|";
+arsort($a);
+echo json_encode($a);
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"a\":\"1\",\"b\":\"2\",\"c\":\"3\"}|{\"c\":\"3\",\"b\":\"2\",\"a\":\"1\"}|\
+{\"a\":\"1\",\"b\":\"2\",\"c\":\"3\"}|{\"c\":\"3\",\"b\":\"2\",\"a\":\"1\"}"
+    );
+}
+
+/// An integer-keyed hash reaches the same slot shape through a gapped variable index, which is
+/// the storage a write the checker cannot bound against the array's length now picks.
+#[test]
+fn test_ksort_on_a_gapped_integer_keyed_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+foreach ([30, 10, 20] as $k) { $a[$k] = $k * 2; }
+ksort($a);
+echo json_encode($a), "|", count($a);
+"#,
+    );
+    assert_eq!(out, "{\"10\":20,\"20\":40,\"30\":60}|3");
+}

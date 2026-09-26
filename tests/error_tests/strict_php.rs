@@ -173,6 +173,76 @@ fn test_audit_rejects_packed_class() {
     );
 }
 
+/// Verifies the audit rejects `array<T>` type arguments.
+#[test]
+fn test_audit_rejects_array_type_argument() {
+    expect_audit_violation(
+        "<?php function f(array<int> $a): int { return $a[0]; }",
+        "`array<T>` type arguments are an elephc extension",
+    );
+}
+
+/// Verifies the audit rejects an `array<T>` type argument in return position too.
+#[test]
+fn test_audit_rejects_array_type_argument_in_return_position() {
+    expect_audit_violation(
+        "<?php function f(): array<string> { return []; }",
+        "`array<T>` type arguments are an elephc extension",
+    );
+}
+
+/// Verifies the audit rejects `array<K, V>` type arguments with their own message.
+#[test]
+fn test_audit_rejects_assoc_array_type_arguments() {
+    expect_audit_violation(
+        "<?php function f(array<string, int> $m): int { return 0; }",
+        "`array<K, V>` type arguments are an elephc extension",
+    );
+}
+
+/// Verifies the audit rejects a type parameter list on a function declaration.
+#[test]
+fn test_audit_rejects_generic_function() {
+    expect_audit_violation(
+        "<?php function identity<T>(T $value): T { return $value; }",
+        "generic functions are an elephc extension",
+    );
+}
+
+/// A `@template` docblock is valid PHP — the annotations are comments — so `--strict-php` must
+/// accept it even though it compiles to generics.
+///
+/// This is the whole reason the docblock surface exists, and it only holds because the
+/// annotations are applied AFTER the audit. Applying them first made the audit see the injected
+/// `<T>` and `array<T>` and reject a file php-src parses happily.
+#[test]
+fn test_audit_accepts_a_template_docblock() {
+    let messages = strict_audit_messages(
+        "<?php\n\
+         /**\n\
+          * @template T\n\
+          * @param array<T> $items\n\
+          * @return T\n\
+          */\n\
+         function firstOf(array $items) { return $items[0]; }",
+    );
+    assert!(
+        messages.is_empty(),
+        "expected no violations for an annotated PHP file, got {messages:?}"
+    );
+}
+
+/// A bare `array` hint stays valid PHP: it parses as `TypeExpr::Named("array")`, never as
+/// `TypeExpr::Array`, so the audit must leave it alone.
+#[test]
+fn test_audit_accepts_bare_array_hint() {
+    let messages = strict_audit_messages("<?php function f(array $a): array { return $a; }");
+    assert!(
+        messages.is_empty(),
+        "expected no violations for a bare array hint, got {messages:?}"
+    );
+}
+
 /// Verifies the audit rejects `extern` function declarations.
 #[test]
 fn test_audit_rejects_extern_block() {
@@ -411,4 +481,128 @@ fn test_audit_accepts_plain_php() {
         echo $f(21), strlen('abc'), PHP_EOL;",
     );
     assert!(messages.is_empty(), "expected no violations, got {messages:?}");
+}
+
+
+/// A class declaring type parameters is not PHP: php-src reads the `<` as a comparison and the
+/// declaration fails to parse.
+#[test]
+fn test_audit_rejects_generic_class_declaration() {
+    expect_audit_violation(
+        "<?php class Box<T> { private T $v; }",
+        "Type parameters on 'Box' are an elephc extension",
+    );
+}
+
+/// An interface's type parameters are rejected the same way, bound included.
+#[test]
+fn test_audit_rejects_generic_interface_declaration() {
+    expect_audit_violation(
+        "<?php interface Repository<T: Entity> { public function f(): T; }",
+        "Type parameters on 'Repository' are an elephc extension",
+    );
+}
+
+/// Type arguments on an inherited interface are a SEPARATE extension from declaring type
+/// parameters: a class can stop being generic and still implement a generic interface, so
+/// removing one does not remove the other.
+#[test]
+fn test_audit_rejects_type_arguments_on_an_implemented_interface() {
+    expect_audit_violation(
+        "<?php class R implements Repository<User> {}",
+        "Type arguments on what 'R' inherits are an elephc extension",
+    );
+}
+
+/// The same for an inherited parent class.
+#[test]
+fn test_audit_rejects_type_arguments_on_a_parent_class() {
+    expect_audit_violation(
+        "<?php class Small extends Box<int> {}",
+        "Type arguments on what 'Small' inherits are an elephc extension",
+    );
+}
+
+/// A generic class type in an annotation is rejected wherever a type can appear.
+#[test]
+fn test_audit_rejects_generic_class_type_annotation() {
+    expect_audit_violation(
+        "<?php function f(Box<int> $b) { return $b; }",
+        "Generic class type 'Box<...>' is an elephc extension",
+    );
+}
+
+/// `new Box<int>()` is rejected on the TYPE rather than on the parse, so the message names the
+/// extension instead of leaving the programmer with another engine's syntax error.
+#[test]
+fn test_audit_rejects_generic_construction() {
+    expect_audit_violation(
+        "<?php $b = new Box<int>(1);",
+        "Generic class type 'Box<...>' is an elephc extension",
+    );
+}
+
+/// An ordinary class implementing an ordinary interface stays valid PHP.
+#[test]
+fn test_audit_accepts_a_non_generic_class() {
+    let messages =
+        strict_audit_messages("<?php class Plain implements Countable { public int $x = 1; }");
+    assert!(messages.is_empty(), "unexpected violations: {messages:?}");
+}
+
+/// A generic static receiver is not PHP either, and it reaches the audit through five
+/// expression forms — a method call, a class constant, a static property, `::class`, and a
+/// first-class callable. Auditing only the DECLARATION would accept a file php-src cannot
+/// parse whenever the class is declared elsewhere.
+#[test]
+fn test_audit_rejects_a_generic_static_method_call() {
+    expect_audit_violation(
+        "<?php echo Box<int>::of(1);",
+        "Generic class type 'Box<...>' is an elephc extension",
+    );
+}
+
+/// The same receiver reached through a class constant.
+#[test]
+fn test_audit_rejects_a_generic_class_constant_receiver() {
+    expect_audit_violation(
+        "<?php echo Box<int>::LABEL;",
+        "Generic class type 'Box<...>' is an elephc extension",
+    );
+}
+
+/// And through `::class`, which is the form that looks most like plain PHP.
+#[test]
+fn test_audit_rejects_a_generic_class_name_receiver() {
+    expect_audit_violation(
+        "<?php echo Box<int>::class;",
+        "Generic class type 'Box<...>' is an elephc extension",
+    );
+}
+
+/// An ordinary static call stays valid PHP.
+#[test]
+fn test_audit_accepts_an_ordinary_static_call() {
+    let messages = strict_audit_messages("<?php echo Plain::of(1), Plain::LABEL, Plain::class;");
+    assert!(messages.is_empty(), "unexpected violations: {messages:?}");
+}
+
+/// `$x instanceof Box<int>` is not PHP either, and it is the fifth place a generic class type
+/// can be written.
+#[test]
+fn test_audit_rejects_a_generic_instanceof_target() {
+    expect_audit_violation(
+        "<?php var_dump($x instanceof Box<int>);",
+        "Generic class type 'Box<...>' is an elephc extension",
+    );
+}
+
+/// A caught class is the fifth place a generic type can be written, and `--strict-php` has to
+/// reject it there too — a file that only CATCHES one is still not PHP.
+#[test]
+fn test_audit_rejects_a_generic_catch_type() {
+    expect_audit_violation(
+        "<?php try { f(); } catch (Err<int> $e) {} ",
+        "Generic class type 'Err<...>' is an elephc extension",
+    );
 }

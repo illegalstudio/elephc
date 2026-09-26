@@ -167,6 +167,7 @@ pub(super) fn builtin_reflection_named_type_to_string_method() -> ClassMethod {
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "__toString".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -260,6 +261,7 @@ pub(super) fn builtin_reflection_composite_type_string_method(
         dummy_span,
     ));
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,

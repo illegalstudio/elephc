@@ -11,13 +11,16 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{Expr, ExprKind, PackedField, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, PackedField, Stmt, StmtKind, TypeExpr};
 use crate::parser::expr::parse_args;
 use crate::parser::{next_anonymous_class_name, register_anonymous_class};
 use crate::span::Span;
 
-use super::super::params::{parse_name_list, parse_type_expr};
-use super::super::{expect_semicolon, expect_token, parse_name, parse_unqualified_name};
+use super::super::params::{
+    parse_inherited_name, parse_name_list, parse_type_expr, parse_type_param_list,
+};
+use crate::parser::ast::GenericDecl;
+use super::super::{expect_semicolon, expect_token, parse_unqualified_name};
 use super::body::parse_class_like_body;
 
 /// Parses a class declaration: `class Name extends Parent { implements Ifaces { body } }`.
@@ -40,19 +43,24 @@ pub(in crate::parser::stmt) fn parse_class_decl(
         "Expected class name after 'class'",
     )?;
 
-    let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
+    let type_params = parse_type_param_list(tokens, pos, span)?;
+
+    let (extends, extends_args) = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
         *pos += 1;
-        Some(parse_name(
+        let (parent, args) = parse_inherited_name(
             tokens,
             pos,
             span,
             "Expected parent class name after 'extends'",
-        )?)
+        )?;
+        (Some(parent), args)
     } else {
-        None
+        (None, Vec::new())
     };
 
-    let implements = if *pos < tokens.len() && tokens[*pos].0 == Token::Implements {
+    let (implements, interface_args) = if *pos < tokens.len()
+        && tokens[*pos].0 == Token::Implements
+    {
         *pos += 1;
         parse_name_list(
             tokens,
@@ -61,8 +69,10 @@ pub(in crate::parser::stmt) fn parse_class_decl(
             "Expected interface name after 'implements'",
         )?
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
+
+    let generics = GenericDecl::new(type_params, extends_args, interface_args);
 
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after class name")?;
 
@@ -74,6 +84,7 @@ pub(in crate::parser::stmt) fn parse_class_decl(
     Ok(Stmt::new(
         StmtKind::ClassDecl {
             name,
+            generics,
             extends,
             implements,
             is_abstract,
@@ -111,19 +122,22 @@ pub(crate) fn parse_anonymous_class(
         Vec::new()
     };
 
-    let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
+    let (extends, extends_args) = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
         *pos += 1;
-        Some(parse_name(
+        let (parent, args) = parse_inherited_name(
             tokens,
             pos,
             span,
             "Expected parent class name after 'extends'",
-        )?)
+        )?;
+        (Some(parent), args)
     } else {
-        None
+        (None, Vec::new())
     };
 
-    let implements = if *pos < tokens.len() && tokens[*pos].0 == Token::Implements {
+    let (implements, interface_args) = if *pos < tokens.len()
+        && tokens[*pos].0 == Token::Implements
+    {
         *pos += 1;
         parse_name_list(
             tokens,
@@ -132,8 +146,12 @@ pub(crate) fn parse_anonymous_class(
             "Expected interface name after 'implements'",
         )?
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
+
+    // An anonymous class cannot DECLARE type parameters — there is no name to instantiate under
+    // — but it can implement someone else's template at a concrete type.
+    let generics = GenericDecl::new(Vec::new(), extends_args, interface_args);
 
     expect_token(
         tokens,
@@ -154,6 +172,7 @@ pub(crate) fn parse_anonymous_class(
     register_anonymous_class(Stmt::new(
         StmtKind::ClassDecl {
             name: name.clone(),
+            generics,
             extends,
             implements,
             is_abstract: false,
@@ -195,17 +214,26 @@ pub(in crate::parser::stmt) fn parse_enum_decl(
         None
     };
 
+    let mut enum_interface_args: Vec<Vec<TypeExpr>> = Vec::new();
     let implements = if *pos < tokens.len() && tokens[*pos].0 == Token::Implements {
         *pos += 1;
-        parse_name_list(
+        let (names, type_args) = parse_name_list(
             tokens,
             pos,
             span,
             "Expected interface name after 'implements'",
-        )?
+        )?;
+        // Aligned index by index with `names`, the way `parse_name_list` returns them, so
+        // `implements Labelled<string>, Countable` keeps the arguments on the interface they
+        // were written on.
+        enum_interface_args = type_args;
+        names
     } else {
         Vec::new()
     };
+    // An enum declares no type parameters of its own and extends nothing, so the only generic
+    // half it can have is the arguments written on what it implements.
+    let generics = GenericDecl::new(Vec::new(), Vec::new(), enum_interface_args);
 
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after enum name")?;
     // Enum bodies share the class member grammar (methods, constants) plus `case` declarations.
@@ -220,6 +248,7 @@ pub(in crate::parser::stmt) fn parse_enum_decl(
     Ok(Stmt::new(
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,

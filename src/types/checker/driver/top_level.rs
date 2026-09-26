@@ -188,8 +188,13 @@ impl Checker {
                 | "Property access requires an object or typed pointer"
         ) || message.starts_with("Undefined property: ")
             || (message.starts_with("Cannot call $") && message.contains("not a callable"))
+            // Spelled as the diagnostic reads, which is PHP's own vocabulary: this branch of the
+            // checker renders types with `Display` (`callable`, `null`) rather than `Debug`
+            // (`Callable`, `Void`). Matching a rendered message is a coupling, so it is worth
+            // naming — the old spelling kept compiling and silently stopped suppressing anything,
+            // and the provisional error it was written to discard reached the user instead.
             || (message.contains(" parameter $")
-                && message.ends_with(" expects Callable, got Void"))
+                && message.ends_with(" expects callable, got null"))
     }
 
     /// Builds the initial `TypeEnv` with built-in globals `$argc`, `$argv`, and external globals.

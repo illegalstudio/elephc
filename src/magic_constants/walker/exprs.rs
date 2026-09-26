@@ -10,8 +10,10 @@
 
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget};
 
+use crate::span::Span;
+
 use super::stmts::{walk_program, walk_stmt};
-use super::Pass;
+use super::{walk_static_receiver, Pass};
 
 /// Recursively walks an expression AST, applying `pass` transformations to magic constants and
 /// string literals, and recursing into all expression subtrees.
@@ -36,8 +38,13 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         | ExprKind::PreDecrement(_)
         | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
-        | ExprKind::This
-        | ExprKind::StaticPropertyAccess { .. }) => kind,
+        | ExprKind::This) => kind,
+
+        // Not a leaf after all: its receiver can name a generic class, which is a type position.
+        ExprKind::StaticPropertyAccess { receiver, property } => ExprKind::StaticPropertyAccess {
+            receiver: walk_static_receiver(receiver, pass, span),
+            property,
+        },
 
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(walk_expr(*left, pass)),
@@ -46,7 +53,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
             value: Box::new(walk_expr(*value, pass)),
-            target: walk_instanceof_target(target, pass),
+            target: walk_instanceof_target(target, pass, span),
         },
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(walk_expr(*inner, pass))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(walk_expr(*inner, pass))),
@@ -150,17 +157,26 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             let new_params = params
                 .into_iter()
                 .map(|(n, t, default, by_ref)| {
-                    (n, t, default.map(|d| walk_expr(d, pass)), by_ref)
+                    (
+                        n,
+                        t.map(|ty| pass.transform_type(ty, span)),
+                        default.map(|d| walk_expr(d, pass)),
+                        by_ref,
+                    )
                 })
                 .collect();
             let new_body = walk_program(body, pass);
+            // Before `leave_closure`, for the reason the function arm documents: a struct
+            // literal's fields are evaluated after the statements above it.
+            let new_variadic_type = variadic_type.map(|ty| pass.transform_type(ty, span));
+            let new_return_type = return_type.map(|ty| pass.transform_type(ty, span));
             pass.leave_closure();
             ExprKind::Closure {
                 params: new_params,
                 variadic,
                 variadic_by_ref,
-                variadic_type,
-                return_type,
+                variadic_type: new_variadic_type,
+                return_type: new_return_type,
                 body: new_body,
                 is_arrow,
                 is_static,
@@ -192,9 +208,23 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
-            class_name,
+            class_name: pass.transform_class_reference(class_name, span),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
+        ExprKind::NewGeneric { class_type, args } => {
+            let class_type = pass.transform_type(class_type, span);
+            let args: Vec<Expr> = args.into_iter().map(|a| walk_expr(a, pass)).collect();
+            // A construction whose type is no longer generic is an ordinary construction, and
+            // collapsing it HERE is what keeps `NewGeneric` out of every later pass: the
+            // instantiating pass only has to answer "what does this type become", never "and
+            // which expression node should replace it".
+            match class_type {
+                crate::parser::ast::TypeExpr::Named(class_name) => {
+                    ExprKind::NewObject { class_name, args }
+                }
+                class_type => ExprKind::NewGeneric { class_type, args },
+            }
+        }
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
             name_expr: Box::new(walk_expr(*name_expr, pass)),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
@@ -238,7 +268,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             args,
         } => ExprKind::MethodCall {
             object: Box::new(walk_expr(*object, pass)),
-            method,
+            method: pass.transform_method_call_name(method, span),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::NullsafeMethodCall {
@@ -264,30 +294,37 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             method,
             args,
         } => ExprKind::StaticMethodCall {
-            receiver,
-            method,
+            receiver: walk_static_receiver(receiver, pass, span),
+            // Renamed like the instance form: a generic method resolved by the checker is called
+            // under its INSTANTIATED name, and leaving the static spelling alone left the backend
+            // looking for a template that was stripped from the program. A call the checker
+            // recorded nothing for is keyed by nothing and passes through unchanged.
+            method: pass.transform_method_call_name(method, span),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::FirstClassCallable(target) => {
-            ExprKind::FirstClassCallable(walk_callable_target(target, pass))
+            ExprKind::FirstClassCallable(walk_callable_target(target, pass, span))
         }
         ExprKind::PtrCast { target_type, expr: inner } => ExprKind::PtrCast {
             target_type,
             expr: Box::new(walk_expr(*inner, pass)),
         },
         ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
-            element_type,
+            element_type: pass.transform_type(element_type, span),
             len: Box::new(walk_expr(*len, pass)),
         },
-        ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant {
+            receiver: walk_static_receiver(receiver, pass, span),
+        },
         ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
             object: Box::new(walk_expr(*object, pass)),
         },
-        ExprKind::ScopedConstantAccess { receiver, name } => {
-            ExprKind::ScopedConstantAccess { receiver, name }
-        }
+        ExprKind::ScopedConstantAccess { receiver, name } => ExprKind::ScopedConstantAccess {
+            receiver: walk_static_receiver(receiver, pass, span),
+            name,
+        },
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
-            receiver,
+            receiver: walk_static_receiver(receiver, pass, span),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::Yield { key, value } => ExprKind::Yield {
@@ -302,18 +339,23 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
 /// Transforms a `CallableTarget` by recursively walking any boxed expression inside it.
 ///
 /// `CallableTarget::Method` carries a boxed object expression that must be walked;
-/// `CallableTarget::Function` and `CallableTarget::StaticMethod` carry no expressions and are
-/// returned unchanged.
-fn walk_callable_target<P: Pass>(target: CallableTarget, pass: &mut P) -> CallableTarget {
+/// `CallableTarget::Function` carries nothing; `CallableTarget::StaticMethod` carries a receiver
+/// that may name a generic class and so is a type position.
+fn walk_callable_target<P: Pass>(
+    target: CallableTarget,
+    pass: &mut P,
+    span: Span,
+) -> CallableTarget {
     match target {
         CallableTarget::Method { object, method } => CallableTarget::Method {
             object: Box::new(walk_expr(*object, pass)),
             method,
         },
         CallableTarget::Function(name) => CallableTarget::Function(name),
-        CallableTarget::StaticMethod { receiver, method } => {
-            CallableTarget::StaticMethod { receiver, method }
-        }
+        CallableTarget::StaticMethod { receiver, method } => CallableTarget::StaticMethod {
+            receiver: walk_static_receiver(receiver, pass, span),
+            method,
+        },
     }
 }
 
@@ -324,9 +366,18 @@ fn walk_callable_target<P: Pass>(target: CallableTarget, pass: &mut P) -> Callab
 fn walk_instanceof_target<P: Pass>(
     target: InstanceOfTarget,
     pass: &mut P,
+    span: Span,
 ) -> InstanceOfTarget {
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        // A target that is no longer generic is an ordinary named target, and collapsing it
+        // here keeps `InstanceOfTarget::Generic` out of every pass after instantiation.
+        InstanceOfTarget::Generic(class_type) => {
+            match pass.transform_type(class_type, span) {
+                crate::parser::ast::TypeExpr::Named(name) => InstanceOfTarget::Name(name),
+                class_type => InstanceOfTarget::Generic(class_type),
+            }
+        }
         InstanceOfTarget::Expr(expr) => {
             InstanceOfTarget::Expr(Box::new(walk_expr(*expr, pass)))
         }

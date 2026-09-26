@@ -557,6 +557,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
         | ExprKind::NewObject { .. }
+        | ExprKind::NewGeneric { .. }
         | ExprKind::NewDynamic { .. }
         | ExprKind::NewDynamicObject { .. }
         | ExprKind::StaticPropertyAccess { .. }
@@ -705,7 +706,9 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
                         || expr_may_write_dependency(arg, dependencies)
                 })
         }
-        ExprKind::NewObject { args, .. } | ExprKind::NewScopedObject { args, .. } => {
+        ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => {
             args.iter().any(|arg| {
                 expr_contains_dependency(arg, dependencies)
                     || expr_may_write_dependency(arg, dependencies)
@@ -800,6 +803,7 @@ fn instanceof_target_may_write_dependency(
 ) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_may_write_dependency(expr, dependencies),
     }
 }
@@ -876,6 +880,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
             args.iter().any(|arg| expr_contains_equivalent(arg, needle))
         }
@@ -979,6 +984,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
 fn instanceof_target_contains_equivalent(target: &InstanceOfTarget, needle: &Expr) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_contains_equivalent(expr, needle),
     }
 }

@@ -31,11 +31,13 @@ fn test_normalize_control_flow_merges_adjacent_identical_catches() {
             )],
             catches: vec![
                 crate::parser::ast::CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec![Name::unqualified("A")],
                     variable: Some("e".into()),
                     body: vec![Stmt::echo(Expr::int_lit(7))],
                 },
                 crate::parser::ast::CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec![Name::unqualified("B")],
                     variable: Some("e".into()),
                     body: vec![Stmt::echo(Expr::int_lit(7))],
@@ -82,11 +84,13 @@ fn test_normalize_control_flow_deduplicates_merged_catch_exception_types() {
             )],
             catches: vec![
                 crate::parser::ast::CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec![Name::unqualified("A"), Name::unqualified("B")],
                     variable: Some("e".into()),
                     body: vec![Stmt::echo(Expr::int_lit(7))],
                 },
                 crate::parser::ast::CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec![Name::unqualified("B"), Name::unqualified("C")],
                     variable: Some("e".into()),
                     body: vec![Stmt::echo(Expr::int_lit(7))],
@@ -136,6 +140,7 @@ fn test_normalize_control_flow_sorts_catch_exception_types() {
                 Span::dummy(),
             )],
             catches: vec![crate::parser::ast::CatchClause {
+                exception_type_args: Vec::new(),
                 exception_types: vec![
                     Name::unqualified("Zed"),
                     Name::unqualified("Alpha"),

@@ -222,7 +222,8 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             catches: catches
                 .into_iter()
                 .map(|catch_clause| CatchClause {
-                    exception_types: catch_clause.exception_types,
+                    exception_type_args: catch_clause.exception_type_args,
+                exception_types: catch_clause.exception_types,
                     variable: catch_clause.variable,
                     body: apply_stmts(catch_clause.body, defines),
                 })
@@ -235,6 +236,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -245,6 +247,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         } => StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params: params
                 .into_iter()
                 .map(|(name, type_ann, default, is_ref)| {
@@ -273,6 +276,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             init: rewrite_expr(init, defines),
         },
         StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -284,6 +288,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             methods,
         constants,
         } => StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -317,6 +322,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         },
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -325,6 +331,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             constants,
         } => StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             implements,
             trait_uses,
@@ -339,12 +346,14 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
                 .collect(),
         },
         StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties,
             methods,
         constants,
         } => StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties: properties

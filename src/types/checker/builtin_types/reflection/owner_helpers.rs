@@ -16,6 +16,7 @@ pub(super) fn builtin_reflection_owner_constructor_method(
 ) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__construct".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -43,6 +44,7 @@ pub(super) fn builtin_reflection_owner_constructor_method(
 pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "getAttributes".to_string(),
         visibility: Visibility::Public,
         is_static: false,

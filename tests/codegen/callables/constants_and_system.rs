@@ -35,6 +35,26 @@ fn compile_and_run_expect_runtime_error(source: &str) -> String {
     stderr
 }
 
+/// Verifies a descriptor invoker reserves one spill cell for every by-reference allocation site.
+///
+/// An associative Mixed argument can allocate a temporary cell on both the boxed and raw value
+/// branches, and each omitted default adds a third site. Two by-reference defaults therefore need
+/// six live frame slots even though only two cells are allocated on this runtime branch (#1221).
+#[test]
+fn test_descriptor_invoker_reserves_all_associative_by_ref_default_cells() {
+    let out = compile_and_run(
+        r#"<?php
+function make_mixed_assoc_args(): mixed { return ["first" => "provided"]; }
+$callback = function (&$first = "first-default", &$second = "second-default"): string {
+    return $first . ":" . $second;
+};
+echo call_user_func_array($callback, make_mixed_assoc_args());
+"#,
+    );
+
+    assert_eq!(out, "provided:second-default");
+}
+
 // --- Constants (const / define) ---
 
 // Tests `const MAX = 100; echo MAX;` compiles and outputs "100".

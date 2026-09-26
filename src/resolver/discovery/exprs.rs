@@ -113,6 +113,7 @@ pub(super) fn discover_expr(
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
             discover_exprs(args, base_dir, loaded_paths, include_chain, state, output)?;
         }
@@ -275,6 +276,7 @@ fn discover_instanceof_target(
 ) -> Result<(), CompileError> {
     match target {
         InstanceOfTarget::Name(_) => Ok(()),
+        InstanceOfTarget::Generic(_) => Ok(()),
         InstanceOfTarget::Expr(expr) => {
             discover_expr(expr, base_dir, loaded_paths, include_chain, state, output)
         }

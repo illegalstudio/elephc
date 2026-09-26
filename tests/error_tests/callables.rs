@@ -48,7 +48,7 @@ $guard = new CallableParameterGuard();
 $guard->accept($guard->callback);
 "#,
     ] {
-        expect_error(source, "parameter $callback expects Callable, got Void");
+        expect_error(source, "parameter $callback expects callable, got null");
     }
 }
 
@@ -401,7 +401,7 @@ fn test_error_closure_return_type_rejects_mismatch() {
     // type produces a diagnostic showing the expected and actual types.
     expect_error(
         "<?php $f = function(): string { return 1; };",
-        "Closure return type expects Str, got Int",
+        "Closure return type expects string, got int",
     );
 }
 
@@ -412,7 +412,7 @@ fn test_error_arrow_return_type_rejects_mismatch() {
     // mismatched type produces a diagnostic showing the expected and actual types.
     expect_error(
         "<?php $f = fn(): int => \"nope\";",
-        "Closure return type expects Int, got Str",
+        "Closure return type expects int, got string",
     );
 }
 
@@ -580,7 +580,7 @@ fn test_error_pipe_closure_literal_typed_parameter_mismatch() {
     // showing the expected vs actual parameter type.
     expect_error(
         r#"<?php $r = "nope" |> (function(int $n): int { $copy = $n; return $copy; });"#,
-        "pipe target parameter $n expects Int, got Str",
+        "pipe target parameter $n expects int, got string",
     );
 }
 
@@ -706,7 +706,7 @@ fn test_callable_parameter_accepts_a_callable_array_local() {
 fn test_error_callable_parameter_rejects_a_plain_array() {
     expect_error(
         "<?php function apply(callable $f): mixed { return $f(); } $values = [1, 2]; echo apply($values);",
-        "expects Callable",
+        "expects callable",
     );
 }
 
@@ -716,7 +716,7 @@ fn test_error_callable_parameter_rejects_a_plain_array() {
 fn test_error_callable_parameter_rejects_an_unresolved_pair() {
     expect_error(
         "<?php function apply(callable $f): mixed { return $f(); } $pair = [1, \"join\"]; echo apply($pair);",
-        "expects Callable",
+        "expects callable",
     );
 }
 
@@ -725,7 +725,7 @@ fn test_error_callable_parameter_rejects_an_unresolved_pair() {
 fn test_error_callable_array_target_is_cleared_when_branches_disagree() {
     expect_error(
         "<?php class BranchCallable { public static function left(): int { return 1; } public static function right(): int { return 2; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { if ($value > 0) { $callback = [BranchCallable::class, 'left']; } else { $callback = [BranchCallable::class, 'right']; } return consume($callback); } echo choose($argc);",
-        "expects Callable",
+        "expects callable",
     );
 }
 
@@ -734,7 +734,7 @@ fn test_error_callable_array_target_is_cleared_when_branches_disagree() {
 fn test_error_elseif_does_not_inherit_callable_target_from_prior_body() {
     expect_error(
         "<?php class ElseifCallable { public static function base(): int { return 0; } public static function changed(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $callback = [ElseifCallable::class, 'base']; if ($value === 1) { $callback = [ElseifCallable::class, 'changed']; } elseif ($value === 2) { $marker = 2; } else { $marker = 3; } return consume($callback); } echo choose($argc);",
-        "expects Callable",
+        "expects callable",
     );
 }
 
@@ -767,7 +767,7 @@ fn test_branch_copies_of_one_instance_callable_array_can_join() {
 fn test_error_branch_local_instance_callable_arrays_do_not_merge_by_syntax() {
     expect_error(
         "<?php class BranchInstanceCallable { public function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $receiver = new BranchInstanceCallable(); if ($value > 0) { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } else { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } return consume($callback); } echo choose($argc);",
-        "expects Callable",
+        "expects callable",
     );
 }
 
@@ -795,7 +795,7 @@ fn test_error_direct_mixed_argument_does_not_gain_descriptor_unboxing() {
         "<?php function consume(callable $callback): int { return $callback(); } function forward(mixed $value): int { return consume($value); } echo forward(null);",
         "<?php function consume(callable $callback): int { return $callback(); } function forward(callable $dispatch, mixed $value): int { return $dispatch($value); } echo forward(consume(...), null);",
     ] {
-        expect_error(source, "parameter $callback expects Callable, got Mixed");
+        expect_error(source, "parameter $callback expects callable, got mixed");
     }
 }
 

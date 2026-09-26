@@ -254,7 +254,6 @@ fn preg_replace_callback_target(
 /// Emits a descriptor callback wrapper that adapts regex matches to callable descriptors.
 fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
     let wrapper_label = ctx.next_global_label("preg_replace_descriptor_callback_wrapper");
-    let done_label = ctx.next_label("preg_replace_descriptor_callback_after_wrapper");
     let wrapper = DeferredCallbackWrapper {
         label: wrapper_label.clone(),
         visible_arg_types: vec![preg_matches_type()],
@@ -264,9 +263,12 @@ fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
         descriptor_return_type: Some(PhpType::Str),
         invocation_scope_class_id: ctx.lexical_class_id(),
     };
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Out of line: spliced here, the wrapper's `label_global` opened its own ELF section in the
+    // middle of the caller, and `--debug-info` then failed to assemble any function using
+    // `preg_replace_callback` on Linux. See `Emitter::begin_out_of_line`.
+    let scope = ctx.emitter.begin_out_of_line();
     crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     wrapper_label
 }
 

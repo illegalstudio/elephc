@@ -184,6 +184,7 @@ pub(super) fn builtin_reflection_parameter_get_default_value_method() -> ClassMe
     let dummy_span = crate::span::Span::dummy();
     let object_default_body = reflection_parameter_get_default_object_body(dummy_span);
     ClassMethod {
+        type_params: Vec::new(),
         name: "getDefaultValue".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -337,6 +338,7 @@ pub(super) fn reflection_parameter_default_object_arg(index: usize, span: crate:
 pub(super) fn builtin_reflection_class_new_instance_without_constructor_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "newInstanceWithoutConstructor".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -363,6 +365,7 @@ pub(super) fn builtin_reflection_class_new_instance_without_constructor_method()
 pub(super) fn builtin_reflection_parameter_is_default_value_constant_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "isDefaultValueConstant".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -395,6 +398,7 @@ pub(super) fn builtin_reflection_parameter_is_default_value_constant_method() ->
 pub(super) fn builtin_reflection_parameter_get_default_value_constant_name_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "getDefaultValueConstantName".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -467,6 +471,7 @@ pub(super) fn reflection_parameter_throw_if_default_missing(span: crate::span::S
 pub(super) fn builtin_reflection_parameter_can_be_passed_by_value_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "canBePassedByValue".to_string(),
         visibility: Visibility::Public,
         is_static: false,

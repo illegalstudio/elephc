@@ -143,6 +143,7 @@ pub fn flatten_classes(
     for stmt in program {
         match &stmt.kind {
             StmtKind::ClassDecl {
+                generics: _,
                 name,
                 extends,
                 implements,

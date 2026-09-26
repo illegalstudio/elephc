@@ -76,6 +76,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [LFC Source Files](beyond-php/lfc-source-files.md) — tagless source, mixed PHP/LFC projects, and per-file strict-mode behavior
 - [Pointers](beyond-php/pointers.md) — ptr(), ptr_get(), ptr_set(), pointer arithmetic, typed casting
 - [Buffers](beyond-php/buffers.md) — buffer&lt;T&gt; for fixed-size contiguous arrays, hot-path data
+- [Generics](beyond-php/generics.md) — array&lt;T&gt; pins an element type, and function f&lt;T&gt;(), class Box&lt;T&gt; and interface Repository&lt;T&gt; each monomorphize per type argument; all keep register-width storage instead of collapsing to boxed mixed
 - [Packed Classes](beyond-php/packed-classes.md) — flat POD records with compile-time field offsets
 - [FFI & Extern](beyond-php/extern.md) — calling C libraries, extern functions/globals/classes, callbacks
 - [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags

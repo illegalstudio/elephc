@@ -89,6 +89,7 @@ pub(super) fn collect_expr_reads(
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ExprCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::MethodCall { args, .. }
         | ExprKind::NullsafeMethodCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. } => {

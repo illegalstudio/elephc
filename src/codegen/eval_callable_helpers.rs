@@ -760,7 +760,7 @@ fn receiver_bound_instance_method_case(
     }
 }
 
-/// Emits a descriptor invoker inline and branches around its global entry body.
+/// Emits a descriptor invoker out of line, after the function that first needed it.
 ///
 /// `current_class` is the class that DECLARES the callee, which is the scope `self::`,
 /// `static::` and `parent::` resolve in when the invoker materializes a parameter default.
@@ -778,7 +778,6 @@ fn emit_eval_runtime_callable_invoker_inline(
     state.argument_normalizer_needed |=
         super::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     let label = state.next_label("callable_invoker");
-    let done_label = state.next_label("callable_invoker_done");
     let defaults = super::runtime_callable_invoker::resolve_invoker_defaults(
         module,
         current_class,
@@ -791,11 +790,10 @@ fn emit_eval_runtime_callable_invoker_inline(
         owns_string_return,
         defaults: &defaults,
     };
-    let enclosing = emitter.current_text_section();
-    abi::emit_jump(emitter, &done_label);
+    // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = emitter.begin_out_of_line();
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);
-    emitter.reopen_text_section(enclosing);
-    emitter.label(&done_label);
+    emitter.end_out_of_line(scope);
     label
 }
 
@@ -824,8 +822,9 @@ fn emit_eval_instance_method_descriptor_entry_wrapper(
 ) -> String {
     let visible_arg_types = descriptor_visible_arg_types(sig);
     let wrapper_label = state.next_label("callable_instance_method");
-    let done_label = state.next_label("callable_instance_method_done");
-    abi::emit_jump(emitter, &done_label);
+    // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`. The label is
+    // referenced only from a static descriptor in data, so its position is free.
+    let scope = emitter.begin_out_of_line();
     emitter.label(&wrapper_label);
     emit_eval_instance_method_descriptor_entry_wrapper_body(
         emitter,
@@ -833,7 +832,7 @@ fn emit_eval_instance_method_descriptor_entry_wrapper(
         method_key,
         &visible_arg_types,
     );
-    emitter.label(&done_label);
+    emitter.end_out_of_line(scope);
     wrapper_label
 }
 
@@ -848,8 +847,9 @@ fn emit_eval_static_method_descriptor_entry_wrapper(
 ) -> String {
     let visible_arg_types = descriptor_visible_arg_types(sig);
     let wrapper_label = state.next_label("static_method_descriptor_entry");
-    let done_label = state.next_label("static_method_descriptor_entry_done");
-    abi::emit_jump(emitter, &done_label);
+    // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`. The label is
+    // referenced only from a static descriptor in data, so its position is free.
+    let scope = emitter.begin_out_of_line();
     emitter.label(&wrapper_label);
     emit_eval_static_method_descriptor_entry_wrapper_body(
         emitter,
@@ -858,7 +858,7 @@ fn emit_eval_static_method_descriptor_entry_wrapper(
         &visible_arg_types,
         called_class_id,
     );
-    emitter.label(&done_label);
+    emitter.end_out_of_line(scope);
     wrapper_label
 }
 

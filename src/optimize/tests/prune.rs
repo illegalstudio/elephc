@@ -152,6 +152,7 @@ fn test_prune_block_drops_statements_after_return() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "answer".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -183,6 +184,7 @@ fn test_prune_drops_pure_expr_stmt() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "answer".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -259,6 +261,7 @@ fn test_prune_block_drops_statements_after_exhaustive_if() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "answer".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -306,6 +309,7 @@ fn test_prune_block_drops_statements_after_exhaustive_switch() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "answer".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

@@ -110,6 +110,7 @@ fn try_lower_source_at_for_target(
     let defines = HashSet::new();
     let parsed = crate::source::finalize_physical_program(
         parsed,
+        source,
         &main_file_path,
         source_mode,
         &defines,
@@ -150,7 +151,14 @@ fn try_lower_source_at_for_target(
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
     let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
     let ast = crate::optimize::fold_constants_for_target(ast, target);
-    let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
+    // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
+    // CLASS is instantiated by that driver rather than by the checker, so a plain
+    // `check_with_target` here hands the checker a template and reports `Unknown type: T` on an
+    // example that compiles perfectly well through the CLI.
+    let (ast, check_result) = crate::generics::monomorphize(ast, |program, bounds| {
+        crate::types::check_with_target_and_bounds(program, target, bounds)
+    })
+    .expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let ast = crate::optimize::prune_constant_control_flow(
         ast,

@@ -21,6 +21,7 @@ fn test_eliminate_dead_code_drops_statements_after_try_finally_exit() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "answer".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -71,6 +72,7 @@ fn test_eliminate_dead_code_preserves_outer_guard_for_finally_when_only_other_lo
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -132,6 +134,7 @@ fn test_eliminate_dead_code_sinks_tail_into_safe_finally_path() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

@@ -177,6 +177,11 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
+        // NOT relaxed for `int|float`, deliberately. Accepting it here only moves the refusal:
+        // the lowering has no arm for a boxed runtime property name and answers
+        // `dynamic_prop_set with runtime property name PHP type Mixed`, which is the same gap a
+        // genuinely `mixed` name hits. The checker's message is the better one until the backend
+        // grows that arm.
         if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
             return Err(CompileError::new(
                 property.span,
@@ -280,6 +285,11 @@ impl Checker {
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
+        }
+        if self.awaits_generic_instantiation(class_name) {
+            // Resolved by this round, spliced by the next one. `Mixed` keeps the rest of this
+            // round meaningful; the next sees an ordinary class and types the read properly.
+            return Ok(PhpType::Mixed);
         }
         Err(CompileError::new(
             expr.span,
@@ -477,7 +487,16 @@ impl Checker {
         receiver: &StaticReceiver,
         expr: &Expr,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(class_name) => Ok(class_name.as_str().to_string()),
             StaticReceiver::Self_ => self.current_class.as_ref().cloned().ok_or_else(|| {
                 CompileError::new(expr.span, "Cannot use self:: outside class method scope")

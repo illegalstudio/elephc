@@ -18,7 +18,9 @@ use crate::parser::ast::{
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
-use super::super::params::{looks_like_typed_param, parse_name_list, parse_type_expr};
+use super::super::params::{
+    looks_like_typed_param, parse_name_list, parse_type_expr, parse_type_param_list,
+};
 use super::super::{expect_semicolon, expect_token, parse_block, parse_unqualified_name};
 use super::method_params::parse_method_params;
 use super::traits::parse_trait_use;
@@ -40,7 +42,9 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
         "Expected interface name after 'interface'",
     )?;
 
-    let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
+    let type_params = parse_type_param_list(tokens, pos, span)?;
+
+    let (extends, interface_args) = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
         *pos += 1;
         parse_name_list(
             tokens,
@@ -49,8 +53,13 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
             "Expected parent interface name after 'extends'",
         )?
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
+
+    // An interface has no single parent, so its inherited type arguments all live in
+    // `interface_args`, aligned with `extends`.
+    let generics =
+        crate::parser::ast::GenericDecl::new(type_params, Vec::new(), interface_args);
 
     expect_token(
         tokens,
@@ -69,6 +78,7 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
     Ok(Stmt::new(
         StmtKind::InterfaceDecl {
             name,
+            generics,
             extends,
             properties,
             methods,
@@ -610,6 +620,11 @@ fn parse_class_like_method(
         None => return Err(CompileError::new(span, "Expected method name")),
     };
 
+    // A method may declare type parameters of its OWN, distinct from its class's: `map<U>` on a
+    // `Box<T>` binds `T` when the class is instantiated and `U` when the method is called. The
+    // list answers empty when there is no `<`, so an ordinary method costs one token peek.
+    let type_params = parse_type_param_list(tokens, pos, span)?;
+
     expect_token(
         tokens,
         pos,
@@ -660,6 +675,7 @@ fn parse_class_like_method(
     };
     Ok((
         ClassMethod {
+            type_params,
             name: method_name,
             visibility,
             is_static,
@@ -1035,6 +1051,7 @@ fn parse_property_hooks(
             hooks.get_by_ref = get_by_ref;
             if let Some(body) = body {
                 accessors.push(ClassMethod {
+                    type_params: Vec::new(),
                     name: property_hook_get_method(prop_name),
                     visibility: Visibility::Public,
                     is_static: false,
@@ -1066,6 +1083,7 @@ fn parse_property_hooks(
             hooks.set = true;
             if let Some(body) = body {
                 accessors.push(ClassMethod {
+                    type_params: Vec::new(),
                     name: property_hook_set_method(prop_name),
                     visibility: Visibility::Public,
                     is_static: false,

@@ -201,7 +201,7 @@ fn load_autoloaded_file(
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
         .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed =
-        crate::source::finalize_physical_program(parsed, path, source_mode, defines)?;
+        crate::source::finalize_physical_program(parsed, &content, path, source_mode, defines)?;
     let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_with_defines(
         parsed,
         path.parent().unwrap_or(base_dir),

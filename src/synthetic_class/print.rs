@@ -237,6 +237,7 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             out
         }
         StmtKind::InterfaceDecl {
+            generics: _,
             name,
             extends,
             properties,
@@ -644,6 +645,13 @@ fn type_expr(ty: &TypeExpr) -> String {
             .join("|"),
         TypeExpr::Ptr(None) => "ptr".to_string(),
         TypeExpr::Named(name) => name_source(name),
+        // Rendered structurally so the round trip holds: `printing_round_trips` re-parses
+        // everything this prints, and `Box<int>` parses back to the same type.
+        TypeExpr::GenericClass { name, args } => format!(
+            "{}<{}>",
+            name_source(name),
+            args.iter().map(type_expr).collect::<Vec<_>>().join(", ")
+        ),
         other => panic!("print: unmodelled type {:?}", other),
     }
 }
@@ -910,6 +918,7 @@ fn render(value: &Expr) -> (String, u8) {
 fn static_receiver(receiver: &StaticReceiver) -> String {
     match receiver {
         StaticReceiver::Named(name) => name_source(name),
+        StaticReceiver::Generic(class_type) => type_expr(class_type),
         StaticReceiver::Self_ => "self".to_string(),
         StaticReceiver::Parent => "parent".to_string(),
         StaticReceiver::Static => "static".to_string(),

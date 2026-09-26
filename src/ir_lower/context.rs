@@ -277,6 +277,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
+    /// Which monomorphic instantiation each generic call site resolved to, keyed by the
+    /// enclosing function and the call position.
+    ///
+    /// Carried from the checker rather than re-derived: choosing the instantiation needs the
+    /// argument TYPES, and `lower_args_with_signature` needs the callee signature before it
+    /// lowers the arguments, so lowering cannot ask the question itself.
+    pub generic_call_sites: &'m HashMap<(String, Span), String>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
     /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
@@ -403,6 +410,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
+        generic_call_sites: &'m HashMap<(String, Span), String>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
@@ -466,6 +474,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             throw_access_sites,
             builtin_call_types,
             boxed_reference_promotion_sites,
+            generic_call_sites,
             loop_storage_types,
             string_incdec_locals,
             bind_kill_sites,
@@ -870,16 +879,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
     }
 
-    /// Returns the frame storage type a local must use, boxing `string` locals that PHP's
-    /// `++`/`--` can retype.
+    /// Returns the frame storage type a local must use, boxing the locals PHP's `++`/`--`
+    /// can retype.
     ///
-    /// `"9"++` is `int(10)`, so a local the checker recorded as a string increment/decrement
-    /// target cannot keep concrete `Str` storage. Widening the slot lazily at the increment
-    /// is not enough: the slot type is a whole-frame property, so every OTHER `Str`-typed
-    /// read of the same slot would then have to detach an owned copy out of the boxed cell
-    /// (`__rt_mixed_cast_string`), leaking one heap block per executed read. Boxing from the
-    /// first store — including the incoming-parameter store — keeps every access on the
-    /// ordinary boxed-Mixed path instead.
+    /// Two types qualify, for the same reason. `"9"++` is `int(10)`, so a string target
+    /// cannot keep concrete `Str` storage; and `PHP_INT_MAX++` is a float, so an int target
+    /// cannot keep a raw `I64` one. Widening the slot lazily at the increment is not enough:
+    /// the slot type is a whole-frame property, so every OTHER concretely typed access to it
+    /// reads the wrong representation. The string case leaked one heap block per read
+    /// (`__rt_mixed_cast_string` detaching an owned copy); the int case silently TRUNCATED —
+    /// the promoting `ichecked_add` produced a boxed float and the raw slot kept its low
+    /// word, so `for ($i = PHP_INT_MAX - 1; …; $i++)` wrapped to the negative minimum where
+    /// php prints the float.
+    ///
+    /// Boxing from the first store — including the incoming-parameter store — keeps every
+    /// access on the ordinary boxed-Mixed path instead, and `checked_int_sink` narrows the
+    /// slot back to `I64` wherever no access can observe the float, which is what keeps an
+    /// ordinary counter loop as fast as it was.
     fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
         if !matches!(php_type.codegen_repr(), PhpType::Str) {
             return php_type;
@@ -4934,6 +4950,8 @@ pub(crate) fn value_ir_type(php_type: &PhpType) -> IrType {
 /// Converts parsed type syntax into a conservative PHP type for fallback metadata.
 pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
     match type_expr {
+        // Storage is a callable descriptor either way; the declared signature is checker-side.
+        TypeExpr::CallableSig { .. } => PhpType::Callable,
         TypeExpr::Int => PhpType::Int,
         TypeExpr::Float => PhpType::Float,
         TypeExpr::Bool => PhpType::Bool,
@@ -4943,11 +4961,19 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Never => PhpType::Never,
         TypeExpr::Iterable => PhpType::Iterable,
         TypeExpr::Array(inner) => PhpType::Array(Box::new(type_expr_to_php_type(inner))),
+        TypeExpr::AssocArray { key, value } => PhpType::AssocArray {
+            key: Box::new(type_expr_to_php_type(key)),
+            value: Box::new(type_expr_to_php_type(value)),
+        },
         TypeExpr::Ptr(name) => {
             PhpType::Pointer(name.as_ref().map(|name| name.as_str().to_string()))
         }
         TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(type_expr_to_php_type(inner))),
         TypeExpr::Named(name) => named_type_expr_to_php_type(name.as_str()),
+        // Lowering only ever sees instantiated classes, which are `Named`. Should one
+        // arrive uninstantiated, its head is the class it denotes — conservative metadata,
+        // which is all this fallback promises.
+        TypeExpr::GenericClass { name, .. } => named_type_expr_to_php_type(name.as_str()),
         TypeExpr::Nullable(inner) => {
             PhpType::Union(vec![PhpType::Void, type_expr_to_php_type(inner)])
         }

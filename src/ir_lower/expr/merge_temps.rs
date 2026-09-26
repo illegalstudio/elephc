@@ -207,6 +207,38 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
         _ => false,
     };
     if !target_has_mixed_payload {
+        // A TYPED container target with a whole-boxed source is the `?array<int>` shape, and it
+        // only exists since `array<T>` did: before that a container merge target was always
+        // `array<mixed>`, so this early return could only ever see a source that needed nothing.
+        // It stored the CELL into the raw slot untouched, and the first element read then saw the
+        // cell header — `function g(?array<int> $a) { $r = $a ?? [4, 5]; echo $r[0]; }` printed
+        // `0` and dumped four zeros where php prints `1` and `[1, 2, 3]`. A ternary was correct,
+        // and a bare `?array` was correct, which is what kept it hidden.
+        //
+        // Unboxing is exact here: the payload's slots carry the declared element type, because
+        // that declaration is what typed the caller's array in the first place. If that is ever
+        // false, the boundary guard in `lower_runtime_call` reads the payload's own value_type
+        // tag and fatals rather than handing back a cell pointer as an element.
+        if matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+            && value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+            && matches!(target_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            let cell_is_owning = ctx.value_is_owning_temporary(value);
+            let unboxed = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                target_ty.clone(),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            // The unbox takes its own reference to the payload, so an owning cell has no reader
+            // left — the same ledger the whole-boxed branch below keeps.
+            if cell_is_owning {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            return unboxed;
+        }
         return value;
     }
     let op = match (source_ty, target_ty) {
@@ -349,7 +381,16 @@ pub(crate) fn emit_bool_literal(
 
 /// Returns a printable static receiver name.
 pub(super) fn receiver_name(receiver: &StaticReceiver) -> String {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => name.as_str().to_string(),
         StaticReceiver::Self_ => "self".to_string(),
         StaticReceiver::Static => "static".to_string(),

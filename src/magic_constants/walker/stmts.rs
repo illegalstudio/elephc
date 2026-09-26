@@ -8,17 +8,99 @@
 //! Key details:
 //! - Scope-bearing statements must enter and exit pass context in PHP lexical order.
 
-use crate::parser::ast::{CatchClause, EnumCaseDecl, Stmt, StmtKind};
+use crate::names::Name;
+use crate::parser::ast::{CatchClause, EnumCaseDecl, GenericDecl, Stmt, StmtKind};
+use crate::span::Span;
 
 use super::exprs::walk_expr;
-use super::members::{walk_class_method, walk_class_property};
-use super::Pass;
+use super::members::{walk_class_const, walk_class_method, walk_class_property};
+use super::{walk_inherited, walk_inherited_list, walk_static_receiver, Pass};
+
+/// Routes a class declaration's type parameters and inheritance clauses through the pass.
+///
+/// Returns the three fields together because they are one fact split across three places: the
+/// names live on the declaration, their type arguments on its `GenericDecl`, and a substitution
+/// that makes the last argument concrete has to update both AND drop the `GenericDecl` itself,
+/// or the class would still look generic to `crate::generics::classes` and be stripped as a
+/// template it no longer is.
+fn walk_class_heritage<P: Pass>(
+    generics: Option<Box<GenericDecl>>,
+    extends: Option<Name>,
+    implements: Vec<Name>,
+    pass: &P,
+    span: Span,
+) -> (Option<Box<GenericDecl>>, Option<Name>, Vec<Name>) {
+    let Some(generics) = generics else {
+        return (None, extends, implements);
+    };
+    let GenericDecl {
+        type_params,
+        extends_args,
+        interface_args,
+    } = *generics;
+    let type_params = walk_type_params(type_params, pass, span);
+    let (extends, extends_args) = match extends {
+        Some(parent) => {
+            let (parent, args) = walk_inherited(parent, extends_args, pass, span);
+            (Some(parent), args)
+        }
+        None => (None, Vec::new()),
+    };
+    let (implements, interface_args) = walk_inherited_list(implements, interface_args, pass, span);
+    (
+        GenericDecl::new(type_params, extends_args, interface_args),
+        extends,
+        implements,
+    )
+}
+
+/// The interface form of [`walk_class_heritage`]: every inherited name is in `extends`.
+fn walk_interface_heritage<P: Pass>(
+    generics: Option<Box<GenericDecl>>,
+    extends: Vec<Name>,
+    pass: &P,
+    span: Span,
+) -> (Option<Box<GenericDecl>>, Vec<Name>) {
+    let Some(generics) = generics else {
+        return (None, extends);
+    };
+    let GenericDecl {
+        type_params,
+        extends_args: _,
+        interface_args,
+    } = *generics;
+    let type_params = walk_type_params(type_params, pass, span);
+    let (extends, interface_args) = walk_inherited_list(extends, interface_args, pass, span);
+    (
+        GenericDecl::new(type_params, Vec::new(), interface_args),
+        extends,
+    )
+}
+
+/// Routes each type parameter's bound and default through the pass.
+///
+/// A bound is a type (`<T : Box<int>>`) and so is a default (`<K = array<string>>`), so both are
+/// substitution points; the parameter NAME is not a type and is left alone.
+pub(super) fn walk_type_params<P: Pass>(
+    type_params: Vec<crate::parser::ast::TypeParam>,
+    pass: &P,
+    span: Span,
+) -> Vec<crate::parser::ast::TypeParam> {
+    type_params
+        .into_iter()
+        .map(|param| crate::parser::ast::TypeParam {
+            bound: param.bound.map(|ty| pass.transform_type(ty, span)),
+            default: param.default.map(|ty| pass.transform_type(ty, span)),
+            ..param
+        })
+        .collect()
+}
 
 /// Applies a magic-constant pass to a sequence of top-level statements.
 ///
 /// Iterates through `stmts`, applies [`walk_stmt`] to each, and collects the results
 /// into a new vector. This is the entry point for walking a program or block's statements.
-pub(in crate::magic_constants) fn walk_program<P: Pass>(stmts: Vec<Stmt>, pass: &mut P) -> Vec<Stmt> {
+pub(crate) fn walk_program<P: Pass>(stmts: Vec<Stmt>, pass: &mut P) -> Vec<Stmt> {
     stmts.into_iter().map(|s| walk_stmt(s, pass)).collect()
 }
 
@@ -60,7 +142,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             name,
             value,
         } => StmtKind::TypedAssign {
-            type_expr,
+            type_expr: pass.transform_type(type_expr, span),
             name,
             value: walk_expr(value, pass),
         },
@@ -127,7 +209,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             property,
             value,
         } => StmtKind::StaticPropertyAssign {
-            receiver,
+            receiver: walk_static_receiver(receiver, pass, span),
             property,
             value: walk_expr(value, pass),
         },
@@ -136,7 +218,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             property,
             value,
         } => StmtKind::StaticPropertyArrayPush {
-            receiver,
+            receiver: walk_static_receiver(receiver, pass, span),
             property,
             value: walk_expr(value, pass),
         },
@@ -146,7 +228,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             index,
             value,
         } => StmtKind::StaticPropertyArrayAssign {
-            receiver,
+            receiver: walk_static_receiver(receiver, pass, span),
             property,
             index: walk_expr(index, pass),
             value: walk_expr(value, pass),
@@ -231,10 +313,18 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             try_body: walk_program(try_body, pass),
             catches: catches
                 .into_iter()
-                .map(|c| CatchClause {
-                    exception_types: c.exception_types,
-                    variable: c.variable,
-                    body: walk_program(c.body, pass),
+                .map(|c| {
+                    // A caught class is a class position like an implemented interface, and
+                    // goes through the same helper — so a `catch (Err<int> $e)` collapses to an
+                    // ordinary named catch the moment its type stops being generic.
+                    let (exception_types, exception_type_args) =
+                        walk_inherited_list(c.exception_types, c.exception_type_args, pass, span);
+                    CatchClause {
+                        exception_types,
+                        exception_type_args,
+                        variable: c.variable,
+                        body: walk_program(c.body, pass),
+                    }
                 })
                 .collect(),
             finally_body: finally_body.map(|b| walk_program(b, pass)),
@@ -242,6 +332,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -254,25 +345,38 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             let new_params = params
                 .into_iter()
                 .map(|(n, t, default, by_ref)| {
-                    (n, t, default.map(|d| walk_expr(d, pass)), by_ref)
+                    (
+                        n,
+                        t.map(|ty| pass.transform_type(ty, span)),
+                        default.map(|d| walk_expr(d, pass)),
+                        by_ref,
+                    )
                 })
                 .collect();
             let new_body = walk_program(body, pass);
+            // Transformed BEFORE leaving the scope. A struct literal's fields are evaluated
+            // after the statements above it, so writing these inline below `leave_function`
+            // handed them to the pass with the ENCLOSING scope active — the one type position
+            // in a function that is not covered by its own declaration.
+            let new_variadic_type = variadic_type.map(|ty| pass.transform_type(ty, span));
+            let new_return_type = return_type.map(|ty| pass.transform_type(ty, span));
             pass.leave_function();
             StmtKind::FunctionDecl {
                 by_ref_return,
                 name,
+                type_params,
                 params: new_params,
                 param_attributes,
                 variadic,
                 variadic_by_ref,
-                variadic_type,
-                return_type,
+                variadic_type: new_variadic_type,
+                return_type: new_return_type,
                 body: new_body,
             }
         }
         StmtKind::ClassDecl {
             name,
+            generics,
             extends,
             implements,
             is_abstract,
@@ -284,6 +388,8 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         constants,
         } => {
             pass.enter_class(&name);
+            let (generics, extends, implements) =
+                walk_class_heritage(generics, extends, implements, pass, span);
             let new_properties = properties
                 .into_iter()
                 .map(|p| walk_class_property(p, pass))
@@ -292,9 +398,14 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
                 .collect();
+            let constants = constants
+                .into_iter()
+                .map(|c| walk_class_const(c, pass))
+                .collect();
             pass.leave_class();
             StmtKind::ClassDecl {
                 name,
+                generics,
                 extends,
                 implements,
                 is_abstract,
@@ -322,6 +433,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
                 .collect();
+            let constants = constants
+                .into_iter()
+                .map(|c| walk_class_const(c, pass))
+                .collect();
             pass.leave_trait();
             StmtKind::TraitDecl {
                 name,
@@ -333,25 +448,39 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         }
         StmtKind::InterfaceDecl {
             name,
+            generics,
             extends,
             properties,
             methods,
         constants,
-        } => StmtKind::InterfaceDecl {
-            name,
-            extends,
-            properties: properties
-                .into_iter()
-                .map(|p| walk_class_property(p, pass))
-                .collect(),
-            methods: methods
-                .into_iter()
-                .map(|m| walk_class_method(m, pass))
-                .collect(),
-        constants,
-        },
+        } => {
+            pass.enter_class(&name);
+            // An interface has no single parent, so every inherited name — and every type
+            // argument on one — lives in the `extends` list.
+            let (generics, extends) = walk_interface_heritage(generics, extends, pass, span);
+            let stmt = StmtKind::InterfaceDecl {
+                name,
+                generics,
+                extends,
+                properties: properties
+                    .into_iter()
+                    .map(|p| walk_class_property(p, pass))
+                    .collect(),
+                methods: methods
+                    .into_iter()
+                    .map(|m| walk_class_method(m, pass))
+                    .collect(),
+                constants: constants
+                    .into_iter()
+                    .map(|c| walk_class_const(c, pass))
+                    .collect(),
+            };
+            pass.leave_class();
+            stmt
+        }
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -373,10 +502,26 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
                 .collect();
+            let constants = constants
+                .into_iter()
+                .map(|c| walk_class_const(c, pass))
+                .collect();
             pass.leave_class();
+            // An enum's interface arguments go through the same rewrite a class's do:
+            // `walk_inherited_list` turns `Labelled` + `[string]` into the instantiated name
+            // `Labelled<string>` once the arguments are concrete, and drops the `GenericDecl`
+            // with them. Transforming the argument TYPES alone left the enum implementing the
+            // stripped template, which reaches codegen as missing interface metadata.
+            let (implements, enum_interface_args) = walk_inherited_list(
+                implements,
+                generics.map(|g| g.interface_args).unwrap_or_default(),
+                pass,
+                span,
+            );
             StmtKind::EnumDecl {
                 name,
-                backing_type,
+                generics: GenericDecl::new(Vec::new(), Vec::new(), enum_interface_args),
+                backing_type: backing_type.map(|ty| pass.transform_type(ty, span)),
                 cases,
                 implements,
                 trait_uses,

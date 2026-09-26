@@ -73,6 +73,7 @@ impl Checker {
             | ExprKind::BinaryOp { .. }
             | ExprKind::InstanceOf { .. }
             | ExprKind::NewObject { .. }
+            | ExprKind::NewGeneric { .. }
             | ExprKind::Clone(_)
             | ExprKind::NewDynamic { .. }
             | ExprKind::NewDynamicObject { .. }
@@ -179,7 +180,10 @@ impl Checker {
 fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
     *idx_ty == PhpType::Int
         || *idx_ty == PhpType::Float
-        || *idx_ty == PhpType::Mixed
+        // A boxed offset is decided at runtime, and a union IS boxed — `int|float`, what an
+        // incremented counter carries, reaches `$s[$i]` in several preludes. Refusing it while
+        // accepting `mixed` would make the narrower type the stricter one.
+        || matches!(idx_ty.codegen_repr(), PhpType::Mixed)
         || matches!(
             &index.kind,
             ExprKind::StringLiteral(value)
@@ -488,14 +492,24 @@ impl Checker {
         ))
     }
 
-    /// Records that `name` is a `string` local used as a `++` / `--` target in the
-    /// function-like scope currently being checked.
+    /// Records that `name` is a local whose `++` / `--` can RETYPE it, in the function-like
+    /// scope currently being checked.
+    ///
+    /// Two reasons, one contract. A `string` target changes type outright — `"9"++` is
+    /// `int(10)` — and an `int` target promotes at the overflow boundary, where
+    /// `PHP_INT_MAX++` is `float(9.223372036854776E+18)` in php-src and in elephc.
     ///
     /// EIR lowering reads this contract (through `CheckResult::string_incdec_locals`) and
     /// gives the local boxed `Mixed` frame storage from its first store. Without it the
-    /// slot only widens at the increment, and every earlier or later `string`-typed read
-    /// of the same slot has to detach an owned copy out of the boxed cell — one leaked
-    /// heap block per executed read, unbounded inside a loop.
+    /// slot only widens at the increment, and every earlier or later concretely typed read
+    /// of the same slot reads the wrong representation: the string case leaked one heap
+    /// block per read, and the int case TRUNCATED the promoted float back into the raw
+    /// slot, so `for ($i = PHP_INT_MAX - 1; …; $i++)` wrapped to the negative minimum.
+    ///
+    /// The cost is recovered by `checked_int_sink`, which narrows the slot back to `I64`
+    /// when every access to it observes an int — measured: an ordinary counter loop keeps a
+    /// raw slot and an `ichecked_add_to_int`, while a loop whose counter reaches `var_dump`
+    /// keeps the box and prints php's float.
     fn record_string_incdec_local(&mut self, name: &str) {
         self.string_incdec_locals
             .insert((self.current_loop_storage_scope.clone(), name.to_string()));

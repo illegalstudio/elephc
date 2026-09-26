@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L717) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:766](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L766) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

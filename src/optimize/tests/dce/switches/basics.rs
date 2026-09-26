@@ -30,6 +30,7 @@ fn test_eliminate_dead_code_drops_empty_switch_shell_created_by_branch_dce() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

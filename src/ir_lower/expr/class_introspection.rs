@@ -357,7 +357,12 @@ fn literal_class_argument(argument: &Expr) -> Option<String> {
             StaticReceiver::Named(name) => {
                 Some(name.as_str().trim_start_matches('\\').to_string())
             }
-            StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
+            // A generic receiver is rewritten to its instantiated name before lowering, so one
+            // reaching here belongs to a template body that is stripped rather than emitted.
+            StaticReceiver::Self_
+            | StaticReceiver::Static
+            | StaticReceiver::Parent
+            | StaticReceiver::Generic(_) => None,
         },
         _ => None,
     }

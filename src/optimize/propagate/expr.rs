@@ -267,6 +267,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             class_name,
             args: propagate_args(args, None, None),
         },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type,
+            args: propagate_args(args, None, None),
+        },
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
             name_expr: Box::new(propagate_expr(*name_expr, env)),
             args: propagate_args(args, None, None),
@@ -438,6 +442,7 @@ fn propagate_instanceof_target(
 ) -> InstanceOfTarget {
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        InstanceOfTarget::Generic(class_type) => InstanceOfTarget::Generic(class_type),
         InstanceOfTarget::Expr(expr) => {
             InstanceOfTarget::Expr(Box::new(propagate_expr(*expr, env)))
         }

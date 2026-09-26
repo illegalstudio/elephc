@@ -38,6 +38,14 @@ impl Scanner<'_> {
                 self.scan_class_introspection_callable(&callable, args);
                 self.scan_exprs(args);
             }
+            // A generic construction keeps its class alive through the TYPE it names, which
+            // the type scanner already records head and arguments of.
+            ExprKind::NewGeneric { class_type, args } => {
+                self.scan_type(class_type);
+                for arg in args {
+                    self.scan_expr(arg);
+                }
+            }
             ExprKind::NewObject { class_name, args } => {
                 let key = self.record_class(class_name.as_str());
                 self.usage.instantiated_classes.insert(key.clone());
@@ -124,7 +132,17 @@ impl Scanner<'_> {
             }
             ExprKind::InstanceOf { value, target } => {
                 self.scan_expr(value);
-                match target { InstanceOfTarget::Name(name) => { self.record_class(name.as_str()); }, InstanceOfTarget::Expr(expr) => { self.usage.hazards.dynamic_class = true; self.scan_expr(expr); } }
+                match target {
+                    InstanceOfTarget::Name(name) => {
+                        self.record_class(name.as_str());
+                    }
+                    // Head and arguments both keep a class alive, as in any type position.
+                    InstanceOfTarget::Generic(class_type) => self.scan_type(class_type),
+                    InstanceOfTarget::Expr(expr) => {
+                        self.usage.hazards.dynamic_class = true;
+                        self.scan_expr(expr);
+                    }
+                }
             }
             ExprKind::ClassConstant { receiver } | ExprKind::ScopedConstantAccess { receiver, .. }
             | ExprKind::StaticPropertyAccess { receiver, .. } => self.scan_receiver(receiver),
@@ -773,7 +791,16 @@ impl Scanner<'_> {
 
     /// Resolves a static receiver to its named, current, or immediate parent class.
     pub(super) fn receiver_class(&self, receiver: &StaticReceiver) -> Option<String> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => Some(self.class_key(name.as_str())),
             StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.as_deref().map(php_symbol_key),
             StaticReceiver::Parent => self.parent_class.as_deref().map(php_symbol_key),

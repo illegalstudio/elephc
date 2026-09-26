@@ -31,6 +31,10 @@ pub(super) fn lower_instanceof(
     // must retire after the op has read it.
     let mut dynamic_target: Option<LoweredValue> = None;
     let immediate = match target {
+        // Lowering only ever sees the instantiated class, which is an ordinary `Name`.
+        InstanceOfTarget::Generic(_) => unreachable!(
+            "InstanceOfTarget::Generic must be instantiated by generics::classes"
+        ),
         InstanceOfTarget::Name(name) => {
             if name.as_str().trim_start_matches('\\') == "static" && ctx.local_slots.contains_key("this") {
                 // Apply the same storage-aware retirement to the implicit target

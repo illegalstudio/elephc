@@ -218,11 +218,30 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
         } => {
             audit_stmts(try_body, errors);
             for CatchClause {
-                exception_types: _,
+                exception_type_args,
+                exception_types,
                 variable: _,
                 body,
             } in catches
             {
+                // `catch (Err<int> $e)` is not PHP, and the caught class is the fifth place a
+                // generic type can be written. The MENTION is what is rejected, not its
+                // arguments — `int` is perfectly good PHP on its own — so it is rebuilt the way
+                // the AST walker rebuilds it and audited whole, which also gives it the same
+                // message every other generic mention produces.
+                for (name, args) in exception_types.iter().zip(exception_type_args) {
+                    if args.is_empty() {
+                        continue;
+                    }
+                    audit_type(
+                        &TypeExpr::GenericClass {
+                            name: name.clone(),
+                            args: args.clone(),
+                        },
+                        span,
+                        errors,
+                    );
+                }
                 audit_stmts(body, errors);
             }
             if let Some(body) = finally_body {
@@ -236,6 +255,7 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
         StmtKind::UseDecl { imports: _ } => {}
         StmtKind::FunctionDecl {
             name,
+            type_params,
             params,
             param_attributes,
             variadic: _,
@@ -246,6 +266,13 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             body,
         } => {
             reject_reserved_name(errors, span, &Name::unqualified(name));
+            if !type_params.is_empty() {
+                reject(
+                    errors,
+                    span,
+                    "generic functions are an elephc extension and are not valid PHP",
+                );
+            }
             for groups in param_attributes {
                 audit_attribute_groups(groups, errors);
             }
@@ -276,7 +303,8 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
         StmtKind::Global { vars: _ } => {}
         StmtKind::StaticVar { name: _, init } => audit_expr(init, errors),
         StmtKind::ClassDecl {
-            name: _,
+            generics,
+            name,
             extends: _,
             implements: _,
             is_abstract: _,
@@ -287,10 +315,12 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             methods,
             constants,
         } => {
+            audit_generic_decl(generics, name, span, errors);
             audit_class_members(properties, methods, constants, span, errors);
         }
         StmtKind::EnumDecl {
-            name: _,
+            name,
+            generics,
             backing_type,
             cases,
             implements: _,
@@ -298,6 +328,9 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             methods,
             constants,
         } => {
+            // Type arguments on what an enum implements are an elephc extension, exactly as they
+            // are on a class; `audit_generic_decl` already words that and audits the arguments.
+            audit_generic_decl(generics, name, span, errors);
             if let Some(backing_type) = backing_type {
                 audit_type(backing_type, span, errors);
             }
@@ -324,12 +357,14 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             );
         }
         StmtKind::InterfaceDecl {
-            name: _,
+            generics,
+            name,
             extends: _,
             properties,
             methods,
             constants,
         } => {
+            audit_generic_decl(generics, name, span, errors);
             audit_class_members(properties, methods, constants, span, errors);
         }
         StmtKind::TraitDecl {
@@ -484,12 +519,14 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
         | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
         | ExprKind::This
-        | ExprKind::ClassConstant { receiver: _ }
-        | ExprKind::ScopedConstantAccess {
-            receiver: _,
-            name: _,
-        }
         | ExprKind::MagicConstant(_) => {}
+        // A receiver is a class position, and `Box<int>::L` is not PHP even when the class is
+        // declared in another file. Auditing only the DECLARATION would accept a file php-src
+        // cannot parse, which is the one thing this flag exists to prevent.
+        ExprKind::ClassConstant { receiver }
+        | ExprKind::ScopedConstantAccess { receiver, name: _ } => {
+            audit_static_receiver(receiver, span, errors)
+        }
         ExprKind::BinaryOp { left, op: _, right } => {
             audit_expr(left, errors);
             audit_expr(right, errors);
@@ -498,6 +535,8 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             audit_expr(value, errors);
             match target {
                 InstanceOfTarget::Name(_) => {}
+                // `$x instanceof Box<int>` is not PHP even when `Box` is declared elsewhere.
+                InstanceOfTarget::Generic(class_type) => audit_type(class_type, span, errors),
                 InstanceOfTarget::Expr(target_expr) => audit_expr(target_expr, errors),
             }
         }
@@ -620,6 +659,12 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             class_name: _,
             args,
         } => audit_exprs(args, errors),
+        // `new Box<int>()` is not PHP: php-src reads the `<` as a comparison. The audit rejects
+        // the type itself so the message names the extension rather than the parse.
+        ExprKind::NewGeneric { class_type, args } => {
+            audit_type(class_type, expr.span, errors);
+            audit_exprs(args, errors);
+        }
         ExprKind::NewDynamic { name_expr, args } => {
             audit_expr(name_expr, errors);
             audit_exprs(args, errors);
@@ -647,9 +692,9 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             audit_expr(property, errors);
         }
         ExprKind::StaticPropertyAccess {
-            receiver: _,
+            receiver,
             property: _,
-        } => {}
+        } => audit_static_receiver(receiver, span, errors),
         ExprKind::MethodCall {
             object,
             method: _,
@@ -673,16 +718,19 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             audit_exprs(args, errors);
         }
         ExprKind::StaticMethodCall {
-            receiver: _,
+            receiver,
             method: _,
             args,
-        } => audit_exprs(args, errors),
+        } => {
+            audit_static_receiver(receiver, span, errors);
+            audit_exprs(args, errors);
+        }
         ExprKind::FirstClassCallable(target) => match target {
             CallableTarget::Function(name) => reject_reserved_name(errors, span, name),
             CallableTarget::StaticMethod {
-                receiver: _,
+                receiver,
                 method: _,
-            } => {}
+            } => audit_static_receiver(receiver, span, errors),
             CallableTarget::Method { object, method: _ } => audit_expr(object, errors),
         },
         ExprKind::PtrCast {
@@ -705,7 +753,10 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             audit_type(element_type, span, errors);
             audit_expr(len, errors);
         }
-        ExprKind::NewScopedObject { receiver: _, args } => audit_exprs(args, errors),
+        ExprKind::NewScopedObject { receiver, args } => {
+            audit_static_receiver(receiver, span, errors);
+            audit_exprs(args, errors);
+        }
         ExprKind::Yield { key, value } => {
             if let Some(key) = key {
                 audit_expr(key, errors);
@@ -717,8 +768,85 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
     }
 }
 
-/// Audits a type annotation: rejects `ptr`/`buffer<T>` and recurses through
-/// nullable, union, intersection, and array element types.
+/// Audits a static receiver: only a generic one is an extension.
+///
+/// `self`, `static`, `parent` and a plain class name are all PHP. `Box<int>::` is not, and it
+/// reaches the audit through five different expression forms, so the check lives here rather
+/// than five times over.
+fn audit_static_receiver(
+    receiver: &crate::parser::ast::StaticReceiver,
+    span: Span,
+    errors: &mut Vec<CompileError>,
+) {
+    if let crate::parser::ast::StaticReceiver::Generic(class_type) = receiver {
+        audit_type(class_type, span, errors);
+    }
+}
+
+/// Audits the generic half of a class or interface declaration.
+///
+/// Two separate extensions live here and php-src parses neither: DECLARING type parameters
+/// (`class Box<T>`), and passing type ARGUMENTS to something inherited
+/// (`implements Repository<User>`). They are reported separately because they are separately
+/// removable — a class can stop being generic and still implement a generic interface at a
+/// concrete type, and the file is only valid PHP once both are gone.
+fn audit_generic_decl(
+    generics: &Option<Box<crate::parser::ast::GenericDecl>>,
+    name: &str,
+    span: Span,
+    errors: &mut Vec<CompileError>,
+) {
+    let Some(generics) = generics else { return };
+    if !generics.type_params.is_empty() {
+        reject(
+            errors,
+            span,
+            &format!(
+                "Type parameters on '{}' are an elephc extension and are not valid PHP",
+                name
+            ),
+        );
+        // A bound and a default are types, and a file that removes the `<T>` still has to lose
+        // whatever they named.
+        for param in &generics.type_params {
+            if let Some(bound) = &param.bound {
+                audit_type(bound, span, errors);
+            }
+            if let Some(default) = &param.default {
+                audit_type(default, span, errors);
+            }
+        }
+    }
+    let inherited = generics
+        .extends_args
+        .iter()
+        .chain(generics.interface_args.iter().flatten());
+    let mut reported = false;
+    for argument in inherited {
+        if !reported {
+            reject(
+                errors,
+                span,
+                &format!(
+                    "Type arguments on what '{}' inherits are an elephc extension and are not \
+                     valid PHP",
+                    name
+                ),
+            );
+            reported = true;
+        }
+        audit_type(argument, span, errors);
+    }
+}
+
+/// Audits a type annotation: rejects `ptr`, `buffer<T>`, and `array<T>`, and recurses
+/// through nullable, union, intersection, and array element types.
+///
+/// `TypeExpr::Array` reaches this pass only from a user-written `array<T>`: the audit runs
+/// per physical file at load time, before includes are spliced and before any compiler
+/// prelude is injected, so the internally constructed `Array` values (builtin schemas,
+/// reflection literals, the `*_prelude` surfaces) never arrive here. A bare `array` parses
+/// as `TypeExpr::Named("array")` and stays valid PHP.
 fn audit_type(type_expr: &TypeExpr, span: Span, errors: &mut Vec<CompileError>) {
     match type_expr {
         TypeExpr::Int
@@ -730,7 +858,53 @@ fn audit_type(type_expr: &TypeExpr, span: Span, errors: &mut Vec<CompileError>) 
         | TypeExpr::Never
         | TypeExpr::Iterable
         | TypeExpr::Named(_) => {}
-        TypeExpr::Array(inner) => audit_type(inner, span, errors),
+        // `callable(int): string` is not PHP: php-src reads the parentheses after the keyword as
+        // a syntax error. The halves are audited too, so a file that removes the signature still
+        // has to lose whatever it named.
+        TypeExpr::CallableSig { params, ret } => {
+            reject(
+                errors,
+                span,
+                "A declared callable signature is an elephc extension and is not valid PHP",
+            );
+            for param in params {
+                audit_type(param, span, errors);
+            }
+            audit_type(ret, span, errors);
+        }
+        // `Box<int>` is not PHP: php-src reads the `<` as a comparison operator and the
+        // declaration fails to parse. Rejected here so the audit names the extension rather
+        // than leaving the programmer with a parse error from another engine.
+        TypeExpr::GenericClass { name, args } => {
+            reject(
+                errors,
+                span,
+                &format!(
+                    "Generic class type '{}<...>' is an elephc extension, not PHP",
+                    name.as_str()
+                ),
+            );
+            for arg in args {
+                audit_type(arg, span, errors);
+            }
+        }
+        TypeExpr::Array(inner) => {
+            reject(
+                errors,
+                span,
+                "`array<T>` type arguments are an elephc extension and are not valid PHP",
+            );
+            audit_type(inner, span, errors);
+        }
+        TypeExpr::AssocArray { key, value } => {
+            reject(
+                errors,
+                span,
+                "`array<K, V>` type arguments are an elephc extension and are not valid PHP",
+            );
+            audit_type(key, span, errors);
+            audit_type(value, span, errors);
+        }
         TypeExpr::Ptr(_) => {
             reject(
                 errors,

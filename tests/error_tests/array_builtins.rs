@@ -791,7 +791,7 @@ fn test_error_array_map_rejects_object_elements() {
 fn test_error_array_callback_rejects_known_element_mismatch() {
     expect_error(
         "<?php array_map(static fn(string $value): string => $value, [1, 2]);",
-        "array_map() callback parameter $value expects Str, got Int",
+        "array_map() callback parameter $value expects string, got int",
     );
 }
 

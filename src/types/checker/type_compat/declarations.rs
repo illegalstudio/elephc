@@ -26,6 +26,39 @@ impl Checker {
 
     /// Resolves a parameter type hint from a `TypeExpr` to a `PhpType`, validating that
     /// the type is valid for a parameter context. Rejects `void` and types containing `never`.
+    /// Builds the signature a declared `callable(A): B` promises, for typing its INVOCATION.
+    ///
+    /// A bare `callable` answers `None` and nothing changes: it carries no types, which is the
+    /// whole reason the declared form exists. Resolution of the halves goes through the ordinary
+    /// type path, so a signature naming a class resolves that class like any other mention.
+    pub(crate) fn declared_callable_signature(
+        &self,
+        type_expr: &TypeExpr,
+        span: crate::span::Span,
+    ) -> Option<crate::types::FunctionSig> {
+        let TypeExpr::CallableSig { params, ret } = type_expr else {
+            return None;
+        };
+        let mut resolved = Vec::with_capacity(params.len());
+        for (index, param) in params.iter().enumerate() {
+            resolved.push((format!("arg{}", index), self.resolve_type_expr(param, span).ok()?));
+        }
+        let return_type = self.resolve_type_expr(ret, span).ok()?;
+        Some(crate::types::FunctionSig {
+            param_type_exprs: params.iter().map(|p| Some(p.clone())).collect(),
+            param_attributes: vec![Vec::new(); resolved.len()],
+            defaults: vec![None; resolved.len()],
+            ref_params: vec![false; resolved.len()],
+            declared_params: vec![true; resolved.len()],
+            params: resolved,
+            return_type,
+            declared_return: true,
+            by_ref_return: false,
+            variadic: None,
+            deprecation: None,
+        })
+    }
+
     pub(crate) fn resolve_declared_param_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -279,6 +312,35 @@ impl Checker {
                 ),
             ));
         }
+        // Rule 3, the mirror of rule 1: a parameter whose declared type is a CONCRETE scalar
+        // slot writes a raw value back, while a boxed caller variable goes on reading a cell.
+        // Nothing converts between them at the boundary, and `type_accepts` admits the binding
+        // — correct for a by-VALUE parameter, which is why the question has to be asked here.
+        //
+        // Measured before this rule existed: `$i = 0; $i++; byRef($i);` against
+        // `function byRef(int &$n) { $n = $n + 1; }` left `$i` reading NULL where php prints
+        // `int(2)`, and a `mixed` variable did the same. The argument was passed as the cell's
+        // VALUE with no reference at all, so the callee's write-back went nowhere.
+        //
+        // Scalars only. A container passed by reference has its own ref-cell lowering, and no
+        // wrong answer has been measured there — widening this rule on suspicion would refuse
+        // working code.
+        if matches!(
+            expected_ty.codegen_repr(),
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        ) && supports_by_ref_boxed_storage(actual_ty)
+        {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} expects {}, got {} — a by-reference parameter writes back through the \
+                     caller's variable, and a boxed variable cannot receive a raw {} write. \
+                     Pass a variable that already holds {} (an incremented counter is \
+                     `int|float`, which is boxed), or declare the parameter `mixed &$p`",
+                    context, expected_ty, actual_ty, expected_ty, expected_ty
+                ),
+            ));
+        }
         if *actual_ty == PhpType::Void && !Self::declared_type_accepts_null(expected_ty) {
             return Err(CompileError::new(
                 arg.span,
@@ -288,7 +350,7 @@ impl Checker {
                 // a bare `$v = null` still fails the boxed-storage rule above. `?int $v =
                 // null` is the spelling that compiles.
                 &format!(
-                    "{} expects {:?}, got Void — a by-reference parameter writes back \
+                    "{} expects {}, got null — a by-reference parameter writes back \
                      through the caller's variable, so that variable must already hold the \
                      declared type; initialize it (for example `= 0`), or declare BOTH the \
                      parameter and the variable nullable (`?int &$p` with `?int $v = null`)",
@@ -312,7 +374,7 @@ impl Checker {
             && !self.ref_aliased_locals.contains(name)
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
-            && !self.typed_local_names.contains(name)
+            && !self.typed_local_names.contains_key(name)
             && !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
     }

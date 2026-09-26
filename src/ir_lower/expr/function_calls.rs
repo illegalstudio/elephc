@@ -18,7 +18,16 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = constants::lower_static_constant_call(ctx, name, args, expr) {
         return value;
     }
-    let canonical = name.as_str();
+    // A generic call names its TEMPLATE in the source; the checker already decided which
+    // monomorphic instantiation this particular call resolves to, from argument types lowering
+    // cannot consult before it has a signature. Swap in that name before anything else looks at
+    // it, so every path below — the introspection shortcuts included — sees an ordinary user
+    // function.
+    let instantiated = ctx
+        .generic_call_sites
+        .get(&(ctx.owner_name().to_string(), expr.span))
+        .cloned();
+    let canonical = instantiated.as_deref().unwrap_or_else(|| name.as_str());
     if let Some(value) = lower_class_introspection(ctx, canonical, args, expr) {
         return value;
     }

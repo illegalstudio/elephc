@@ -291,7 +291,7 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
         }
         StmtKind::Try { try_body, catches, finally_body } => {
             count_block(try_body, tally);
-            for CatchClause { exception_types: _, variable: _, body } in catches {
+            for CatchClause { exception_type_args: _, exception_types: _, variable: _, body } in catches {
                 count_block(body, tally);
             }
             if let Some(finally_body) = finally_body {
@@ -405,6 +405,7 @@ fn count_expr(expr: &Expr, tally: &mut Tally) {
         | ExprKind::StaticMethodCall { receiver: _, method: _, args }
         | ExprKind::NewScopedObject { receiver: _, args }
         | ExprKind::NewObject { class_name: _, args }
+        | ExprKind::NewGeneric { class_type: _, args }
         | ExprKind::ClosureCall { var: _, args } => count_exprs(args, tally),
         ExprKind::MethodCall { object, method: _, args }
         | ExprKind::NullsafeMethodCall { object, method: _, args } => {

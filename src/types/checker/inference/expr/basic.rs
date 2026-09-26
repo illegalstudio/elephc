@@ -46,6 +46,10 @@ impl Checker {
                     PhpType::Mixed | PhpType::Bool | PhpType::False | PhpType::Void => {
                         Ok(PhpType::Mixed)
                     }
+                    // Negating a counter is ordinary arithmetic — `$i = 4; $i++; echo -$i;` is
+                    // `-5` in php — and the union stays the union: negation cannot turn a float
+                    // into an int or the other way round.
+                    ref ty if ty.is_int_float_union() => Ok(ty.clone()),
                     _ => Err(CompileError::new(
                         expr.span,
                         "Cannot negate a non-numeric value",
@@ -77,6 +81,10 @@ impl Checker {
                 Some(PhpType::Bool) | Some(PhpType::False) | Some(PhpType::Void) => {
                     Ok(PhpType::Int)
                 }
+                // What a PREVIOUS `++` left behind: an int that may have promoted at the
+                // overflow boundary. Incrementing it again stays `int|float`, and refusing it
+                // would make the second `$i++` in a row a compile error.
+                Some(ty) if ty.is_int_float_union() => Ok(ty.clone()),
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &increment_type_error(name, other),
@@ -102,6 +110,8 @@ impl Checker {
                 }
                 // The post-forms yield the float the local held before the update.
                 Some(PhpType::Float) => Ok(PhpType::Float),
+                // See the pre-form arm: this is the type a previous `++` produced.
+                Some(ty) if ty.is_int_float_union() => Ok(ty.clone()),
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &increment_type_error(name, other),
@@ -313,7 +323,9 @@ impl Checker {
                                 }
                                 PhpType::Buffer(elem_ty) => {
                                     saw_indexable_member = true;
-                                    if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) {
+                                    if !matches!(idx_ty, PhpType::Int | PhpType::Mixed)
+                                        && !idx_ty.is_int_float_union()
+                                    {
                                         first_index_error =
                                             first_index_error.or(Some("Buffer index must be integer"));
                                         continue;
@@ -342,7 +354,9 @@ impl Checker {
                         }
                     }
                     PhpType::Buffer(elem_ty) => {
-                        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) {
+                        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed)
+                            && !idx_ty.is_int_float_union()
+                        {
                             return Err(CompileError::new(
                                 expr.span,
                                 "Buffer index must be integer",
@@ -478,5 +492,5 @@ impl Checker {
 /// `int`, `float`, `bool`, `null`, `string`, and boxed `mixed` locals all have an increment
 /// path; everything else (arrays, objects, buffers, pointers) reaches this diagnostic.
 fn increment_type_error(name: &str, ty: &PhpType) -> String {
-    format!("Cannot increment/decrement ${} of type {:?}", name, ty)
+    format!("Cannot increment/decrement ${} of type {}", name, ty)
 }

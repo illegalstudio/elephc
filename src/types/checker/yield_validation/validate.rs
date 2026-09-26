@@ -300,6 +300,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. }
         | ExprKind::StaticMethodCall { args, .. } => {
             for a in args {

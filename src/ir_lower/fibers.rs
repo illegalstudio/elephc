@@ -257,7 +257,16 @@ fn static_method_sig(
     receiver: &StaticReceiver,
     method: &str,
 ) -> Option<FunctionSig> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     let class_name = match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => name.as_str().trim_start_matches('\\').to_string(),
         StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone()?,
         StaticReceiver::Parent => {

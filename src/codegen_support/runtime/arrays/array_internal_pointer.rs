@@ -21,7 +21,9 @@
 //! - Value boxing is delegated to already-audited ownership paths: indexed storage tail
 //!   calls `__rt_array_get_mixed_key` (the ordinary `$a[$i]` read path, which understands
 //!   every indexed `value_type`), hash storage tail calls `__rt_mixed_from_value` (which
-//!   retains containers and persists strings).
+//!   retains containers and persists strings). A hash entry that already holds a boxed Mixed
+//!   cell, directly or through a PHP reference, is returned as that cell with `__rt_incref`:
+//!   boxing it again would nest a Mixed inside a Mixed.
 //! - Hash ordinals are resolved by walking the insertion-order `next` chain, so hash
 //!   reads are `O(cursor)`; indexed reads are `O(1)`.
 //! - The seek modes consumed by `__rt_array_ptr_seek` are `0` reset, `1` end, `2` next and
@@ -364,11 +366,20 @@ pub fn emit_array_ptr_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x10, #24]");                                  // x9 = value_lo from the hash entry
     emitter.instruction("ldr x13, [x10, #32]");                                 // x13 = value_hi from the hash entry
     emitter.instruction("ldr x14, [x10, #40]");                                 // x14 = value_tag from the hash entry
+    emitter.instruction("cmp x14, #7");                                         // is the payload already a boxed Mixed cell?
+    emitter.instruction("b.eq __rt_aptr_val_hash_boxed");                       // then it IS the value; boxing it again nests a Mixed in a Mixed
     emitter.instruction("mov x0, x14");                                         // value_tag = the entry's runtime tag
     emitter.instruction("mov x1, x9");                                          // value_lo = the entry's low payload word
     emitter.instruction("mov x2, x13");                                         // value_hi = the entry's high payload word
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_aptr_val_deref_done", "x0", "x1", "x2");
+    emitter.instruction("cmp x0, #7");                                          // did the deref yield the reference's boxed Mixed cell?
+    emitter.instruction("b.eq __rt_aptr_val_ref_boxed");                        // then return that cell; boxing it again nests a Mixed in a Mixed
     emitter.instruction("b __rt_mixed_from_value");                             // retain/persist the payload and return the box
+    emitter.label("__rt_aptr_val_ref_boxed");
+    emitter.instruction("mov x9, x1");                                          // the referenced value IS the Mixed cell the caller wants
+    emitter.label("__rt_aptr_val_hash_boxed");
+    emitter.instruction("mov x0, x9");                                          // the entry payload IS the Mixed cell the caller wants
+    emitter.instruction("b __rt_incref");                                       // retain it and return it; incref preserves x0
     emitter.label("__rt_aptr_val_false");
     emitter.instruction("mov x0, #3");                                          // value_tag = 3 (bool)
     emitter.instruction("mov x1, #0");                                          // value_lo = 0 (false)
@@ -399,10 +410,19 @@ fn emit_array_ptr_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [r10 + 24]");                        // r8 = value_lo from the hash entry
     emitter.instruction("mov r9, QWORD PTR [r10 + 32]");                        // r9 = value_hi from the hash entry
     emitter.instruction("mov rax, QWORD PTR [r10 + 40]");                       // rax = value_tag from the hash entry
+    emitter.instruction("cmp rax, 7");                                          // is the payload already a boxed Mixed cell?
+    emitter.instruction("je __rt_aptr_val_hash_boxed");                         // then it IS the value; boxing it again nests a Mixed in a Mixed
     emitter.instruction("mov rdi, r8");                                         // value_lo = the entry's low payload word
     emitter.instruction("mov rsi, r9");                                         // value_hi = the entry's high payload word
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_aptr_val_deref_done", "rax", "rdi", "rsi");
+    emitter.instruction("cmp rax, 7");                                          // did the deref yield the reference's boxed Mixed cell?
+    emitter.instruction("je __rt_aptr_val_ref_boxed");                          // then return that cell; boxing it again nests a Mixed in a Mixed
     emitter.instruction("jmp __rt_mixed_from_value");                           // retain/persist the payload and return the box
+    emitter.label("__rt_aptr_val_ref_boxed");
+    emitter.instruction("mov r8, rdi");                                         // the referenced value IS the Mixed cell the caller wants
+    emitter.label("__rt_aptr_val_hash_boxed");
+    emitter.instruction("mov rax, r8");                                         // the entry payload IS the Mixed cell the caller wants
+    emitter.instruction("jmp __rt_incref");                                     // retain it and return it; incref preserves rax
     emitter.label("__rt_aptr_val_false");
     emitter.instruction("xor edi, edi");                                        // value_lo = 0 (false)
     emitter.instruction("xor esi, esi");                                        // value_hi unused

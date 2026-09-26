@@ -94,6 +94,17 @@ impl Checker {
                 self.closure_return_types
                     .insert(pname.clone(), sig.return_type.clone());
                 self.callable_sigs.insert(pname.clone(), sig);
+            } else if let Some(sig) = param_types
+                .iter()
+                .position(|(name, _)| name == pname)
+                .and_then(|index| decl.param_types.get(index))
+                .and_then(|type_ann| type_ann.as_ref())
+                .and_then(|type_ann| self.declared_callable_signature(type_ann, decl.span))
+            {
+                // No call site told us what this callable is, but the DECLARATION did.
+                self.closure_return_types
+                    .insert(pname.clone(), sig.return_type.clone());
+                self.callable_sigs.insert(pname.clone(), sig);
             } else {
                 self.closure_return_types.remove(pname);
                 self.callable_sigs.remove(pname);

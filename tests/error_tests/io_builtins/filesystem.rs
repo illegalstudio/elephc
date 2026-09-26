@@ -32,7 +32,7 @@ function read_file(): string {
     return file_get_contents("missing.txt");
 }
 "#,
-        "Function 'read_file' return type expects Str, got Union([Str, False])",
+        "Function 'read_file' return type expects string, got string|false",
     );
 }
 
@@ -60,7 +60,7 @@ function dump_file(): int {
     return readfile("missing.txt");
 }
 "#,
-        "Function 'dump_file' return type expects Int, got Union([Int, False])",
+        "Function 'dump_file' return type expects int, got int|false",
     );
 }
 

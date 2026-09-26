@@ -371,6 +371,7 @@ pub(super) fn resolve_stmt_exprs(
         StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -381,6 +382,7 @@ pub(super) fn resolve_stmt_exprs(
         } => StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params: resolve_params(
                 params,
                 base_dir,
@@ -397,6 +399,7 @@ pub(super) fn resolve_stmt_exprs(
             body,
         },
         StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -408,6 +411,7 @@ pub(super) fn resolve_stmt_exprs(
             methods,
         constants,
         } => StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -434,12 +438,14 @@ pub(super) fn resolve_stmt_exprs(
         constants,
         },
         StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties,
             methods,
         constants,
         } => StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties: resolve_properties(
@@ -489,6 +495,7 @@ pub(super) fn resolve_stmt_exprs(
         },
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -497,6 +504,7 @@ pub(super) fn resolve_stmt_exprs(
             constants,
         } => StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             implements,
             trait_uses,

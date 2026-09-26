@@ -32,6 +32,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_switch_bool_guard_case(
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -86,6 +87,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_exact_guard
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -139,6 +141,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_excluded_gu
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -215,6 +218,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_true_cases_from_outer_guard(
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -274,6 +278,7 @@ fn test_eliminate_dead_code_invalidates_switch_bool_guard_after_local_write() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

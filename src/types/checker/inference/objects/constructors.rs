@@ -49,6 +49,15 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let class_name = class_name.to_string();
+        // `new Box(5)` on a generic class, BEFORE the unknown-class check below: a template is
+        // stripped from the program, so the class table has no entry for it and the ordinary
+        // path would report it as undefined. Written arguments never reach here — those were
+        // already rewritten to the instantiated class by `generics::classes`.
+        if let Some(instantiated) =
+            self.infer_generic_construction(&class_name, args, expr, env)?
+        {
+            return Ok(instantiated);
+        }
         if self.enums.contains_key(class_name.as_str()) {
             return Err(CompileError::new(
                 expr.span,
@@ -850,7 +859,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: crate::span::Span,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => Ok(name.as_canonical()),
             StaticReceiver::Self_ | StaticReceiver::Static => {
                 self.current_class.clone().ok_or_else(|| {
@@ -1085,7 +1103,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: crate::span::Span,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(class_name) => self
                 .resolve_fiber_callable_class_name(class_name.as_str())
                 .map(str::to_string)

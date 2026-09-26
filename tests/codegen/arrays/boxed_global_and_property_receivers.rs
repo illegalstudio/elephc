@@ -84,3 +84,72 @@ echo $t, "\n";
     assert_eq!(out.stdout, "42\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A property array reaching a parameter compiled for RAW array storage must be unboxed first.
+///
+/// `prop_get` on a declared `array` yields a boxed `Heap(Mixed)` cell, while the SPL and prelude
+/// classes declare `array: Heap(Array)` — a raw pointer. Nothing converted between the two, so the
+/// callee read the cell's header words as the array's, silently: this fixture printed
+/// `4||5|01234|2` where php prints `2|34|2|a1b2|2`. The associative half is the clearer tell —
+/// `count()` answered 5 for two pairs and the `foreach` walked the cell's own words as elements.
+///
+/// A user function was never affected, and that is the diagnostic: `takeCount()` has a
+/// `Heap(Mixed)` parameter slot, so both sides already agreed. Only a callee compiled for raw
+/// storage could see the difference, which is why it is in the fixture — it passed before the fix
+/// and must keep passing after it.
+///
+/// Both array shapes are covered because they unbox through different runtime helpers, and the
+/// assertion is the CONTENT rather than only the count: a wrong header word still yields a
+/// plausible number.
+#[test]
+fn test_property_array_unboxes_into_a_raw_array_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    public array $items = [3, 4];
+    public array $pairs = ['a' => 1, 'b' => 2];
+}
+function takeCount(array $a): int { return count($a); }
+$h = new Holder();
+$ai = new ArrayIterator($h->items);
+echo $ai->count(), "|";
+foreach ($ai as $v) { echo $v; }
+echo "|", count(new ArrayObject($h->pairs)), "|";
+foreach (new ArrayIterator($h->pairs) as $k => $v) { echo $k, $v; }
+echo "|", takeCount($h->items);
+"#,
+    );
+    assert_eq!(out, "2|34|2|a1b2|2");
+}
+
+/// The same crossing reached through argument SPREADS, and the layout trap it guards against.
+///
+/// A static positional spread and a named spread both end in `coerce_operands_to_params`, so they
+/// take the same unbox; `origin/main` printed `4||5|01234` for this fixture where php prints
+/// `2|34|2|a1b2`.
+///
+/// The named half is also the regression test for a tempting "improvement". Routing the unbox
+/// through the shared container conversion that merge temps use — it canonicalizes slots and
+/// carries the boxed-slot guard, which a reviewer recommended — made `new ArrayObject(...)` die
+/// with SIGBUS: that conversion trusts the STATIC layout, the SPL parameter says `array<mixed>`,
+/// and it ran the indexed-array conversion over a hash payload. The unbox has to stay
+/// layout-agnostic.
+#[test]
+fn test_property_array_reaches_a_raw_array_parameter_through_spreads() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { public array $items = [3, 4]; public array $pairs = ['a' => 1, 'b' => 2]; }
+$h = new Holder();
+$args = [$h->items];
+$ai = new ArrayIterator(...$args);
+echo $ai->count(), "|";
+foreach ($ai as $v) { echo $v; }
+echo "|";
+$named = ['array' => $h->pairs];
+$bo = new ArrayObject(...$named);
+echo count($bo), "|";
+foreach ($bo as $k => $v) { echo $k, $v; }
+"#,
+    );
+    assert_eq!(out, "2|34|2|a1b2");
+}

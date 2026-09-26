@@ -155,7 +155,8 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             catches: catches
                 .into_iter()
                 .map(|catch| crate::parser::ast::CatchClause {
-                    exception_types: catch.exception_types,
+                    exception_type_args: catch.exception_type_args,
+                exception_types: catch.exception_types,
                     variable: catch.variable,
                     body: fold_block(catch.body),
                 })
@@ -174,6 +175,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -190,6 +192,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             StmtKind::FunctionDecl {
                 by_ref_return,
                 name,
+                type_params,
                 params: fold_params(params),
                 param_attributes,
                 variadic,
@@ -214,6 +217,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             init: fold_expr(init),
         },
         StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -225,6 +229,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             methods,
         constants,
         } => StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -238,6 +243,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         },
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -246,6 +252,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             constants,
         } => StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             implements,
             trait_uses,
@@ -255,12 +262,14 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         },
         StmtKind::PackedClassDecl { name, fields } => StmtKind::PackedClassDecl { name, fields },
         StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties,
             methods,
         constants,
         } => StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties: properties.into_iter().map(fold_property).collect(),

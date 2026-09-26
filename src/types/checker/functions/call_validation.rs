@@ -526,10 +526,12 @@ impl Checker {
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             Ok(())
         } else {
-            Err(CompileError::new(
-                span,
-                &format!("{} expects {:?}, got {:?}", context, expected, actual),
-            ))
+            let mut message = format!("{} expects {}, got {}", context, expected, actual);
+            if let Some(hint) = self.variance_refusal_hint(expected, actual) {
+                message.push_str(" — ");
+                message.push_str(&hint);
+            }
+            Err(CompileError::new(span, &message))
         }
     }
 

@@ -114,6 +114,7 @@ fn receiver_refs_xml(receiver: &StaticReceiver) -> bool {
 fn instanceof_target_refs_xml(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(name) => name_is_xml_class(name),
+        InstanceOfTarget::Generic(class_type) => type_refs_xml(class_type),
         InstanceOfTarget::Expr(expr) => expr_refs_xml(expr),
     }
 }
@@ -145,7 +146,16 @@ fn type_refs_xml(type_expr: &TypeExpr) -> bool {
         TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => {
             type_refs_xml(inner)
         }
+        TypeExpr::AssocArray { key, value } => type_refs_xml(key) || type_refs_xml(value),
+        // A declared signature can name one of these classes, and a program
+        // that mentions it only through a callback still needs the prelude.
+        TypeExpr::CallableSig { params, ret } => {
+            params.iter().any(type_refs_xml) || type_refs_xml(ret)
+        }
         TypeExpr::Named(name) => name_is_xml_class(name),
+        TypeExpr::GenericClass { name, args } => {
+            name_is_xml_class(name) || args.iter().any(type_refs_xml)
+        }
         TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
             members.iter().any(type_refs_xml)
         }
@@ -317,6 +327,9 @@ fn expr_refs_xml(expr: &Expr) -> bool {
         }
         ExprKind::NewObject { class_name, args } => {
             name_is_xml_class(class_name) || args.iter().any(expr_refs_xml)
+        }
+        ExprKind::NewGeneric { class_type, args } => {
+            type_refs_xml(class_type) || args.iter().any(expr_refs_xml)
         }
         ExprKind::NewDynamic { name_expr, args } => {
             expr_refs_xml(name_expr) || args.iter().any(expr_refs_xml)

@@ -323,6 +323,7 @@ fn mixed_type() -> TypeExpr {
 /// Used for simple methods like `current()`, `key()`, `valid()`, `rewind()`, `next()`.
 fn builtin_interface_method(name: &str, return_type: TypeExpr) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -356,6 +357,7 @@ fn builtin_interface_method_with_params(
         .map(|(param_name, ty)| (param_name.to_string(), Some(ty), None, false))
         .collect();
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,

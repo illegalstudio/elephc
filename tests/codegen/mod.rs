@@ -10,6 +10,7 @@
 mod exceptions;
 mod fibers;
 mod buffers;
+mod generics;
 mod preprocessor;
 mod namespaces;
 mod null_sentinel;

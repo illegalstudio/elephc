@@ -250,7 +250,16 @@ pub(super) fn static_late_binding_receiver_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
 ) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {
             ctx.current_class.clone()
@@ -548,7 +557,16 @@ pub(super) fn static_receiver_class_name(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
 ) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
         StaticReceiver::Parent => {

@@ -10,7 +10,9 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind};
+use crate::parser::ast::{
+    ClassMethod, Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
+};
 
 /// Entry point: walks a complete `Program` and returns all class names that require
 /// emitted metadata (class tables, vtables, dispatch helpers, etc.).
@@ -68,6 +70,7 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
                 name,
                 extends,
                 implements,
+                properties,
                 methods,
                 ..
             } => {
@@ -79,7 +82,13 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
                     names.insert(interface.as_str().to_string());
                 }
                 for method in methods {
+                    collect_instantiated_method_types(method, names);
                     collect_required_class_names_in_body(&method.body, names);
+                }
+                for property in properties {
+                    if let Some(ty) = &property.type_expr {
+                        collect_instantiated_type_names(ty, names);
+                    }
                 }
             }
             StmtKind::Try {
@@ -108,7 +117,19 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
                 collect_required_class_names_in_body(body, names);
             }
             StmtKind::IncludeOnceMark { .. } => {}
-            StmtKind::FunctionDecl { body, .. } => {
+            StmtKind::FunctionDecl {
+                params,
+                variadic_type,
+                return_type,
+                body,
+                ..
+            } => {
+                collect_instantiated_signature_types(
+                    params.iter().map(|(_, declared, _, _)| declared.as_ref()),
+                    variadic_type.as_ref(),
+                    return_type.as_ref(),
+                    names,
+                );
                 collect_required_class_names_in_body(body, names);
             }
             StmtKind::IfDef {
@@ -260,6 +281,53 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
 ///
 /// # Panics
 /// - `unreachable!` if a `MagicConstant` is encountered (must be lowered before this pass).
+/// Adds the INSTANTIATED class names a method's signature mentions.
+fn collect_instantiated_method_types(method: &ClassMethod, names: &mut HashSet<String>) {
+    collect_instantiated_signature_types(
+        method.params.iter().map(|(_, declared, _, _)| declared.as_ref()),
+        method.variadic_type.as_ref(),
+        method.return_type.as_ref(),
+        names,
+    );
+}
+
+/// Adds the instantiated class names one signature's declared types mention.
+fn collect_instantiated_signature_types<'a>(
+    params: impl Iterator<Item = Option<&'a TypeExpr>>,
+    variadic: Option<&TypeExpr>,
+    return_type: Option<&TypeExpr>,
+    names: &mut HashSet<String>,
+) {
+    for declared in params.flatten() {
+        collect_instantiated_type_names(declared, names);
+    }
+    for declared in variadic.into_iter().chain(return_type) {
+        collect_instantiated_type_names(declared, names);
+    }
+}
+
+/// Adds every INSTANTIATED class name a declared type mentions.
+///
+/// Only instantiated names — the ones carrying `<` — are collected, and that restriction is the
+/// whole safety of this: for any other class a type hint names, nothing changes, so no program
+/// without generics can grow a byte.
+///
+/// An instantiation named only in a type hint became reachable when variance landed. Before it,
+/// a `Box<Animal>` parameter could only ever receive a `Box<Animal>`, which some `new` had to
+/// build, and that `new` is what required the metadata. A widened call site breaks that
+/// coincidence: `inspect(new Box<Dog>(...))` never names `Box<Animal>` in an expression, yet the
+/// callee computes its vtable slot from exactly that class. Without its metadata the slot is
+/// garbage and the program prints garbage — silently, which is the reason this is collected here
+/// rather than diagnosed later.
+fn collect_instantiated_type_names(ty: &TypeExpr, names: &mut HashSet<String>) {
+    for name in ty.named_classes() {
+        let name = name.as_str();
+        if name.contains('<') {
+            names.insert(name.to_string());
+        }
+    }
+}
+
 fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>) {
     match &expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
@@ -379,6 +447,12 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 collect_required_class_names_in_expr(arg, names);
             }
         }
+        // `NewGeneric` is a transient node: `generics::classes` rewrites it to an ordinary
+        // `NewObject` naming the INSTANTIATED class before the checker runs, and recording the
+        // template's own name here would ask codegen for a class the program no longer declares.
+        ExprKind::NewGeneric { .. } => unreachable!(
+            "ExprKind::NewGeneric must be instantiated by generics::classes"
+        ),
         ExprKind::NewObject { class_name, args } => {
             names.insert(class_name.as_str().to_string());
             for arg in args {

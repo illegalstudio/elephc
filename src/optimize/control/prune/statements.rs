@@ -177,7 +177,8 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             let catches = normalize_catch_clauses(catches
                 .into_iter()
                 .map(|catch| crate::parser::ast::CatchClause {
-                    exception_types: catch.exception_types,
+                    exception_type_args: catch.exception_type_args,
+                exception_types: catch.exception_types,
                     variable: catch.variable,
                     body: prune_block(catch.body),
                 })
@@ -268,6 +269,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -279,6 +281,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             kind: StmtKind::FunctionDecl {
                 by_ref_return,
                 name,
+                type_params,
                 params,
                 param_attributes,
                 variadic,
@@ -300,6 +303,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             attributes: Vec::new(),
         }],
         StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -318,6 +322,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
                 .collect();
             vec![Stmt {
                 kind: StmtKind::ClassDecl {
+                    generics,
                     name,
                     extends,
                     implements,
@@ -351,6 +356,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         }
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -360,6 +366,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         } => vec![Stmt {
             kind: StmtKind::EnumDecl {
                 name,
+                generics,
                 backing_type,
                 cases,
                 implements,
@@ -380,6 +387,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             attributes: Vec::new(),
         }],
         StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties,
@@ -387,6 +395,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         constants,
         } => vec![Stmt {
             kind: StmtKind::InterfaceDecl {
+                generics,
                 name,
                 extends,
                 properties,

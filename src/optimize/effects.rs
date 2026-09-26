@@ -331,9 +331,11 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .with_may_throw()
                     .with_writes_globals(),
             }),
-        ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
-            .with_side_effects()
-            .with_may_throw(),
+        ExprKind::NewObject { args, .. } | ExprKind::NewGeneric { args, .. } => {
+            combine_effects(args.iter().map(expr_effect))
+                .with_side_effects()
+                .with_may_throw()
+        }
         ExprKind::NewDynamic { name_expr, args } => expr_effect(name_expr)
             .combine(combine_effects(args.iter().map(expr_effect)))
             .with_side_effects()
@@ -493,6 +495,7 @@ pub(super) fn statically_known_array_read(array: &Expr, index: &Expr) -> Option<
 fn instanceof_target_effect(target: &InstanceOfTarget) -> Effect {
     match target {
         InstanceOfTarget::Name(_) => Effect::PURE,
+        InstanceOfTarget::Generic(_) => Effect::PURE,
         InstanceOfTarget::Expr(expr) => expr_effect(expr),
     }
 }

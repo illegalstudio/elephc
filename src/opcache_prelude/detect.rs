@@ -440,6 +440,7 @@ fn packed_field_refs(_field: &PackedField, _target: Symbol<'_>) -> Option<Span> 
 fn instanceof_target_refs(target_ref: &InstanceOfTarget, target: Symbol<'_>) -> Option<Span> {
     match target_ref {
         InstanceOfTarget::Name(_) => None,
+        InstanceOfTarget::Generic(_) => None,
         InstanceOfTarget::Expr(expr) => expr_refs(expr, target),
     }
 }
@@ -578,7 +579,9 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         ExprKind::NamedArg { value, .. } => expr_refs(value, target),
         ExprKind::ExprCall { callee, args } => expr_refs(callee, target)
             .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
-        ExprKind::NewObject { args, .. } => args.iter().find_map(|arg| expr_refs(arg, target)),
+        ExprKind::NewObject { args, .. } | ExprKind::NewGeneric { args, .. } => {
+            args.iter().find_map(|arg| expr_refs(arg, target))
+        }
         ExprKind::NewDynamic { name_expr, args } => expr_refs(name_expr, target)
             .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
         ExprKind::NewDynamicObject {

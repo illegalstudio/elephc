@@ -197,7 +197,7 @@ fn materialize_extern_arg(
         }
         (expected, actual) => {
             return Err(CodegenIrError::unsupported(format!(
-                "extern parameter ${} expects {:?}, got {:?}",
+                "extern parameter ${} expects {}, got {}",
                 param.name, expected, actual
             )))
         }

@@ -27,10 +27,15 @@ pub(crate) mod scope_dynamic_storage;
 mod driver;
 mod extern_decl;
 mod functions;
+mod generic_bounds;
+mod generic_method;
+mod generic_new;
+mod generic_variance;
 mod inference;
 mod loop_storage;
 mod method_pass;
 mod mixed_storage_scan;
+mod packed_counter;
 pub(crate) mod null_probe;
 mod schema;
 mod stmt_check;
@@ -120,6 +125,76 @@ pub(crate) struct Checker {
     pub param_specialization_seen: HashSet<(String, usize)>,
     /// Untyped interface positions whose implementation uses a stable boxed ABI.
     pub interface_method_boxed_params: HashSet<(String, usize)>,
+    /// Every generic instantiation a call site asked for, as (template name, type arguments).
+    ///
+    /// The checker instantiates into `fn_decls`/`functions` so the CALL type-checks, but
+    /// lowering walks the AST, not the checker's tables. The pipeline therefore reads this
+    /// list, splices a real declaration per entry into the program, and re-checks — repeating
+    /// until no new entry appears, since an instantiated body may itself call a template.
+    /// Deduplicated by instantiated name, so the fixpoint terminates for any program without
+    /// polymorphic recursion.
+    pub requested_instantiations: Vec<(String, crate::generics::Bindings)>,
+    /// (enclosing function, call site) -> the instantiated function that call resolved to.
+    ///
+    /// Lowering cannot re-derive this: picking the instantiation needs the argument TYPES, and
+    /// `lower_args_with_signature` needs the signature before it lowers the arguments. So the
+    /// checker's answer is carried across, the way `builtin_call_types` already is.
+    ///
+    /// The ENCLOSING FUNCTION is half the key, and it has to be. One source position inside a
+    /// generic template is reached once per instantiation of that template, and legitimately
+    /// resolves differently each time: `twice<T>() { return identity($value); }` calls
+    /// `identity<int>` from `twice<int>` and `identity<string>` from `twice<string>`, at the
+    /// same line and column. Keying on `Span` alone collapsed those two into one and made the
+    /// second call invoke the first's function.
+    ///
+    /// `Span` still carries no file identity, so two calls at the same position inside
+    /// same-named functions in two included files remain indistinguishable. That residue is a
+    /// hard error rather than a silent miscompile — see `instantiate_generic_call`.
+    pub generic_call_sites: HashMap<(String, Span), String>,
+    /// The generic class templates, for inferring type arguments at `new Box(5)`.
+    ///
+    /// Empty on every path that does not run `generics::monomorphize`, which makes those paths
+    /// behave exactly as they did before this feature: a bare `new Box(…)` on a template is an
+    /// unknown class, as it was.
+    pub class_templates: Vec<crate::generics::classes::TemplateSignature>,
+    /// Every generic METHOD the program declares, by (class key, method key).
+    ///
+    /// Rebuilt each fixpoint round, because a template rides along when its class is
+    /// instantiated: `Box<int>` gets `map<U>` from `Box<T>`.
+    pub method_templates: std::collections::HashMap<
+        (String, String),
+        crate::generics::methods::MethodTemplate,
+    >,
+    /// The method instantiations this round asked for, as (class key, method key, arguments).
+    pub requested_method_instantiations:
+        Vec<((String, String), crate::generics::Bindings)>,
+    /// (enclosing function, call site) -> the instantiated method name that site selected.
+    pub generic_method_sites: std::collections::HashMap<
+        (String, crate::span::Span),
+        std::collections::BTreeSet<String>,
+    >,
+    /// Every generic CLASS instantiation a `new` asked for, as (template key, type arguments).
+    ///
+    /// The mirror of `requested_instantiations` for classes. `generics::classes` splices one
+    /// declaration per entry on the next round.
+    pub requested_class_instantiations: Vec<(String, crate::generics::Bindings)>,
+    /// (enclosing function, `new` site) -> the instantiated class that construction resolved to.
+    ///
+    /// The ENCLOSING FUNCTION is half the key for the same reason it is in `generic_call_sites`:
+    /// one position inside a generic function is reached once per instantiation of it, and
+    /// legitimately means a different class each time. `function wrap<T>(T $v) { new Box($v); }`
+    /// builds a `Box<int>` from `wrap<int>` and a `Box<string>` from `wrap<string>`, at one line
+    /// and column. The bodies are DIFFERENT AST nodes after splicing — a clone keeps its source
+    /// spans — so the span alone was never enough to tell them apart.
+    ///
+    /// The consumer is not lowering but `generics::classes`, which rewrites the AST node in
+    /// place; once it has, the program names the instantiated class outright and every later
+    /// pass — reachability included — sees an ordinary construction with nothing to re-derive.
+    ///
+    /// The value is a SET because the key still cannot separate everything: a `Span` carries no
+    /// file identity, so two same-named functions in two included files collide. That residue
+    /// is a compile error naming both classes, not a choice between them.
+    pub generic_new_sites: HashMap<(String, Span), std::collections::BTreeSet<String>>,
     /// Tracks callable signatures inferred for user-function callable returns.
     pub callable_return_sigs: HashMap<String, FunctionSig>,
     /// Tracks callable element signatures inferred for user-function array returns.
@@ -217,6 +292,22 @@ pub(crate) struct Checker {
     /// promoting to `AssocArray` like a statically-known string key would. Mirrors
     /// the lowering's `foreach_int_key_locals` lifetime (per function, not popped).
     pub foreach_key_locals: HashSet<String>,
+    /// The counter of the innermost `for` loop whose writes stay on packed storage, with the
+    /// `local_conditional_depth` its body runs at.
+    ///
+    /// Packed storage has no keys — slot `n` IS key `n` — so a write past the logical end has
+    /// to zero-fill the gap, and php would instead have promoted the array to a hash. The
+    /// checker therefore refuses packed storage for a write it cannot bound against the
+    /// array's length (see `array_key_contiguity_is_unproven`), EXCEPT for the one shape it
+    /// can bound: a `for ($i = 0; …; $i++)` counter, written unconditionally in that loop's
+    /// body, into an array that is still empty. There `$i` is 0 at the first write and grows
+    /// one at a time with the array, so no gap is reachable.
+    ///
+    /// The depth is what makes "unconditionally" checkable: the loop body runs one conditional
+    /// scope deeper than the `for` statement, and an `if` inside adds another, so a write at any
+    /// greater depth may be skipped and is not covered. `Some` only ever names a loop whose body
+    /// also has no `continue` to skip the write with, and no second write to the counter.
+    pub(crate) packed_loop_counter: Option<packed_counter::PackedLoopCounter>,
     /// Whether the active local statement stream has crossed an `eval()` call.
     ///
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because
@@ -373,15 +464,20 @@ pub(crate) struct Checker {
     /// binding is never killable.
     pub static_local_names: HashSet<String>,
     /// Names whose type was DECLARED in the current body by a `TypedAssign` local
-    /// (`int $x = …`). A declaration is a programmer contract and stays strict in both
-    /// permissive and `--strict-locals` mode.
+    /// (`int $x = …`), and what each was declared AS. A declaration is a programmer contract
+    /// and stays strict in both permissive and `--strict-locals` mode.
+    ///
+    /// The declared type is kept, not just the name, because a guard's narrowing is not the
+    /// contract: `?Node $c = $head; while ($c !== null) { $c = $c->next; }` reaches the
+    /// reassignment with `$c` bound `Node`, and only the declaration knows that `?Node` was
+    /// always allowed. See `check_local_reassignment`.
     ///
     /// PARAMETERS are deliberately absent, type hint or not. A PHP parameter type constrains
     /// the INCOMING ARGUMENT; it says nothing about the local afterwards, and php-src lets
     /// `function f(float $v) { $v = (string) $v; }` reassign it freely (issue #857). Listing
     /// typed parameters here made them permanently monomorphic and rejected that valid PHP
     /// with `cannot reassign $v from float to string`.
-    pub typed_local_names: HashSet<String>,
+    pub typed_local_names: HashMap<String, PhpType>,
     /// The `unset()` ARGUMENTS whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed there. EIR lowering consults these to abandon the old frame slot instead of
     /// null-storing into it. The name is half the key: a `Span` has no file identity and include
@@ -507,7 +603,7 @@ pub(crate) struct SavedLocalBindingScope {
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
-    typed: HashSet<String>,
+    typed: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
     contains_eval: bool,
 }
@@ -600,7 +696,7 @@ impl Checker {
             && !self.ref_aliased_locals.contains(name)
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
-            && !self.typed_local_names.contains(name)
+            && !self.typed_local_names.contains_key(name)
     }
 
     /// Authorizes reference-binding detachment outside conditional flow and name-addressed storage.
@@ -613,7 +709,7 @@ impl Checker {
                 || self.active_external_ref_bindings.contains(name))
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
-            && !self.typed_local_names.contains(name)
+            && !self.typed_local_names.contains_key(name)
             && !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
     }
@@ -711,7 +807,7 @@ impl Checker {
         };
         self.local_conditional_depth = 0;
         self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
-        self.typed_local_names = HashSet::new();
+        self.typed_local_names = HashMap::new();
         // Cleared rather than inherited: a caller that runs `eval` says nothing about the body
         // about to be checked. `run_mixed_storage_scan` fills it in for real, and BOTH callers of
         // this method run that scan immediately afterwards — `with_local_storage_context` and
@@ -1014,6 +1110,13 @@ pub(crate) fn record_throw_access_site(
 /// types, defaults, variadic marker, return type, span, body statements, and
 /// attributes (currently only `#[\Deprecated]` is consulted).
 pub(crate) struct FnDecl {
+    /// Declared type parameters (`function f<T>(...)`), empty for an ordinary function.
+    ///
+    /// A non-empty list makes this declaration a TEMPLATE: it is deliberately absent from
+    /// `Checker::functions`, because its parameter types mention names that have no
+    /// representation until a call site supplies type arguments. Each call site instantiates
+    /// it under a synthetic monomorphic name instead.
+    pub type_params: Vec<crate::parser::ast::TypeParam>,
     pub params: Vec<String>,
     pub param_types: Vec<Option<TypeExpr>>,
     /// Attribute groups aligned with the declared parameters plus the variadic parameter, if any.
@@ -1046,7 +1149,12 @@ pub fn check_types(
     program: &Program,
     target: Target,
 ) -> Result<CheckResult, CompileError> {
-    check_types_with_options(program, target, CheckOptions::default())
+    check_types_with_options(
+        program,
+        target,
+        CheckOptions::default(),
+        &crate::generics::GenericContext::default(),
+    )
 }
 
 /// Runs the type checker on `program` for the given `target` and `options`,
@@ -1057,11 +1165,12 @@ pub fn check_types_with_options(
     program: &Program,
     target: Target,
     options: CheckOptions,
+    generics: &crate::generics::GenericContext,
 ) -> Result<CheckResult, CompileError> {
     // Every `check*` spelling funnels through here, so this is the one place the checker needs
     // the stack its own recursion depth implies (issue #686).
     crate::compiler_stack::with_compiler_stack(|| {
-        check_types_on_compiler_stack(program, target, options)
+        check_types_on_compiler_stack(program, target, options, generics)
     })
 }
 
@@ -1070,8 +1179,17 @@ fn check_types_on_compiler_stack(
     program: &Program,
     target: Target,
     options: CheckOptions,
+    generics: &crate::generics::GenericContext,
 ) -> Result<CheckResult, CompileError> {
-    let (mut checker, global_env) = driver::check_types_impl(program, target, options)?;
+    let (mut checker, global_env) = driver::check_types_impl(program, target, options, generics)?;
+
+    // Generic class instantiation happened before this checker ran, and on purpose: its type
+    // arguments are written, not inferred. What it could NOT do is decide whether `User`
+    // satisfies `T : Entity` — that is a subtyping question, and the class table that answers it
+    // exists only here. Checked once the tables are built, and before the result is handed back,
+    // so a violated bound is a compile error rather than a confusing failure inside the
+    // instantiated body.
+    checker.verify_class_type_argument_bounds(&generics.class_type_argument_bounds)?;
 
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);
@@ -1124,6 +1242,12 @@ fn check_types_on_compiler_stack(
     )?;
 
     Ok(CheckResult {
+        requested_instantiations: checker.requested_instantiations,
+        generic_call_sites: checker.generic_call_sites,
+        requested_class_instantiations: checker.requested_class_instantiations,
+        requested_method_instantiations: checker.requested_method_instantiations,
+        generic_method_sites: checker.generic_method_sites,
+        generic_new_sites: checker.generic_new_sites,
         global_env,
         functions: checker.functions,
         function_attribute_names,

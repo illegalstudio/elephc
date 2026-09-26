@@ -72,14 +72,22 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             );
         }
         PhpType::Str => {
-            let callback_elem_ty = PhpType::Mixed;
+            // The same narrowed element type every other arm uses. A callback named by string
+            // binds through a descriptor whose result arrives boxed, but the wrapper casts that
+            // box to the declared return type before the runtime helper sees it — so there is no
+            // reason for this arm alone to force `Mixed`, and forcing it cost `array_map('label',
+            // …)` the `array<string>` that `function label(int $n): string` plainly promises.
+            //
+            // The narrowing set is `Int`/`Bool`/`Str` and nothing else, so anything the wrapper
+            // cannot cast still arrives here as `Mixed` and lowers exactly as it did.
+            let callback_elem_ty = array_map_descriptor_callback_result_element_type(inst)?;
             let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
             lower_runtime_string_descriptor_callback(
                 ctx,
                 callback,
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![elem_ty.clone()],
-                PhpType::Mixed,
+                callback_elem_ty.clone(),
                 super::super::super::instruction_strict_php_profile(inst),
                 "array_map",
                 |ctx, wrapper_label, env_bytes| {
@@ -221,7 +229,6 @@ pub(super) fn emit_descriptor_callback_wrapper(
     return_ty: PhpType,
 ) -> String {
     let wrapper_label = ctx.next_global_label("array_map_descriptor_callback_wrapper");
-    let done_label = ctx.next_label("array_map_descriptor_callback_after_wrapper");
     let wrapper = DeferredCallbackWrapper {
         label: wrapper_label.clone(),
         visible_arg_types,
@@ -231,9 +238,10 @@ pub(super) fn emit_descriptor_callback_wrapper(
         descriptor_return_type: Some(return_ty),
         invocation_scope_class_id: ctx.lexical_class_id(),
     };
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`.
+    let scope = ctx.emitter.begin_out_of_line();
     crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     wrapper_label
 }
 

@@ -122,6 +122,9 @@ fn lower_builtin_callable_body(
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        // One more empty site map: the merge with core-align left this wrapper lowering with two
+        // independent site tables to forward, and a builtin wrapper has neither.
+        &Default::default(),
         label.to_string(),
         &module.global_constants,
         None,

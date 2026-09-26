@@ -212,7 +212,7 @@ impl Checker {
         CompileError::new(
             span,
             &format!(
-                "{} expects {:?}, got {:?} — {}",
+                "{} expects {}, got {} — {}",
                 context, expected, actual, detail
             ),
         )

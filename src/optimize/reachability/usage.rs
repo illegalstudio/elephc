@@ -697,10 +697,32 @@ impl Scanner<'_> {
             TypeExpr::Named(name) => {
                 self.record_class(name.as_str());
             }
+            // A signature keeps alive whatever it names: `callable(User): Order` is the only
+            // mention either class may have, and dropping them here dead-strips a class the
+            // program still needs.
+            TypeExpr::CallableSig { params, ret } => {
+                for param in params {
+                    self.scan_type(param);
+                }
+                self.scan_type(ret);
+            }
+            // `Box<User>` keeps BOTH alive: the instantiated class and whatever it holds.
+            TypeExpr::GenericClass { name, args } => {
+                self.record_class(name.as_str());
+                for arg in args {
+                    self.scan_type(arg);
+                }
+            }
             TypeExpr::Ptr(Some(name)) => {
                 self.record_class(name.as_str());
             }
             TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => self.scan_type(inner),
+            // Both halves reach the class recorder: `array<string, Foo>` keeps `Foo` alive, and
+            // scanning only the value would let reachability dead-strip a class named in a key.
+            TypeExpr::AssocArray { key, value } => {
+                self.scan_type(key);
+                self.scan_type(value);
+            }
             TypeExpr::Union(types) | TypeExpr::Intersection(types) => {
                 for ty in types { self.scan_type(ty); }
             }
@@ -714,6 +736,9 @@ impl Scanner<'_> {
 /// Returns whether a declared local type excludes every object representation.
 fn type_is_definitely_non_object(ty: &TypeExpr) -> bool {
     match ty {
+        // A callable is a descriptor address, never an object — the same answer the bare
+        // `callable` keyword gets, since a declared signature changes nothing about storage.
+        TypeExpr::CallableSig { .. } => true,
         TypeExpr::Int
         | TypeExpr::Float
         | TypeExpr::Bool
@@ -722,6 +747,7 @@ fn type_is_definitely_non_object(ty: &TypeExpr) -> bool {
         | TypeExpr::Void
         | TypeExpr::Never
         | TypeExpr::Array(_)
+        | TypeExpr::AssocArray { .. }
         | TypeExpr::Ptr(_)
         | TypeExpr::Buffer(_) => true,
         TypeExpr::Named(name) => matches!(
@@ -730,6 +756,8 @@ fn type_is_definitely_non_object(ty: &TypeExpr) -> bool {
         ),
         TypeExpr::Nullable(inner) => type_is_definitely_non_object(inner),
         TypeExpr::Union(types) => types.iter().all(type_is_definitely_non_object),
+        // A generic class is a class: whatever it holds, the value is an object.
+        TypeExpr::GenericClass { .. } => false,
         TypeExpr::Iterable | TypeExpr::Intersection(_) => false,
     }
 }

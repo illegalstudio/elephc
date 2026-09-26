@@ -783,7 +783,16 @@ fn resolve_static_receiver_class(
     receiver: &StaticReceiver,
     span: Span,
 ) -> Result<String, CompileError> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => resolve_class_name(checker, name.as_str())
             .map(str::to_string)
             .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", name))),
@@ -938,6 +947,22 @@ fn merge_local_assignment_type(
                     return Ok(());
                 }
             }
+            // A DECLARED local's contract is its declaration, not whatever a guard narrowed it
+            // to. `?Node $c = $head; while ($c !== null) { $c = $c->next; }` arrives here with
+            // `$c` bound `Node` — the guard's narrowing, inserted into the shared environment
+            // for the loop body — and the merge rejects the `?Node` the declaration always
+            // allowed. That rejected the cursor idiom every linked structure is written with.
+            //
+            // Same shape as the `mixed_storage_locals` re-assertion above, and for the same
+            // reason: flow narrowing falsified an invariant the declaration owns. Consulted only
+            // once the merge has FAILED, so no program that compiles today changes type here —
+            // this branch can only accept what was previously an error.
+            if let Some(declared) = checker.typed_local_names.get(name).cloned() {
+                if checker.type_accepts(&declared, ty) {
+                    env.insert(name.to_string(), ty.clone());
+                    return Ok(());
+                }
+            }
             if !checker.strict_locals && stmt_form && checker.local_binding_is_killable(name) {
                 let message = format!(
                     "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
@@ -1070,7 +1095,9 @@ pub(super) fn check_typed_assign(
     }
     // A declared type is a programmer contract: the local is never kill/retype eligible, in
     // either mode. The binding depth is still recorded so the name has one authority.
-    checker.typed_local_names.insert(name.to_string());
+    checker
+        .typed_local_names
+        .insert(name.to_string(), declared_ty.clone());
     checker
         .local_binding_depth
         .entry(name.to_string())

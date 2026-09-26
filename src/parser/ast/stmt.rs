@@ -13,7 +13,7 @@ use crate::span::Span;
 
 use super::{
     AttributeGroup, CType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    ExternField, ExternParam, PackedField, StaticReceiver, TraitUse, TypeExpr,
+    ExternField, ExternParam, PackedField, StaticReceiver, TraitUse, TypeExpr, TypeParam,
 };
 
 // --- Statements ---
@@ -80,6 +80,19 @@ impl Stmt {
 /// and the statements in the catch body.
 pub struct CatchClause {
     pub exception_types: Vec<Name>,
+    /// Type arguments written on each caught class, aligned index by index with
+    /// `exception_types`, and EMPTY when no caught class carried any.
+    ///
+    /// `catch` is the fifth place PHP names a class, and the only one where the name is not
+    /// reached through a type node. Aligned rather than mapped for the reason `implements`
+    /// keeps its own: `catch (Repository<User> | RuntimeException $e)` has to keep the
+    /// arguments on the class they were written on.
+    ///
+    /// The empty collapse is not an optimization. Every synthetic catch the compiler builds
+    /// itself — the preludes, the printer's round trip — writes no arguments, so an
+    /// aligned-always list would make `catch (Exception $e)` a DIFFERENT AST depending on
+    /// whether a parser or a builder produced it. Consumers pad before zipping.
+    pub exception_type_args: Vec<Vec<TypeExpr>>,
     pub variable: Option<String>,
     pub body: Vec<Stmt>,
 }
@@ -204,6 +217,12 @@ pub enum StmtKind {
     },
     FunctionDecl {
         name: String,
+        /// Declared type parameters (`function f<T>(...)`), empty for an ordinary function.
+        ///
+        /// A generic declaration is a TEMPLATE: it is never lowered as written. Each call site
+        /// infers concrete type arguments and instantiates a monomorphic copy under a synthetic
+        /// name, so the type parameters only ever live on the template's own node.
+        type_params: Vec<TypeParam>,
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         /// PHP 8 attribute groups attached to each function parameter, aligned with `params`
         /// plus the variadic parameter when present.
@@ -246,6 +265,13 @@ pub enum StmtKind {
     },
     ClassDecl {
         name: String,
+        /// Type parameters and inherited type arguments, `None` for an ordinary class.
+        ///
+        /// A class carrying `type_params` is a TEMPLATE and is stripped before type checking —
+        /// see [`crate::parser::ast::GenericDecl`]. A class with no type parameters can still
+        /// carry this (`class UserRepo implements Repository<User>`): it is an ordinary class
+        /// that instantiates someone else's template.
+        generics: Option<Box<crate::parser::ast::GenericDecl>>,
         extends: Option<Name>,
         implements: Vec<Name>,
         is_abstract: bool,
@@ -258,6 +284,14 @@ pub enum StmtKind {
     },
     EnumDecl {
         name: String,
+        /// Type arguments written on the interfaces this enum implements
+        /// (`enum Suit implements Labelled<string>`), `None` for an ordinary enum.
+        ///
+        /// An enum never declares type parameters of its OWN — there is no `enum Suit<T>` — so
+        /// `type_params` and `extends_args` are always empty here and only `interface_args`
+        /// carries anything. The field is the same `GenericDecl` a class uses so that
+        /// `crate::generics::classes` instantiates the mention through one path.
+        generics: Option<Box<crate::parser::ast::GenericDecl>>,
         backing_type: Option<TypeExpr>,
         cases: Vec<EnumCaseDecl>,
         /// Interfaces the enum implements (`enum E implements Foo, Bar`).
@@ -276,6 +310,9 @@ pub enum StmtKind {
     },
     InterfaceDecl {
         name: String,
+        /// Type parameters and inherited type arguments, `None` for an ordinary interface.
+        /// See [`StmtKind::ClassDecl`]'s field of the same name.
+        generics: Option<Box<crate::parser::ast::GenericDecl>>,
         extends: Vec<Name>,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,

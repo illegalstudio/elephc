@@ -600,10 +600,13 @@ pub(crate) fn check_files_diagnostics(
         let resolved = elephc::name_resolver::resolve(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::func_args::desugar(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::optimize::fold_constants(resolved);
+        // No generic instantiation runs on this path, so the checker has nothing to answer and
+        // no templates to infer from: the fixture compiles the program as written.
         let check_result = elephc::types::check_with_target_and_options(
             &resolved,
             target(),
             elephc::types::CheckOptions { strict_locals },
+            &elephc::generics::GenericContext::default(),
         )
         .map_err(|e| e.message.clone())?;
         Ok(check_result

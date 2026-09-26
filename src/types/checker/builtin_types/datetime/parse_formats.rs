@@ -197,6 +197,7 @@ return $r;
 pub(super) fn datetime_date_parse_from_format() -> ClassMethod {
     let body = super::bodies::date_parse_from_format();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_date_parse_from_format".to_string(),
         visibility: Visibility::Public,
         is_static: true,

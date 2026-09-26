@@ -277,6 +277,7 @@ pub(super) fn propagate_try_stmt(
                 body_env.remove(name);
             }
             crate::parser::ast::CatchClause {
+                exception_type_args: catch.exception_type_args,
                 exception_types: catch.exception_types,
                 variable: catch.variable,
                 body: propagate_block(catch.body, body_env).0,

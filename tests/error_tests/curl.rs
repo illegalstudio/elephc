@@ -223,7 +223,7 @@ fn curl_multi_exec_rejects_a_null_seeded_still_running() {
              $status = curl_multi_exec($mh, $running);
          } while ($running > 0 && $status == CURLM_OK);
          echo $running;",
-        "parameter $still_running expects Int, got Void",
+        "parameter $still_running expects int, got null",
     );
     expect_curl_error(
         "<?php

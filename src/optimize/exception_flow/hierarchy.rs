@@ -436,6 +436,9 @@ pub(super) fn type_expr_is_non_destructible(type_expr: &TypeExpr) -> bool {
         | TypeExpr::Never => true,
         TypeExpr::Nullable(inner) => type_expr_is_non_destructible(inner),
         TypeExpr::Union(members) => members.iter().all(type_expr_is_non_destructible),
+        // Containers and callables can hold an object, and a generic class IS a class — all of
+        // them answer the way `Named` does, which is the conservative side of this predicate.
+        TypeExpr::AssocArray { .. } | TypeExpr::GenericClass { .. } | TypeExpr::CallableSig { .. } => false,
         TypeExpr::Named(_)
         | TypeExpr::Iterable
         | TypeExpr::Array(_)

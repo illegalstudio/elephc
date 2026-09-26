@@ -69,8 +69,13 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        // The arithmetic union is decided by the arms below, not here: this per-member rule asks
+        // whether `int` accepts `float`, which is false, so it would refuse `int|float` at every
+        // position — including the `int` parameters the preludes pass a loop counter to.
         if let PhpType::Union(members) = actual {
-            return members.iter().all(|member| self.type_accepts(expected, member));
+            if !actual.is_int_float_union() {
+                return members.iter().all(|member| self.type_accepts(expected, member));
+            }
         }
         match expected {
             PhpType::Mixed => true,
@@ -84,9 +89,45 @@ impl Checker {
             {
                 true
             }
-            PhpType::Union(members) => members
-                .iter()
-                .any(|member| self.type_accepts(member, actual)),
+
+            // The arithmetic union belongs with `Mixed` at a scalar position, and leaving it out
+            // was inconsistent: `mixed` is the widest type there is, so refusing `int|float`
+            // while accepting `mixed` made the NARROWER type the stricter one. It surfaced the
+            // moment `$i++` started reporting `int|float`: every prelude that passes a loop
+            // counter to an `int` parameter stopped compiling.
+            //
+            // Only THIS union, not unions in general. `string|false` at a `string` parameter
+            // must keep being refused — that diagnostic is how an unchecked `false` sentinel
+            // gets caught, and it is worth more than the symmetry.
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+                if actual.is_int_float_union() =>
+            {
+                true
+            }
+            // An expected UNION containing a number accepts the arithmetic union whole. The
+            // per-member recursion below cannot: it asks whether `int` accepts `float`, which is
+            // false, so `?int $x` refused a counter that a bare `int $x` took. `mixed` was
+            // accepted at all of these positions, so this is the same "narrower type is the
+            // stricter one" hole, one level up.
+            PhpType::Union(members)
+                if actual.is_int_float_union()
+                    && members
+                        .iter()
+                        .any(|member| matches!(member, PhpType::Int | PhpType::Float)) =>
+            {
+                true
+            }
+            PhpType::Union(members) => match actual {
+                PhpType::Union(actual_members) => actual_members.iter().all(|actual_member| {
+                    members
+                        .iter()
+                        .any(|expected_member| self.type_accepts(expected_member, actual_member))
+                }),
+                _ => members
+                    .iter()
+                    .any(|member| self.type_accepts(member, actual)),
+            },
+
             PhpType::Array(expected_elem) => match actual {
                 PhpType::Array(actual_elem) if matches!(actual_elem.as_ref(), PhpType::Never) => {
                     true
@@ -108,6 +149,13 @@ impl Checker {
                     self.type_accepts(expected_key.as_ref(), actual_key.as_ref())
                         && self.type_accepts(expected_value.as_ref(), actual_value.as_ref())
                 }
+                // The empty literal `[]` is `Array(Never)` and carries no keys and no element
+                // storage, so it satisfies EVERY declared container form — including a
+                // string-keyed one, which the `Mixed | Int` case below cannot reach. Mirrors
+                // the same shortcut the indexed arm takes.
+                PhpType::Array(actual_elem) if matches!(actual_elem.as_ref(), PhpType::Never) => {
+                    true
+                }
                 PhpType::Array(actual_elem)
                     if matches!(expected_key.as_ref(), PhpType::Mixed | PhpType::Int)
                         && self.type_accepts(expected_value.as_ref(), actual_elem.as_ref()) =>
@@ -123,6 +171,11 @@ impl Checker {
                         || self.is_subclass_of(actual_name, expected_name)
                         || self.class_implements_interface(actual_name, expected_name)
                         || self.interface_extends_interface(actual_name, expected_name)
+                        // Two instantiations of one template are unrelated classes, so every
+                        // disjunct above has already said no. A variance marker is the only
+                        // thing that can relate them, and it relates them here rather than
+                        // through an inheritance edge — see `generic_variance`.
+                        || self.variance_permits(expected_name, actual_name)
                 }
                 _ => false,
             },
@@ -239,6 +292,17 @@ impl Checker {
         // variable's content can no longer be represented by the narrower side.
         if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
             return Some(PhpType::Mixed);
+        }
+        // The arithmetic union merges with either number it is made of. It is what an
+        // incremented integer local carries, and the checker walks a body more than once: the
+        // first walk sees `$t = $i++` as `int` and the second as `int|float`, so refusing the
+        // merge made a re-walk a hard `cannot reassign` on code that had not changed.
+        if (existing.is_int_float_union()
+            && matches!(new_ty, PhpType::Int | PhpType::Float))
+            || (new_ty.is_int_float_union()
+                && matches!(existing, PhpType::Int | PhpType::Float))
+        {
+            return Some(PhpType::Union(vec![PhpType::Int, PhpType::Float]));
         }
         if matches!(existing, PhpType::Union(_)) {
             return None;

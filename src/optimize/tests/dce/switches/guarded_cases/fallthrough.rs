@@ -35,6 +35,7 @@ fn optimized_switch_cases(
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "run".into(),
+            type_params: Vec::new(),
             params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: vec![Vec::new()],
             variadic: None,

@@ -242,7 +242,6 @@ pub(super) fn emit_eval_native_function_invoker_inline(
     ctx.shared.callable_argument_normalizer |=
         crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     let label = ctx.next_global_label("eval_callable_invoker");
-    let done_label = ctx.next_label("eval_callable_invoker_done");
     let captures: [(String, PhpType, bool); 0] = [];
     // A registered native FREE function has no class scope, so its defaults resolve globally.
     let defaults =
@@ -255,14 +254,13 @@ pub(super) fn emit_eval_native_function_invoker_inline(
             .is_some_and(crate::codegen::runtime_callable_invoker::function_returns_owned_string),
         defaults: &defaults,
     };
-    let enclosing = ctx.emitter.current_text_section();
-    abi::emit_jump(ctx.emitter, &done_label);
+    // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
     crate::codegen::runtime_callable_invoker::emit_runtime_callable_invoker_with_exception_boundary(
         ctx.emitter,
         ctx.data,
         &invoker,
     );
-    ctx.emitter.reopen_text_section(enclosing);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     label
 }

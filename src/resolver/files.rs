@@ -54,5 +54,5 @@ pub(super) fn parse_file(
         .map_err(|e| e.with_file(file.clone()))?;
 
     let parsed = parser::parse_with_mode(&tokens, mode).map_err(|e| e.with_file(file))?;
-    crate::source::finalize_physical_program(parsed, path, mode, defines)
+    crate::source::finalize_physical_program(parsed, &source, path, mode, defines)
 }

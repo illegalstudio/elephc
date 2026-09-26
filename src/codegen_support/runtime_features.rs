@@ -457,6 +457,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
             expr_has_regex_call(value)
                 || match target {
                     InstanceOfTarget::Name(_) => false,
+                    InstanceOfTarget::Generic(_) => false,
                     // Dynamic class targets make codegen include the builtin class universe.
                     // That universe contains RegexIterator methods that call preg runtime helpers.
                     InstanceOfTarget::Expr(_) => true,
@@ -527,6 +528,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_has_regex_call),
         ExprKind::NewDynamicObject {
             class_name,
@@ -620,7 +622,16 @@ fn expr_is_regex_callback_string(expr: &Expr) -> bool {
 
 /// Returns true when a static receiver expression can contain a regex call.
 fn static_receiver_has_regex_call(receiver: &StaticReceiver) -> bool {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(_)
         | StaticReceiver::Self_
         | StaticReceiver::Static
@@ -869,6 +880,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_needs_descriptor_invoker),
         ExprKind::NewDynamicObject {
             class_name, args, ..

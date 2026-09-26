@@ -79,7 +79,14 @@ fn check_source_with_defines_and_options(
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
-    types::check_with_options(&ast, options).map_err(|e| e.message.clone())?;
+    // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
+    // CLASS is instantiated by that driver, not by the checker, so a plain `check_with_options`
+    // here would hand the checker a template and report `Unknown type: T` in place of whatever
+    // the test is actually about.
+    elephc::generics::monomorphize(ast, |program, bounds| {
+        types::check_with_options_and_bounds(program, options, bounds)
+    })
+    .map_err(|e| e.message.clone())?;
     Ok(())
 }
 
@@ -96,7 +103,10 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
-    types::check(&ast)
+    let (_, result) = elephc::generics::monomorphize(ast, |program, bounds| {
+        types::check_with_options_and_bounds(program, types::CheckOptions::default(), bounds)
+    })?;
+    Ok(result)
 }
 
 /// Resolves files error for this module.
@@ -428,6 +438,6 @@ fn test_error_yield_from_rejects_non_generator_call() {
 function not_gen(): int { return 1; }
 function gen() { yield from not_gen(); }
 ",
-        "yield from expects an array literal or Generator, got Int",
+        "yield from expects an array literal or Generator, got int",
     );
 }

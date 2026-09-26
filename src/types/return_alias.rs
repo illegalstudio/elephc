@@ -836,6 +836,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
         }
         ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
             visit_expr_effects(args, state);
             invalidate_all_aliases(state);

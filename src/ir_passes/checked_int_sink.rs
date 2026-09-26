@@ -97,6 +97,12 @@ struct SinkRewrite {
     replacements: HashMap<ValueId, ValueId>,
     neutralize: HashSet<InstId>,
     saw_integer_sink: bool,
+    /// Whether an explicit `(int)` CAST is among the accepted observations.
+    ///
+    /// It decides what an overflow may do. php converts a promoted float back to an int at a
+    /// cast, so wrapping there is php's own answer; at a plain store into an int slot php keeps
+    /// the float, and wrapping would print a value php never produces.
+    saw_cast_sink: bool,
 }
 
 /// Builds the instruction-use adjacency list for every SSA value.
@@ -196,6 +202,7 @@ fn analyze_sink_graph(
                 rewrite.replacements.insert(cast_result, value);
                 rewrite.neutralize.insert(*use_id);
                 rewrite.saw_integer_sink = true;
+                rewrite.saw_cast_sink = true;
             }
             Op::StoreLocal | Op::StoreStaticLocal | Op::InitStaticLocal
                 if local_store_is_integer(function, user.immediate.as_ref()) =>
@@ -277,7 +284,7 @@ fn apply_specialization(
         }
     }
 
-    specialize_checked_producer(function, candidate)
+    specialize_checked_producer(function, candidate, rewrite.saw_cast_sink)
         .expect("checked-int sink candidate retained its opcode until commit");
     if let Some(value) = function.value_mut(result) {
         value.ir_type = IrType::I64;
@@ -290,11 +297,17 @@ fn apply_specialization(
 ///
 /// Returns `None` when the instruction is no longer a boxed checked operation, which lets
 /// callers distinguish an already-specialized producer from a commit-time inconsistency.
-fn specialize_checked_producer(function: &mut Function, candidate: InstId) -> Option<()> {
+fn specialize_checked_producer(
+    function: &mut Function,
+    candidate: InstId,
+    cast_justified: bool,
+) -> Option<()> {
     let replacement_op = checked_to_int_op(function.instruction(candidate)?.op)?;
     let result = function.instruction(candidate)?.result;
     if let Some(inst) = function.instruction_mut(candidate) {
         inst.op = replacement_op;
+        // What the overflow path is allowed to do. See `SinkRewrite::saw_cast_sink`.
+        inst.immediate = Some(Immediate::Bool(cast_justified));
         inst.result_type = IrType::I64;
         inst.result_php_type = PhpType::Int;
         inst.result_ownership = Ownership::NonHeap;
@@ -560,7 +573,9 @@ fn apply_slot_specialization(function: &mut Function, slot: LocalSlotId, plan: S
         }
     }
     for producer in &plan.producers {
-        specialize_checked_producer(function, *producer);
+        // The slot path accepts loads and stores, never a cast, so an overflow here is never
+        // php's own conversion — see `SinkRewrite::saw_cast_sink`.
+        specialize_checked_producer(function, *producer, false);
     }
     if let Some(local) = function.locals.get_mut(slot.as_raw() as usize) {
         local.ir_type = IrType::I64;

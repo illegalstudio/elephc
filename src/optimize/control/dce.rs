@@ -699,6 +699,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -712,6 +713,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 kind: StmtKind::FunctionDecl {
                     by_ref_return,
                     name,
+                    type_params,
                     params,
                     param_attributes,
                     variadic,
@@ -743,6 +745,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             attributes: Vec::new(),
         }],
         StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -761,6 +764,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 .collect();
             vec![Stmt {
                 kind: StmtKind::ClassDecl {
+                    generics,
                     name,
                     extends,
                     implements,
@@ -794,6 +798,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         }
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -803,6 +808,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         } => vec![Stmt {
             kind: StmtKind::EnumDecl {
                 name,
+                generics,
                 backing_type,
                 cases,
                 implements,
@@ -823,6 +829,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             attributes: Vec::new(),
         }],
         StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties,
@@ -830,6 +837,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         constants,
         } => vec![Stmt {
             kind: StmtKind::InterfaceDecl {
+                generics,
                 name,
                 extends,
                 properties,

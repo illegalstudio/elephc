@@ -174,3 +174,37 @@ buffer_free($values);
         output.stderr
     );
 }
+
+/// A counter that overflows in a RAW slot stops, instead of printing a number php never produces.
+///
+/// The narrowed opcodes exist because the sink proved every observation of the value is an int,
+/// which is what lets it live in a raw slot. An overflow breaks exactly that proof: php promotes
+/// to float, 64 raw bits cannot hold one, and the previous answer — php's float-to-int conversion
+/// of the true result — printed `int(-9223372036854775808)` where php prints
+/// `float(9.223372036854776E+18)`.
+///
+/// Boxing the counter instead was measured and rejected: it fixes the promotion and costs 4.7x on
+/// a 20M-iteration loop, because the boxed slot also turns the loop's `icmp` into `php_rel_cmp`
+/// and its `ichecked_add` into `mixed_numeric_binop`.
+#[test]
+fn test_for_counter_overflow_stops_instead_of_wrapping() {
+    let err = compile_and_run_expect_failure(
+        "<?php for ($i = PHP_INT_MAX - 1, $n = 0; $n < 3; $i++, $n++) { var_dump($i); }",
+    );
+    assert!(
+        err.contains("integer overflow in arithmetic whose result is used as an int"),
+        "expected the raw-slot overflow to stop, got: {err}"
+    );
+}
+
+/// An explicit `(int)` cast keeps php's own conversion, which is the OTHER reason the sink
+/// narrows a value — and the one where wrapping is correct.
+///
+/// `(int) (PHP_INT_MAX + 1)` is `-9223372036854775808` in php-src (with a warning elephc does not
+/// yet emit), so the overflow path must convert here rather than stop. The two justifications are
+/// told apart by what the sink accepted: a cast use, or a store into an int slot.
+#[test]
+fn test_explicit_int_cast_of_an_overflow_still_converts() {
+    let out = compile_and_run("<?php int $one = $argc; echo (int) (PHP_INT_MAX + $one);");
+    assert_eq!(out, "-9223372036854775808");
+}

@@ -82,9 +82,15 @@ pub(super) fn check_types_impl(
     program: &Program,
     target: Target,
     options: CheckOptions,
+    generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target);
     checker.strict_locals = options.strict_locals;
+    // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
+    // Empty on every path that does not run `generics::monomorphize`, which is what makes those
+    // paths behave exactly as they did before this feature.
+    checker.class_templates = generics.class_templates.clone();
+    checker.method_templates = generics.method_templates.clone();
     // Program-wide and computed once, BEFORE any body is walked: the top-level `unset` that has to
     // consult it can sit textually above the `function w() { global $a; }` that makes the name
     // program-global. Shared with EIR lowering's `all_global_var_names` so the two sides cannot
@@ -125,6 +131,7 @@ pub(super) fn check_types_impl(
     checker.declared_classes = class_map.keys().cloned().collect();
     for stmt in program {
         if let StmtKind::InterfaceDecl {
+            generics: _,
             name,
             extends,
             properties,

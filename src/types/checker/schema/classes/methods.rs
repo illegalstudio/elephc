@@ -31,6 +31,13 @@ pub(super) fn apply_methods(
 ) -> Result<(), CompileError> {
     for method in &class.methods {
         validate_method_shape(class, method)?;
+        // A generic method is a TEMPLATE and has no signature of its own: its parameter types
+        // name type parameters that only a call site can bind, so resolving it here would report
+        // `Unknown type: U`. Its instantiations are ordinary methods on this same class and go
+        // through this same loop. Mirrors `resolve_unchecked_functions` for generic functions.
+        if !method.type_params.is_empty() {
+            continue;
+        }
         if method.is_static {
             apply_static_method(state, class, checker, method)?;
         } else {
@@ -203,8 +210,12 @@ fn apply_static_method(
         state.abstract_static_methods.remove(&method_key);
     }
     if method.visibility != Visibility::Private
+        && !method_key.contains('<')
         && !state.static_vtable_slots.contains_key(&method_key)
     {
+        // Same rule as the instance path, and for the same reason: an instantiated generic
+        // static method is named exactly by its call site, so it needs no slot — and giving it
+        // one lets two instantiations of a class number their statics differently.
         let slot = state.static_vtable_methods.len();
         state.static_vtable_slots.insert(method_key.clone(), slot);
         state.static_vtable_methods.push(method_key);
@@ -339,7 +350,18 @@ fn apply_instance_method(
             .insert(method_key.clone(), class.name.clone());
         state.abstract_methods.remove(&method_key);
     }
-    if method.visibility != Visibility::Private && !state.vtable_slots.contains_key(&method_key) {
+    // An INSTANTIATED generic method takes no slot, and that is a soundness rule rather than an
+    // optimization. Its call site names it exactly — that is what instantiation means — so there
+    // is nothing to dispatch on. And giving it one breaks the invariant two instantiations of a
+    // class must keep: `Pair<int>` may be called with `withRight<string>` where `Pair<string>`
+    // never is, so the slot after it lands at a different number in each, and a variance
+    // widening takes the slot from one class and indexes the other's table.
+    // `assert_instantiation_vtable_slots_aligned` fails loudly if this ever stops holding.
+    let is_instantiation = method_key.contains('<');
+    if method.visibility != Visibility::Private
+        && !is_instantiation
+        && !state.vtable_slots.contains_key(&method_key)
+    {
         let slot = state.vtable_methods.len();
         state.vtable_slots.insert(method_key.clone(), slot);
         state.vtable_methods.push(method_key);

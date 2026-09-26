@@ -176,7 +176,16 @@ fn fold_attr_key(expr: &Expr) -> Option<AttrKey> {
 
 /// Returns the canonical named receiver for class-constant attribute arguments.
 fn scoped_receiver_type_name(receiver: &StaticReceiver) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Some(name.as_str().to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
     }

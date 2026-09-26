@@ -185,7 +185,7 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
 fn test_error_mixed_rejected_at_object_parameter_boundary() {
     expect_error(
         "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
-        "Function 'take' parameter $box expects Object(\"Box\"), got Mixed",
+        "Function 'take' parameter $box expects Box, got mixed",
     );
 }
 
@@ -194,7 +194,7 @@ fn test_error_mixed_rejected_at_object_parameter_boundary() {
 fn test_error_mixed_rejected_at_array_return_boundary() {
     expect_error(
         "<?php function relay(mixed $value): array { return $value; }",
-        "Function 'relay' return type expects Union([Array(Mixed), AssocArray { key: Mixed, value: Mixed }]), got Mixed",
+        "Function 'relay' return type expects array, got mixed",
     );
 }
 
@@ -679,7 +679,7 @@ class Box {
 }
 $box = new Box("bad");
 "#,
-        "Constructor 'Box::__construct' parameter $value expects Int, got Str",
+        "Constructor 'Box::__construct' parameter $value expects int, got string",
     );
 }
 
@@ -694,7 +694,7 @@ class Box {
     public function __construct(public Expected $value = new Unrelated()) {}
 }
 "#,
-        "Method parameter $value expects Object(\"Expected\"), got Object(\"Unrelated\")",
+        "Method parameter $value expects Expected, got Unrelated",
     );
 }
 
@@ -722,7 +722,7 @@ class Foo {
 }
 function unused_class_constant_default(Foo $value = Foo::BAR): void {}
 "#,
-        "Function 'unused_class_constant_default' parameter $value expects Object(\"Foo\"), got Int",
+        "Function 'unused_class_constant_default' parameter $value expects Foo, got int",
     );
 }
 
@@ -785,7 +785,7 @@ class Config {
     public Level $level = Holder::NAME;
 }
 "#,
-        "Property Config::$level default expects Object(\"Level\"), got Str",
+        "Property Config::$level default expects Level, got string",
     );
 }
 
@@ -1272,7 +1272,7 @@ fn test_error_int_parameter_rejects_out_of_range_float_constant() {
 fn test_error_by_ref_parameter_is_not_coerced() {
     expect_error(
         "<?php function f(string &$s) { $s = $s . \"!\"; } $n = 42; f($n);",
-        "Function 'f' parameter $s expects Str, got Int",
+        "Function 'f' parameter $s expects string, got int",
     );
 }
 
@@ -1386,7 +1386,7 @@ fn test_error_strict_types_rejects_numeric_string_into_float_parameter() {
 fn test_error_strict_types_rejects_method_argument() {
     expect_error(
         "<?php declare(strict_types=1); class C { public function m(int $i) { return $i; } } $c = new C(); echo $c->m(true);",
-        "Method C::m parameter $i expects Int, got Bool",
+        "Method C::m parameter $i expects int, got bool",
     );
 }
 
@@ -1406,7 +1406,7 @@ fn test_error_strict_types_rejects_closure_argument() {
 fn test_error_strict_types_rejects_variadic_element() {
     expect_error(
         "<?php declare(strict_types=1); function f(int ...$xs) { return count($xs); } echo f(true);",
-        "variadic parameter $xs expects Int, got Bool",
+        "variadic parameter $xs expects int, got bool",
     );
 }
 
@@ -1421,7 +1421,7 @@ fn test_error_strict_types_rejects_variadic_element() {
 fn test_error_strict_types_rejects_variadic_element_after_callable_promotion() {
     expect_error(
         "<?php declare(strict_types=1); function f(int ...$xs) { return count($xs); } $g = f(...); echo f(true);",
-        "variadic parameter $xs expects Int, got Bool",
+        "variadic parameter $xs expects int, got bool",
     );
 }
 
@@ -1431,7 +1431,7 @@ fn test_error_strict_types_rejects_method_variadic_element_after_callable_promot
     expect_error(
         "<?php declare(strict_types=1); class Adder { public function add(int ...$xs): int { return array_sum($xs); } } \
          $adder = new Adder(); $call = $adder->add(...); echo $adder->add(true);",
-        "variadic parameter $xs expects Int, got Bool",
+        "variadic parameter $xs expects int, got bool",
     );
 }
 
@@ -1441,7 +1441,7 @@ fn test_error_strict_types_rejects_static_variadic_element_after_callable_array_
     expect_error(
         "<?php declare(strict_types=1); class Joiner { public static function join(int ...$xs): int { return array_sum($xs); } } \
          $call = [Joiner::class, 'join']; echo Joiner::join(true);",
-        "variadic parameter $xs expects Int, got Bool",
+        "variadic parameter $xs expects int, got bool",
     );
 }
 
@@ -1455,7 +1455,7 @@ fn test_error_strict_types_rejects_static_variadic_element_after_callable_array_
 fn test_error_strict_types_rejects_closure_variadic_element() {
     expect_error(
         "<?php declare(strict_types=1); $f = function (int ...$xs) { return count($xs); }; echo $f(true);",
-        "variadic parameter $xs expects Int, got Bool",
+        "variadic parameter $xs expects int, got bool",
     );
 }
 
@@ -1900,7 +1900,7 @@ fn test_typed_by_ref_param_can_detach_and_rebind() {
 fn test_typed_property_stays_strict() {
     expect_error(
         "<?php class C { public string $s = \"a\"; } $c = new C(); $c->s = 5;",
-        "Property C::$s expects Str, got Int",
+        "Property C::$s expects string, got int",
     );
 }
 
@@ -3227,7 +3227,7 @@ fn test_unset_in_a_ternary_arm_records_no_kill() {
 fn test_unset_in_a_ternary_arm_keeps_the_callable_signature() {
     expect_error(
         "<?php $f = function (int $x) { return $x + 1; }; $c = $argc > 0 ? 1 : unset($f); echo $f(\"s\"), $c;",
-        "callable $f parameter $x expects Int, got Str",
+        "callable $f parameter $x expects int, got string",
     );
 }
 
@@ -3324,5 +3324,48 @@ fn test_branch_divergent_marking_survives_an_eval_body() {
         2,
         "both branch assignments must still be recorded in an eval body: {:?}",
         result.mixed_storage_store_sites
+    );
+}
+
+/// A DECLARED local's contract is its declaration, not whatever a guard narrowed it to.
+///
+/// `while ($c !== null)` inserts the narrowed `Node` into the environment for the loop body, so
+/// the reassignment inside was judged against `Node` and rejected the `?Node` the declaration
+/// always allowed. That rejected the cursor idiom every linked structure is written with.
+#[test]
+fn test_declared_nullable_local_accepts_the_cursor_idiom() {
+    expect_no_error(
+        "<?php \
+         class Node { public ?Node $next = null; public int $v = 1; } \
+         $head = new Node(); \
+         ?Node $c = $head; \
+         while ($c !== null) { $c = $c->next; } \
+         echo \"ok\";",
+    );
+}
+
+/// The declaration is still a contract in the other direction: a value it does NOT allow is
+/// rejected exactly as before, because the declared type is only consulted once the ordinary
+/// merge has already failed.
+#[test]
+fn test_error_declared_local_still_rejects_an_incompatible_value() {
+    expect_error(
+        "<?php int $x = 1; $x = \"s\"; echo $x;",
+        "cannot reassign $x from int to string",
+    );
+}
+
+/// The same, one narrowing deeper: an `instanceof` guard narrows a declared union, and the
+/// declaration still permits assigning the other member back.
+#[test]
+fn test_declared_union_local_accepts_the_other_member_after_a_guard() {
+    expect_no_error(
+        "<?php \
+         class A {} \
+         class B {} \
+         $a = new A(); \
+         A|B $x = $a; \
+         if ($x instanceof A) { $x = new B(); } \
+         echo \"ok\";",
     );
 }

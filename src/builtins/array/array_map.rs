@@ -13,12 +13,14 @@
 //!   infers the callback return element type; the result preserves the input array element
 //!   type unless the callback returns Mixed. An associative source keeps its KEY type, which
 //!   is what makes the single-array form key-preserving the way php-src is.
+//! - Checker and EIR share ONE result type. See `array_map_semantics`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{
-    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemantics,
 };
 use crate::errors::CompileError;
+use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -27,43 +29,84 @@ builtin! {
     semantics: array_map_semantics(),
 }
 
-/// Builds semantics with a boxed Mixed result for runtime-selected callback shapes.
+/// Builds semantics whose EIR result slot IS the checker's result type.
+///
+/// This builtin used to carry two answers for one call: the checker's precise container
+/// (`array<int>` for a callback declared `: int`) and a separate EIR result slot of `Mixed`,
+/// on the ground that a STRING callback binds through a runtime descriptor whose element ABI
+/// is only known once that descriptor resolves.
+///
+/// Nothing reconciled them, and every boundary that quotes the CHECKER's type — a return
+/// contract, a parameter contract — then read a boxed Mixed cell as though it were an array:
+///
+/// ```php
+/// function c(array $s) { return array_map(fn(int $x): int => $x * $x, $s); }
+/// echo c([1, 2, 3])[0];   // printed a pointer; php prints 1
+/// ```
+///
+/// with no extension syntax in sight. The same call used inside the function was correct,
+/// because that consumer reads the EIR type — which is exactly what made it hard to see.
+///
+/// `mapped_element_type` is what makes ONE answer safe: it narrows to the callback's own
+/// element type only where EVERY lowering path can build that storage, and reports `Mixed`
+/// otherwise — which is the storage `__rt_array_map_mixed` actually builds. So the checker's
+/// type is always the storage, `BuiltinResultType::Checked` hands that same type to EIR
+/// (`checked_result_type_fits_operands` answers `true` for `ArrayMap`), and the result slot
+/// can no longer disagree with the container the runtime allocated.
+///
+/// DO NOT restore a `Shared` override that returns `Mixed`. Boxing every mapped element and
+/// then boxing the container is not only the miscompile above, it is also slower than the
+/// typed `__rt_array_map` path a narrowed slot selects.
 const fn array_map_semantics() -> BuiltinSemantics {
     let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayMap);
-    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics.result_type = BuiltinResultType::Checked;
     semantics
-}
-
-/// Returns Mixed because a string or descriptor callback can select its result ABI at runtime.
-///
-/// DO NOT narrow this to the concrete container type to "match `array_flip`". That was measured:
-/// dropping this override makes the EIR result slot the checker's `Array(Int)`/`AssocArray`, and
-/// every STRING-callback call site — `array_map('double', $a)` — then dies at compile time with
-/// `array_map result element PHP type Int for callback result PHP type Mixed`. A string callback
-/// is bound through a runtime descriptor (`__rt_array_map_mixed`), whose element ABI is Mixed and
-/// is only known once the descriptor resolves, so a statically concrete result slot is genuinely
-/// incompatible with it. Closure / arrow-fn / first-class-callable / callable-array sites do
-/// compile under a narrowed slot, which is precisely why the breakage is easy to miss.
-///
-/// The heap consequence of the Mixed slot — the result container gets boxed and must therefore be
-/// TRANSFERRED into the Mixed cell rather than shared with it — is handled in the lowering, by
-/// `box_array_result_for_mixed_builtin` / `box_hash_result_for_mixed_builtin` in
-/// `src/codegen/lower_inst/builtins/arrays.rs`.
-fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
-    PhpType::Mixed
 }
 
 /// Returns the element type of the array `array_map` produces for a callback returning
 /// `callback_ret_ty`.
 ///
 /// The mapped array holds the CALLBACK's results, so the callback return type — not the input
-/// element type — decides the element type. `null`/`never` returns have no element
-/// representation of their own and a union is boxed at runtime anyway, so both collapse to
-/// `Mixed`, which is the type the runtime cells actually carry.
-fn mapped_element_type(callback_ret_ty: PhpType) -> PhpType {
+/// element type — decides the element type.
+///
+/// The narrowing is deliberately conservative: `Int`, `Bool` and `Str` only, and only when the
+/// callback does not reach EIR as a string. That set is the INTERSECTION of what the lowering
+/// paths can build. `array_map_descriptor_callback_result_element_type` accepts exactly those
+/// three from the result slot; a string callback is bound through a runtime descriptor whose
+/// element ABI is Mixed whatever the named function returns, so a narrowed slot there is the one
+/// case that genuinely cannot be honoured — it fails as `array_map result element PHP type Int
+/// for callback result PHP type Mixed`. Everything else — `Float`, a union, `void`/`never`, an
+/// unresolved callable, a nested container — keeps `Mixed`, which is what the runtime cells
+/// carry and what the widening in `normalize_indexed_array_result` then stamps.
+fn mapped_element_type(callback_ret_ty: PhpType, callback_is_string: bool) -> PhpType {
+    // A callback named by STRING is no longer an exception. Its descriptor wrapper casts the boxed
+    // result to the declared return type, so the narrowed storage it promises is the storage the
+    // runtime builds — which is what let this arm be dropped without reintroducing the dual answer
+    // the unification exists to prevent.
+    let _ = callback_is_string;
     match callback_ret_ty {
-        PhpType::Void | PhpType::Never | PhpType::Union(_) => PhpType::Mixed,
-        other => other,
+        PhpType::Int | PhpType::Bool | PhpType::Str => callback_ret_ty,
+        _ => PhpType::Mixed,
+    }
+}
+
+/// Returns whether the callback operand reaches EIR as a `string`.
+///
+/// `lower_array_map` dispatches on the callback operand's EIR type, and its `PhpType::Str` arm
+/// binds the callback through a runtime descriptor whose element ABI is Mixed. The element
+/// decision has to agree with that arm, so it asks the same question the lowering asks.
+///
+/// A closure literal is answered syntactically rather than by inference: inferring it HERE would
+/// type its parameters before `check_map_callback` supplies the source element type as a
+/// contextual hint, which is the whole reason that hook exists.
+fn callback_reaches_eir_as_string(cx: &mut BuiltinCheckCtx) -> Result<bool, CompileError> {
+    match &cx.args[0].kind {
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => Ok(false),
+        ExprKind::StringLiteral(_) => Ok(true),
+        _ => Ok(matches!(
+            cx.checker.infer_type(&cx.args[0], cx.env)?.codegen_repr(),
+            PhpType::Str
+        )),
     }
 }
 
@@ -84,6 +127,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         check_map_callback(cx, &PhpType::Mixed)?;
         return Ok(PhpType::php_array());
     }
+    let callback_is_string = callback_reaches_eir_as_string(cx)?;
     match arr_ty {
         PhpType::Array(elem_ty) => {
             if matches!(elem_ty.as_ref(), PhpType::Object(_)) {
@@ -93,7 +137,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 ));
             }
             let callback_ret_ty = check_map_callback(cx, elem_ty.as_ref())?;
-            Ok(PhpType::Array(Box::new(mapped_element_type(callback_ret_ty))))
+            Ok(PhpType::Array(Box::new(mapped_element_type(
+                callback_ret_ty,
+                callback_is_string,
+            ))))
         }
         PhpType::AssocArray { key, value } => {
             if matches!(value.as_ref(), PhpType::Object(_)) {
@@ -105,7 +152,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             let callback_ret_ty = check_map_callback(cx, value.as_ref())?;
             Ok(PhpType::AssocArray {
                 key,
-                value: Box::new(mapped_element_type(callback_ret_ty)),
+                value: Box::new(mapped_element_type(callback_ret_ty, callback_is_string)),
             })
         }
         _ => Err(CompileError::new(

@@ -91,11 +91,49 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => {
                 lower_mixed_to_mixed_assoc_array(ctx)?;
             }
-            PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Callable
-            | PhpType::Iterable
-            | PhpType::Object(_) => {
+            // `Never` elements are the EMPTY-array contract: the type names no element storage,
+            // so there is nothing to narrow and the plain unbox is exact. A borrowed `?array`
+            // parameter cell reaching `??` lands here — `$r = $a ?? ["x", "y"]` — and its payload
+            // keeps whatever slots the caller's array already had.
+            //
+            // Tested through `codegen_repr`, which is where `Never` becomes `Void`. The ELEMENT
+            // is still the declared one here: `codegen_repr` on the array above does not recurse
+            // into it.
+            PhpType::Array(ref elem) if matches!(elem.codegen_repr(), PhpType::Void) => {
+                emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+            }
+            PhpType::AssocArray { ref value, .. }
+                if matches!(value.codegen_repr(), PhpType::Void) =>
+            {
+                emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+            }
+            // A TYPED element contract is met by unboxing only when the payload's slots are
+            // already raw, and whether they are is a RUNTIME property — the array's own
+            // value_type tag — not something the types here can decide.
+            //
+            // Both shapes reach this arm with identical IR. `array_pop` on an
+            // `array<array<int>>` boxes a real `array<int>` whose slots are raw, so unboxing is
+            // exact and `function f(array $a): array { return array_pop($a); }` must compile.
+            // `array_map` used to box an array whose slots were themselves boxed cells, and the
+            // first element read under an `array<int>` contract then yielded the CELL POINTER —
+            // `echo c([1,2,3])[0]` printed a pointer where php prints 1.
+            //
+            // So the check is emitted rather than decided: unbox, then read the tag, and fatal
+            // only when the payload really does carry boxed slots. A static refusal was tried
+            // first and rejected correct programs; a silent unbox printed pointers. This is the
+            // one answer that does neither.
+            PhpType::Array(_) => {
+                emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+                emit_boxed_element_slots_fatal_guard(ctx);
+            }
+            // The associative form keeps the plain unbox: its value_type lives in the hash
+            // header rather than the indexed-array kind word, and no builtin has been measured
+            // handing a boxed-value hash to a typed-value contract. Adding the guard here would
+            // mean reading a header this function has no test for.
+            PhpType::AssocArray { .. } => {
+                emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+            }
+            PhpType::Callable | PhpType::Iterable | PhpType::Object(_) => {
                 emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
             }
             other => {
@@ -437,4 +475,45 @@ pub(super) fn lower_mixed_to_mixed_assoc_array(ctx: &mut FunctionContext<'_>) ->
         },
     );
     Ok(())
+}
+
+/// Fatals when the just-unboxed indexed array carries BOXED element slots.
+///
+/// The result register holds the container the cell wrapped. Its packed kind word records the
+/// value_type the slots actually have, so one load answers the question the types could not:
+/// tag 7 means every slot is a boxed Mixed cell, and reading one under a typed element contract
+/// would hand the caller a cell POINTER as the element.
+///
+/// This runs only where a `Mixed` value meets a typed element contract, which is rare — a
+/// builtin whose checker type and EIR result slot disagree. Everything else took an earlier arm.
+/// The cost is a load, a shift, a mask and a not-taken branch.
+fn emit_boxed_element_slots_fatal_guard(ctx: &mut FunctionContext<'_>) {
+    let ok = ctx.next_label("unbox_slots_raw");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the unboxed array's packed kind word
+            ctx.emitter.instruction("lsr x9, x9, #8");                          // shift the runtime value_type tag into the low bits
+            ctx.emitter.instruction("and x9, x9, #0x7f");                       // isolate the value_type, dropping the COW bit
+            ctx.emitter.instruction("cmp x9, #7");                              // 7 = every slot is a boxed Mixed cell
+            ctx.emitter.instruction(&format!("b.ne {}", ok));                   // raw slots: the typed contract is exact
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");            // load the unboxed array's packed kind word
+            ctx.emitter.instruction("shr r10, 8");                              // shift the runtime value_type tag into the low bits
+            ctx.emitter.instruction("and r10, 0x7f");                           // isolate the value_type, dropping the COW bit
+            ctx.emitter.instruction("cmp r10, 7");                              // 7 = every slot is a boxed Mixed cell
+            ctx.emitter.instruction(&format!("jne {}", ok));                    // raw slots: the typed contract is exact
+        }
+    }
+    emit_boxed_element_slots_fatal(ctx);
+    ctx.emitter.label(&ok);
+}
+
+/// Writes the boxed-slot fatal to stderr and exits.
+fn emit_boxed_element_slots_fatal(ctx: &mut FunctionContext<'_>) {
+    super::objects::emit_fatal_message(
+        ctx,
+        b"Fatal error: an array with boxed element slots reached a typed element contract; \
+the value's declared element type does not describe its storage\n",
+    );
 }

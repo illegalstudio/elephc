@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget};
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, TypeExpr};
 use crate::parser::stmt::parse_name;
 use crate::span::Span;
 
@@ -238,7 +238,30 @@ fn parse_expr_bp_inner(
                         continue;
                     }
                 };
-                let member_name = member;
+                // `$box->map<string>($f)` — a generic METHOD call that writes its type argument
+                // instead of leaving it to inference. Recognized exactly like the function form:
+                // a balanced argument list followed by `(`, which the comparison reading cannot
+                // be (`<` is non-associative in PHP 8, so php-src rejects the chain outright).
+                //
+                // The arguments go into the method NAME, because that is already the spelling a
+                // call site gets once inference has chosen them — `generics::methods` renames it
+                // to `map<string>` — so the written form arrives where the inferred form lands.
+                let member_name = match crate::parser::stmt::type_arguments_end(tokens, *pos) {
+                    Some(after)
+                        if tokens.get(after).map(|(token, _)| token) == Some(&Token::LParen) =>
+                    {
+                        let args = crate::parser::stmt::parse_type_arguments_only(
+                            tokens, pos, arrow_span,
+                        )?;
+                        let rendered = args
+                            .iter()
+                            .map(crate::generics::describe_type)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{}<{}>", member, rendered)
+                    }
+                    _ => member,
+                };
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                     *pos += 1;
                     if parse_first_class_callable_parens(tokens, pos)? {
@@ -731,13 +754,59 @@ fn parse_instanceof_target(
             let target = parse_expr_bp(tokens, pos, 36)?;
             Ok(InstanceOfTarget::Expr(Box::new(target)))
         }
-        _ => parse_name(
-            tokens,
-            pos,
-            span,
-            "Expected class or interface name after 'instanceof'",
-        )
-        .map(InstanceOfTarget::Name),
+        _ => {
+            let name = parse_name(
+                tokens,
+                pos,
+                span,
+                "Expected class or interface name after 'instanceof'",
+            )?;
+            match generic_instanceof_arguments(tokens, pos) {
+                Some(end) => {
+                    let (_, args) =
+                        crate::parser::stmt::parse_inherited_name_at(tokens, pos, span, &name)?;
+                    debug_assert_eq!(*pos, end, "type argument list consumed to its recognized end");
+                    Ok(InstanceOfTarget::Generic(TypeExpr::GenericClass { name, args }))
+                }
+                None => Ok(InstanceOfTarget::Name(name)),
+            }
+        }
+    }
+}
+
+/// Recognizes `instanceof Box<int>` without stealing `($x instanceof Box) < BAR > $y`.
+///
+/// This is the one generic mention with no disambiguating token after it. `new Box<int>(` has
+/// its `(` and `Box<int>::` has its `::`, but `instanceof Name < … >` is followed by whatever
+/// the surrounding expression continues with — and a comparison chain against two constants is
+/// the same token sequence.
+///
+/// So the list is only read as type arguments when what FOLLOWS it cannot begin an expression.
+/// `instanceof Box<int>;` and `instanceof Box<int> && $y` are unambiguous; `instanceof Box < A >
+/// $y` still parses as two comparisons, because `$y` could be an operand. That keeps every
+/// program that parses today parsing the same way, and only claims the sequences PHP has no
+/// reading for.
+///
+/// Measured: php-src REJECTS `$x instanceof Foo < BAR > $z` outright — `<` is non-associative
+/// in PHP 8, so the chain is `syntax error, unexpected token ">"`. The conservative rule
+/// therefore gives up nothing a PHP program could have meant; it only declines to reinterpret
+/// a sequence this parser happens to accept more loosely than php-src does.
+fn generic_instanceof_arguments(tokens: &[SpannedToken], pos: &mut usize) -> Option<usize> {
+    let end = crate::parser::stmt::type_arguments_end(tokens, *pos)?;
+    match tokens.get(end).map(|(token, _)| token) {
+        None
+        | Some(Token::Semicolon)
+        | Some(Token::RParen)
+        | Some(Token::Comma)
+        | Some(Token::RBracket)
+        | Some(Token::RBrace)
+        | Some(Token::AndAnd)
+        | Some(Token::OrOr)
+        | Some(Token::Question)
+        | Some(Token::QuestionQuestion)
+        | Some(Token::Colon)
+        | Some(Token::DoubleArrow) => Some(end),
+        _ => None,
     }
 }
 

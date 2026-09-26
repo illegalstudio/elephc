@@ -611,6 +611,9 @@ fn expr_binds_no_frame_storage(expr: &Expr) -> bool {
             expr_binds_no_frame_storage(value)
                 && match target {
                     InstanceOfTarget::Name(_) => true,
+                    // `$x instanceof Box<int>` names a class the same way a plain name does:
+                    // the target is a type, not a value, so it binds no frame storage either.
+                    InstanceOfTarget::Generic(_) => true,
                     InstanceOfTarget::Expr(target) => expr_binds_no_frame_storage(target),
                 }
         }

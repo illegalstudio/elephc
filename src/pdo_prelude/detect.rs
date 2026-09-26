@@ -93,6 +93,7 @@ fn receiver_refs_pdo(receiver: &StaticReceiver) -> bool {
 fn instanceof_target_refs_pdo(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(name) => name_is_pdo(name),
+        InstanceOfTarget::Generic(class_type) => type_refs_pdo(class_type),
         InstanceOfTarget::Expr(expr) => expr_refs_pdo(expr),
     }
 }
@@ -123,7 +124,16 @@ fn type_refs_pdo(type_expr: &TypeExpr) -> bool {
         TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => {
             type_refs_pdo(inner)
         }
+        TypeExpr::AssocArray { key, value } => type_refs_pdo(key) || type_refs_pdo(value),
+        // A declared signature can name one of these classes, and a program
+        // that mentions it only through a callback still needs the prelude.
+        TypeExpr::CallableSig { params, ret } => {
+            params.iter().any(type_refs_pdo) || type_refs_pdo(ret)
+        }
         TypeExpr::Named(name) => name_is_pdo(name),
+        TypeExpr::GenericClass { name, args } => {
+            name_is_pdo(name) || args.iter().any(type_refs_pdo)
+        }
         TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
             members.iter().any(type_refs_pdo)
         }
@@ -287,6 +297,9 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
         }
         ExprKind::NewObject { class_name, args } => {
             name_is_pdo(class_name) || args.iter().any(expr_refs_pdo)
+        }
+        ExprKind::NewGeneric { class_type, args } => {
+            type_refs_pdo(class_type) || args.iter().any(expr_refs_pdo)
         }
         ExprKind::NewDynamic { name_expr, args } => {
             expr_refs_pdo(name_expr) || args.iter().any(expr_refs_pdo)

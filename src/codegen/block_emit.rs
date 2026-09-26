@@ -160,6 +160,13 @@ pub(super) fn emit_module(
     }
     // The probe symbol table's terminating sentinel resolves to this label,
     // emitted after every function so it bounds the last real function's range.
+    //
+    // Out-of-line thunks (`Emitter::begin_out_of_line`) land AFTER it, so a sample in a descriptor
+    // invoker or wrapper resolves to `<native>`, like any other compiler-generated glue. That is
+    // deliberate: inline, it was charged to whichever function happened to mint the thunk first —
+    // and invokers are cached by signature and shared, so a call from `g` was billed to `f`.
+    // Moving this label past the thunks would be worse still: they would all be charged to the
+    // last user function in the file.
     if probe {
         emitter.raw(&format!("{PROBE_TEXT_END_LABEL}:"));
     }

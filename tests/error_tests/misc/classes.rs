@@ -253,7 +253,7 @@ fn test_error_typed_property_rejects_invalid_default() {
     // typed property with a mismatched default value is rejected at declaration time.
     expect_error(
         "<?php class Box { public int $value = \"bad\"; }",
-        "Property Box::$value default expects Int, got Str",
+        "Property Box::$value default expects int, got string",
     );
 }
 
@@ -263,7 +263,7 @@ fn test_error_typed_property_rejects_invalid_assignment() {
     // assigning a string to an int-typed property is rejected at the assignment site.
     expect_error(
         "<?php class Box { public int $value; } $b = new Box(); $b->value = \"bad\";",
-        "Property Box::$value expects Int, got Str",
+        "Property Box::$value expects int, got string",
     );
 }
 
@@ -282,7 +282,7 @@ class Box {
 }
 $box = new Box("bad");
 "#,
-        "Property Box::$value expects Int, got Str",
+        "Property Box::$value expects int, got string",
     );
 }
 

@@ -60,6 +60,28 @@ pub enum ThrowAccessKind {
 /// class metadata, warnings, FFI data, and required libraries forward to optimizer,
 /// codegen, and linker setup.
 pub struct CheckResult {
+    /// Every instantiation a call site asked for, as (template name, type arguments).
+    ///
+    /// The pipeline splices one declaration per entry into the program and re-checks, because
+    /// lowering walks the AST rather than the checker's tables.
+    pub requested_instantiations: Vec<(String, crate::generics::Bindings)>,
+    /// Call site -> the instantiated function that call resolved to.
+    ///
+    /// Keyed by `Span` exactly like `builtin_call_types`, and consumed by lowering the same
+    /// way. See `Checker::generic_call_sites` for why lowering cannot re-derive it.
+    pub generic_call_sites: HashMap<(String, Span), String>,
+    /// Every generic CLASS instantiation a `new` asked for, as (template key, type arguments).
+    pub requested_class_instantiations: Vec<(String, crate::generics::Bindings)>,
+    /// The generic METHOD instantiations this round asked for.
+    pub requested_method_instantiations: Vec<((String, String), crate::generics::Bindings)>,
+    /// (enclosing function, call site) -> the instantiated method name that site selected.
+    pub generic_method_sites: std::collections::HashMap<
+        (String, crate::span::Span),
+        std::collections::BTreeSet<String>,
+    >,
+    /// (enclosing function, `new` site) -> the instantiated class it resolved to, consumed by
+    /// `generics::classes` as an AST rewrite. See `Checker::generic_new_sites` for the key.
+    pub generic_new_sites: HashMap<(String, Span), std::collections::BTreeSet<String>>,
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
     pub function_attribute_names: HashMap<String, Vec<String>>,
@@ -226,7 +248,20 @@ pub fn check_with_options(
     program: &Program,
     options: checker::CheckOptions,
 ) -> Result<CheckResult, CompileError> {
-    checker::check_types_with_options(program, Target::detect_host(), options)
+    check_with_options_and_bounds(program, options, &crate::generics::GenericContext::default())
+}
+
+/// Runs type checking on the host platform, answering the bound obligations that generic class
+/// instantiation left behind.
+///
+/// The host-target counterpart of [`check_with_target_and_bounds`]; see it for why the
+/// obligations travel separately from the program.
+pub fn check_with_options_and_bounds(
+    program: &Program,
+    options: checker::CheckOptions,
+    generics: &crate::generics::GenericContext,
+) -> Result<CheckResult, CompileError> {
+    checker::check_types_with_options(program, Target::detect_host(), options, generics)
 }
 
 /// Runs type checking targeting a specific platform (e.g., Linux instead of the host macOS).
@@ -238,7 +273,32 @@ pub fn check_with_options(
 /// via `check_with_target_and_options`), so this is dead code outside of tests.
 #[allow(dead_code)]
 pub fn check_with_target(program: &Program, target: Target) -> Result<CheckResult, CompileError> {
-    check_with_target_and_options(program, target, checker::CheckOptions::default())
+    check_with_target_and_options(
+        program,
+        target,
+        checker::CheckOptions::default(),
+        &crate::generics::GenericContext::default(),
+    )
+}
+
+/// Runs type checking targeting a specific platform, answering the bound obligations that
+/// generic class instantiation left behind.
+///
+/// The entry point for a caller driving [`crate::generics::monomorphize`] by hand: instantiating
+/// `Box<User>` is syntax, but deciding that `User` satisfies `T : Entity` needs this checker's
+/// class table, so the obligations travel from the one pass to the other.
+#[allow(dead_code)]
+pub fn check_with_target_and_bounds(
+    program: &Program,
+    target: Target,
+    generics: &crate::generics::GenericContext,
+) -> Result<CheckResult, CompileError> {
+    check_with_target_and_options(
+        program,
+        target,
+        checker::CheckOptions::default(),
+        generics,
+    )
 }
 
 /// Runs type checking targeting a specific platform with explicit `CheckOptions`
@@ -248,8 +308,9 @@ pub fn check_with_target_and_options(
     program: &Program,
     target: Target,
     options: checker::CheckOptions,
+    generics: &crate::generics::GenericContext,
 ) -> Result<CheckResult, CompileError> {
-    checker::check_types_with_options(program, target, options)
+    checker::check_types_with_options(program, target, options, generics)
 }
 
 #[cfg(test)]

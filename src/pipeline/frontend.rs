@@ -59,6 +59,7 @@ pub(super) fn read_and_parse(
     let main_file_path = Path::new(filename).to_path_buf();
     let parsed = match crate::source::finalize_physical_program(
         parsed,
+        &source,
         &main_file_path,
         source_mode,
         &defines,

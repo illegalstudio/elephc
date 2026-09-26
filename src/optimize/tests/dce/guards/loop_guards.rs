@@ -15,6 +15,7 @@ fn function_with_typed_param(type_expr: TypeExpr, body: Vec<Stmt>) -> Vec<Stmt> 
     vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("x".into(), Some(type_expr), None, false)],
             param_attributes: vec![Vec::new()],
             variadic: None,

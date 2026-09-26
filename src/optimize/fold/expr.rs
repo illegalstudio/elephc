@@ -66,6 +66,8 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
     );
     ClassMethod {
         name: method.name,
+        // A REBUILD. Folding rewrites a body, never a declaration's type parameters.
+        type_params: method.type_params,
         visibility: method.visibility,
         is_static: method.is_static,
         is_abstract: method.is_abstract,
@@ -366,6 +368,10 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             class_name,
             args: args.into_iter().map(fold_expr).collect(),
         },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type,
+            args: args.into_iter().map(fold_expr).collect(),
+        },
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
             name_expr: Box::new(fold_expr(*name_expr)),
             args: args.into_iter().map(fold_expr).collect(),
@@ -477,6 +483,8 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
 fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        // Folding runs BEFORE instantiation, so the arguments have to survive it untouched.
+        InstanceOfTarget::Generic(class_type) => InstanceOfTarget::Generic(class_type),
         InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(fold_expr(*expr))),
     }
 }

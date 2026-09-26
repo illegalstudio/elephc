@@ -43,6 +43,7 @@ fn stabilize_loop_storage(
     body: &[Stmt],
     update: Option<&Stmt>,
     env: &mut TypeEnv,
+    packed_counter: Option<&str>,
 ) {
     let key = (checker.current_loop_storage_scope.clone(), loop_span);
     if let Some(recorded) = checker.loop_storage_types.get(&key).cloned() {
@@ -58,6 +59,7 @@ fn stabilize_loop_storage(
         body,
         update,
         &snapshot,
+        packed_counter,
         &mut |expr, analysis_env| {
             let is_call = matches!(
                 expr.kind,
@@ -534,7 +536,7 @@ impl Checker {
                 }
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
-                stabilize_loop_storage(self, stmt.span, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env, None);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -788,7 +790,7 @@ impl Checker {
             }
             StmtKind::DoWhile { body, condition } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env, None);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 self.callable_array_targets.clear();
@@ -801,7 +803,7 @@ impl Checker {
             }
             StmtKind::While { condition, body } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env, None);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 // The condition is re-evaluated before every iteration, so a guard on it
                 // holds on entry to each one: `while (($row = fgetcsv($h)) !== false)`
@@ -849,21 +851,42 @@ impl Checker {
                     self.check_stmt(s, env)?;
                 }
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, update.as_deref(), env);
-                if let Some(c) = condition {
-                    self.infer_type_with_assignment_effects(c, env)?;
-                }
-                if let Some(s) = update {
-                    self.check_stmt(s, env)?;
-                }
-                let errors = self.check_break_continue_target_body(body, env);
+                // A `for ($i = 0; …; $i++)` counter is the one index a still-empty array can be
+                // written through without leaving packed storage, because it is 0 at the first
+                // write and grows one slot at a time with the array. Recorded with the depth its
+                // body runs at, so a write under an `if` — which could skip a slot — is not
+                // covered. Saved and restored so a nested loop's counter cannot outlive it.
+                let saved_packed_counter = self.packed_loop_counter.take();
+                self.packed_loop_counter =
+                    crate::types::checker::packed_counter::packed_for_counter(
+                        init.as_deref(),
+                        condition.as_ref(),
+                        update.as_deref(),
+                        body,
+                        self.local_conditional_depth,
+                    );
+                // Cloned first: the stabilizer takes `&mut Checker`, so the name cannot be
+                // borrowed out of `self` across the call.
+                let packed_counter_name = self
+                    .packed_loop_counter
+                    .as_ref()
+                    .map(|counter| counter.name.clone());
+                stabilize_loop_storage(
+                    self,
+                    stmt.span,
+                    body,
+                    update.as_deref(),
+                    env,
+                    packed_counter_name.as_deref(),
+                );
+                // The rest of the arm re-walks this same body, so the counter stays registered
+                // through it — the storage decision must not come out differently on the second
+                // walk than on the first — and is restored on every exit, error paths included.
+                let outcome = self.check_for_tail(condition.as_ref(), update.as_deref(), body, env);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
-                if errors.is_empty() {
-                    Ok(())
-                } else {
-                    Err(CompileError::from_many(errors))
-                }
+                self.packed_loop_counter = saved_packed_counter;
+                outcome
             }
             StmtKind::Throw(expr) => {
                 let thrown_ty = self.infer_type_with_assignment_effects(expr, env)?;
@@ -1101,6 +1124,28 @@ impl Checker {
     /// Increments `break_continue_depth` before checking the body and decrements it after,
     /// so that `break`/`continue` validation knows the correct nesting level. Returns all
     /// errors accumulated while checking the body; the caller decides whether to propagate them.
+    /// Checks a `for` loop's condition, update, and body re-walk, after its storage has settled.
+    fn check_for_tail(
+        &mut self,
+        condition: Option<&Expr>,
+        update: Option<&Stmt>,
+        body: &[Stmt],
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        if let Some(c) = condition {
+            self.infer_type_with_assignment_effects(c, env)?;
+        }
+        if let Some(s) = update {
+            self.check_stmt(s, env)?;
+        }
+        let errors = self.check_break_continue_target_body(body, env);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(CompileError::from_many(errors))
+        }
+    }
+
     fn check_break_continue_target_body(
         &mut self,
         body: &[Stmt],

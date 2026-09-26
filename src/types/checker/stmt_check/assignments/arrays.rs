@@ -12,8 +12,8 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{
-    merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
-    PhpType, TypeEnv,
+    array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
+    static_array_key_forces_hash_storage, PhpType, TypeEnv,
 };
 
 use super::super::super::Checker;
@@ -64,10 +64,24 @@ pub(super) fn check_array_assign(
         // runtime-tagged cell, so it stays `Array(Mixed)` to match the lowering's
         // `ArraySetMixedKey` routing.
         let index_is_foreach_key = matches!(&index.kind, ExprKind::Variable(name) if checker.is_foreach_key(name));
+        // An INTEGER key into a still-empty array decides that array's storage, because packed
+        // storage has no keys: slot `n` is key `n`, and a write past the end zero-fills the gap.
+        // php instead promotes to a hash the moment an integer key skips, so `$rows[$id] = …`
+        // over ids 101/102/205 counts 3 there and counted 206 here. A literal key is decided
+        // exactly; anything this pass cannot bound against the length takes hash storage, where
+        // a gap costs nothing. A foreach key and a `Mixed`-typed key are excluded: both are
+        // runtime-tagged cells that stay on `Array(Mixed)` for `Op::ArraySetMixedKey` to
+        // tag-dispatch, and pinning them to an `Int` hash key here would be a lie. The counter of
+        // the `for` loop this write runs directly in IS bounded — it starts at 0 and advances one
+        // slot per iteration — so `for ($i = 0; …; $i++) { $a[$i] = … }` keeps packed storage.
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
             || (matches!(elem_ty.as_ref(), PhpType::Never)
-                && static_array_key_forces_hash_storage(index));
+                && (static_array_key_forces_hash_storage(index)
+                    || (matches!(normalized_idx_ty, PhpType::Int)
+                        && !index_is_foreach_key
+                        && !checker.index_is_packed_loop_counter(array, index)
+                        && array_key_contiguity_is_unproven(index))));
         if forces_hash {
             let merged_key = if matches!(elem_ty.as_ref(), PhpType::Never) {
                 normalized_idx_ty
@@ -99,6 +113,18 @@ pub(super) fn check_array_assign(
             let merged_ty = checker
                 .merge_array_element_type(elem_ty, &val_ty)
                 .unwrap_or(PhpType::Mixed);
+            // A DECLARED element type (`array<int> $a = …`) is a contract, exactly like a
+            // declared scalar local: widening it here would silently rewrite the array's
+            // storage (`Op::ArrayToMixed`) and box every slot the declaration asked to keep
+            // raw. An INFERRED element type has no such contract and still widens.
+            //
+            // The guard is the MERGE RESULT, not `elem_ty != val_ty`: that inequality is also
+            // true when the merge changes nothing (a declared `array` is `Array(Mixed)`, and
+            // `Mixed != Str` while `merge(Mixed, Str)` is still `Mixed`). Keying on the merge
+            // is what keeps a bare `array` declaration writable.
+            if merged_ty != **elem_ty {
+                reject_declared_element_widening(checker, array, &arr_ty, &val_ty, span)?;
+            }
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
     } else if let PhpType::AssocArray {
@@ -115,6 +141,13 @@ pub(super) fn check_array_assign(
         } else {
             PhpType::Mixed
         };
+        // Same contract as the indexed form, and guarded the same way — on the MERGE RESULT,
+        // so a declared `array<string, mixed>` stays writable with anything while
+        // `array<string, int>` rejects a string value instead of silently widening to
+        // `array<string, mixed>` and boxing every slot.
+        if merged_value != **existing_value {
+            reject_declared_element_widening(checker, array, &arr_ty, &val_ty, span)?;
+        }
         env.insert(
             array.to_string(),
             PhpType::AssocArray {
@@ -123,7 +156,7 @@ pub(super) fn check_array_assign(
             },
         );
     } else if let PhpType::Buffer(elem_ty) = &arr_ty {
-        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) {
+        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) && !idx_ty.is_int_float_union() {
             return Err(CompileError::new(span, "Buffer index must be integer"));
         }
         match elem_ty.as_ref() {
@@ -137,7 +170,7 @@ pub(super) fn check_array_assign(
                 return Err(CompileError::new(
                     span,
                     &format!(
-                        "Buffer element type mismatch: expected {:?}, got {:?}",
+                        "Buffer element type mismatch: expected {}, got {}",
                         inner, val_ty
                     ),
                 ));
@@ -158,6 +191,15 @@ pub(super) fn check_array_assign(
 /// Returns whether a buffer element accepts an assignment value after runtime coercion.
 fn buffer_element_accepts_assignment(expected: &PhpType, actual: &PhpType) -> bool {
     if expected == actual {
+        return true;
+    }
+    // `int|float` belongs with `Mixed` here: a buffer element is a raw scalar slot and the
+    // runtime narrows either one the same way. Refusing it while accepting `Mixed` made the
+    // narrower type the stricter one, which is what a loop counter runs into —
+    // `for (…; $i++) { $buf[$k] = $i; }`.
+    if matches!(expected, PhpType::Float | PhpType::Int | PhpType::Bool)
+        && actual.is_int_float_union()
+    {
         return true;
     }
     matches!(
@@ -273,4 +315,38 @@ pub(super) fn check_array_push(
         }
     }
     Ok(())
+}
+
+/// Rejects an element write that would widen a local's DECLARED element type.
+///
+/// `array<int> $a = …` and `array<string, int> $m = …` are programmer contracts in exactly
+/// the sense `Checker::typed_local_names` already gives `int $x = …`: the declaration pins
+/// the container's storage, and widening it is not a type refinement but a representation
+/// rewrite (`Op::ArrayToMixed` boxes every slot). Accepting it silently is what made
+/// `array<int> $a = [1,2,3]; $a[0] = "s";` compile to `array_to_mixed` with no diagnostic,
+/// defeating the declaration.
+///
+/// `declared` is the whole container type rather than its element, so the diagnostic can name
+/// the form the programmer actually wrote — `array<string, int>`, not `array<int>`.
+///
+/// Callers must have established that the write genuinely widens; a bare `array` declaration
+/// is `Array(Mixed)` and absorbs every write without changing, so it never reaches here.
+/// Inferred containers are absent from `typed_local_names` and keep widening as before.
+fn reject_declared_element_widening(
+    checker: &Checker,
+    array: &str,
+    declared: &PhpType,
+    val_ty: &PhpType,
+    span: Span,
+) -> Result<(), CompileError> {
+    if !checker.typed_local_names.contains_key(array) {
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        &format!(
+            "cannot store {} into ${} declared as {}",
+            val_ty, array, declared
+        ),
+    ))
 }

@@ -311,6 +311,11 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::ClosureCall { var, args } => lower_closure_call(ctx, var, args, expr),
         ExprKind::ExprCall { callee, args } => lower_expr_call(ctx, callee, args, expr),
         ExprKind::ConstRef(name) => constants::lower_const_ref(ctx, name, expr),
+        // `new Box<int>()` is rewritten to a `NewObject` naming the instantiated class long
+        // before lowering; a template has no storage layout to construct.
+        ExprKind::NewGeneric { .. } => unreachable!(
+            "ExprKind::NewGeneric must be instantiated by generics::classes"
+        ),
         ExprKind::NewObject { class_name, args } => lower_new_object(ctx, class_name, args, expr),
         ExprKind::Clone(inner) => lower_clone(ctx, inner, expr),
         ExprKind::NewDynamic { name_expr, args } => {

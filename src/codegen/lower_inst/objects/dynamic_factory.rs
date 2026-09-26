@@ -453,7 +453,7 @@ pub(super) fn emit_dynamic_new_invalid_class_name_fatal(ctx: &mut FunctionContex
 }
 
 /// Writes a fatal diagnostic to stderr and exits.
-pub(super) fn emit_fatal_message(ctx: &mut FunctionContext<'_>, message: &[u8]) {
+pub(in crate::codegen::lower_inst) fn emit_fatal_message(ctx: &mut FunctionContext<'_>, message: &[u8]) {
     let (message_label, message_len) = ctx.data.add_string(message);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

@@ -149,6 +149,7 @@ fn test_user_by_ref_param_invalidates_and_retains() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "f".to_string(),
+            type_params: Vec::new(),
             params: vec![
                 ("p".to_string(), None, None, true),
                 ("q".to_string(), None, None, false),
@@ -201,6 +202,7 @@ fn test_top_level_globals_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "gw".to_string(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

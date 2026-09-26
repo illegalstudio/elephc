@@ -81,11 +81,23 @@ pub(super) fn lower_array_map_identity(
     inst: &Instruction,
     array: ValueId,
 ) -> Result<()> {
+    let result_ty = match inst.result {
+        Some(result) => ctx.value_php_type(result)?.codegen_repr(),
+        None => PhpType::Mixed,
+    };
+    let source_php_ty = ctx.value_php_type(array)?;
     let source_ty = ctx.load_value_to_result(array)?.codegen_repr();
     if source_ty == PhpType::Mixed {
         abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
-    } else {
+    } else if result_ty == PhpType::Mixed {
         emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+    } else {
+        // The result slot is the source's own container type — the checker answers a literal
+        // `null` callback with the source type, since the identity map IS the source array. Hand
+        // back that array with one more reference, as `array_values()` does for a list; boxing it
+        // here stored a Mixed cell pointer into an `array<string>` slot, and every read of the
+        // result then treated the cell's words as the array's.
+        abi::emit_incref_if_refcounted(ctx.emitter, &source_php_ty);
     }
     store_if_result(ctx, inst)
 }

@@ -772,6 +772,9 @@ fn type_guard_subject(condition: &Expr) -> Option<(&str, PhpType)> {
                 guarded_variable_name(value)?,
                 PhpType::Object(class.as_str().to_string()),
             )),
+            // `generics::classes` names the instantiated class before this scan runs, so a
+            // generic target here would be a template — which narrows to no storage at all.
+            InstanceOfTarget::Generic(_) => None,
             InstanceOfTarget::Expr(_) => None,
         },
         // `$x === null` / `$x === false` (either operand order). `!==` is the negated form and is
@@ -980,7 +983,7 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
         }
         StmtKind::Try { try_body, catches, finally_body } => {
             collect_block(checker, try_body, depth + 1, facts);
-            for CatchClause { exception_types: _, variable, body } in catches {
+            for CatchClause { exception_type_args: _, exception_types: _, variable, body } in catches {
                 // The catch variable is bound by the clause, not by an assignment statement.
                 if let Some(variable) = variable {
                     disqualify(facts, variable);
@@ -1074,6 +1077,7 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
         ExprKind::StaticMethodCall { receiver: _, method: _, args }
         | ExprKind::NewScopedObject { receiver: _, args }
         | ExprKind::NewObject { class_name: _, args }
+        | ExprKind::NewGeneric { class_type: _, args }
         | ExprKind::ClosureCall { var: _, args } => {
             disqualify_call_arguments(facts, args);
             collect_exprs(checker, args, depth, facts);

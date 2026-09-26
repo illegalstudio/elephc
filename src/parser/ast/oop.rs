@@ -224,6 +224,15 @@ impl PartialEq for ClassConst {
 /// Class method.
 pub struct ClassMethod {
     pub name: String,
+    /// Type parameters this method declares of its OWN (`function map<U>(…)`), empty for an
+    /// ordinary method.
+    ///
+    /// Distinct from the class's: a method of `Box<T>` may introduce a `U` that only its call
+    /// sites determine, so `T` is bound when the CLASS is instantiated and `U` when the METHOD
+    /// is called. An instantiated generic method is dispatched statically and never takes a
+    /// vtable slot — two instantiations of one class must keep identical method sets, or their
+    /// slot numbering diverges and a variance widening lands on the wrong method.
+    pub type_params: Vec<crate::parser::ast::TypeParam>,
     pub visibility: Visibility,
     pub is_static: bool,
     pub is_abstract: bool,

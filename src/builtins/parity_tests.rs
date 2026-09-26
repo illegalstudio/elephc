@@ -803,6 +803,12 @@ fn dump_prelude_contract_seed_on_request() {
 
     fn type_text(ty: &TypeExpr) -> String {
         match ty {
+            // No builtin declares one; rendering it keeps this helper total.
+            TypeExpr::CallableSig { params, ret } => format!(
+                "callable({}): {}",
+                params.iter().map(type_text).collect::<Vec<_>>().join(", "),
+                type_text(ret)
+            ),
             TypeExpr::Int => "int".to_string(),
             TypeExpr::Float => "float".to_string(),
             TypeExpr::Bool => "bool".to_string(),
@@ -811,10 +817,15 @@ fn dump_prelude_contract_seed_on_request() {
             TypeExpr::Void => "void".to_string(),
             TypeExpr::Never => "never".to_string(),
             TypeExpr::Iterable => "iterable".to_string(),
-            TypeExpr::Array(_) => "array".to_string(),
+            TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => "array".to_string(),
             TypeExpr::Ptr(_) => "ptr".to_string(),
             TypeExpr::Buffer(_) => "buffer".to_string(),
             TypeExpr::Named(name) => name.as_str().to_string(),
+            TypeExpr::GenericClass { name, args } => format!(
+                "{}<{}>",
+                name.as_str(),
+                args.iter().map(type_text).collect::<Vec<_>>().join(", ")
+            ),
             TypeExpr::Nullable(inner) => format!("?{}", type_text(inner)),
             TypeExpr::Union(members) => members.iter().map(type_text).collect::<Vec<_>>().join("|"),
             TypeExpr::Intersection(members) => {

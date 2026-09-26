@@ -13,6 +13,7 @@ use super::*;
 pub(super) fn builtin_reflection_parameter_count_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "getNumberOfParameters".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -66,6 +67,7 @@ pub(super) fn builtin_reflection_function_method_is_variadic_method() -> ClassMe
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "isVariadic".to_string(),
         visibility: Visibility::Public,
         is_static: false,

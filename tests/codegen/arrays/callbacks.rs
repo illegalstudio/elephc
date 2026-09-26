@@ -1817,3 +1817,394 @@ echo array_reduce($w, fn($c, $v) => $c + strlen($v) + 1, 0);
     );
     assert_eq!(out, "1");
 }
+
+// --- array_map speaks ONE type: the storage it builds ---
+//
+// `array_map` used to keep the checker's precise container AND a separate EIR result slot of
+// `Mixed`. The value was then a boxed cell wrapping boxed slots while every boundary that quotes
+// the CHECKER's type — a return contract, a parameter contract, a property — was told it held an
+// int array. Each test below printed a POINTER before that was made one answer, and the same call
+// used inside the function printed the right number, which is what hid it.
+
+/// Verifies the reduced case: a mapped array crossing a return boundary, indexed by the caller.
+#[test]
+fn test_array_map_result_returned_then_indexed() {
+    let out = compile_and_run(
+        r#"<?php
+function c(array $s) { return array_map(fn(int $x): int => $x * $x, $s); }
+echo c([1, 2, 3])[0];
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies a DECLARED `: array` return does not reintroduce the boxed cell. The declaration is
+/// refined to the inferred element type, so this is the same contract as the inferred form.
+#[test]
+fn test_array_map_result_returned_through_declared_array_return() {
+    let out = compile_and_run(
+        r#"<?php
+function c(array $s): array { return array_map(fn(int $x): int => $x * $x, $s); }
+echo c([1, 2, 3])[2];
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+/// Verifies the result survives a local and two call hops, which is how it reaches most real
+/// call sites.
+#[test]
+fn test_array_map_result_returned_through_a_local_and_two_hops() {
+    let out = compile_and_run(
+        r#"<?php
+function inner(array $s) { $r = array_map(fn(int $x): int => $x + 1, $s); return $r; }
+function outer(array $s) { return inner($s); }
+echo outer([1, 2, 3])[1];
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies every element of a returned mapped array, not just the first: a boxed slot read as a
+/// raw one is wrong at every index, and `count()` stayed right throughout, so only the VALUES
+/// catch it.
+#[test]
+fn test_array_map_result_returned_then_iterated() {
+    let out = compile_and_run(
+        r#"<?php
+function c(array $s) { return array_map(fn(int $x): int => $x * $x, $s); }
+$out = "";
+foreach (c([1, 2, 3]) as $v) { $out .= $v . ","; }
+echo $out, count(c([1, 2, 3]));
+"#,
+    );
+    assert_eq!(out, "1,4,9,3");
+}
+
+/// Verifies the result binds to a typed array PARAMETER. The argument boundary quotes the same
+/// checker type as the return boundary and was wrong in the same way.
+#[test]
+fn test_array_map_result_passed_to_an_array_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function first(array $a): int { return $a[0]; }
+function c(array $s) { return array_map(fn(int $x): int => $x * 10, $s); }
+echo first(c([4, 5]));
+"#,
+    );
+    assert_eq!(out, "40");
+}
+
+/// Verifies the result stores into a declared array PROPERTY. That assignment used to be refused
+/// outright — `prop_set assigning PHP type Mixed to H::$items with PHP type Array(Mixed)` — because
+/// the value was a boxed cell rather than a container.
+#[test]
+fn test_array_map_result_stored_into_an_array_property() {
+    let out = compile_and_run(
+        r#"<?php
+class H { public array $items = []; }
+$h = new H();
+$h->items = array_map(fn(int $x): int => $x * 3, [1, 2]);
+echo $h->items[1];
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies a STRING callback naming a user function still crosses a return boundary. This is the
+/// shape the second answer existed for: its element ABI is decided by a runtime descriptor, so the
+/// result element type stays `Mixed` — and being `Mixed` on BOTH channels is what makes it right.
+#[test]
+fn test_array_map_string_callback_result_returned_then_indexed() {
+    let out = compile_and_run(
+        r#"<?php
+function twice(int $x): int { return $x * 2; }
+function c(array $s) { return array_map('twice', $s); }
+echo c([1, 2])[1];
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+/// Verifies a callback return type that CANNOT be narrowed keeps working through the boxed path.
+/// `float` is outside the narrowable set on purpose: the descriptor lowering accepts only `Int`,
+/// `Bool` and `Str` from the result slot.
+#[test]
+fn test_array_map_float_callback_result_returned_then_indexed() {
+    let out = compile_and_run(
+        r#"<?php
+function c(array $s) { return array_map(fn(int $x): float => $x / 2, $s); }
+echo c([1, 3])[1];
+"#,
+    );
+    assert_eq!(out, "1.5");
+}
+
+/// Verifies a callback returning an ARRAY — also outside the narrowable set — survives the return
+/// boundary and can be indexed twice.
+#[test]
+fn test_array_map_nested_array_callback_result_returned_then_indexed() {
+    let out = compile_and_run(
+        r#"<?php
+function c(array $s) { return array_map(fn(int $x): array => [$x, $x + 1], $s); }
+echo c([1, 2])[1][1];
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies an ASSOCIATIVE source keeps its keys across the return boundary, which is the
+/// key-preserving single-array form php-src implements.
+#[test]
+fn test_array_map_assoc_result_returned_keeps_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function c(array $s) { return array_map(fn(int $x): int => $x * 2, $s); }
+$r = c(['a' => 1, 'b' => 2]);
+echo $r['b'];
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+/// Verifies a `callable` parameter carrying the callback still maps and returns correctly: the
+/// callback reaches EIR as a descriptor, not as a string, so the element type is the closure's.
+#[test]
+fn test_array_map_through_a_callable_parameter_returned() {
+    let out = compile_and_run(
+        r#"<?php
+function c(callable $f, array $s) { return array_map($f, $s); }
+echo c(fn(int $x): int => $x + 1, [1, 2])[1];
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies a first-class callable as the callback, returned and indexed.
+#[test]
+fn test_array_map_first_class_callable_result_returned() {
+    let out = compile_and_run(
+        r#"<?php
+function twice(int $x): int { return $x * 2; }
+function c(array $s) { return array_map(twice(...), $s); }
+echo c([1, 2])[1];
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+/// A container popped out of a nested array unboxes EXACTLY, and must not be refused.
+///
+/// `array_pop` boxes the element it removes, so an `array<array<int>>` yields a `Mixed` cell
+/// whose payload is a real `array<int>` with raw slots — the IR is indistinguishable from the
+/// `array_map` shape that used to carry boxed slots, and a static refusal at that boundary
+/// rejected this program (found by an external review, which ran it).
+///
+/// The boundary reads the payload's own value_type tag instead of deciding from the types:
+/// raw slots pass, boxed slots fatal. A mutation proves the second half — restoring the
+/// two-answer `array_map` makes `echo c([1,2,3])[0]` exit 1 with that fatal, where it used to
+/// print a pointer.
+///
+/// The CONTRACT is written in a doc block rather than as `: array`, and that is not a detail. A
+/// bare `array` declaration is now `array<mixed>|array<mixed, mixed>`, a type that names no
+/// element at all, so `array_pop` on one is `mixed` and the return is refused — `Function 'last'
+/// return type expects array, got mixed` — for this program and for the one that really does
+/// return an int. Neither is decidable from that declaration any more, and relaxing the boundary
+/// to accept `mixed` was measured and rejected: it compiles `function bad(array $a): array {
+/// return array_pop($a); } bad([1, 2])` into a program that prints `int(2)` where php throws a
+/// TypeError. A concrete element type is what makes the question answerable, so that is what
+/// these two fixtures declare.
+#[test]
+fn test_popped_container_unboxes_into_a_typed_element_contract() {
+    let out = compile_and_run(
+        "<?php \
+         /** @return array<int> */ \
+         function last(array $a) { return array_pop($a); } \
+         $r = last([[1, 2], [3, 4]]); \
+         echo $r[0], $r[1], count($r);",
+    );
+    assert_eq!(out, "342");
+}
+
+/// The associative form of the same shape: the popped value is a hash with typed values.
+#[test]
+fn test_shifted_hash_unboxes_into_a_typed_value_contract() {
+    let out = compile_and_run(
+        "<?php \
+         /** @return array<string, int> */ \
+         function first(array $a) { return array_shift($a); } \
+         $r = first([['a' => 1, 'b' => 2], ['a' => 3]]); \
+         echo $r['a'], $r['b'];",
+    );
+    assert_eq!(out, "12");
+}
+
+/// A callback that returns nothing maps to a list of nulls, as php-src does.
+///
+/// The inline static path builds the result array from the CALLBACK's return type rather than
+/// from the checker's answer, so a `void` callback reached `array_push` with a `Void` operand —
+/// which has no lowering — and a program php accepts was refused. It now declines the shortcut
+/// and takes the ordinary runtime path, which boxes each result.
+///
+/// Only the first-class-callable-over-a-literal shape took that shortcut: the closure-literal
+/// form was always correct, which is what hid it. Found by an external review that ran it.
+#[test]
+fn test_array_map_with_a_void_callback_yields_nulls() {
+    let out = compile_and_run(
+        "<?php \
+         function nop(int $x): void {} \
+         $b = array_map(nop(...), [1, 2]); \
+         var_dump($b);",
+    );
+    assert_eq!(out, "array(2) {\n  [0]=>\n  NULL\n  [1]=>\n  NULL\n}\n");
+}
+
+/// The `never` form of the same shape reaches the callback and throws, instead of being refused.
+#[test]
+fn test_array_map_with_a_never_callback_throws_from_the_callback() {
+    let err = compile_and_run_expect_failure(
+        "<?php \
+         function boom(int $x): never { throw new Exception('no'); } \
+         $b = array_map(boom(...), [1, 2]); \
+         echo 'unreached';",
+    );
+    assert!(
+        err.contains("Uncaught Exception: no"),
+        "expected the callback's own exception, got: {err}"
+    );
+}
+
+/// `array_filter()` over an ASSOCIATIVE source, which php has always allowed and the compiled
+/// path refused outright — the check arm matched `PhpType::Array` only, so the most ordinary
+/// associative idiom there is did not compile:
+///
+/// ```php
+/// array_filter(["b" => 2, "a" => 1], fn($x) => $x > 1)
+/// ```
+///
+/// The eval interpreter has supported it all along, key preservation included, so this is the
+/// compiled path catching up rather than a new semantic. php drops entries and never renumbers,
+/// so every surviving key comes across untouched — which is what `json_encode` shows here and
+/// what `implode` would have hidden.
+#[test]
+fn test_array_filter_over_a_string_keyed_hash_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["b" => 2, "a" => 1, "c" => 3];
+echo json_encode(array_filter($h, fn($x) => $x > 1)), "|";
+$s = ["b" => "yy", "a" => "", "c" => "zz"];
+echo json_encode(array_filter($s, fn($x) => $x !== "")), "|";
+echo json_encode(array_filter($h, fn($x) => $x > 9)), "|";
+echo json_encode(array_filter($h, fn($x) => $x > 0));
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"b\":2,\"c\":3}|{\"b\":\"yy\",\"c\":\"zz\"}|[]|{\"b\":2,\"a\":1,\"c\":3}"
+    );
+}
+
+/// An integer-keyed hash keeps its own keys too, including one built through a gapped variable
+/// index — the storage a write the checker cannot bound against the array's length now picks.
+#[test]
+fn test_array_filter_over_an_integer_keyed_hash_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$h = [10 => 2, 20 => 1, 30 => 3];
+echo json_encode(array_filter($h, fn($x) => $x > 1)), "|";
+$rows = [];
+foreach ([101, 102, 205] as $id) { $rows[$id] = $id % 2; }
+echo json_encode(array_filter($rows, fn($x) => $x === 1));
+"#,
+    );
+    assert_eq!(out, "{\"10\":2,\"30\":3}|{\"101\":1,\"205\":1}");
+}
+
+/// The source is only ever READ, and a surviving string value is duplicated rather than shared,
+/// so three hundred filters neither corrupt the source nor alias its payloads.
+///
+/// The heap is deliberately NOT asserted clean here. `array_filter()` leaks its RESULT — three
+/// blocks per call on this fixture — and always has, identically on the indexed path and on
+/// committed `main`; asserting `clean` would pin a property the builtin has never had. The
+/// source's own integrity is what this fixture is for, and a value aliased instead of duplicated
+/// would corrupt it as the released results piled up.
+#[test]
+fn test_array_filter_over_a_hash_leaves_the_source_intact_and_owns_its_values() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["b" => "yy", "a" => "xx", "c" => "zz"];
+$n = 0;
+for ($i = 0; $i < 300; $i++) {
+    $kept = array_filter($h, fn($x) => $x !== "xx");
+    $n += count($kept);
+}
+echo $n, "|", json_encode($h);
+"#,
+    );
+    assert_eq!(out, "600|{\"b\":\"yy\",\"a\":\"xx\",\"c\":\"zz\"}");
+}
+
+/// `array_reduce()` over an ASSOCIATIVE source, which the backend refused outright although the
+/// checker never restricted the argument's shape — it reads the element through
+/// `array_element_type`, which understands both.
+///
+/// A hash folds its VALUES the way an indexed array folds its elements, and the answer is a
+/// scalar either way, so there is no destination to build and no key to preserve. Insertion order
+/// is what the fold follows, which the subtraction here would expose if it did not.
+#[test]
+fn test_array_reduce_over_a_hash_folds_its_values_in_insertion_order() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+echo array_reduce($h, fn($c, $x) => $c + $x, 0), "|";
+echo array_reduce($h, fn($c, $x) => $c - $x, 100), "|";
+$i = [10 => 1, 20 => 2];
+echo array_reduce($i, fn($c, $x) => $c + $x, 0), "|";
+$empty = [];
+$empty["gone"] = 1;
+unset($empty["gone"]);
+echo array_reduce($empty, fn($c, $x) => $c + $x, 7);
+"#,
+    );
+    assert_eq!(out, "6|94|3|7");
+}
+
+/// The same fold over a hash built by a gapped variable index — the storage a write the checker
+/// cannot bound against the array's length now picks — and through a capturing closure, whose
+/// environment the runtime helper appends only when it is non-null.
+#[test]
+fn test_array_reduce_over_a_gapped_hash_with_a_capturing_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [];
+foreach ([101, 102, 205] as $id) { $rows[$id] = 1; }
+$weight = 10;
+echo array_reduce($rows, fn($c, $x) => $c + $x * $weight, 0), "|", count($rows);
+"#,
+    );
+    assert_eq!(out, "30|3");
+}
+
+/// `array_filter($h, $cb, 0)` over a hash: the DEFAULT mode written out.
+///
+/// php passes the value alone for mode 0, which is the two-argument call exactly, so the explicit
+/// spelling has to lower the same way. Testing `mode.is_some()` refused it and reported a backend
+/// error for a valid program; the mode is read statically now, and an absent operand already
+/// answers `Some(0)`, so both spellings are one predicate.
+///
+/// The non-default modes stay refused — they pass a KEY, whose register shape is independent of
+/// the value's — and that refusal is what the second half pins.
+#[test]
+fn test_array_filter_over_a_hash_accepts_the_explicitly_written_default_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$kept = array_filter($h, fn($v) => $v > 1, 0);
+echo count($kept), "|", json_encode($kept), "|";
+$none = array_filter($h, fn($v) => false, 0);
+echo count($none);
+"#,
+    );
+    assert_eq!(out, "2|{\"b\":2,\"c\":3}|0");
+}
+
