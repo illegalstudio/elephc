@@ -1027,3 +1027,121 @@ fn test_array_slice_builtin_types_do_not_collide_across_included_files() {
     );
     assert_eq!(out, "12|tf");
 }
+
+/// Once `PHP_INT_MAX` is a key, PHP's next free key saturates there and is already taken, so
+/// an append throws `Error` and leaves the array alone (#1315). The next key used to wrap to
+/// `PHP_INT_MIN` instead.
+#[test]
+fn test_append_after_php_int_max_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, PHP_INT_MAX => "max"];
+try { $a[] = "next"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+var_export(array_keys($a)); echo "\n";
+$ok = [PHP_INT_MAX - 1 => 'a'];
+$ok[] = 'b';
+echo array_key_last($ok) === PHP_INT_MAX ? "last is max" : "wrong", "\n";
+function via_mixed(mixed $m): mixed {
+    try { $m[] = 3; } catch (Error $e) { echo "mixed: ", $e->getMessage(), "\n"; }
+    return $m;
+}
+echo count(via_mixed([PHP_INT_MAX => 'x']));
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error: Cannot add element to the array as the next element is already occupied\narray (\n  0 => 'x',\n  1 => 9223372036854775807,\n)\nlast is max\nmixed: Cannot add element to the array as the next element is already occupied\n1"
+    );
+}
+
+/// The refused append owned its value, so the throw has to release it.
+#[test]
+fn test_refused_append_after_php_int_max_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 30; $i++) {
+    $h = ['a' => 'x', PHP_INT_MAX => 'max'];
+    try { $h[] = str_repeat('v', $i + 1); } catch (Error $e) { }
+}
+echo count($h);
+"#,
+    );
+    assert_eq!(out.stdout, "2", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A spread reindexes its integer keys from the destination's next free key, so it hits the
+/// same saturated key as an append once `PHP_INT_MAX` is taken, and throws the same `Error`.
+/// String keys never need the counter. Regression for #1315.
+#[test]
+fn test_spread_after_php_int_max_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$src = [1 => 'v'];
+try {
+    $a = [PHP_INT_MAX => 'max', ...$src];
+    var_export(array_keys($a));
+} catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try {
+    $b = ['k' => 1, PHP_INT_MAX => 'm', ...[str_repeat('s', 2), 'y']];
+    var_export(array_keys($b));
+} catch (Error $e) { echo $e->getMessage(), "\n"; }
+$c = [PHP_INT_MAX => 'max', ...['x' => 1]];
+echo count($c), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Error: Cannot add element to the array as the next element is already occupied\n",
+            "Cannot add element to the array as the next element is already occupied\n",
+            "2\n",
+        )
+    );
+}
+
+/// Appending and spreading can now throw, so a store made before them in a `try` must still
+/// be visible to the `catch` that runs instead of the rest of the block.
+#[test]
+fn test_catch_sees_stores_made_before_a_refused_append_or_spread() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $n): string {
+    $h = ['a' => 1, PHP_INT_MAX => 2];
+    $x = 'start';
+    try {
+        $x = 'before' . $n;
+        $h[] = 3;
+        $x = 'after';
+    } catch (Error $e) {
+        return $x . '|' . count($h);
+    }
+    return $x;
+}
+echo f($argc), "\n";
+function g(int $n): string {
+    $x = 'start';
+    try {
+        $x = 'mid' . $n;
+        $a = [PHP_INT_MAX - 1 => 'p', ...[str_repeat('q', $n), 'r']];
+        $x = 'end' . count($a);
+    } catch (Error $e) {
+        return $x . ':' . $e->getMessage();
+    }
+    return $x;
+}
+echo g($argc), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "before1|2\n",
+            "mid1:Cannot add element to the array as the next element is already occupied\n",
+        )
+    );
+}

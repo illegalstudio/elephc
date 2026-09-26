@@ -14,8 +14,9 @@ use crate::codegen_support::platform::Arch;
 /// Emits `__rt_hash_append` for the active target.
 ///
 /// The helper scans occupied hash entries, finds the largest integer key, and appends
-/// at `largest + 1`. If the hash has no integer keys, it appends at key `0`.
-/// It delegates the actual insert, growth, COW split, and ownership transfer to
+/// at `largest + 1`. If the hash has no integer keys, it appends at key `0`. When the
+/// largest key is already `PHP_INT_MAX` it releases the value and throws `Error`, as PHP
+/// does, instead of wrapping to `PHP_INT_MIN`. It delegates the actual insert, growth, COW split, and ownership transfer to
 /// `__rt_hash_set`.
 pub fn emit_hash_append(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -79,8 +80,36 @@ pub fn emit_hash_append(emitter: &mut Emitter) {
     // -- materialize the append key and delegate insertion --
     emitter.label("__rt_hash_append_key_ready");
     emitter.instruction("cbz x9, __rt_hash_append_no_int_keys");                // hashes with no integer keys append at key zero
+    emitter.instruction("mov x10, #-1");                                        // all bits set
+    emitter.instruction("lsr x10, x10, #1");                                    // x10 = PHP_INT_MAX
+    emitter.instruction("cmp x8, x10");                                         // is the largest integer key already PHP_INT_MAX?
+    emitter.instruction("b.eq __rt_hash_append_occupied");                      // PHP's next free key saturates there and is taken
     emitter.instruction("add x1, x8, #1");                                      // append after the largest observed integer key
     emitter.instruction("b __rt_hash_append_call_set");                         // use the computed key for insertion
+
+    emitter.label("__rt_hash_append_occupied");
+    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the tag of the value that will not be stored
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload its payload: the append owned it, so the throw must drop it
+    emitter.instruction("cmp x13, #8");                                         // is the value null?
+    emitter.instruction("b.eq __rt_hash_append_throw");                         // null owns no heap payload
+    emitter.instruction("cmp x13, #1");                                         // is the value a string?
+    emitter.instruction("b.eq __rt_hash_append_release_any");                   // strings release through the uniform dispatcher
+    emitter.instruction("cmp x13, #10");                                        // is the value a callable descriptor?
+    emitter.instruction("b.eq __rt_hash_append_release_callable");              // callable descriptors release through the descriptor helper
+    emitter.instruction("cmp x13, #4");                                         // is the value heap backed?
+    emitter.instruction("b.lo __rt_hash_append_throw");                         // scalars, bools and floats own no heap payload
+    emitter.label("__rt_hash_append_release_any");
+    emitter.instruction("bl __rt_decref_any");                                  // release the refused value through the uniform dispatcher
+    emitter.instruction("b __rt_hash_append_throw");                            // raise once the value is released
+    emitter.label("__rt_hash_append_release_callable");
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the refused callable descriptor
+    emitter.label("__rt_hash_append_throw");
+    super::value_error::emit_throw_static_throwable_aarch64(
+        emitter,
+        "_spl_error_class_id",
+        "_array_next_occupied_msg",
+        crate::codegen_support::runtime::data::ARRAY_NEXT_OCCUPIED_MSG.len(),
+    );
 
     emitter.label("__rt_hash_append_no_int_keys");
     emitter.instruction("mov x1, #0");                                          // first automatic integer key is zero
@@ -150,8 +179,36 @@ fn emit_hash_append_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_append_key_ready");
     emitter.instruction("test r9, r9");                                         // did the scan observe any integer keys?
     emitter.instruction("je __rt_hash_append_no_int_keys");                     // hashes with no integer keys append at key zero
+    emitter.instruction("mov r10, 0x7fffffffffffffff");                         // r10 = PHP_INT_MAX
+    emitter.instruction("cmp rax, r10");                                        // is the largest integer key already PHP_INT_MAX?
+    emitter.instruction("je __rt_hash_append_occupied");                        // PHP's next free key saturates there and is taken
     emitter.instruction("add rax, 1");                                          // append after the largest observed integer key
     emitter.instruction("jmp __rt_hash_append_call_set");                       // use the computed key for insertion
+
+    emitter.label("__rt_hash_append_occupied");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the tag of the value that will not be stored
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload its payload: the append owned it, so the throw must drop it
+    emitter.instruction("cmp rcx, 8");                                          // is the value null?
+    emitter.instruction("je __rt_hash_append_throw");                           // null owns no heap payload
+    emitter.instruction("cmp rcx, 1");                                          // is the value a string?
+    emitter.instruction("je __rt_hash_append_release_any");                     // strings release through the uniform dispatcher
+    emitter.instruction("cmp rcx, 10");                                         // is the value a callable descriptor?
+    emitter.instruction("je __rt_hash_append_release_callable");                // callable descriptors release through the descriptor helper
+    emitter.instruction("cmp rcx, 4");                                          // is the value heap backed?
+    emitter.instruction("jb __rt_hash_append_throw");                           // scalars, bools and floats own no heap payload
+    emitter.label("__rt_hash_append_release_any");
+    emitter.instruction("call __rt_decref_any");                                // release the refused value through the uniform dispatcher
+    emitter.instruction("jmp __rt_hash_append_throw");                          // raise once the value is released
+    emitter.label("__rt_hash_append_release_callable");
+    emitter.instruction("call __rt_callable_descriptor_release");               // release the refused callable descriptor
+    emitter.label("__rt_hash_append_throw");
+    emitter.instruction("sub rsp, 8");                                          // restore call-entry alignment for the throw helper's frame
+    super::value_error::emit_throw_static_throwable_x86_64(
+        emitter,
+        "_spl_error_class_id",
+        "_array_next_occupied_msg",
+        crate::codegen_support::runtime::data::ARRAY_NEXT_OCCUPIED_MSG.len(),
+    );
 
     emitter.label("__rt_hash_append_no_int_keys");
     emitter.instruction("xor eax, eax");                                        // first automatic integer key is zero

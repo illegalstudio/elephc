@@ -240,3 +240,11 @@ echo "Matched language keys: " . implode(", ", array_keys($matched)) . "\n";
 // String array
 $langs = ["PHP", "Rust", "ARM64"];
 echo "Compiled " . $langs[0] . " to " . $langs[2] . " with " . $langs[1] . "\n";
+
+// Once PHP_INT_MAX is a key there is no next integer key, so an append throws.
+$edge = [PHP_INT_MAX => "last"];
+try {
+    $edge[] = "overflow";
+} catch (Error $e) {
+    echo "Append refused: " . $e->getMessage() . " (" . count($edge) . " element)\n";
+}

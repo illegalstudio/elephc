@@ -182,6 +182,10 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_spread_set");                              // insert the preserved object-projection integer key
     emitter.label("__rt_hash_spread_reindex_int_key");
     emitter.instruction("ldr x1, [sp, #16]");                                   // load the running next integer key
+    emitter.instruction("mov x9, #1");                                          // build PHP_INT_MIN, which the counter only reaches by wrapping
+    emitter.instruction("lsl x9, x9, #63");                                     // x9 = PHP_INT_MIN
+    emitter.instruction("cmp x1, x9");                                          // did the counter step past PHP_INT_MAX?
+    emitter.instruction("b.eq __rt_hash_spread_occupied");                      // PHP's next free key saturates there and is taken
     emitter.instruction("mov x2, #-1");                                         // key_hi sentinel marks an integer key
 
     emitter.label("__rt_hash_spread_set");
@@ -207,6 +211,26 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the spread walk spill slots
     emitter.instruction("ret");                                                 // return to generated code
+
+    // -- the next automatic key is taken: drop the retained value, then throw --
+    emitter.label("__rt_hash_spread_occupied");
+    emitter.instruction("ldr x9, [sp, #64]");                                   // reload the tag of the value this entry retained
+    emitter.instruction("cmp x9, #1");                                          // was it a persisted string copy?
+    emitter.instruction("b.eq __rt_hash_spread_occupied_release");              // the persisted copy belongs to this helper
+    emitter.instruction("cmp x9, #4");                                          // was it a retained refcounted payload?
+    emitter.instruction("b.lo __rt_hash_spread_occupied_throw");                // scalars were copied and own nothing
+    emitter.instruction("cmp x9, #7");                                          // tags 4 through 7 were retained above
+    emitter.instruction("b.hi __rt_hash_spread_occupied_throw");                // other tags were copied without a retain
+    emitter.label("__rt_hash_spread_occupied_release");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // load the retained value the destination never took
+    emitter.instruction("bl __rt_decref_any");                                  // release it before unwinding
+    emitter.label("__rt_hash_spread_occupied_throw");
+    super::value_error::emit_throw_static_throwable_aarch64(
+        emitter,
+        "_spl_error_class_id",
+        "_array_next_occupied_msg",
+        crate::codegen_support::runtime::data::ARRAY_NEXT_OCCUPIED_MSG.len(),
+    );
 }
 
 /// Emits `__rt_hash_spread` for the x86_64 Linux ABI.
@@ -355,6 +379,9 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_spread_x86_set");                        // insert the preserved object-projection integer key
     emitter.label("__rt_hash_spread_x86_reindex_int_key");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // load the running next integer key
+    emitter.instruction("mov r10, 0x8000000000000000");                         // PHP_INT_MIN, which the counter only reaches by wrapping
+    emitter.instruction("cmp rsi, r10");                                        // did the counter step past PHP_INT_MAX?
+    emitter.instruction("je __rt_hash_spread_x86_occupied");                    // PHP's next free key saturates there and is taken
     emitter.instruction("mov rdx, -1");                                         // key_hi sentinel marks an integer key
 
     emitter.label("__rt_hash_spread_x86_set");
@@ -380,4 +407,25 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 96");                                         // release the spread walk spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return to generated code
+
+    // -- the next automatic key is taken: drop the retained value, then throw --
+    emitter.label("__rt_hash_spread_x86_occupied");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the tag of the value this entry retained
+    emitter.instruction("cmp r9, 1");                                           // was it a persisted string copy?
+    emitter.instruction("je __rt_hash_spread_x86_occupied_release");            // the persisted copy belongs to this helper
+    emitter.instruction("cmp r9, 4");                                           // was it a retained refcounted payload?
+    emitter.instruction("jb __rt_hash_spread_x86_occupied_throw");              // scalars were copied and own nothing
+    emitter.instruction("cmp r9, 7");                                           // tags 4 through 7 were retained above
+    emitter.instruction("ja __rt_hash_spread_x86_occupied_throw");              // other tags were copied without a retain
+    emitter.label("__rt_hash_spread_x86_occupied_release");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the retained value the destination never took
+    emitter.instruction("call __rt_decref_any");                                // release it before unwinding
+    emitter.label("__rt_hash_spread_x86_occupied_throw");
+    emitter.instruction("sub rsp, 8");                                          // restore call-entry alignment for the throw helper's frame
+    super::value_error::emit_throw_static_throwable_x86_64(
+        emitter,
+        "_spl_error_class_id",
+        "_array_next_occupied_msg",
+        crate::codegen_support::runtime::data::ARRAY_NEXT_OCCUPIED_MSG.len(),
+    );
 }

@@ -1,9 +1,11 @@
 //! Purpose:
-//! Emits shared runtime throw sequences for array helpers that raise `ValueError`.
+//! Emits shared runtime throw sequences for runtime helpers that raise a Throwable with a
+//! static message (`ValueError`, `Error`).
 //! Keeps exception object allocation details out of individual array helper loops.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::strings::mb_strlen`.
+//! - `crate::codegen_support::runtime::strings::mb_strlen` and `strings::iconv`.
+//! - `crate::codegen_support::runtime::arrays::hash_append` and `arrays::hash_spread`.
 //!
 //! Key details:
 //! - The emitted sequence does not return; it publishes `_exc_value` and enters the unwinder.
@@ -13,7 +15,7 @@ use crate::codegen_support::emit::Emitter;
 
 /// Emits an ARM64 `ValueError` throw using a static message symbol.
 ///
-/// Allocates a 32-byte Throwable payload, stamps the per-program `ValueError`
+/// Allocates a 56-byte Throwable payload, stamps the per-program `ValueError`
 /// class id, stores the message pointer/length and zero code, then jumps to
 /// `__rt_throw_current`.
 pub(in crate::codegen_support::runtime) fn emit_throw_value_error_aarch64(
@@ -21,17 +23,28 @@ pub(in crate::codegen_support::runtime) fn emit_throw_value_error_aarch64(
     message_symbol: &str,
     message_len: usize,
 ) {
+    emit_throw_static_throwable_aarch64(emitter, "_spl_value_error_class_id", message_symbol, message_len);
+}
+
+/// Emits an ARM64 throw of the Throwable class whose per-program id lives at `class_id_symbol`,
+/// with a static message. Same payload layout as the `ValueError` form; never returns.
+pub(in crate::codegen_support::runtime) fn emit_throw_static_throwable_aarch64(
+    emitter: &mut Emitter,
+    class_id_symbol: &str,
+    message_symbol: &str,
+    message_len: usize,
+) {
     emitter.instruction("mov x0, #56");                                         // request Throwable payload storage (message/code/previous)
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the ValueError object payload
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Throwable object payload
     emitter.instruction("mov x9, #6");                                          // heap kind 6 = object instance
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp allocation as a runtime object
     emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
-    abi::emit_symbol_address(emitter, "x9", "_spl_value_error_class_id");
-    emitter.instruction("ldr x9, [x9]");                                        // load ValueError's runtime class id for this program
+    abi::emit_symbol_address(emitter, "x9", class_id_symbol);
+    emitter.instruction("ldr x9, [x9]");                                        // load the Throwable's runtime class id for this program
     emitter.instruction("str x9, [x0]");                                        // store class id at the object header
     abi::emit_symbol_address(emitter, "x9", message_symbol);
-    emitter.instruction("str x9, [x0, #8]");                                    // store static ValueError message pointer
-    emitter.instruction(&format!("mov x9, #{}", message_len));                  // load static ValueError message length
+    emitter.instruction("str x9, [x0, #8]");                                    // store the static message pointer
+    emitter.instruction(&format!("mov x9, #{}", message_len));                  // load the static message length
     emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
@@ -50,19 +63,30 @@ pub(in crate::codegen_support::runtime) fn emit_throw_value_error_x86_64(
     message_symbol: &str,
     message_len: usize,
 ) {
+    emit_throw_static_throwable_x86_64(emitter, "_spl_value_error_class_id", message_symbol, message_len);
+}
+
+/// Emits an x86_64 Linux throw of the Throwable class whose per-program id lives at
+/// `class_id_symbol`, with a static message. Same payload layout as the `ValueError` form.
+pub(in crate::codegen_support::runtime) fn emit_throw_static_throwable_x86_64(
+    emitter: &mut Emitter,
+    class_id_symbol: &str,
+    message_symbol: &str,
+    message_len: usize,
+) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
     emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
     emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
     emitter.instruction("mov rax, 56");                                         // request Throwable payload storage (message/code/previous)
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object payload
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the Throwable object payload
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_value_error_class_id", 0); // load ValueError's runtime class id for this program
+    abi::emit_load_symbol_to_reg(emitter, "r10", class_id_symbol, 0);           // load the Throwable's runtime class id for this program
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at the object header
-    abi::emit_symbol_address(emitter, "r10", message_symbol);                   // materialize static ValueError message pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static ValueError message pointer
-    emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static ValueError message length
+    abi::emit_symbol_address(emitter, "r10", message_symbol);                   // materialize the static message pointer
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the static message pointer
+    emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store the static message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
