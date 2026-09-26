@@ -1113,6 +1113,9 @@ real-world validation rather than by speculative pass work.
 - [x] Hardened array, callable, property, and call-boundary ownership, including copy-on-write mutation, named keyed spreads, by-reference arguments, and loop-carried nullable values.
 - [x] Extended the runtime and bridge surface with IPv6 conversion, recursive `mkdir()`, `file_put_contents()` flags, corrected curl output handling, and safer compiler and web artifact paths.
 - [x] Improved release diagnostics and portability for bridge rebuilds, missing native archives, deep recursion, x86_64 argument layout, and assembly-only output.
+- [x] Extended `array_chunk()` to associative arrays, with explicit preservation or renumbering of source keys.
+- [x] Corrected Reflection metadata for by-reference returns and filtered attributes, plus runtime diagnostics for string offsets and float array keys.
+- [x] Preserved syntactic generator behavior through optimizer passes, including functions that return a `Generator` without containing `yield`.
 
 - [ ] Local-to-SSA promotion (`mem2reg`) for eligible non-aliased scalar PHP locals — replace repeated `load_local` / `store_local` traffic with SSA values and block parameters at CFG joins and loop back edges, while conservatively retaining address-taken, by-reference, global/static, refcounted, and otherwise volatile slots in memory. Re-run register allocation on the promoted graph so loop-carried values such as counters and accumulators can remain in registers across the whole loop.
 - [ ] EIR integer range and induction-variable analysis — propagate intervals through constants, comparisons, loop bounds, masks, shifts, and checked `add` / `sub` / `mul`; prove when PHP integer overflow is impossible and rewrite only those operations to unchecked scalar forms. Keep overflow-to-float behavior on every unproven path and cover all supported targets with optimizer-on/off equivalence tests.

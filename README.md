@@ -776,7 +776,7 @@ the Docker image and build cache remain available for later runs.
 
 The **[docs/](docs/)** directory is a complete wiki covering every aspect of the compiler. Inside you'll find:
 
-- **PHP syntax reference**: types, operators, control structures, functions, classes, namespaces, and all 549 built-in functions with signatures and examples
+- **PHP syntax reference**: types, operators, control structures, functions, classes, namespaces, and the generated built-in function reference with signatures and examples
 - **Compiler extensions** — pointers, `buffer<T>`, `packed class`, FFI with `extern`, and conditional compilation with `ifdef` — the features that take PHP beyond the web
 - **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to code generation and runtime structure
 - **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of the ARM64 instruction set used by elephc's AArch64 backend
