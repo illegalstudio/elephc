@@ -328,7 +328,7 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
 
     emitter.label("__rt_pr_val_flt");
     emitter.instruction("ldr d0, [sp, #0]");                                    // reload the float bit pattern
-    emitter.instruction("bl __rt_ftoa");                                        // x1=text ptr, x2=text len
+    emitter.instruction("bl __rt_ftoa_coerce");                                 // x1=text ptr, x2=text len
     emitter.instruction("bl __rt_pr_write");                                    // write the float text
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
@@ -424,7 +424,7 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_pr_val_flt_x86");
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 8]");                     // reload the float bit pattern
-    emitter.instruction("call __rt_ftoa");                                      // rax=text ptr, rdx=text len
+    emitter.instruction("call __rt_ftoa_coerce");                               // rax=text ptr, rdx=text len
     emitter.instruction("mov rsi, rax");                                        // text ptr → write buffer
     emitter.instruction("call __rt_pr_write");                                  // write the float text
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered

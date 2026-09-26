@@ -405,7 +405,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emit_call_label(emitter, "__rt_resource_write_stdout");
         }
         PhpType::Float => {
-            emit_call_label(emitter, "__rt_ftoa");
+            emit_call_label(emitter, "__rt_ftoa_coerce");
             emit_write_current_string_stdout(emitter);
         }
         PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => {

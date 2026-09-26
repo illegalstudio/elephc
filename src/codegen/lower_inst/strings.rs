@@ -339,7 +339,7 @@ pub(super) fn lower_float_to_string(
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     require_float(ctx.load_value_to_result(value)?, inst)?;
-    abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa_coerce");
     store_if_result(ctx, inst)
 }
 

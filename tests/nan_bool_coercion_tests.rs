@@ -3,7 +3,9 @@
 //! `__rt_warn_nan_coerced_bool` runtime helper and the inline NAN probe that guards it
 //! (`src/codegen_support/runtime/arrays/nan_bool_coercion_warning.rs`), reached from the three
 //! float-truthiness lowering sites in `src/codegen/lower_inst` and from the two boxed-Mixed
-//! runtime helpers (`__rt_mixed_cast_bool`, `__rt_mixed_is_empty`).
+//! runtime helpers (`__rt_mixed_cast_bool`, `__rt_mixed_is_empty`). Also covers its sibling,
+//! `unexpected NAN value was coerced to string`, raised by `__rt_ftoa_coerce` on every float
+//! string coercion.
 //!
 //! The diagnostic is NEW IN PHP 8.5 (RFC `warnings-php-8-5`, "Coercing NAN to other types");
 //! 8.2/8.3/8.4 coerce NAN to `true` silently. Before the fix elephc coerced silently on every
@@ -48,6 +50,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// preamble). Keeping the text in one constant makes the message and the counts below impossible
 /// to drift apart.
 const NAN_WARNING: &str = "Warning: unexpected NAN value was coerced to bool\n";
+
+/// The exact stderr line elephc emits for one NAN-to-string coercion.
+const NAN_STRING_WARNING: &str = "Warning: unexpected NAN value was coerced to string\n";
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -163,6 +168,12 @@ fn assert_run_for_version(
 /// coerced a NAN to bool exactly `count` times.
 fn warnings(count: usize) -> String {
     NAN_WARNING.repeat(count)
+}
+
+/// Returns `NAN_STRING_WARNING` repeated `count` times, i.e. the whole stderr of a program that
+/// coerced a NAN to string exactly `count` times.
+fn string_warnings(count: usize) -> String {
+    NAN_STRING_WARNING.repeat(count)
 }
 
 // ---------------------------------------------------------------------------
@@ -439,5 +450,89 @@ var_dump(empty(f()));
         Some("8.5"),
         "bool(true)\nbool(false)\n",
         &warnings(2),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// NAN to string — the same RFC's second coercion warning
+// ---------------------------------------------------------------------------
+
+/// Every string coercion of a NAN warns once: `echo`, concatenation, interpolation, `(string)`,
+/// `strval()`, `.=`, a `string` parameter, a string builtin argument, `printf("%s")`,
+/// `print_r()`, `implode()` of a mixed array and `settype(..., "string")`.
+///
+/// These reach `__rt_ftoa_coerce` through the scalar cast, the builtin argument coercion, the
+/// boxed-Mixed cast and the `print_r` walker. Reference PHP 8.5 prints twelve warnings and the
+/// stdout asserted here. Regression for #1354.
+#[test]
+fn every_string_coercion_site_warns_once_for_a_nan() {
+    assert_run(
+        "nan_string_sites",
+        r#"<?php
+function f(): float { return NAN; }
+function takes(string $s): string { return "[$s]"; }
+echo f(), "\n";
+echo "a" . f() . "\n";
+$n = f();
+echo "i=$n\n";
+echo (string)f(), "\n";
+echo strval(f()), "\n";
+$s = "s"; $s .= f(); echo $s, "\n";
+echo takes(f()), "\n";
+echo str_pad(f(), 5, "-"), "\n";
+printf("%s\n", f());
+print_r(f()); echo "\n";
+echo implode(",", ["a", f()]), "\n";
+$t = f(); settype($t, "string"); echo $t, "\n";
+"#,
+        "NAN\naNAN\ni=NAN\nNAN\nNAN\nsNAN\n[NAN]\nNAN--\nNAN\nNAN\na,NAN\nNAN\n",
+        &string_warnings(12),
+    );
+}
+
+/// Formatting a NAN WITHOUT coercing it to string stays silent, and a boxed Mixed NAN warns.
+///
+/// php-src warns only on a string conversion: `var_dump()`, `var_export()`, `serialize()`,
+/// `json_encode()`, a comparison with a non-numeric string and `number_format()` all format the
+/// float without converting it, so they must not warn; neither do `INF` and `-INF`, nor an
+/// `@`-suppressed conversion. The last two lines coerce a `mixed` NAN, which goes through
+/// `__rt_mixed_cast_string` / `__rt_mixed_write_stdout`. Reference PHP 8.5 prints exactly two
+/// warnings and the stdout asserted here.
+#[test]
+fn nan_formatting_without_string_coercion_stays_silent() {
+    assert_run(
+        "nan_string_controls",
+        r#"<?php
+function f(): float { return NAN; }
+function m(): mixed { return NAN; }
+function inf(): float { return INF; }
+var_dump(f());
+var_export(f()); echo "\n";
+echo serialize(f()), "\n";
+var_dump(json_encode(f()));
+var_dump(f() == "abc");
+echo number_format(f()), "\n";
+echo inf(), " ", -inf(), "\n";
+echo @strval(f()), "\n";
+echo m(), "\n";
+echo (string)m(), "\n";
+"#,
+        "float(NAN)\nNAN\nd:NAN;\nbool(false)\nbool(false)\nnan\nINF -INF\nNAN\nNAN\nNAN\n",
+        &string_warnings(2),
+    );
+}
+
+/// `--php-version 8.4` converts a NAN to string silently, as php 8.4 does.
+#[test]
+fn php_84_coerces_nan_to_string_silently() {
+    assert_run_for_version(
+        "nan_string_version_84",
+        r#"<?php
+function f(): float { return NAN; }
+echo f(), "|", (string)f(), "\n";
+"#,
+        Some("8.4"),
+        "NAN|NAN\n",
+        "",
     );
 }

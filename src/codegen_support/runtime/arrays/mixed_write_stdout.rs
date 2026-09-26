@@ -81,7 +81,7 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_write_stdout_float");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the boxed float bits
     emitter.instruction("fmov d0, x9");                                         // move the boxed float bits into the FP return register
-    emitter.instruction("bl __rt_ftoa");                                        // convert the boxed float to a printable string (x1/x2)
+    emitter.instruction("bl __rt_ftoa_coerce");                                 // convert the boxed float to a printable string (x1/x2)
     emitter.instruction("b __rt_mixed_write_stdout_emit");                      // emit the converted float through the capture-aware tail
 
     emitter.label("__rt_mixed_write_stdout_emit");
@@ -157,7 +157,7 @@ fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_write_stdout_float");
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the boxed float bits into a scratch register before the conversion call
     emitter.instruction("movq xmm0, r10");                                      // move the boxed float bits into the standard x86_64 float argument register
-    emitter.instruction("call __rt_ftoa");                                      // convert the boxed float to a printable string (pointer rax, length rdx)
+    emitter.instruction("call __rt_ftoa_coerce");                               // convert the boxed float to a printable string (pointer rax, length rdx)
     emitter.instruction("jmp __rt_mixed_write_stdout_emit");                    // emit the converted float through the capture-aware tail
 
     emitter.label("__rt_mixed_write_stdout_emit");

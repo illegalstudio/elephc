@@ -2522,7 +2522,7 @@ fn coerce_to_string(
 ) {
     match ty.codegen_repr() {
         PhpType::Int => abi::emit_call_label(emitter, "__rt_itoa"),
-        PhpType::Float => abi::emit_call_label(emitter, "__rt_ftoa"),
+        PhpType::Float => abi::emit_call_label(emitter, "__rt_ftoa_coerce"),
         PhpType::Bool => emit_bool_to_string(emitter, ctx),
         PhpType::Void | PhpType::Never => emit_empty_string_result(emitter),
         PhpType::Mixed | PhpType::Union(_) => {
