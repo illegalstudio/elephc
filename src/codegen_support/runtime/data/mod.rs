@@ -171,6 +171,10 @@ pub(crate) const OBJECT_NOT_ARRAY_SUFFIX: &str = " as array";
 pub(crate) const SERIALIZATION_DENIED_PREFIX: &str = "Serialization of '";
 /// Suffix for PHP's catchable Exception when an object's class forbids serialization.
 pub(crate) const SERIALIZATION_DENIED_SUFFIX: &str = "' is not allowed";
+/// PHP's catchable Error when an append would need the key after `PHP_INT_MAX`: the next free
+/// element saturates at `PHP_INT_MAX`, which is already taken (#1315).
+pub(crate) const ARRAY_NEXT_OCCUPIED_MSG: &str =
+    "Cannot add element to the array as the next element is already occupied";
 /// Prefix for PHP's catchable Error when a name and its positional alias both arrive.
 ///
 /// A descriptor argument container can carry BOTH the positional key `0` and the name of the

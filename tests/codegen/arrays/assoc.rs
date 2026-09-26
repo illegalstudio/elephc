@@ -1027,3 +1027,49 @@ fn test_array_slice_builtin_types_do_not_collide_across_included_files() {
     );
     assert_eq!(out, "12|tf");
 }
+
+/// Once `PHP_INT_MAX` is a key, PHP's next free key saturates there and is already taken, so
+/// an append throws `Error` and leaves the array alone (#1315). The next key used to wrap to
+/// `PHP_INT_MIN` instead.
+#[test]
+fn test_append_after_php_int_max_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, PHP_INT_MAX => "max"];
+try { $a[] = "next"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+var_export(array_keys($a)); echo "\n";
+$ok = [PHP_INT_MAX - 1 => 'a'];
+$ok[] = 'b';
+echo array_key_last($ok) === PHP_INT_MAX ? "last is max" : "wrong", "\n";
+function via_mixed(mixed $m): mixed {
+    try { $m[] = 3; } catch (Error $e) { echo "mixed: ", $e->getMessage(), "\n"; }
+    return $m;
+}
+echo count(via_mixed([PHP_INT_MAX => 'x']));
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error: Cannot add element to the array as the next element is already occupied\narray (\n  0 => 'x',\n  1 => 9223372036854775807,\n)\nlast is max\nmixed: Cannot add element to the array as the next element is already occupied\n1"
+    );
+}
+
+/// The refused append owned its value, so the throw has to release it.
+#[test]
+fn test_refused_append_after_php_int_max_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 30; $i++) {
+    $h = ['a' => 'x', PHP_INT_MAX => 'max'];
+    try { $h[] = str_repeat('v', $i + 1); } catch (Error $e) { }
+}
+echo count($h);
+"#,
+    );
+    assert_eq!(out.stdout, "2", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}

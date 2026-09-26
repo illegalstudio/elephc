@@ -20,6 +20,7 @@ use super::{
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
     SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX,
+    ARRAY_NEXT_OCCUPIED_MSG,
     POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
@@ -112,6 +113,9 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     out.push_str(&format!(
         ".globl _serialization_denied_suffix\n_serialization_denied_suffix:\n    .ascii {SERIALIZATION_DENIED_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _array_next_occupied_msg\n_array_next_occupied_msg:\n    .ascii {ARRAY_NEXT_OCCUPIED_MSG:?}\n"
     ));
     out.push_str(&format!(
         ".globl _named_parameter_overwrite_prefix\n_named_parameter_overwrite_prefix:\n    .ascii {NAMED_PARAMETER_OVERWRITE_PREFIX:?}\n"
