@@ -4,6 +4,10 @@ The extension work is tracked in [the implementation plan](../../.plans/mbstring
 The complete public scope comes from PHP 8.5.10, matching `scripts/docs/php_baseline.json`.
 The native engine does not invoke PHP or download data at build/run time.
 
+All 65 PHP 8.5.10 public mbstring functions and all nine constants are bound in
+both AOT and eval. The notes below record the implementation and its fixtures;
+specific compatibility limits are called out where they still apply.
+
 `php_surface.json` records function signatures, constants, encoding order, aliases,
 and MIME names. The encoding generators capture deterministic conversion results
 from the same PHP executable. They do not copy libmbfl implementation code.
@@ -208,10 +212,9 @@ metadata, and release it at the final owner. The registry removes an identity wh
 its last host lease ends, and the intern index retires byte keys at final ownership
 release. Request reset does not invalidate still-owned results.
 `ARG_STRING` setter values instead create fresh temporary text. Public INI adapters
-must preserve original native/eval string identities through aliases and array
-results, including the lifecycle hooks that release their leases. Those adapters,
-startup option routing, and host core-encoding updates remain integration work in
-the implementation plan.
+preserve original native/eval string identities through aliases and array
+results, including the lifecycle hooks that release their leases. Startup option
+routing and host core-encoding updates use the shared request state.
 
 Native allocation metadata records lazy logical origins per thread. Persistence
 shares a complete known origin or assigns a fresh destination, including empty
@@ -234,9 +237,9 @@ bytes. Eval follows the same origin distinction and retains arbitrary PHP bytes.
 AOT and eval share the literal-byte codec; eval retains non-UTF-8 constants and
 attribute values explicitly and registers literal identity only after native
 boxing. The pipe folder keeps identity-changing string transforms at runtime.
-Auditing remaining direct string constructors, scalar conversions, concatenation
-and cast provenance, short-result normalization, and other transform identities
-remains necessary before routing public INI calls.
+The public INI calls are routed through that shared state. Direct string
+constructors, scalar conversions, concatenation, cast provenance, short-result
+normalization, and other transform identities remain useful audit surfaces.
 
 Detection uses PHP's version-pinned common-character selection. Download
 [`common_codepoints.txt`](https://raw.githubusercontent.com/php/php-src/php-8.5.10/ext/mbstring/common_codepoints.txt)
@@ -301,9 +304,9 @@ detector, and converter. The shared invocation C ABI additionally consumes all 6
 outer-argument cases through an independent callback host and real request dispatch.
 Every callback reenters the request API; results, diagnostic/callback traces, caller
 references, array COW, precision ordering, and final settings match PHP. The host
-fixture models Stringable execution and float formatting explicitly. Production
-native/eval integration, native destructor cleanup, and the three strict outer
-conversion cases for list-valued conversion remain pending.
+fixture models Stringable execution and float formatting explicitly. Subsequent
+native/eval integration and ownership tests cover this boundary. The three strict
+outer conversion cases for list-valued conversion still need an oracle replay.
 
 Invocation tests also inject 54 failures or malformed successes across argument
 copying, metadata lookup, Stringable/float conversion, diagnostic delivery, array
@@ -388,8 +391,8 @@ ordered snapshots. Engine tests distinguish absent HTTP identification from fals
 and verify unsigned error-counter wrapping. Native/eval tests cover all result
 shapes, named and dynamic callbacks, Stringable selectors, and balanced ownership.
 The web regression verifies the conversion-error count resets between requests.
-Host configuration setters exist in the shared state; wiring mbstring directives
-into the public INI surface remains part of the implementation ledger.
+Public INI adapters route mbstring directives to the shared state used by AOT,
+eval, and web requests.
 
 The HTTP input oracle contains 2,176 PHP 8.5.10 cases: every possible one-byte
 selector, invalid longer strings, nullable and weak arguments, eight configured
@@ -397,8 +400,8 @@ lists, repeated names, aliases, transfer encodings, and the complete catalog.
 Shared state keeps the configured list, aggregate identification, and four source
 identifications independent. Native/eval tests verify defaults, Stringable and
 named calls, errors, and that text-setting changes preserve HTTP input candidates.
-Request parsing and public INI updates must populate these fields through the
-pending host integration, rather than copying state into individual adapters.
+Request parsing and public INI updates populate these fields through the shared
+host integration rather than copying state into individual adapters.
 
 The shared query engine under `src/input` prepares the parsing stages needed by
 `mb_parse_str`. Its 17,904 PHP cases cover raw NUL termination, binary percent
@@ -412,11 +415,11 @@ counts rejected units without resetting the request's existing total.
 Name registration emits shared ordered steps for entering an array, storing a
 value, or removing a root after nesting overflow. The owned graph host verifies
 PHP's numeric keys, negative append counters, maximum-index failures, malformed
-brackets, mangled-name rejection, and partial mutations. Native/eval hosts still
-need to apply those steps to live caller storage, preserve exposed array aliases,
-and handle destructor/diagnostic reentry and SAPI input filters. Public
-`mb_parse_str` registration, argument/reference adaptation, core INI routing, and
-its example therefore remain pending. Run the engine replays with
+brackets, mangled-name rejection, and partial mutations. Native/eval hosts apply
+those steps to live caller storage and preserve exposed array aliases through
+destructor and diagnostic reentry. Public `mb_parse_str` registration,
+argument/reference adaptation, core INI routing, and its example are present.
+Run the engine replays with
 `cargo test -p elephc-mbstring --test detect_many --test parse_str`.
 
 The neutral `mb_parse_str` contract and shared operation 82 now reach the V5
@@ -445,16 +448,15 @@ after registration, before deciding whether to emit the nesting warning. Failure
 injection covers owned configuration/filter bytes, invalid readiness/flags,
 unsupported host versions, pending filters, writer cleanup, and an earlier
 throwable surviving a later fatal host response. Run these shared host checks
-with `cargo test -p elephc-mbstring --test invoke mbstring_query_`. The contract
-still reports `ReferenceAdaptersPending` for both public backends until their
-storage callbacks and PHP-visible bindings are integrated.
+with `cargo test -p elephc-mbstring --test invoke mbstring_query_`. The public
+AOT and eval bindings now supply the required storage callbacks.
 
 The mbregex corpus pins PHP 8.5.10 with Oniguruma 6.9.10. Its 8,279 records include
 3,625 option cases, 426 encoding alias cases, and 4,228 anchored/search cases.
 The native transport test compares 4,098 matching cases, exact compile warnings,
 empty/unmatched groups, duplicate named groups, Unicode, binary inputs, and all
 supported PHP syntax selectors. The remaining 130 records describe mb_ereg's
-empty-pattern argument error, which belongs to its pending public adapter.
+empty-pattern argument error, which is checked by public AOT and eval tests.
 
 The Rust regex engine owns PHP option parsing, alias-sensitive validation, and
 capture copies. The managed Oniguruma package owns the opaque native provider;
@@ -625,13 +627,14 @@ opaque eval and runtime-unknown callbacks; run `elephc native add oniguruma` in
 the project before linking. Text operations and regex settings alone need only
 the shared Rust bridge. The old PCRE2-based matching adapters have been removed.
 
-Public `mb_ereg_replace_callback` and `mb_send_mail` now have AOT and eval bindings,
-bringing public binding coverage to 64 of 65 functions. Their focused public call, ownership,
-effects, and error tests pass. This is not complete callback support: the native
-retained-owner regression still reports two unreleased string owners per regex
-invocation in the exercised callback shape, and closure and method callback
-frontend coverage remains open. `mb_convert_variables`, public
-INI host integration, and the earlier compatibility debts are still pending.
+Public `mb_ereg_replace_callback`, `mb_send_mail`, and `mb_convert_variables` have
+AOT and eval bindings, bringing public binding coverage to 65 of 65 functions.
+Focused public call, ownership, effects, and error tests cover these routes.
+`mb_send_mail` opens the configured transport with direct process arguments;
+unlike PHP's shell-based `php_mail`, quotes and shell metacharacters in
+`additional_params` are not interpreted. The bridge catalog identifies network
+I/O because of this mail operation; the other mbstring operations retain their
+own generic timing policy.
 
 The three native CI archive jobs prepare `target/debug/elephc-oniguruma` with
 `scripts/ci/prepare_oniguruma_tests.py`. Nextest packages the complete managed

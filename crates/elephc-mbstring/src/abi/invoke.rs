@@ -20,6 +20,7 @@ mod variables;
 mod ini;
 mod output;
 mod callback;
+mod mail;
 pub use capture::elephc_mbstring_capture_v1;
 pub use output::{elephc_mbstring_output_v1, elephc_mbstring_output_invoke_v1};
 pub use callback::elephc_mbstring_callback_invoke_v1;
@@ -138,6 +139,9 @@ unsafe fn invoke(
         }
     }
     let args: Vec<_> = values.iter().map(Argument::wire).collect::<Option<_>>().ok_or(Status::Fatal)?;
+    if operation == RuntimeBuiltinId::MbSendMail {
+        return unsafe { mail::invoke(&args, session) }.map(Into::into);
+    }
     if operation.is_mbregex() {
         let encoding = regex_entry_encoding.unwrap_or_else(|| REGEX.with(|session| session.encoding()));
         return unsafe { regex::invoke(operation, &args, session, encoding) }.map(Into::into);

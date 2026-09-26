@@ -166,9 +166,14 @@ impl State {
     pub fn with_ini_configuration(overrides: &[(Vec<u8>, Vec<u8>)], defaults: CoreEncodingDefaults,
         mut validate: impl FnMut(&[u8]) -> Result<(), MimeRegexError>) -> (Self, Vec<Diagnostic>) {
         let mut state = Self::default();
-        if let Some((_, value)) = overrides.iter().rev().find(|(name, _)| name == b"sendmail_path") {
-            state.mail_command = value.clone();
-        }
+        let mail_setting = |key: &[u8]| overrides.iter().rev().find(|(name, _)| name == key).map(|(_, value)| value);
+        if let Some(value) = mail_setting(b"sendmail_path") { state.mail_command = value.clone(); }
+        state.mail_force_extra_parameters = mail_setting(b"mail.force_extra_parameters")
+            .filter(|value| !value.contains(&0)).cloned();
+        state.mail_mixed_lf_and_crlf = mail_setting(b"mail.mixed_lf_and_crlf").is_some_and(|value| {
+            !value.is_empty() && ![b"0".as_slice(), b"off", b"no", b"false"].iter()
+                .any(|false_value| value.eq_ignore_ascii_case(false_value))
+        });
         let (core_ini, mut diagnostics) = super::CoreIni::with_overrides(overrides);
         state.core_ini = core_ini;
         state.response = super::Response::with_overrides(overrides);
@@ -203,10 +208,14 @@ impl State {
         core_ini.reset();
         let response = self.response.startup_reset();
         let mail_command = self.mail_command.clone();
+        let mail_force_extra_parameters = self.mail_force_extra_parameters.clone();
+        let mail_mixed_lf_and_crlf = self.mail_mixed_lf_and_crlf;
         *self = Self::with_ini_configuration(&overrides, defaults, |_| Ok(())).0;
         self.core_ini = core_ini;
         self.response = response;
         self.mail_command = mail_command;
+        self.mail_force_extra_parameters = mail_force_extra_parameters;
+        self.mail_mixed_lf_and_crlf = mail_mixed_lf_and_crlf;
     }
 
     /// Updates inherited effective encodings while preserving explicit public/INI overrides and lookup caches.

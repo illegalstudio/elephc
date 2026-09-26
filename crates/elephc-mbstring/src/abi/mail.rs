@@ -19,13 +19,30 @@ use elephc_builtin_contract::mbstring_abi::array::{Key, Value};
 use super::{ARG_ARRAY, Arguments, MbError, Outcome, State};
 use crate::encoding::{Encoding, Substitute};
 
+/// Message bytes and PHP warnings determined before the transport runs.
+pub(super) struct PreparedMail { pub(super) bytes: Vec<u8>, pub(super) warnings: Vec<Vec<u8>> }
+
 /// Formats the message before opening a transport and returns the delivery status.
 pub(super) fn dispatch(args: &Arguments<'_>, state: &mut State) -> Outcome {
-    let message = match prepare(args, state) {
-        Ok(message) => message,
+    let prepared = match prepare(args, state) {
+        Ok(prepared) => prepared,
         Err(error) => return Outcome::error(error),
     };
-    let mut command = match command(state, args.nullable_string(4)) {
+    let mut diagnostics = Vec::new();
+    for warning in &prepared.warnings {
+        diagnostics.extend_from_slice(b"Warning: ");
+        diagnostics.extend_from_slice(warning);
+        diagnostics.push(b'\n');
+    }
+    let mut result = send(prepared.bytes, state, args.nullable_string(4));
+    diagnostics.append(&mut result.diagnostics);
+    result.diagnostics = diagnostics;
+    result
+}
+
+/// Runs an already formatted message using direct process arguments.
+pub(super) fn send(message: Vec<u8>, state: &State, additional: Option<&[u8]>) -> Outcome {
+    let mut command = match command(state, additional) {
         Ok(command) => command,
         Err(error) => return Outcome::error(error),
     };
@@ -53,16 +70,16 @@ fn command(state: &State, additional: Option<&[u8]>) -> Result<Command, MbError>
     let Some(path) = parts.next() else { return Err(MbError::Runtime("mb_send_mail(): No mail transport is configured".into())); };
     let mut command = Command::new(OsString::from_vec(path.to_vec()));
     command.args(parts.map(|part| OsString::from_vec(part.to_vec())));
-    if let Some(additional) = additional {
-        no_nul(additional, 5, "additional_params")?;
-        command.args(additional.split(|byte| byte.is_ascii_whitespace()).filter(|part| !part.is_empty())
+    if let Some(additional) = additional { no_nul(additional, 5, "additional_params")?; }
+    if let Some(parameters) = state.mail_force_extra_parameters().or(additional) {
+        command.args(parameters.split(|byte| byte.is_ascii_whitespace()).filter(|part| !part.is_empty())
             .map(|part| OsString::from_vec(part.to_vec())));
     }
     Ok(command)
 }
 
 /// Encodes PHP's subject and body and appends absent MIME headers in source order.
-fn prepare(args: &Arguments<'_>, state: &State) -> Result<Vec<u8>, MbError> {
+pub(super) fn prepare(args: &Arguments<'_>, state: &State) -> Result<PreparedMail, MbError> {
     let to = args.string(0);
     let subject = args.string(1);
     let body = args.string(2);
@@ -70,6 +87,7 @@ fn prepare(args: &Arguments<'_>, state: &State) -> Result<Vec<u8>, MbError> {
         no_nul(bytes, index, name)?;
     }
     let mut headers = headers(args)?;
+    let mut warnings = Vec::new();
     let [mut charset, header_encoding, mut body_encoding] = state.language().mail_encodings();
     let has_content_type = headers.iter().any(|(name, _)| name.eq_ignore_ascii_case(b"content-type"));
     let has_transfer = headers.iter().any(|(name, _)| name.eq_ignore_ascii_case(b"content-transfer-encoding"));
@@ -81,14 +99,22 @@ fn prepare(args: &Arguments<'_>, state: &State) -> Result<Vec<u8>, MbError> {
         }) {
             let name = name.strip_prefix(b"\"").unwrap_or(name);
             let name = name.strip_suffix(b"\"").unwrap_or(name);
-            charset = Encoding::lookup(name).unwrap_or_else(|| Encoding::lookup(b"ASCII").expect("ASCII codec"));
+            if !name.is_empty() {
+                charset = Encoding::lookup(name).unwrap_or_else(|| {
+                    warnings.push(unsupported(b"charset", name, b"ascii"));
+                    Encoding::lookup(b"ASCII").expect("ASCII codec")
+                });
+            }
         }
     }
     let transfer = headers.iter().find(|(name, _)| name.eq_ignore_ascii_case(b"content-transfer-encoding"));
     if let Some((_, value)) = transfer {
         body_encoding = Encoding::lookup(value.trim_ascii()).filter(|encoding|
             ["BASE64", "7bit", "8bit"].iter().any(|name| encoding.name().eq_ignore_ascii_case(name)))
-            .unwrap_or_else(|| Encoding::lookup(b"8bit").expect("8bit codec"));
+            .unwrap_or_else(|| {
+                warnings.push(unsupported(b"transfer encoding", value.trim_ascii(), b"8bit"));
+                Encoding::lookup(b"8bit").expect("8bit codec")
+            });
     }
     if !headers.iter().any(|(name, _)| name.eq_ignore_ascii_case(b"mime-version")) {
         headers.push((b"MIME-Version".to_vec(), b"1.0".to_vec()));
@@ -105,25 +131,59 @@ fn prepare(args: &Arguments<'_>, state: &State) -> Result<Vec<u8>, MbError> {
         headers.push((b"Content-Transfer-Encoding".to_vec(),
             body_encoding.mime_name().unwrap_or("7bit").as_bytes().to_vec()));
     }
+    let line_sep = state.mail_line_separator();
     let mut result = Vec::new();
     result.extend_from_slice(b"To: ");
-    result.extend(to.trim_ascii_end().iter().map(|&byte| if byte.is_ascii_control() { b' ' } else { byte }));
-    result.extend_from_slice(b"\r\nSubject: ");
+    result.extend_from_slice(&safe_to(to.trim_ascii_end()));
+    result.extend_from_slice(line_sep);
+    result.extend_from_slice(b"Subject: ");
     result.extend_from_slice(&crate::mime::encode_header(subject, state.internal_encoding(), charset,
-        header_encoding.name().eq_ignore_ascii_case("BASE64"), b"\r\n", 29));
-    result.extend_from_slice(b"\r\n");
+        header_encoding.name().eq_ignore_ascii_case("BASE64"), line_sep,
+        (b"Subject: [PHP-jp nnnnnnnn]".len() + line_sep.len()) as i64));
+    result.extend_from_slice(line_sep);
     for (name, value) in headers {
         result.extend_from_slice(&name);
         result.extend_from_slice(b": ");
         result.extend_from_slice(&value);
-        result.extend_from_slice(b"\r\n");
+        result.extend_from_slice(line_sep);
     }
-    result.extend_from_slice(b"\r\n");
+    result.extend_from_slice(line_sep);
     let text = charset.encode_conversion(body, state.internal_encoding(), Substitute::default());
     let raw = Encoding::lookup(b"8bit").expect("8bit codec");
     result.extend_from_slice(&body_encoding.encode_conversion(&text, raw, Substitute::default()));
-    result.extend_from_slice(b"\r\n");
-    Ok(result)
+    result.extend_from_slice(line_sep);
+    Ok(PreparedMail { bytes: result, warnings })
+}
+
+/// Formats PHP's unsupported mail header warning without changing non-UTF-8 bytes.
+fn unsupported(kind: &[u8], value: &[u8], fallback: &[u8]) -> Vec<u8> {
+    let mut warning = b"mb_send_mail(): Unsupported ".to_vec();
+    warning.extend_from_slice(kind);
+    warning.extend_from_slice(b" \"");
+    warning.extend_from_slice(value);
+    warning.extend_from_slice(b"\" - will be regarded as ");
+    warning.extend_from_slice(fallback);
+    warning
+}
+
+/// Keeps RFC 822 folded continuations while neutralizing other control bytes.
+fn safe_to(to: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(to.len());
+    let mut index = 0;
+    while index < to.len() {
+        if to[index..].starts_with(b"\r\n") && to.get(index + 2).is_some_and(|byte| matches!(byte, b' ' | b'\t')) {
+            result.extend_from_slice(b"\r\n");
+            index += 2;
+            while to.get(index).is_some_and(|byte| matches!(byte, b' ' | b'\t')) {
+                result.push(to[index]);
+                index += 1;
+            }
+        } else {
+            result.push(if to[index].is_ascii_control() { b' ' } else { to[index] });
+            index += 1;
+        }
+    }
+    result
 }
 
 /// Copies string and array header forms without allowing embedded NUL bytes.
@@ -187,7 +247,77 @@ mod tests {
             MbArgV1::string("Crème".as_bytes())];
         let args = unsafe { Arguments::new(RuntimeBuiltinId::MbSendMail, &slots) }.expect("mail arguments");
         let message = prepare(&args, &State::default()).expect("MIME message");
-        assert_eq!(message, b"To: a@example.test\r\nSubject: =?UTF-8?B?Q2Fmw6k=?=\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: BASE64\r\n\r\nQ3LDqG1l\r\n");
+        assert_eq!(message.bytes, b"To: a@example.test\r\nSubject: =?UTF-8?B?Q2Fmw6k=?=\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: BASE64\r\n\r\nQ3LDqG1l\r\n");
+        assert!(message.warnings.is_empty());
+    }
+
+    /// Preserves valid RFC 822 folding while replacing other control bytes in To.
+    #[test]
+    fn mail_to_keeps_folded_continuations() {
+        let slots = [MbArgV1::string(b"a@example.test\r\n \tCc: b@example.test\nInjected: z"),
+            MbArgV1::string(b"S"), MbArgV1::string(b"body")];
+        let args = unsafe { Arguments::new(RuntimeBuiltinId::MbSendMail, &slots) }.expect("mail arguments");
+        let message = prepare(&args, &State::default()).expect("MIME message");
+        assert!(message.bytes.starts_with(b"To: a@example.test\r\n \tCc: b@example.test Injected: z\r\nSubject: S\r\n"));
+    }
+
+    /// Applies PHP's legacy mixed line-feed setting to the complete mail envelope.
+    #[test]
+    fn mail_mixed_line_endings_match_php() {
+        let slots = [MbArgV1::string(b"a@example.test"), MbArgV1::string("Café".as_bytes()),
+            MbArgV1::string("Crème".as_bytes())];
+        let args = unsafe { Arguments::new(RuntimeBuiltinId::MbSendMail, &slots) }.expect("mail arguments");
+        let (state, diagnostics) = State::with_ini_configuration(&[(b"mail.mixed_lf_and_crlf".to_vec(), b"1".to_vec())],
+            crate::state::CoreEncodingDefaults::default(), |_| Ok(()));
+        assert!(diagnostics.is_empty());
+        let message = prepare(&args, &state).expect("MIME message");
+        assert_eq!(message.bytes, b"To: a@example.test\nSubject: =?UTF-8?B?Q2Fmw6k=?=\nMIME-Version: 1.0\nContent-Type: text/plain; charset=UTF-8\nContent-Transfer-Encoding: BASE64\n\nQ3LDqG1l\n");
+    }
+
+    /// Gives the configured extra parameters precedence without interpreting shell syntax.
+    #[test]
+    fn mail_force_parameters_replace_call_arguments() {
+        let (state, diagnostics) = State::with_ini_configuration(&[
+            (b"sendmail_path".to_vec(), b"/bin/true -t".to_vec()),
+            (b"mail.force_extra_parameters".to_vec(), b"-f forced@example.test".to_vec()),
+        ], crate::state::CoreEncodingDefaults::default(), |_| Ok(()));
+        assert!(diagnostics.is_empty());
+        let configured = command(&state, Some(b"-f caller@example.test")).expect("mail command");
+        assert_eq!(configured.get_program(), "/bin/true");
+        assert_eq!(configured.get_args().collect::<Vec<_>>(), ["-t", "-f", "forced@example.test"]);
+        assert_eq!(command(&state, Some(b"bad\0parameter")).err(),
+            Some(MbError::argument("mb_send_mail", 5, "additional_params", "must not contain any null bytes")));
+    }
+
+    /// Keeps shell punctuation literal in forced parameters rather than invoking a shell.
+    #[test]
+    fn mail_force_parameters_use_literal_argv() {
+        let (state, _) = State::with_ini_configuration(&[
+            (b"sendmail_path".to_vec(), b"/bin/true".to_vec()),
+            (b"mail.force_extra_parameters".to_vec(), b"'-f quoted@example.test' ; echo".to_vec()),
+        ], crate::state::CoreEncodingDefaults::default(), |_| Ok(()));
+        let command = command(&state, None).expect("mail command");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["'-f", "quoted@example.test'", ";", "echo"]);
+    }
+
+    /// Matches both PHP warnings and the fallback MIME conversion order.
+    #[test]
+    fn mail_unsupported_headers_warn_before_delivery() {
+        use elephc_builtin_contract::mbstring_abi::array::ArrayGraph;
+        let graph = ArrayGraph::new(0, vec![vec![
+            (Key::String(b"Content-Type".to_vec()), Value::String(b"text/plain; charset=X-NOPE".to_vec())),
+            (Key::String(b"Content-Transfer-Encoding".to_vec()), Value::String(b"X-NOPE".to_vec())),
+        ]]).expect("headers");
+        let encoded = graph.encode();
+        let slots = [MbArgV1::string(b"a@example.test"), MbArgV1::string("Café".as_bytes()),
+            MbArgV1::string(b"body"), MbArgV1::array(&encoded)];
+        let args = unsafe { Arguments::new(RuntimeBuiltinId::MbSendMail, &slots) }.expect("mail arguments");
+        let prepared = prepare(&args, &State::default()).expect("MIME message");
+        assert_eq!(prepared.warnings, [
+            b"mb_send_mail(): Unsupported charset \"X-NOPE\" - will be regarded as ascii".to_vec(),
+            b"mb_send_mail(): Unsupported transfer encoding \"X-NOPE\" - will be regarded as 8bit".to_vec(),
+        ]);
+        assert!(prepared.bytes.starts_with(b"To: a@example.test\r\nSubject: =?US-ASCII?B?Q2FmPw==?=\r\n"));
     }
 
     /// Rejects embedded NULs before opening a mail transport.
@@ -195,7 +325,7 @@ mod tests {
     fn mail_rejects_nul_subject() {
         let slots = [MbArgV1::string(b"a@example.test"), MbArgV1::string(b"a\0b"), MbArgV1::string(b"body")];
         let args = unsafe { Arguments::new(RuntimeBuiltinId::MbSendMail, &slots) }.expect("mail arguments");
-        assert_eq!(prepare(&args, &State::default()), Err(MbError::argument("mb_send_mail", 2,
+        assert!(matches!(prepare(&args, &State::default()), Err(error) if error == MbError::argument("mb_send_mail", 2,
             "subject", "must not contain any null bytes")));
     }
 

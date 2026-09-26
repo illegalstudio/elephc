@@ -63,6 +63,8 @@ pub struct State {
     illegal_chars: u64,
     cached_encoding: Option<(Vec<u8>, Encoding)>,
     mail_command: Vec<u8>,
+    mail_force_extra_parameters: Option<Vec<u8>>,
+    mail_mixed_lf_and_crlf: bool,
 }
 
 impl Default for State {
@@ -75,7 +77,8 @@ impl Default for State {
             output_conversion: output::OutputState::default(), encoding_translation: false,
             http_input_sources: [None; 4], http_input_encodings: vec![OutputEncoding::Convert(internal)],
             detect_order: language.detect_order(), substitute: Substitute::default(), strict_detection: false, illegal_chars: 0, cached_encoding: None,
-            mail_command: b"/usr/sbin/sendmail -t -i".to_vec() }
+            mail_command: b"/usr/sbin/sendmail -t -i".to_vec(),
+            mail_force_extra_parameters: None, mail_mixed_lf_and_crlf: false }
     }
 }
 
@@ -85,6 +88,14 @@ impl State {
 
     /// Returns the request's configured sendmail transport command.
     pub fn mail_command(&self) -> &[u8] { &self.mail_command }
+
+    /// Returns configured extra transport arguments, including an explicitly empty override.
+    pub fn mail_force_extra_parameters(&self) -> Option<&[u8]> { self.mail_force_extra_parameters.as_deref() }
+
+    /// Selects PHP's legacy mail line separator for the generated message.
+    pub fn mail_line_separator(&self) -> &'static [u8] {
+        if self.mail_mixed_lf_and_crlf { b"\n" } else { b"\r\n" }
+    }
 
     /// Changes the language and future auto expansion, preserving the active detection order.
     pub fn set_language(&mut self, name: &[u8]) -> MbResult<()> {

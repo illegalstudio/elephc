@@ -14,7 +14,8 @@ pub(super) fn arguments(overrides: &[(String, String)]) -> Vec<Vec<u8>> {
     let directive = |name: &str| {
         use elephc_builtin_contract::mbstring_abi::ini::{catalog, core};
         catalog::lookup(name.as_bytes()).is_some() || core::lookup(name.as_bytes()).is_some()
-            || matches!(name, "default_mimetype" | "default_charset")
+            || matches!(name, "default_mimetype" | "default_charset" | "sendmail_path"
+                | "mail.force_extra_parameters" | "mail.mixed_lf_and_crlf")
     };
     let core = ["default_charset", "internal_encoding", "input_encoding", "output_encoding"];
     let effective = |name: &str| overrides.iter().rev().find(|(key, _)| key == name)
@@ -82,5 +83,18 @@ mod tests {
         assert_eq!(arguments(&settings), expected);
         assert_eq!(arguments(&[("default_mimetype".into(), "".into())]),
             ["UTF-8", "UTF-8", "UTF-8", "default_mimetype", ""].map(|value| value.as_bytes().to_vec()).to_vec());
+    }
+
+    /// Sends system mail settings to the bridge before either native or eval mail calls.
+    #[test]
+    fn mbstring_startup_mail_settings() {
+        let settings = [("sendmail_path", "/bin/true -t"),
+            ("mail.force_extra_parameters", "-f forced@example.test"),
+            ("mail.mixed_lf_and_crlf", "1")]
+            .map(|(key, value)| (key.into(), value.into()));
+        let expected: Vec<_> = ["UTF-8", "UTF-8", "UTF-8", "sendmail_path", "/bin/true -t",
+            "mail.force_extra_parameters", "-f forced@example.test", "mail.mixed_lf_and_crlf", "1"]
+            .map(|value| value.as_bytes().to_vec()).into();
+        assert_eq!(arguments(&settings), expected);
     }
 }

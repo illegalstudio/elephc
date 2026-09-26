@@ -123,6 +123,8 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_libraries: &[],
         needs_libdl: true,
         php_extensions: &["mbstring"],
+        // This bridge-level capability covers MbSendMail; individual text operations
+        // retain GenericTiming in RuntimeFnId::monitoring_policy().
         monitoring: MonitoringPolicy::Io {
             kind: IoKind::Network,
             wait: WaitPolicy::Measured,

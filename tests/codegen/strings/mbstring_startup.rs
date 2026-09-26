@@ -11,6 +11,29 @@
 use crate::support::*;
 use std::process::Command;
 
+/// Delivers complete unsupported mail-encoding warnings before transport in AOT and eval.
+#[test]
+fn test_mbstring_send_mail_warning_handlers() {
+    let body = r#"
+function show_mail_warning(int $level, string $message): bool {
+    echo $level, ":", $message, "\n";
+    return true;
+}
+set_error_handler("show_mail_warning");
+echo mb_send_mail("a@example.test", "S", "body", [
+    "Content-Type" => "text/plain; charset=X-NOPE",
+    "Content-Transfer-Encoding" => "X-NOPE"
+]) ? "sent\n" : "failed\n";
+restore_error_handler();
+"#;
+    let expected = "2:mb_send_mail(): Unsupported charset \"X-NOPE\" - will be regarded as ascii\n\
+2:mb_send_mail(): Unsupported transfer encoding \"X-NOPE\" - will be regarded as 8bit\n\
+sent\n";
+    let settings = ["sendmail_path=/bin/true"];
+    assert_eq!(run(&format!("<?php {body}"), &settings, None).0, expected);
+    assert_eq!(run("<?php eval((string)getenv('MB_STARTUP_CODE'));", &settings, Some(body)).0, expected);
+}
+
 /// Uses public INI wrappers to mutate shared mbstring/Core state and restore configured defaults.
 #[test]
 fn test_mbstring_public_ini_mutation_and_restore() {
@@ -195,7 +218,7 @@ fn run(source: &str, settings: &[&str], eval: Option<&str>) -> (String, String) 
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(output.status.success(), "{}: {stdout}\n{stderr}", directory.display());
-    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{}: {stderr}", directory.display());
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{}: {stdout}\n{stderr}", directory.display());
     fs::remove_dir_all(directory).unwrap();
     (stdout, stderr)
 }
