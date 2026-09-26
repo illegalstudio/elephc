@@ -139,3 +139,5 @@ mod resource_inventory;
 mod class_param_return;
 #[path = "runtime_gc/reflection_attribute_filter.rs"]
 mod reflection_attribute_filter;
+#[path = "runtime_gc/string_offset_writes.rs"]
+mod string_offset_writes;

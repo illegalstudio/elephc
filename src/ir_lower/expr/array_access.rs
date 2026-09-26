@@ -255,18 +255,7 @@ pub(super) fn lower_array_access_from_value(
             // PHP fetches a boxed variable again after its cast warning handler returns.
             let reload_boxed_variable = matches!(index.kind, ExprKind::Variable(_))
                 && matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union));
-            index_value = if index_value.ir_type == IrType::F64 {
-                ctx.emit_value(
-                    Op::FToI,
-                    vec![index_value.value],
-                    Some(Immediate::Bool(true)),
-                    PhpType::Int,
-                    Op::FToI.default_effects() | Effects::MAY_WARN,
-                    Some(index.span),
-                )
-            } else {
-                coerce_string_offset_to_int(ctx, index_value, index.span)
-            };
+            index_value = coerce_string_offset_index(ctx, index_value, index.span);
             if reload_boxed_variable {
                 let current_index = lower_expr(ctx, index);
                 index_value = coerce_to_int_at_span(ctx, current_index, Some(index.span));
@@ -301,6 +290,30 @@ pub(super) fn lower_array_access_from_value(
     // dropping that receiver; boxed and retained container reads are already
     // independent and must not be acquired twice.
     stabilize_borrowed_result_and_release_receiver(ctx, array_value, result, expr.span)
+}
+
+/// Converts a lowered string offset to the integer the string read or write indexes with.
+///
+/// A float offset truncates with PHP's `String offset cast occurred` warning; every other shape
+/// goes through `coerce_string_offset_to_int`. Shared by string reads and string offset writes
+/// so both sides resolve an offset identically.
+pub(crate) fn coerce_string_offset_index(
+    ctx: &mut LoweringContext<'_, '_>,
+    index_value: LoweredValue,
+    span: crate::span::Span,
+) -> LoweredValue {
+    if index_value.ir_type == IrType::F64 {
+        ctx.emit_value(
+            Op::FToI,
+            vec![index_value.value],
+            Some(Immediate::Bool(true)),
+            PhpType::Int,
+            Op::FToI.default_effects() | Effects::MAY_WARN,
+            Some(span),
+        )
+    } else {
+        coerce_string_offset_to_int(ctx, index_value, span)
+    }
 }
 
 /// Converts a non-float string offset while preserving warnings for boxed float values.

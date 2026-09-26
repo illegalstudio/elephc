@@ -788,6 +788,24 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _diag_string_offset_prefix\n_diag_string_offset_prefix:\n    .ascii \"Warning: Uninitialized string offset \"\n");
     out.push_str(".globl _diag_string_offset_nl\n_diag_string_offset_nl:\n    .ascii \"\\n\"\n");
+    // -- string offset WRITE diagnostics, used by `__rt_str_offset_set` --
+    for (label, message) in [
+        ("_diag_illegal_string_offset_prefix", "Warning: Illegal string offset "),
+        (
+            "_diag_string_offset_first_byte_msg",
+            "Warning: Only the first byte will be assigned to the string offset\n",
+        ),
+        (
+            "_string_offset_empty_assign_msg",
+            "Cannot assign an empty string to a string offset",
+        ),
+        (
+            "_string_offset_type_error_msg",
+            "Cannot access offset of type string on string",
+        ),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     for (label, message) in [
         ("_diag_float_key_precision_prefix", "Deprecated: Implicit conversion from float "),
         ("_diag_float_key_precision_suffix", " to int loses precision\n"),

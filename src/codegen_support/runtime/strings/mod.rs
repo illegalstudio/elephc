@@ -55,6 +55,7 @@ mod ucwords;
 mod str_ireplace;
 mod substr_count;
 mod substr_replace;
+mod str_offset_set;
 mod str_pad;
 mod str_split;
 mod str_word_count;
@@ -198,6 +199,8 @@ pub use str_ireplace::emit_str_ireplace;
 pub use substr_count::emit_substr_count;
 /// Emit the non-overlapping substring occurrence counter.
 pub use substr_replace::emit_substr_replace;
+/// Emit the string offset write helper behind `$s[$i] = $v`.
+pub use str_offset_set::emit_str_offset_set;
 /// Emit substring replace helper.
 pub use str_pad::emit_str_pad;
 /// Emit string padding helper.

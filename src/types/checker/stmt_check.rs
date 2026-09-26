@@ -13,6 +13,8 @@ mod assignments;
 mod control_flow;
 mod narrowing;
 
+pub(super) use assignments::expr_is_string_offset_target;
+
 use std::collections::HashSet;
 
 use crate::errors::CompileError;

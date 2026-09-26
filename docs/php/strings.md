@@ -127,7 +127,43 @@ echo $s[-1];   // o
 echo "[" . $s[99] . "]";  // []
 ```
 
-Read-only. Negative indices count from end. Out-of-bounds returns empty string.
+Negative indices count from end. An out-of-bounds read warns `Uninitialized string offset N`
+and returns an empty string.
+
+### Writing to a string offset
+
+Assigning to an offset replaces one byte, exactly as in PHP:
+
+```php
+<?php
+$s = "abc";
+$s[1] = "Z";      // aZc
+$s[-1] = "q";     // aZq   (negative offsets count from the end)
+$s[5] = "x";      // aZq  x (writing past the end pads with spaces)
+$s[0] = "hello";  // hZq  x + Warning: Only the first byte will be assigned to the string offset
+$s[0] = 7;        // 7Zq  x (the value converts to a string first)
+
+$copy = $s;
+$copy[0] = "!";   // $s is unchanged: strings are copied on write
+```
+
+- Only the first byte of the value is written; a longer value warns
+  `Only the first byte will be assigned to the string offset`.
+- An empty value (including `null` and `false`) throws `Error: Cannot assign an empty string
+  to a string offset`.
+- An offset still before the start after counting from the end warns
+  `Illegal string offset -N` and writes nothing, even for an empty value.
+- The offset follows the string read's rules: an integer, a float (truncated, with
+  `String offset cast occurred`), or a numeric string literal such as `"1"`. Other offset
+  expressions are compile errors.
+- The expression `($s[$i] = $v)` evaluates to the one-byte string that was written.
+- Compound assignment (`$s[0] .= "x"`), `++`/`--` (`$s[0]++`), `$s[] = $v` and
+  `$s[0][0] = $v` are compile errors carrying PHP's own `Error` text, because PHP always throws
+  there.
+- The write works on any variable holding a string, including `mixed` parameters and
+  `global` variables. Writing through a property (`$o->s[0] = "x"`, `C::$s[0] = "x"`) or an
+  array element (`$a["k"][0] = "x"`) is not supported yet and is a compile error; copy the
+  string into a local, write the offset, and store it back.
 
 ## Incrementing a string
 

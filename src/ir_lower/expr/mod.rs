@@ -185,12 +185,12 @@ pub(crate) use indexed_array_literals::{
     array_literal_type_for_ir, lower_array_literal_with_expected_type,
 };
 pub(crate) use array_access::{
-    array_access_element_result_type, index_expr_key_type,
+    array_access_element_result_type, coerce_string_offset_index, index_expr_key_type,
     lower_array_access_from_lowered_receiver, lower_by_ref_foreach_element_source,
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
 pub(crate) use instanceof_coercions::{
-    coerce_array_key_to_int_at_span, coerce_to_int_at_span,
+    coerce_array_key_to_int_at_span, coerce_to_int_at_span, coerce_to_string_at_span,
 };
 pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use property_access::{

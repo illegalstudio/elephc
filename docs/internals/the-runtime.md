@@ -133,6 +133,17 @@ handler through the shared diagnostic dispatcher.
 Boxed float offsets use the same warning before the string fetch.
 Integer-form string offsets remain silent, including when their value is boxed.
 
+String offset writes (`$s[$i] = $v`) go through `__rt_str_offset_set`, which
+never mutates the subject: it builds the updated string in storage reserved
+through `__rt_concat_reserve`, and the ordinary local store takes ownership of
+it, so any other holder of the old string keeps its bytes. The helper owns
+PHP's order of checks — an offset still before the start warns through
+`__rt_warn_illegal_string_offset` and copies the subject unchanged, an empty
+value throws `Error`, a longer value warns that only its first byte is used —
+and pads a write past the end with spaces. A string held in a boxed `Mixed`
+cell reaches the same helper from `__rt_mixed_array_set`, which casts the value
+to a string and swaps the persisted result in as the cell's new payload.
+
 ## String routines
 
 **Source:** `src/codegen_support/runtime/strings/`
@@ -325,6 +336,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_ucwords` | Uppercase first letter of each word | `x1`/`x2` | `x1`/`x2` |
 | `__rt_str_ireplace` | Case-insensitive replace | search + replace + subject | `x1`/`x2` |
 | `__rt_substr_replace` | Replace substring at offset | str + replacement + start + len | `x1`/`x2` |
+| `__rt_str_offset_set` | String offset write `$s[$i] = $v` (one byte, space padding, PHP warnings/`Error`) | str in `x1`/`x2` + offset in `x0` + value in `x3`/`x4` | `x1`/`x2` |
 | `__rt_str_pad` | Pad string to length | str + len + pad_str + type | `x1`/`x2` |
 | `__rt_str_split` | Split into chunks | str + chunk_len | `x0` (array ptr) |
 | `__rt_wordwrap` | Wrap text at word boundaries | str + width + break + cut | `x1`/`x2` |
