@@ -48,6 +48,8 @@ mod eir_licm;
 mod effects_v2;
 #[path = "optimizer/identity_arithmetic.rs"]
 mod identity_arithmetic;
+#[path = "optimizer/generator_yield.rs"]
+mod generator_yield;
 #[path = "optimizer/peephole.rs"]
 mod peephole;
 #[path = "optimizer/property_receiver_ownership.rs"]
