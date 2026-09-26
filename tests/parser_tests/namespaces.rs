@@ -118,3 +118,15 @@ fn test_parse_dunder_namespace_magic_constant() {
         &ExprKind::MagicConstant(MagicConstant::Namespace)
     );
 }
+
+/// Verifies a fully qualified predefined constant's span starts at its leading `\` (#1307), so a
+/// diagnostic on `\PHP_EOL` points at the whole name rather than past the separator.
+#[test]
+fn test_fully_qualified_predefined_constant_span_starts_at_the_backslash() {
+    let stmts = parse_source("<?php echo \\PHP_EOL;");
+    let StmtKind::Echo(expr) = &stmts[0].kind else {
+        panic!("expected an echo statement, got {:?}", stmts[0].kind);
+    };
+    // `<?php echo ` is eleven columns, so the `\` is at column 12.
+    assert_eq!((expr.span.line, expr.span.col), (1, 12));
+}

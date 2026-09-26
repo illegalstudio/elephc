@@ -40,6 +40,32 @@ pub(super) fn parse_prefix(
 
     let span = tokens[*pos].1.span;
 
+    // `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\true`...: the lexer turns these predefined
+    // constants into dedicated tokens, so the name parser never sees an identifier after the `\`
+    // (#1307). The fully qualified spelling names the same global constant, so it parses as the
+    // bare token. The few that stay constant references keep their fully qualified kind, so a
+    // namespace-local constant of the same name can never shadow them.
+    if tokens[*pos].0 == Token::Backslash {
+        if let Some((next, metadata)) = tokens.get(*pos + 1) {
+            let literal_constant = matches!(next, Token::True | Token::False | Token::Null);
+            if literal_constant || crate::parser::stmt::token_as_import_name(next, metadata).is_some() {
+                *pos += 1;
+                let mut expr = parse_prefix(tokens, pos)?;
+                if let ExprKind::ConstRef(name) = &expr.kind {
+                    if name.kind == crate::names::NameKind::Unqualified {
+                        expr.kind = ExprKind::ConstRef(Name::from_parts(
+                            crate::names::NameKind::FullyQualified,
+                            name.parts.clone(),
+                        ));
+                    }
+                }
+                // The expression starts at the `\`, so diagnostics point at the whole name.
+                expr.span = Span::with_end_from(span, expr.span);
+                return Ok(expr);
+            }
+        }
+    }
+
     match &tokens[*pos].0 {
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
