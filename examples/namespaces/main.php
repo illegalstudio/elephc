@@ -17,3 +17,7 @@ echo $controller->index($user) . "\n";
 echo formatUser($user) . "\n";
 echo function_exists("\\Demo\\Support\\format_user") . "\n";
 echo call_user_func("\\Demo\\Support\\format_user", $user) . "\n";
+
+// A namespaced constant may reuse a predefined constant's name.
+const NAN = "not-a-number";
+echo \constant(__NAMESPACE__ . "\\NAN") . "\n";
