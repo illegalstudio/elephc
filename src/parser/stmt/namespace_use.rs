@@ -317,14 +317,13 @@ fn parse_use_name(
 
     let mut parts = Vec::new();
     loop {
-        match tokens.get(*pos) {
-            Some((token, metadata))
-                if name_part_from_token(token, metadata).is_some()
-                    || token_as_import_name(token, metadata).is_some() =>
-            {
-                let part = name_part_from_token(token, metadata)
-                    .or_else(|| token_as_import_name(token, metadata))
-                    .expect("import name part was checked immediately above");
+        let after_separator = kind == NameKind::FullyQualified || !parts.is_empty();
+        let part = tokens.get(*pos).and_then(|(token, metadata)| {
+            super::names::qualified_segment_at(tokens, *pos, after_separator)
+                .or_else(|| token_as_import_name(token, metadata))
+        });
+        match part {
+            Some(part) => {
                 parts.push(part);
                 *pos += 1;
             }
