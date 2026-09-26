@@ -6533,7 +6533,9 @@ fixture. A plain eight-iteration eval for-loop, with no function_exists call,
 independently retains 26 blocks / 1040 bytes. Permanent passing startup tests
 exercise the configured array in AOT and scalar detection in eval. Neither
 unresolved ownership path is claimed fixed. Observations are saved under
-/tmp/mbstring-startup-eval-*; follow-up probe sources are in .plans/mbstring-probes.
+/tmp/mbstring-startup-eval-*; follow-up sources are
+`.plans/mbstring-probes/test_mbstring_startup_eval_array_ownership.php` and
+`.plans/mbstring-probes/test_mbstring_startup_eval_loop_ownership.php`.
 
 ### Terminal verification and next work
 

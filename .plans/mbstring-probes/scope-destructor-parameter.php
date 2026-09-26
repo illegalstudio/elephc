@@ -1,0 +1,1 @@
+<?php $source=$argc>0 ? 'class ScopeLife { public function __destruct() { echo "drop:"; } } function use_arg($arg): int { global $value; $value=null; echo "body:"; return 1; } $value=new ScopeLife(); $input=[&$value]; use_arg($value); echo "after";' : ''; eval($source);
