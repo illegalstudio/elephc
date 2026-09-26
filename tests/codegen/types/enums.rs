@@ -339,13 +339,16 @@ fn test_enum_from_string_failure_throws_value_error() {
 /// defaulted to an enum case, plus `=== Level::Low` on the declared one. The identity check is
 /// the part that matters — a default that allocated a fresh object, or stored the case slot
 /// before it was materialized, would still print the right `->name`.
+///
+/// The final row is the #1224 section: a backed case, a pure case and a plain object told apart
+/// through the implicit `BackedEnum` / `UnitEnum` interfaces alone.
 #[test]
 fn test_example_enums_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enums/main.php"));
     assert_eq!(
         out,
         "1\n2\n3\nRed=1 Green=2 Blue=3 \nDefault=default Match=match MATCH=upper-match \nDESC\n\
-         Low High High same"
+         Low High High same\nbacked pure not an enum\n"
     );
 }
 
@@ -1186,4 +1189,108 @@ var_dump($fresh->level->name);
             "string(3) \"Low\"\n",
         )
     );
+}
+
+/// Verifies an enum carries the interface closure PHP gives it.
+///
+/// Two omissions, fixed together because either alone leaves the answers inconsistent (#1224):
+/// PHP gives every enum `UnitEnum` and every BACKED enum `BackedEnum`, and it folds in each
+/// declared interface's own parents the way a class does. elephc took the `implements` clause
+/// verbatim and added neither, so `class_implements("Suit")` answered `HasColor` alone.
+///
+/// The order is PHP's, measured: the declared clause, then the implicit set, then what the
+/// clause transitively brings in.
+#[test]
+fn test_an_enum_reports_its_full_interface_closure() {
+    let out = compile_and_run(
+        r#"<?php
+interface Colorful {}
+interface HasColor extends Colorful {}
+
+enum Suit: string implements HasColor {
+    case Hearts = 'H';
+}
+
+foreach (class_implements("Suit") as $name => $_) { echo $name, ","; }
+"#,
+    );
+
+    assert_eq!(out, "HasColor,UnitEnum,BackedEnum,Colorful,");
+}
+
+/// Verifies transitive parents stay in the declaration order of multiple enum interfaces.
+#[test]
+fn test_enum_interface_closure_preserves_multiple_declaration_orders() {
+    let out = compile_and_run(
+        r#"<?php
+interface GetterRootA {}
+interface GetterRootB {}
+interface GetterLeftA extends GetterRootA {}
+interface GetterLeftB extends GetterRootB {}
+enum OrderedBackedEnum: string implements GetterLeftA, GetterLeftB { case One = "1"; }
+foreach (class_implements("OrderedBackedEnum") as $name) { echo $name, ","; }
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "GetterLeftA,GetterLeftB,UnitEnum,BackedEnum,GetterRootA,GetterRootB,"
+    );
+}
+
+/// Verifies the relation predicates see that closure through an enum CASE.
+///
+/// `UnitEnum` and `BackedEnum` had to be registered as builtin interfaces for this: naming an
+/// interface with no metadata in a class's list makes codegen fail outright with
+/// `missing interface metadata for class`.
+///
+/// A string subject is refused on this base for every class, not just enums, so these rows use
+/// the object form; the `is_subclass_of("Suit", ...)` spelling the issue also lists needs the
+/// name-keyed lookup that is PR #1116's subject.
+#[test]
+fn test_an_enum_case_satisfies_its_implicit_and_inherited_interfaces() {
+    let out = compile_and_run(
+        r#"<?php
+interface Colorful {}
+interface HasColor extends Colorful {}
+
+enum Suit: string implements HasColor { case Hearts = 'H'; }
+enum Plain implements Colorful { case One; }
+
+$s = Suit::Hearts;
+echo ($s instanceof UnitEnum) ? "y" : "n";
+echo ($s instanceof BackedEnum) ? "y" : "n";
+echo ($s instanceof HasColor) ? "y" : "n";
+echo ($s instanceof Colorful) ? "y" : "n";
+echo is_a($s, "UnitEnum") ? "y" : "n";
+echo is_a($s, "Colorful") ? "y" : "n";
+
+$p = Plain::One;
+echo ($p instanceof BackedEnum) ? "y" : "n";
+echo ($p instanceof UnitEnum) ? "y" : "n";
+"#,
+    );
+
+    // A PURE enum is a UnitEnum and not a BackedEnum, which is the seventh column.
+    assert_eq!(out, "yyyyyyny");
+}
+
+/// Verifies an interface may extend `UnitEnum`, and an enum may implement that interface.
+///
+/// The guards that refuse a CLASS reaching `UnitEnum`, and an enum NAMING it directly, must
+/// leave this shape alone: PHP accepts both declarations and the case is still a `UnitEnum`.
+#[test]
+fn test_an_enum_may_implement_an_interface_that_extends_unit_enum() {
+    let out = compile_and_run(
+        r#"<?php
+interface Labelled extends UnitEnum {}
+enum Level implements Labelled { case Low; }
+
+$l = Level::Low;
+echo ($l instanceof Labelled) ? "y" : "n";
+echo ($l instanceof UnitEnum) ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "yy");
 }

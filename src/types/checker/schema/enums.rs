@@ -233,6 +233,8 @@ pub(crate) fn build_enum_info(
         });
     }
 
+    validate_enum_does_not_name_implicit_interfaces(name, implements, backing_type.is_some(), span)?;
+
     insert_enum_metadata(
         name,
         resolved_backing,
@@ -450,10 +452,7 @@ pub(crate) fn insert_enum_metadata(
         constant_attribute_args.insert(case.name.clone(), case.attribute_args.clone());
     }
 
-    let interfaces: Vec<String> = implements
-        .iter()
-        .map(|interface| interface.as_str().to_string())
-        .collect();
+    let interfaces = enum_interface_closure(checker, implements, backing_type.is_some());
 
     checker.classes.insert(
         name.to_string(),
@@ -582,4 +581,93 @@ fn push_enum_readonly_property(
     property_declared_slots.push(true);
     readonly_properties.insert(property);
     property_reference_slots.push(false);
+}
+
+/// Refuses an enum whose `implements` clause names `UnitEnum` or `BackedEnum` itself.
+///
+/// Every enum already gets `UnitEnum`, and a backed one `BackedEnum`, from
+/// [`enum_interface_closure`], so naming one again is PHP's "previously implemented" error. A
+/// pure enum naming `BackedEnum` is a different error: it has no backing type to satisfy it.
+/// Naming an interface that merely EXTENDS one of them is legal, and not checked here. The
+/// messages are PHP 8.5.10's, measured.
+fn validate_enum_does_not_name_implicit_interfaces(
+    enum_name: &str,
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    span: crate::span::Span,
+) -> Result<(), CompileError> {
+    for interface in implements {
+        let key = php_symbol_key(interface.as_str());
+        let message = if key == php_symbol_key("UnitEnum") {
+            format!("Enum {} cannot implement previously implemented interface UnitEnum", enum_name)
+        } else if key == php_symbol_key("BackedEnum") && is_backed {
+            format!("Enum {} cannot implement previously implemented interface BackedEnum", enum_name)
+        } else if key == php_symbol_key("BackedEnum") {
+            format!("Non-backed enum {} cannot implement interface BackedEnum", enum_name)
+        } else {
+            continue;
+        };
+        return Err(CompileError::new(span, &message));
+    }
+    Ok(())
+}
+
+/// Returns the interfaces an enum implements, the way PHP reports them.
+///
+/// Two things the declared `implements` clause does not say on its own, and both are needed for
+/// `class_implements()` and the relation predicates to agree with PHP (#1224).
+///
+/// The IMPLICIT set: PHP gives every enum `UnitEnum`, and every backed enum `BackedEnum` as well.
+/// `BackedEnum` extends `UnitEnum`, so a backed enum reports both.
+///
+/// The TRANSITIVE closure: a class runs `collect_interfaces`, which folds in each interface's own
+/// parents. Taking the clause verbatim meant `enum Suit implements HasColor` never recorded
+/// `Colorful`, even with `interface HasColor extends Colorful`. This walks the same parent lists
+/// that collector does.
+///
+/// Declaration order is preserved and duplicates are dropped, so an enum that names an interface
+/// it also inherits reports it once, where its own clause put it.
+fn enum_interface_closure(
+    checker: &Checker,
+    implements: &[crate::names::Name],
+    is_backed: bool,
+) -> Vec<String> {
+    let mut collected: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // PHP's order, measured on 8.5.10 for `enum Suit: string implements HasColor` where
+    // `HasColor extends Colorful`: `HasColor,UnitEnum,BackedEnum,Colorful`. The declared clause
+    // first, then the implicit set, then what the clause transitively brings in.
+    let push = |name: String, collected: &mut Vec<String>, seen: &mut HashSet<String>| {
+        if seen.insert(name.clone()) {
+            collected.push(name);
+        }
+    };
+
+    for interface in implements {
+        push(interface.as_str().to_string(), &mut collected, &mut seen);
+    }
+    push("UnitEnum".to_string(), &mut collected, &mut seen);
+    if is_backed {
+        push("BackedEnum".to_string(), &mut collected, &mut seen);
+    }
+
+    // Walk the worklist in declaration order. The enum's explicitly declared interfaces come
+    // first, followed by their parents in the same order PHP's class interface collector uses.
+    let mut queue = collected.clone();
+    let mut cursor = 0;
+    while cursor < queue.len() {
+        let interface_name = queue[cursor].clone();
+        cursor += 1;
+        let Some(info) = checker.interfaces.get(&interface_name) else {
+            continue;
+        };
+        for parent_name in &info.parents {
+            if seen.insert(parent_name.clone()) {
+                collected.push(parent_name.clone());
+                queue.push(parent_name.clone());
+            }
+        }
+    }
+    collected
 }

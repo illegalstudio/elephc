@@ -55,6 +55,65 @@ fn test_error_enum_cannot_be_instantiated() {
     );
 }
 
+/// Verifies that only an enum may implement `UnitEnum` or `BackedEnum`.
+///
+/// Registering the two as builtin interfaces (#1224) made them resolvable, and with nothing
+/// else in place a plain class naming one — directly, or through an interface that extends
+/// one — was accepted. PHP names `BackedEnum` only when that is the interface written;
+/// reaching it through a user interface reports `UnitEnum`. Messages measured on PHP 8.5.10.
+#[test]
+fn test_error_non_enum_class_cannot_implement_enum_interfaces() {
+    expect_error(
+        "<?php class C1 implements UnitEnum {}",
+        "Non-enum class C1 cannot implement interface UnitEnum",
+    );
+    expect_error(
+        "<?php class C2 implements BackedEnum {}",
+        "Non-enum class C2 cannot implement interface BackedEnum",
+    );
+    expect_error(
+        "<?php abstract class C3 implements UnitEnum {}",
+        "Non-enum class C3 cannot implement interface UnitEnum",
+    );
+    expect_error(
+        "<?php interface I4 extends UnitEnum {} class C4 implements I4 {}",
+        "Non-enum class C4 cannot implement interface UnitEnum",
+    );
+    expect_error(
+        "<?php interface I5 extends BackedEnum {} class C5 implements I5 {}",
+        "Non-enum class C5 cannot implement interface UnitEnum",
+    );
+}
+
+/// Verifies that an enum cannot name the interfaces it is already given implicitly.
+///
+/// Every enum gets `UnitEnum`, and a backed one `BackedEnum`, so naming either again is PHP's
+/// "previously implemented" error; a pure enum naming `BackedEnum` has no backing type to
+/// satisfy it and gets a different one. Messages measured on PHP 8.5.10.
+#[test]
+fn test_error_enum_cannot_name_its_implicit_interfaces() {
+    expect_error(
+        "<?php enum E1 implements UnitEnum { case A; }",
+        "Enum E1 cannot implement previously implemented interface UnitEnum",
+    );
+    expect_error(
+        "<?php enum E2: int implements UnitEnum { case A = 1; }",
+        "Enum E2 cannot implement previously implemented interface UnitEnum",
+    );
+    expect_error(
+        "<?php enum E3: string implements BackedEnum { case A = 'a'; }",
+        "Enum E3 cannot implement previously implemented interface BackedEnum",
+    );
+    expect_error(
+        "<?php enum E4 implements BackedEnum { case A; }",
+        "Non-backed enum E4 cannot implement interface BackedEnum",
+    );
+    expect_error(
+        "<?php enum E5 implements unitenum { case A; }",
+        "Enum E5 cannot implement previously implemented interface UnitEnum",
+    );
+}
+
 /// Verifies that a backed enum case without an explicit value
 /// (e.g., `case Red;` in `enum Color: int`) reports
 /// "Backed enum cases must declare a value".

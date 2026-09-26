@@ -50,6 +50,15 @@ pub(super) fn collect_interfaces(
                 ),
             ));
         }
+        if let Some(enum_interface) = enum_only_interface_reached(checker, interface_name) {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!(
+                    "Non-enum class {} cannot implement interface {}",
+                    class.name, enum_interface
+                ),
+            ));
+        }
         if class_map.contains_key(interface_name) {
             return Err(CompileError::new(
                 crate::span::Span::dummy(),
@@ -89,6 +98,25 @@ pub(super) fn collect_interfaces(
 fn interface_is_throwable_contract(checker: &Checker, interface_name: &str) -> bool {
     php_symbol_key(interface_name) == php_symbol_key("Throwable")
         || checker.interface_extends_interface(interface_name, "Throwable")
+}
+
+/// Returns the enum-only interface a class would reach through `interface_name`, if any.
+///
+/// Only an enum may implement `UnitEnum` or `BackedEnum`, whether it names one directly or
+/// reaches it through an interface that extends it. PHP names the interface in its message:
+/// `BackedEnum` when that is the one written, `UnitEnum` otherwise — including for an interface
+/// that extends `BackedEnum`, which reaches `UnitEnum` through it (measured on PHP 8.5.10).
+fn enum_only_interface_reached(checker: &Checker, interface_name: &str) -> Option<&'static str> {
+    let key = php_symbol_key(interface_name);
+    if key == php_symbol_key("BackedEnum") {
+        return Some("BackedEnum");
+    }
+    if key == php_symbol_key("UnitEnum")
+        || checker.interface_extends_interface(interface_name, "UnitEnum")
+    {
+        return Some("UnitEnum");
+    }
+    None
 }
 
 /// Returns `true` if `class` is allowed to implement `Throwable` (must be `Error`, `Exception`,
