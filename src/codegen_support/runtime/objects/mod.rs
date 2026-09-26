@@ -39,7 +39,7 @@ pub(crate) use mixed_array_append::emit_mixed_array_append;
 pub(crate) use magic_set_guard::emit_magic_set_guard;
 pub(crate) use mixed_array_fetch_for_write::emit_mixed_array_fetch_for_write;
 pub(crate) use mixed_array_get::emit_mixed_array_get;
-pub(crate) use object_not_array::emit_throw_object_not_array;
+pub(crate) use object_not_array::{emit_throw_object_not_array, emit_throw_serialization_denied};
 pub(crate) use mixed_array_set::emit_mixed_array_set;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;

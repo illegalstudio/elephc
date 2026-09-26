@@ -1144,6 +1144,48 @@ try {
     );
 }
 
+/// The denial holds wherever the serializer meets a Reflection object: behind `mixed`, nested at
+/// any depth in an array, and on a subclass that declares its own `__serialize()`, which PHP
+/// still refuses. A plain array is untouched. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_serialize_denies_reflection_objects_wherever_they_sit() {
+    let out = compile_and_run(
+        r#"<?php
+class Mine extends ReflectionClass {
+    public function __serialize(): array { return ['x' => 1]; }
+}
+function attempt(string $label, mixed $value): void {
+    try {
+        echo $label, ": ", serialize($value), "\n";
+    } catch (Exception $e) {
+        echo $label, ": ", get_class($e), " ", $e->getMessage(), "\n";
+    }
+}
+function f(int $a) {}
+$param = (new ReflectionFunction('f'))->getParameters()[0];
+attempt("direct", $param);
+attempt("nested", [1, $param]);
+attempt("deep", ['k' => [new ReflectionFunction('f')]]);
+attempt("method", new ReflectionMethod('Mine', '__serialize'));
+attempt("subclass", new Mine('Mine'));
+attempt("plain", [1, 'a' => true]);
+try { echo serialize([$param]); } catch (Exception $e) { echo "typed-array: ", $e->getMessage(), "\n"; }
+echo "after\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "direct: direct: Exception Serialization of 'ReflectionParameter' is not allowed\n\
+         nested: nested: Exception Serialization of 'ReflectionParameter' is not allowed\n\
+         deep: deep: Exception Serialization of 'ReflectionFunction' is not allowed\n\
+         method: method: Exception Serialization of 'ReflectionMethod' is not allowed\n\
+         subclass: subclass: Exception Serialization of 'Mine' is not allowed\n\
+         plain: a:2:{i:0;i:1;s:1:\"a\";b:1;}\n\
+         typed-array: Serialization of 'ReflectionParameter' is not allowed\n\
+         after\n"
+    );
+}
+
 /// Verifies an array cast of a runtime `mixed` value preserves PHP semantics
 /// for scalar, null, and already-array payload tags.
 #[test]

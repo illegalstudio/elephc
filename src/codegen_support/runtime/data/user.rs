@@ -584,6 +584,17 @@ pub(crate) fn emit_runtime_data_user(
         if let Some(max_class_id) = max_class_id {
             let method_key = php_symbol_key(method);
             for class_id in 0..=max_class_id {
+                // A class PHP refuses to serialize routes `__serialize` to the throwing helper,
+                // so the denial holds wherever the object is found: nested in an array, behind
+                // `mixed`, or reached through a subclass that declares its own `__serialize`.
+                let denied = table == "_class_serialize_ptrs"
+                    && class_name_by_id
+                        .get(&class_id)
+                        .is_some_and(|name| class_serialization_denied(name, classes));
+                if denied {
+                    out.push_str("    .quad __rt_throw_serialization_denied\n");
+                    continue;
+                }
                 let entry = class_info_by_id
                     .get(&class_id)
                     .map(|class_info| source_instance_method_entry(class_info, &method_key, classes))
@@ -2913,6 +2924,46 @@ fn interface_method_table_symbol(
 }
 
 /// Resolves one source-ABI instance entry through its physical implementing class.
+/// Returns whether PHP forbids serializing instances of a class: the Reflection family, which
+/// php-src marks `ZEND_ACC_NOT_SERIALIZABLE`, and any class that extends one of them.
+fn class_serialization_denied(class_name: &str, classes: &HashMap<String, ClassInfo>) -> bool {
+    let mut current = class_name.trim_start_matches('\\');
+    for _ in 0..=classes.len() {
+        if matches!(
+            current,
+            "ReflectionAttribute"
+                | "ReflectionClass"
+                | "ReflectionClassConstant"
+                | "ReflectionConstant"
+                | "ReflectionEnum"
+                | "ReflectionEnumBackedCase"
+                | "ReflectionEnumUnitCase"
+                | "ReflectionExtension"
+                | "ReflectionFiber"
+                | "ReflectionFunction"
+                | "ReflectionFunctionAbstract"
+                | "ReflectionGenerator"
+                | "ReflectionIntersectionType"
+                | "ReflectionMethod"
+                | "ReflectionNamedType"
+                | "ReflectionObject"
+                | "ReflectionParameter"
+                | "ReflectionProperty"
+                | "ReflectionReference"
+                | "ReflectionType"
+                | "ReflectionUnionType"
+                | "ReflectionZendExtension"
+        ) {
+            return true;
+        }
+        let Some(parent) = classes.get(current).and_then(|info| info.parent.as_deref()) else {
+            return false;
+        };
+        current = parent.trim_start_matches('\\');
+    }
+    false
+}
+
 fn source_instance_method_entry(
     class_info: &ClassInfo,
     method_name: &str,
