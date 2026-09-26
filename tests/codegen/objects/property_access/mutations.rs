@@ -930,6 +930,34 @@ echo $b->k . "|" . $b->s . "|" . $c->k . "|" . $d->k;
     assert_eq!(out, "4|z|7|9");
 }
 
+/// Writes through a mixed receiver must still enforce private and protected visibility.
+#[test]
+fn test_mixed_receiver_write_to_inaccessible_declared_properties_throws() {
+    let out = compile_and_run(
+        r#"<?php
+class HiddenSlots {
+    private int $secret = 1;
+    protected int $guard = 2;
+    public function readSecret(): int { return $this->secret; }
+    public function readGuard(): int { return $this->guard; }
+}
+function writeSecret(mixed $object): void { $object->secret = 9; }
+function writeGuard(mixed $object): void { $object->guard = 8; }
+$object = new HiddenSlots();
+try { writeSecret($object); echo "no throw;"; }
+catch (Error $error) { echo $error->getMessage() . ";"; }
+echo $object->readSecret() . ";";
+try { writeGuard($object); echo "no throw;"; }
+catch (Error $error) { echo $error->getMessage() . ";"; }
+echo $object->readGuard();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot access private property HiddenSlots::$secret;1;Cannot access protected property HiddenSlots::$guard;2"
+    );
+}
+
 /// Verifies an ordinary runtime-name property access whose name collides with a STRICT ancestor's
 /// private property addresses a DYNAMIC property, while the declaring scope keeps its own slot.
 ///
