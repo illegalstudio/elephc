@@ -247,6 +247,7 @@ pub(super) fn reflection_property_hook_parameter_member(
         type_metadata,
         default_value: None,
         default_value_constant_name: None,
+        default_value_export: None,
     }
 }
 
@@ -351,6 +352,7 @@ pub(super) fn reflection_type_metadata_to_string(type_metadata: &ReflectionParam
             if union.allows_null && names.iter().all(|name| name != "null") {
                 names.push(String::from("null"));
             }
+            names.sort_by_key(|name| elephc_builtin_contract::union_member_rank(name));
             names.join("|")
         }
         ReflectionParameterTypeMetadata::Intersection(intersection) => intersection

@@ -25,6 +25,23 @@ pub(super) fn reflection_parameter_default_value(
         return Ok(Some(value));
     }
     match &default.kind {
+        // `ConstRef` is a GLOBAL constant. It folds the same way the scoped forms do, and it
+        // has to: the constant NAME alone left `isDefaultValueConstant()` true while
+        // `isDefaultValueAvailable()` stayed false and `getDefaultValue()` threw — a state PHP
+        // never produces (#1080).
+        //
+        // Unlike the scoped forms it does NOT propagate a fold failure. `reflection_constant_value`
+        // is fallible, and `ReflectionConstantValue` carries no array, so `const ITEMS = [1, 2];
+        // function f($items = ITEMS) {}` failed the whole compile once global constants reached
+        // it. Every other unsupported default here answers `Ok(None)` and keeps the program
+        // building; this one now does too. That is still short of PHP, which reports the array —
+        // folding it needs an array variant and is filed — but a program that compiled before
+        // this branch compiles after it.
+        ExprKind::ConstRef(_) => Ok(
+            reflection_constant_value(ctx, current_class, current_info, default, 0)
+                .ok()
+                .and_then(reflection_parameter_default_from_constant_value),
+        ),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
@@ -43,6 +60,7 @@ pub(super) fn reflection_object_parameter_default_value(
     let ExprKind::NewObject { class_name, args } = &default.kind else {
         return Ok(None);
     };
+    let written_args = args.len();
     let Some(args) = reflection_object_parameter_default_args(
         ctx,
         current_class,
@@ -56,6 +74,7 @@ pub(super) fn reflection_object_parameter_default_value(
     Ok(Some(ReflectionParameterDefaultValue::Object {
         class_name: class_name.as_str().to_string(),
         args,
+        written_args,
     }))
 }
 
@@ -129,6 +148,15 @@ pub(super) fn reflection_parameter_default_non_object_value(
         return Ok(Some(value));
     }
     match &default.kind {
+        // A global constant inside an object default's arguments must not fail the build either,
+        // for the reason `reflection_parameter_default_value` gives at the top level: an array
+        // constant cannot fold, and `new Box(ITEMS)` compiled before global constants reached
+        // this helper. The object default then has no value, as it had before.
+        ExprKind::ConstRef(_) => Ok(
+            reflection_constant_value(ctx, current_class, current_info, default, 0)
+                .ok()
+                .and_then(reflection_parameter_default_from_constant_value),
+        ),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
@@ -261,6 +289,14 @@ pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Opti
             reflection_static_receiver_label(receiver),
             name
         )),
+        // A GLOBAL constant is a name too, and PHP reports it the same way: a parameter declared
+        // `int $n = LIMIT` answers `LIMIT` from `getDefaultValueConstantName()` and prints
+        // `= LIMIT` in a dump, exactly as a class constant does. Only the scoped form was
+        // recognized here, so the global one had neither a name nor a folded value and dropped out
+        // of both (#1080).
+        ExprKind::ConstRef(name) => {
+            Some(name.as_str().trim_start_matches('\\').to_string())
+        }
         _ => None,
     }
 }
@@ -301,11 +337,12 @@ pub(super) fn reflection_declared_type_metadata(
         }
         TypeExpr::Union(members) => {
             let allows_null = members.iter().any(|member| matches!(member, TypeExpr::Void));
-            let types = members
+            let mut types = members
                 .iter()
                 .filter(|member| !matches!(member, TypeExpr::Void))
                 .map(reflection_named_type_metadata_from_type_expr)
                 .collect::<Option<Vec<_>>>()?;
+            sort_union_members_like_php(&mut types);
             if types.len() == 1 {
                 let mut metadata = types.into_iter().next()?;
                 metadata.allows_null = allows_null;
@@ -381,6 +418,15 @@ pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionN
             Some(reflection_builtin_named_type("array", false))
         }
         PhpType::Callable => Some(reflection_builtin_named_type("callable", false)),
+        // `false` is a type of its own in a union (`false|int`), not a `bool`. Answering `None`
+        // here made the whole union unrepresentable, so `(string) $type` rendered as the empty
+        // string rather than `int|false` (issue #1118).
+        PhpType::False => Some(reflection_builtin_named_type("false", false)),
+        // A bare `object` hint resolves to `PhpType::Object` with no name, and copying that name
+        // printed nothing at all — `array|object|string` came out as `array||string`.
+        PhpType::Object(name) if name.is_empty() => {
+            Some(reflection_builtin_named_type("object", false))
+        }
         PhpType::Object(name) => Some(ReflectionNamedTypeMetadata {
             name: name.clone(),
             allows_null: false,
@@ -422,6 +468,10 @@ pub(super) fn reflection_union_or_nullable_type_metadata(
         metadata.allows_null = allows_null;
         return Some(ReflectionParameterTypeMetadata::Named(metadata));
     }
+    // PHP prints union members in its own rank order, not the declared one. The list built
+    // above already collapses packed and keyed storage into one PHP type, so it only needs
+    // ordering -- rebuilding it here would undo that de-duplication.
+    sort_union_members_like_php(&mut types);
     (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Union(
         ReflectionUnionTypeMetadata { types, allows_null },
     ))
@@ -468,4 +518,24 @@ pub(super) fn reflection_named_type_metadata_from_type_expr(
         }
         _ => None,
     }
+}
+
+/// Orders a union's members the way PHP prints them, not the way they were declared.
+///
+/// PHP renders a union from its internal type mask, which has a fixed order, so `int|string`
+/// prints as `string|int`. `ReflectionMethod::__toString()` already used this order (issue
+/// #1080); the type OBJECT returned by `getType()` kept the declared one, so the same program
+/// disagreed with itself:
+///
+/// ```text
+/// echo (string) $p;             // Parameter #0 [ <required> string|int $v ]
+/// echo (string) $p->getType();  // int|string
+/// ```
+///
+/// The sort is stable, which is what keeps class names in their declared order among themselves:
+/// they all share rank 0.
+fn sort_union_members_like_php(types: &mut [ReflectionNamedTypeMetadata]) {
+    types.sort_by_key(|member| {
+        elephc_builtin_contract::union_member_rank(&member.name)
+    });
 }

@@ -23035,7 +23035,7 @@ echo $untyped->getType() === null ? "N" : "n";
     );
     assert_eq!(
         out.stdout,
-        "H:intB,stringB:n:D?EvalAotReflectPropertyTypeDepC:S?intB:B?stringB:uN"
+        "H:stringB,intB:n:D?EvalAotReflectPropertyTypeDepC:S?intB:B?stringB:uN"
     );
 }
 
@@ -24037,7 +24037,7 @@ foreach ($intersection->getTypes() as $type) {
     );
     assert_eq!(
         out.stdout,
-        "U2:intB:stringB:D?:EvalAotReflectTypeDepC:R?:stringB:S!:EvalAotReflectTypeDepC:I2:EvalAotReflectTypeLeftC:EvalAotReflectTypeRightC"
+        "U2:stringB:intB:D?:EvalAotReflectTypeDepC:R?:stringB:S!:EvalAotReflectTypeDepC:I2:EvalAotReflectTypeLeftC:EvalAotReflectTypeRightC"
     );
 }
 
@@ -24752,7 +24752,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "7/3:first@0rvRNTnac:int!B:A1:EvalParamTag:first:d|union@1rvbYTnac:union!:intB:stringB:A0:d|both@2rvbYTnac:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|items@3OvbYTNAc:array?B:A0:D=null|callback@4OvbYTNaC:callable?B:A0:D=null|second@5OvbYTNac:App\\Name?C:A0:D=null|rest@6OVRNtNac:null:A0:d|"
+        "7/3:first@0rvRNTnac:int!B:A1:EvalParamTag:first:d|union@1rvbYTnac:union!:stringB:intB:A0:d|both@2rvbYTnac:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|items@3OvbYTNAc:array?B:A0:D=null|callback@4OvbYTNaC:callable?B:A0:D=null|second@5OvbYTNac:App\\Name?C:A0:D=null|rest@6OVRNtNac:null:A0:d|"
     );
 }
 
@@ -24788,7 +24788,7 @@ echo $unionType;
     );
     assert_eq!(
         out.stdout,
-        "dep:?EvalReflectTypeStringDep|union:int|string|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:int|string|null|concat:int|string|null|echo:int|string|null"
+        "dep:?EvalReflectTypeStringDep|union:string|int|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:string|int|null|concat:string|int|null|echo:string|int|null"
     );
 }
 
@@ -25133,7 +25133,7 @@ echo ":unionSet:" . count($directUnion->getSettableType()->getTypes());');
     );
     assert_eq!(
         out.stdout,
-        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep:set:EvalReflectPropertyTypeDep:plainSet:N:unionSet:2"
+        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:stringB:intB|direct:T:EvalReflectPropertyTypeDep:set:EvalReflectPropertyTypeDep:plainSet:N:unionSet:2"
     );
 }
 
@@ -25170,7 +25170,7 @@ echo ":" . $box->value;');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "string:2:intB:stringB:2:7");
+    assert_eq!(out.stdout, "string:2:stringB:intB:2:7");
 }
 
 /// Verifies eval ReflectionProperty materializes property default metadata through the bridge.
@@ -26008,7 +26008,7 @@ echo $plain->getReturnType() === null ? "Q" : "q";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "T:int:N:B:2:intBstringB:never:n:B:p:Q");
+    assert_eq!(out.stdout, "T:int:N:B:2:stringBintB:never:n:B:p:Q");
 }
 
 /// Verifies eval ReflectionFunction and ReflectionMethod stringify retained signatures.
@@ -26038,7 +26038,7 @@ echo str_replace("\n", "|", $method->__toString());');
     );
     assert_eq!(
         out.stdout,
-        "Function [ <user> function eval_reflect_string_text ] {|  - Parameters [3] {|    Parameter #0 [ <required> string $name ]|    Parameter #1 [ <optional> int $count = 3 ]|    Parameter #2 [ <optional> &...$items ]|  }|  - Return [ ?string ]|}|::Method [ <user> final static public method run ] {|  - Parameters [2] {|    Parameter #0 [ <required> ?int $id ]|    Parameter #1 [ <optional> string $label = 'ok' ]|  }|  - Return [ ?string ]|}|"
+        "Function [ <user> function eval_reflect_string_text ] {||  - Parameters [3] {|    Parameter #0 [ <required> string $name ]|    Parameter #1 [ <optional> int $count = 3 ]|    Parameter #2 [ <optional> &...$items ]|  }|  - Return [ ?string ]|}|::Method [ <user> final static public method run ] {||  - Parameters [2] {|    Parameter #0 [ <required> ?int $id ]|    Parameter #1 [ <optional> string $label = 'ok' ]|  }|  - Return [ ?string ]|}|"
     );
 }
 
