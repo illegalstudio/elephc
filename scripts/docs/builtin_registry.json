@@ -82843,7 +82843,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/exception.rs",
       "codegen_function": "mysqli_report",
-      "codegen_line": 90,
+      "codegen_line": 81,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -94272,7 +94272,7 @@
       "checker_line": null,
       "codegen_file": "src/pdo_prelude/build.rs",
       "codegen_function": "pdo_drivers",
-      "codegen_line": 7675,
+      "codegen_line": 7668,
       "notes": [
         "Implemented by the compiler-injected PDO prelude."
       ],

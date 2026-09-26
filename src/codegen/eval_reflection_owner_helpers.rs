@@ -25,6 +25,8 @@ struct ReflectionOwnerLayout {
     property_count: usize,
     name_lo: Option<usize>,
     name_hi: Option<usize>,
+    public_name_lo: Option<usize>,
+    public_name_hi: Option<usize>,
     short_name_lo: Option<usize>,
     short_name_hi: Option<usize>,
     namespace_name_lo: Option<usize>,
@@ -200,6 +202,10 @@ fn function_uses_eval(function: &Function) -> bool {
 
 /// Returns the Reflection owner object layouts from class metadata.
 fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
+    let parameter_info = module.class_infos.get("ReflectionParameter")?;
+    let mut parameter = reflection_owner_layout(parameter_info, true)?;
+    parameter.public_name_lo = reflection_property_offset(parameter_info, "name");
+    parameter.public_name_hi = parameter.public_name_lo.map(|offset| offset + 8);
     Some(ReflectionOwnerLayouts {
         class: reflection_owner_layout(module.class_infos.get("ReflectionClass")?, true)?,
         object_class: reflection_owner_layout(module.class_infos.get("ReflectionObject")?, true)?,
@@ -219,7 +225,7 @@ fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
             module.class_infos.get("ReflectionEnumBackedCase")?,
             true,
         )?,
-        parameter: reflection_owner_layout(module.class_infos.get("ReflectionParameter")?, true)?,
+        parameter,
         named_type: reflection_owner_layout(module.class_infos.get("ReflectionNamedType")?, true)?,
         union_type: reflection_owner_layout(module.class_infos.get("ReflectionUnionType")?, false)?,
         intersection_type: reflection_owner_layout(
@@ -302,6 +308,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         property_count: info.properties.len(),
         name_lo,
         name_hi: name_lo.map(|offset| offset + 8),
+        public_name_lo: None,
+        public_name_hi: None,
         short_name_lo,
         short_name_hi: short_name_lo.map(|offset| offset + 8),
         namespace_name_lo,
@@ -940,10 +948,8 @@ fn emit_alloc_reflection_owner_object_x86_64(
     let payload_size = 8 + layout.property_count * 16;
     emitter.instruction(&format!("mov rax, {}", payload_size));                 // request Reflection owner object payload storage
     abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    ));                                                                         // materialize the x86_64 object heap kind word
+    let heap_kind_word = crate::codegen_support::sentinels::x86_64_heap_kind_word(4);
+    emitter.instruction(&format!("mov r10, 0x{:x}", heap_kind_word));           // stamp the allocated payload as an object
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object heap header before the payload
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the Reflection owner class id
@@ -969,6 +975,18 @@ fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &Reflecti
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", name_hi);
+    if let (Some(public_name_lo), Some(public_name_hi)) =
+        (layout.public_name_lo, layout.public_name_hi)
+    {
+        emitter.instruction("str x1, [sp, #40]");                               // preserve the persisted name across retaining its second property owner
+        emitter.instruction("mov x0, x1");                                      // retain one reference for the public name property
+        emitter.instruction("bl __rt_incref");                                  // both public and private slots own the shared string
+        emitter.instruction("ldr x1, [sp, #40]");                               // reload the persisted name
+        emitter.instruction("ldr x2, [sp, #16]");                               // restore its byte length
+        emitter.instruction("ldr x9, [sp, #32]");                               // reload the ReflectionParameter object pointer
+        abi::emit_store_to_address(emitter, "x1", "x9", public_name_lo);
+        abi::emit_store_to_address(emitter, "x2", "x9", public_name_hi);
+    }
     let (
         Some(short_name_lo),
         Some(short_name_hi),
@@ -1059,6 +1077,18 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", name_hi);
+    if let (Some(public_name_lo), Some(public_name_hi)) =
+        (layout.public_name_lo, layout.public_name_hi)
+    {
+        emitter.instruction("mov QWORD PTR [rbp - 48], rax");                   // preserve the persisted name across retaining its second property owner
+        emitter.instruction("mov rdi, rax");                                    // retain one reference for the public name property
+        emitter.instruction("call __rt_incref");                                // both public and private slots own the shared string
+        emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                   // reload the persisted name
+        emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                   // restore its byte length
+        emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                   // reload the ReflectionParameter object pointer
+        abi::emit_store_to_address(emitter, "rax", "r10", public_name_lo);
+        abi::emit_store_to_address(emitter, "rdx", "r10", public_name_hi);
+    }
     let (
         Some(short_name_lo),
         Some(short_name_hi),

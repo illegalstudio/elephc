@@ -174,10 +174,11 @@ impl Checker {
 
 /// Returns `true` if `index` is a valid string offset index for a string receiver.
 ///
-/// A valid index is an integer type, or a string literal whose value can be
-/// parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`).
+/// A valid index is an integer or float type, or a string literal whose value
+/// can be parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`).
 fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
     *idx_ty == PhpType::Int
+        || *idx_ty == PhpType::Float
         || *idx_ty == PhpType::Mixed
         || matches!(
             &index.kind,

@@ -928,3 +928,21 @@ fn test_malformed_declarator_lists_are_rejected() {
         "A property hook block needs a declaration of its own",
     );
 }
+
+/// Verifies PHP-final Exception accessors cannot be overridden by user subclasses.
+#[test]
+fn test_error_cannot_override_final_exception_method() {
+    expect_error(
+        "<?php class CustomException extends Exception { public function getMessage(): string { return 'custom'; } }",
+        "Cannot override final method Exception::getMessage",
+    );
+}
+
+/// Verifies Exception::getCode cannot be overridden by user classes.
+#[test]
+fn test_error_cannot_override_final_exception_get_code() {
+    expect_error(
+        "<?php class CustomCodeException extends Exception { public function getCode(): int { return 0; } }",
+        "Cannot override final method Exception::getCode",
+    );
+}

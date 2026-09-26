@@ -155,7 +155,7 @@ pub(super) fn lower_local_parent_fetch_for_write(
                 PhpType::Int => {
                     let array_value = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
-                    let key = coerce_to_int_at_span(ctx, key, Some(index.span));
+                    let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), false);
                     // Autovivification makes the element type effectively
                     // Mixed even when the array started empty-typed. The
                     // ensure call consumes the loaded container (in-place
@@ -243,7 +243,7 @@ pub(super) fn lower_hash_parent_fetch_for_write(
     ctx.emit_value(
         Op::HashGetForWrite,
         vec![ensured.value, key.value],
-        None,
+        Some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::HashGetForWrite.default_effects(),
         Some(span),

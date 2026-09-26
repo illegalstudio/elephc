@@ -190,3 +190,14 @@ echo "done";
         "basething,helpme,match,runit,staticone|match|match|basething,helpme,match,runit,staticone|basething,helpme,match,runit,staticone|done"
     );
 }
+
+/// An eval-created ReflectionParameter returned to AOT code retains PHP's public name property.
+#[test]
+fn test_eval_constructed_reflection_parameter_exposes_public_name_to_aot() {
+    let out = compile_and_run(r#"<?php
+$parameter = eval('function eval_param_target(string $argument) {} $parameter = new ReflectionParameter("eval_param_target", "argument"); return $parameter;');
+echo $parameter->getName(), "|", $parameter->name, "|", serialize((array) $parameter);
+unset($parameter);
+"#);
+    assert_eq!(out, r#"argument|argument|a:1:{s:4:"name";s:8:"argument";}"#);
+}

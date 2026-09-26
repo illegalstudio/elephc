@@ -68,6 +68,34 @@ and link the resulting user object against the cached runtime object.
 The active backend must remain target-aware. New lowering paths should use the
 ABI helpers instead of hardcoding AArch64 or x86_64 register and stack details.
 
+For a nested write into an associative array, `ArrayFetchForWrite` ensures the
+parent entry exists and diagnoses a float key while normalizing it. The
+following `HashGetForWrite` carries a boolean EIR marker indicating that the
+same key was already diagnosed. Its target lowering rebuilds the normalized
+key for the read without emitting the deprecation again. Missing ordinary
+hash reads likewise avoid repeating the float diagnostic while formatting
+their undefined-key warning.
+Compound hash updates carry the same diagnosed-key marker from the read half
+to `HashSet`. Increment and decrement expressions capture the old element once,
+then calculate and write the new value, so one source operation reports one
+float-key diagnostic. These updates also capture a mutable dimension after
+eager right-hand-side evaluation and before the read, so an error handler
+cannot redirect the write by changing the source index variable.
+
+Packed indexed arrays apply the same float-key conversion before `ArrayGet`,
+`ArraySet`, and existence probes. Compound writes reuse the read's diagnosis,
+including when a key becomes boxed `Mixed` or the array is promoted to hash
+storage at runtime. Integral float keys convert without a deprecation.
+
+String indexing returns a null sentinel for a missing offset when lowered for
+`isset()`, `empty()`, or `??`, allowing null coalescing to select its fallback
+without an out-of-bounds warning. Ordinary reads still return an empty string
+and warn. A float string offset is converted to an integer by a warning-marked
+`FToI` instruction before `StrCharAt`. A boxed float uses a marked integer cast
+that checks its runtime tag and issues the same warning. A boxed variable is
+fetched again after its warning handler returns, matching PHP when the handler
+changes that variable.
+
 ## Runtime Split
 
 Codegen always produces two compiler-owned artifacts:

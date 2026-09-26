@@ -869,10 +869,12 @@ impl Checker {
                 let thrown_ty = self.infer_type_with_assignment_effects(expr, env)?;
                 match thrown_ty {
                     PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name) =>
+                        if self.object_type_implements_throwable(&type_name)
+                            || self.object_type_may_be_eval_declared(&type_name) =>
                     {
                         Ok(())
                     }
+                    PhpType::Mixed if self.eval_barrier_active => Ok(()),
                     PhpType::Object(_) => Err(CompileError::new(
                         stmt.span,
                         "Type error: throw requires an object implementing Throwable",

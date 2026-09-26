@@ -26,10 +26,12 @@ $cfg = ['mode' => MYSQLI_ASSOC, 'flags' => MYSQLI_REPORT_STRICT];
 echo $cfg['mode'], $cfg['flags'];
 $e = new mysqli_sql_exception("boom");
 $e->sqlstate = "42S02";
-echo "|", $e->getSqlState();
+$previous = new Exception("root");
+$chained = new mysqli_sql_exception("outer", 0, $previous);
+echo "|", $e->getSqlState(), "|", $chained->getPrevious()->getMessage();
 "#,
     );
-    assert_eq!(out, "12|42S02");
+    assert_eq!(out, "12|42S02|root");
 }
 
 /// The completed procedural surface is declared: the savepoint API, the

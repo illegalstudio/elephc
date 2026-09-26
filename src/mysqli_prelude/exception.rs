@@ -26,9 +26,7 @@ pub(super) const SRC: &str = r#"
 class mysqli_sql_exception extends RuntimeException {
     public string $sqlstate = "00000";
 
-    // The previous exception in the chain. Same storage note as PDOException:
-    // the compiler-owned base Throwable layout has no previous slot, so the
-    // class keeps its own and dispatches getPrevious() below.
+    // The previous exception in the chain, stored in Exception's inherited Throwable slot.
     public ?Throwable $previous = null;
 
     public function __construct(string $message = "", int $code = 0, ?Throwable $previous = null) {
@@ -39,10 +37,6 @@ class mysqli_sql_exception extends RuntimeException {
         $this->message = $message;
         $this->code = $code;
         $this->previous = $previous;
-    }
-
-    public function getPrevious(): ?Throwable {
-        return $this->previous;
     }
 
     // php 8.1+: the documented accessor for the SQLSTATE (the property itself is

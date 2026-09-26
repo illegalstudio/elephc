@@ -9,8 +9,8 @@
 //! - PHP freezes an index *expression* into a temporary before the right-hand
 //!   side runs, so its side effects happen first and the destination slot is
 //!   whatever that expression returned.
-//! - A plain *variable* index is not frozen: the store reads the variable's slot
-//!   at store time, after the right-hand side. `$i = 0; $a[$i] = ($i = 1);`
+//! - A plain *variable* index in a simple write is not frozen: the store reads
+//!   the variable's slot at store time, after the right-hand side. `$i = 0; $a[$i] = ($i = 1);`
 //!   therefore writes index 1, and elephc used to write index 0 — silently, with
 //!   no diagnostic, in a shape that reads as obviously index 0.
 //! - Constant propagation runs ahead of EIR lowering and folded the index against
@@ -110,10 +110,9 @@ echo $c[0], ",", $c[1], ";", $g[0], ",", $g[1];
     assert_eq!(out, "a,b1;10,19");
 }
 
-/// The hoist must not fire for a right-hand side that cannot touch the index: those
-/// keep the existing shape and emit no temporary. `$c[$k] += $n` and `$c[$k]++` are
-/// the overwhelmingly common forms, so a gate that widened to "any right-hand side
-/// with effects" would add a temporary to most compound element writes in a program.
+/// The RHS hoist must not fire for a value that cannot touch the index. Updates
+/// still capture a mutable index after the RHS so a diagnostic handler cannot
+/// redirect the write. `$c[$k] += $n` and `$c[$k]++` are common forms.
 #[test]
 fn test_compound_write_is_unchanged_when_the_right_hand_side_cannot_touch_the_index() {
     let out = compile_and_run(

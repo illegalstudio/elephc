@@ -88,6 +88,13 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     } else {
         rhs
     };
+    // A compound operation reads and writes one dimension. Capture a mutable index after
+    // any eager RHS evaluation, before a diagnostic handler can change its source variable.
+    let lhs_expr = if matches!(op, AssignmentOperator::Compound(_)) {
+        hoisted.snapshot_update_dimension(lhs_expr)
+    } else {
+        lhs_expr
+    };
     let lhs_span = lhs_expr.span;
     if is_append {
         let stmt = match lhs_expr.kind {
@@ -580,6 +587,19 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
     }
 }
 
+/// Returns whether an update must capture an index before its read and write halves.
+pub(crate) fn update_index_needs_snapshot(index: &Expr) -> bool {
+    match &index.kind {
+        ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => false,
+        ExprKind::Variable(name) if crate::names::is_generated_local_name(name) => false,
+        _ => true,
+    }
+}
+
 /// Recursively checks whether `target` can be used as an r-value in a replay-safe assignment.
 fn can_replay_instanceof_target(target: &InstanceOfTarget) -> bool {
     match target {
@@ -690,6 +710,8 @@ pub(crate) fn lower_postfix_incdec_assignment(
         return lower_effectful_postfix_assignment(lhs_expr, op, one, span);
     }
 
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    let lhs_expr = lowerer.snapshot_update_dimension(lhs_expr);
     let value = assignment_value(lhs_expr.clone(), op, one, span);
     let kind = match lhs_expr.kind {
         ExprKind::ArrayAccess { array, index } => match array.kind {
@@ -724,7 +746,7 @@ pub(crate) fn lower_postfix_incdec_assignment(
         _ => return Err(CompileError::new(span, "Invalid increment target")),
     };
 
-    Ok(Stmt::new(kind, span))
+    Ok(lowerer.finish_if_used(kind, span))
 }
 
 /// Lowers a compound static property assignment where the target cannot be replayed safely.
@@ -826,6 +848,27 @@ impl EffectfulTargetLowerer {
             self.span,
         ));
         Expr::new(ExprKind::Variable(name), self.span)
+    }
+
+    /// Captures a variable-rooted array index once for both halves of an update.
+    fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
+        let span = target.span;
+        match target.kind {
+            ExprKind::ArrayAccess { array, index }
+                if matches!(&array.kind, ExprKind::Variable(_)) =>
+            {
+                let index = if update_index_needs_snapshot(&index) {
+                    self.stabilize_unconditionally(*index)
+                } else {
+                    *index
+                };
+                Expr::new(ExprKind::ArrayAccess {
+                    array,
+                    index: Box::new(index),
+                }, span)
+            }
+            kind => Expr::new(kind, span),
+        }
     }
 
     /// Returns a unique synthetic temporary name for this lowered statement.

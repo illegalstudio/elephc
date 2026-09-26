@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, the containers an array literal allocates when it defaults a property, boxed or nested, and read-modify-write stores into a typed static property or a property array element.
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, and the ownership of an array literal whose element is an array-returning builtin call.
+//! - The `assoc_chunk` submodule checks heap balance when `array_chunk()` copies an associative receiver.
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
@@ -33,12 +35,18 @@ mod assoc_rebind_release;
 mod by_ref_foreach_reference_cells;
 #[path = "runtime_gc/compound_assign_stores.rs"]
 mod compound_assign_stores;
+#[path = "runtime_gc/assoc_chunk.rs"]
+mod assoc_chunk;
+#[path = "runtime_gc/literal_builtin_elements.rs"]
+mod literal_builtin_elements;
 #[path = "runtime_gc/object_supertype_rebind.rs"]
 mod object_supertype_rebind;
 #[path = "runtime_gc/boxed_property_defaults.rs"]
 mod boxed_property_defaults;
 #[path = "runtime_gc/by_ref_place_args.rs"]
 mod by_ref_place_args;
+#[path = "runtime_gc/by_ref_variadic_writeback.rs"]
+mod by_ref_variadic_writeback;
 #[path = "runtime_gc/omitted_by_ref_default_args.rs"]
 mod omitted_by_ref_default_args;
 

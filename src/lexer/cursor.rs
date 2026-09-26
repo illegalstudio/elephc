@@ -21,19 +21,19 @@ pub struct Cursor<'a> {
     pos: usize,
     line: usize,
     col: usize,
+    source_id: u32,
 }
 
 impl<'a> Cursor<'a> {
-    /// Constructs a new cursor over the given source string.
-    ///
-    /// The cursor starts at position 0, line 1, column 1 (one-based spans).
-    pub fn new(source: &'a str) -> Self {
+    /// Constructs a cursor whose spans identify one included physical source file.
+    pub(super) fn new_in_source(source: &'a str, source_id: u32) -> Self {
         Self {
             bytes: source.as_bytes(),
             text: Some(source),
             pos: 0,
             line: 1,
             col: 1,
+            source_id,
         }
     }
 
@@ -50,6 +50,7 @@ impl<'a> Cursor<'a> {
             pos: 0,
             line: 1,
             col: 1,
+            source_id: 0,
         }
     }
 
@@ -57,7 +58,7 @@ impl<'a> Cursor<'a> {
     ///
     /// Used to attach source locations to tokens for diagnostics.
     pub fn span(&self) -> Span {
-        Span::new(self.line as u32, self.col as u32)
+        Span::new_in_source(self.line as u32, self.col as u32, self.source_id)
     }
 
     /// Returns the next character without advancing the cursor.

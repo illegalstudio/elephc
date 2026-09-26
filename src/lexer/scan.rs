@@ -27,10 +27,19 @@ pub fn scan_tokens(
     source: &str,
     mode: SourceMode,
 ) -> Result<Vec<SpannedToken>, CompileError> {
+    scan_tokens_in_source(source, mode, 0)
+}
+
+/// Tokenizes one physical source while assigning a disambiguating source identity to its spans.
+pub(super) fn scan_tokens_in_source(
+    source: &str,
+    mode: SourceMode,
+    source_id: u32,
+) -> Result<Vec<SpannedToken>, CompileError> {
     // A leading UTF-8 byte-order mark (U+FEFF) is ignored, matching editors that save PHP
     // files as BOM-prefixed UTF-8; stripping it keeps the `<?php` open tag at the start.
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
-    let mut cursor = Cursor::new(source);
+    let mut cursor = Cursor::new_in_source(source, source_id);
     let mut tokens = Vec::new();
 
     let span = cursor.span();
@@ -82,7 +91,7 @@ pub fn scan_tokens(
             let remaining_before = cursor.remaining();
             let token = scan_token(&mut cursor)?;
             let end = cursor.span();
-            let span = crate::span::Span::with_end(span.line, span.col, end.line, end.col);
+            let span = crate::span::Span::with_end_from(span, end);
             let metadata = if starts_word && !matches!(token, Token::Identifier(_)) {
                 let consumed_len = remaining_before.len() - cursor.remaining().len();
                 let source_spelling = &remaining_before[..consumed_len];

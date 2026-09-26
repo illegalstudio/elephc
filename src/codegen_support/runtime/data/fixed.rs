@@ -19,6 +19,7 @@ use super::{
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
+    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX,
     POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
@@ -105,6 +106,12 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     out.push_str(&format!(
         ".globl _object_not_array_suffix\n_object_not_array_suffix:\n    .ascii {OBJECT_NOT_ARRAY_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _serialization_denied_prefix\n_serialization_denied_prefix:\n    .ascii {SERIALIZATION_DENIED_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _serialization_denied_suffix\n_serialization_denied_suffix:\n    .ascii {SERIALIZATION_DENIED_SUFFIX:?}\n"
     ));
     out.push_str(&format!(
         ".globl _named_parameter_overwrite_prefix\n_named_parameter_overwrite_prefix:\n    .ascii {NAMED_PARAMETER_OVERWRITE_PREFIX:?}\n"
@@ -779,6 +786,16 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _diag_undefined_array_key_prefix\n_diag_undefined_array_key_prefix:\n    .ascii \"Warning: Undefined array key \"\n");
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _diag_string_offset_prefix\n_diag_string_offset_prefix:\n    .ascii \"Warning: Uninitialized string offset \"\n");
+    out.push_str(".globl _diag_string_offset_nl\n_diag_string_offset_nl:\n    .ascii \"\\n\"\n");
+    for (label, message) in [
+        ("_diag_float_key_precision_prefix", "Deprecated: Implicit conversion from float "),
+        ("_diag_float_key_precision_suffix", " to int loses precision\n"),
+        ("_diag_float_key_range_prefix", "Warning: The float "),
+        ("_diag_float_key_range_suffix", " is not representable as an int, cast occurred\n"),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii \"Warning: Trying to access array offset on null\\n\"\n");
     // -- curl_setopt()'s unsupported-option warning, split around the option number --
     // `__rt_curl_warn_unsupported_option` derives both `write()` lengths from the same

@@ -163,6 +163,14 @@ pub(crate) const UNSER_ALLOWED_CLASSES_ENTRY_PREFIX: &str =
 pub(crate) const OBJECT_NOT_ARRAY_PREFIX: &str = "Cannot use object of type ";
 /// Suffix for PHP's catchable Error when an object is indexed like an array.
 pub(crate) const OBJECT_NOT_ARRAY_SUFFIX: &str = " as array";
+/// Prefix for PHP's catchable Exception when an object's class forbids serialization.
+///
+/// `serialize()` on a Reflection object throws `Serialization of 'ReflectionMethod' is not
+/// allowed` (php-src's `ZEND_ACC_NOT_SERIALIZABLE`), wherever the object sits: nested in an array
+/// or behind `mixed` too, so the class name is only known at run time.
+pub(crate) const SERIALIZATION_DENIED_PREFIX: &str = "Serialization of '";
+/// Suffix for PHP's catchable Exception when an object's class forbids serialization.
+pub(crate) const SERIALIZATION_DENIED_SUFFIX: &str = "' is not allowed";
 /// Prefix for PHP's catchable Error when a name and its positional alias both arrive.
 ///
 /// A descriptor argument container can carry BOTH the positional key `0` and the name of the

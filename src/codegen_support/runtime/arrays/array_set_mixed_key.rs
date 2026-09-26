@@ -32,6 +32,8 @@
 //!   returns a `+1` the destination owns. Acquiring a second reference for a raw
 //!   local would leak the abandoned array, while omitting it for a retiring storeback
 //!   would release the same source owner twice.
+//! - The alternate entry point skips a float-key diagnostic after the read half
+//!   of a compound update has already reported it.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -47,6 +49,11 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_set_mixed_key ---");
     emitter.label_global("__rt_array_set_mixed_key");
+    abi::emit_load_int_immediate(emitter, "x3", 0);
+    emitter.instruction("b __rt_array_set_mixed_key_entry");                    // enter with float-key diagnostics enabled
+    emitter.label_global("__rt_array_set_mixed_key_already_diagnosed");
+    abi::emit_load_int_immediate(emitter, "x3", 1);
+    emitter.label_shared("__rt_array_set_mixed_key_entry");
 
     emitter.instruction("sub sp, sp, #96");                                     // reserve frame for array, key, value, promoted key, temp/merged hash
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
@@ -54,6 +61,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the incoming indexed-array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the boxed Mixed key cell
     emitter.instruction("str x2, [sp, #16]");                                   // save the consumed boxed Mixed value
+    emitter.instruction("str x3, [sp, #56]");                                   // remember whether this source operation already diagnosed its float key
 
     // -- materialize an empty indexed array for null/uninitialized destinations --
     emitter.instruction("cbz x0, __rt_array_set_mixed_key_alloc_empty");        // a null destination (e.g. `$dst = []`) needs a real array before writes
@@ -81,7 +89,15 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("b.ne __rt_array_set_mixed_key_int_ready");             // integer/bool keys are already valid indexed indexes
     emitter.instruction("fmov d0, x1");                                         // load the float key payload into the FP register
-    abi::emit_php_float_to_int(emitter, "x1");                                  // cast the float key to an integer index with PHP float->int rules
+    emitter.instruction("ldr x9, [sp, #56]");                                   // check whether the read half already diagnosed this key
+    emitter.instruction("cbnz x9, __rt_array_set_mixed_key_int_float_silent");  // use the silent PHP cast for a diagnosed compound key
+    abi::emit_call_label(emitter, "__rt_float_key_to_int");
+    emitter.instruction("b __rt_array_set_mixed_key_int_float_done");           // keep the diagnosed integer result
+    emitter.label("__rt_array_set_mixed_key_int_float_silent");
+    abi::emit_call_label(emitter, "__rt_php_float_to_int");
+    emitter.instruction("mov x0, x9");                                          // recover the silent PHP integer conversion result
+    emitter.label("__rt_array_set_mixed_key_int_float_done");
+    emitter.instruction("mov x1, x0");                                          // use the diagnosed PHP integer as the index
     emitter.label("__rt_array_set_mixed_key_int_ready");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the indexed-array pointer
     emitter.instruction("cmp x1, #0");                                          // negative int keys cannot live in packed indexed storage
@@ -167,7 +183,15 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("b.ne __rt_array_set_mixed_key_hash_int");              // integer/bool keys become scalar integer hash keys
     emitter.instruction("fmov d0, x1");                                         // load the float key payload into the FP register
-    abi::emit_php_float_to_int(emitter, "x1");                                  // cast the float key to an integer hash key with PHP float->int rules
+    emitter.instruction("ldr x9, [sp, #56]");                                   // check whether the read half already diagnosed this key
+    emitter.instruction("cbnz x9, __rt_array_set_mixed_key_hash_float_silent"); // use the silent PHP cast for a diagnosed compound key
+    abi::emit_call_label(emitter, "__rt_float_key_to_int");
+    emitter.instruction("b __rt_array_set_mixed_key_hash_float_done");          // keep the diagnosed integer result
+    emitter.label("__rt_array_set_mixed_key_hash_float_silent");
+    abi::emit_call_label(emitter, "__rt_php_float_to_int");
+    emitter.instruction("mov x0, x9");                                          // recover the silent PHP integer conversion result
+    emitter.label("__rt_array_set_mixed_key_hash_float_done");
+    emitter.instruction("mov x1, x0");                                          // use the diagnosed PHP integer as the hash key
     emitter.label("__rt_array_set_mixed_key_hash_int");
     emitter.instruction("mov x2, #-1");                                         // key_hi sentinel marks scalar integer hash keys
     emitter.instruction("b __rt_array_set_mixed_key_hash_set");                 // proceed to the hash insert with an integer key
@@ -195,6 +219,11 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_set_mixed_key ---");
     emitter.label_global("__rt_array_set_mixed_key");
+    abi::emit_load_int_immediate(emitter, "rcx", 0);
+    emitter.instruction("jmp __rt_array_set_mixed_key_entry");                  // enter with float-key diagnostics enabled
+    emitter.label_global("__rt_array_set_mixed_key_already_diagnosed");
+    abi::emit_load_int_immediate(emitter, "rcx", 1);
+    emitter.label("__rt_array_set_mixed_key_entry");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame
@@ -202,6 +231,7 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the incoming indexed-array pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the boxed Mixed key cell
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the consumed boxed Mixed value
+    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // remember whether this source operation already diagnosed its float key
 
     // -- materialize an empty indexed array for null/uninitialized destinations --
     emitter.instruction("test rdi, rdi");                                       // a null destination (e.g. `$dst = []`) needs a real array before writes
@@ -230,7 +260,15 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("jne __rt_array_set_mixed_key_int_ready");              // integer/bool keys are already valid indexed indexes
     emitter.instruction("movq xmm0, rdi");                                      // load the float key payload into the FP register
-    abi::emit_php_float_to_int(emitter, "rdi");                                 // cast the float key to an integer index with PHP float->int rules
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // check whether the read half already diagnosed this key
+    emitter.instruction("jne __rt_array_set_mixed_key_int_float_silent");       // use the silent PHP cast for a diagnosed compound key
+    abi::emit_call_label(emitter, "__rt_float_key_to_int");
+    emitter.instruction("jmp __rt_array_set_mixed_key_int_float_done");         // keep the diagnosed integer result
+    emitter.label("__rt_array_set_mixed_key_int_float_silent");
+    abi::emit_call_label(emitter, "__rt_php_float_to_int");
+    emitter.instruction("mov rax, r11");                                        // recover the silent PHP integer conversion result
+    emitter.label("__rt_array_set_mixed_key_int_float_done");
+    emitter.instruction("mov rdi, rax");                                        // use the diagnosed PHP integer as the index
     emitter.label("__rt_array_set_mixed_key_int_ready");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the indexed-array pointer
     emitter.instruction("cmp rdi, 0");                                          // negative int keys cannot live in packed indexed storage
@@ -315,7 +353,15 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("jne __rt_array_set_mixed_key_hash_int");               // integer/bool keys become scalar integer hash keys
     emitter.instruction("movq xmm0, rdi");                                      // load the float key payload into the FP register
-    abi::emit_php_float_to_int(emitter, "rdi");                                 // cast the float key to an integer hash key with PHP float->int rules
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // check whether the read half already diagnosed this key
+    emitter.instruction("jne __rt_array_set_mixed_key_hash_float_silent");      // use the silent PHP cast for a diagnosed compound key
+    abi::emit_call_label(emitter, "__rt_float_key_to_int");
+    emitter.instruction("jmp __rt_array_set_mixed_key_hash_float_done");        // keep the diagnosed integer result
+    emitter.label("__rt_array_set_mixed_key_hash_float_silent");
+    abi::emit_call_label(emitter, "__rt_php_float_to_int");
+    emitter.instruction("mov rax, r11");                                        // recover the silent PHP integer conversion result
+    emitter.label("__rt_array_set_mixed_key_hash_float_done");
+    emitter.instruction("mov rdi, rax");                                        // use the diagnosed PHP integer as the hash key
     emitter.label("__rt_array_set_mixed_key_hash_int");
     emitter.instruction("mov rsi, rdi");                                        // publish the integer key payload as the hash key low word
     emitter.instruction("mov rdx, -1");                                         // key_hi sentinel marks scalar integer hash keys

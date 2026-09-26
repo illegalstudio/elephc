@@ -74,6 +74,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_key_exists(emitter);
     arrays::emit_array_key_exists_mixed_key(emitter);
     arrays::emit_undefined_array_key_warning(emitter);
+    arrays::emit_float_key_to_int(emitter);
     arrays::emit_array_search(emitter);
     arrays::emit_in_array_mixed_int(emitter);
     arrays::emit_array_reverse(emitter);
@@ -94,6 +95,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_slice_to_hash(emitter);
     arrays::emit_hash_slice(emitter);
     arrays::emit_array_chunk_to_hash(emitter);
+    arrays::emit_hash_chunk(emitter);
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
     arrays::emit_array_rand(emitter);
@@ -246,6 +248,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_mixed_cell_autovivify_array(emitter);
     objects::emit_mixed_array_get(emitter);
     objects::emit_throw_object_not_array(emitter);
+    objects::emit_throw_serialization_denied(emitter);
     objects::emit_mixed_array_set(emitter);
     objects::emit_mixed_array_append(emitter);
     objects::emit_mixed_array_fetch_for_write(emitter);

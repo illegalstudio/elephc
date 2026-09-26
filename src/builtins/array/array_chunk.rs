@@ -12,9 +12,12 @@
 //!   into `Array<Array<T>>`; with `true` each chunk keeps the source integer keys of its own
 //!   window, which is `Array<AssocArray { key: Int, value: T }>` because elephc's dense indexed
 //!   representation cannot hold a window that does not start at key 0.
-//! - Associative inputs are rejected (the lowering only supports indexed arrays), and non-array
-//!   inputs are rejected too. A check hook is required because the return type depends on the
-//!   inferred argument type and on that literal flag.
+//! - An ASSOCIATIVE receiver chunks into `Array<AssocArray { … }>` in both modes: with the flag
+//!   each window keeps the source's own keys, and without it the keys restart at 0 inside every
+//!   chunk — which is where chunk's `preserve_keys` rule parts company with `array_slice()`'s,
+//!   since chunk drops STRING keys too. Non-array inputs are still rejected. A check hook is
+//!   required because the return type depends on the inferred argument type and on that literal
+//!   flag.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -66,10 +69,18 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             value: elem_ty,
         }))),
         PhpType::Array(elem_ty) => Ok(PhpType::Array(Box::new(PhpType::Array(elem_ty)))),
-        PhpType::AssocArray { .. } => Err(CompileError::new(
-            cx.span,
-            "array_chunk() argument must be indexed array",
-        )),
+        // An associative receiver chunks into hashes in BOTH modes, because neither mode's inner
+        // container is a dense list elephc can represent: with `preserve_keys` the window keeps
+        // the source's own keys, and without it the keys restart at 0 but the values may be any
+        // width — which is the 16-byte string-slot problem. A hash keyed 0,1,2,… reads and prints
+        // exactly like the list PHP returns.
+        PhpType::AssocArray { key, value } if preserve => {
+            Ok(PhpType::Array(Box::new(PhpType::AssocArray { key, value })))
+        }
+        PhpType::AssocArray { value, .. } => Ok(PhpType::Array(Box::new(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value,
+        }))),
         _ => Err(CompileError::new(
             cx.span,
             "array_chunk() first argument must be array",
