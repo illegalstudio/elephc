@@ -4,6 +4,8 @@ class User {
     public int $id;
     public string $name = "Ada";
     public ?string $email = null;
+    // `Foo::class` is a compile-time string, so it can be a default.
+    public static string $repository = UserRepository::class;
 
     public function __construct($id) {
         $this->id = $id;
@@ -14,9 +16,12 @@ class User {
     }
 }
 
+final class UserRepository {}
+
 $user = new User(42);
 echo $user->label();
 echo PHP_EOL;
+echo "repository: " . User::$repository . PHP_EOL;
 
 if (is_null($user->email)) {
     echo "missing email";
