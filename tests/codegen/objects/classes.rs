@@ -1167,3 +1167,39 @@ $l = new L(); echo $l->c1 + $l->c2 + $l->hooked, "\n";
         )
     );
 }
+
+/// `$this(...)` invokes the current object through its `__invoke`, with positional or named
+/// arguments, as a statement or inside an expression. It failed to parse with
+/// `Expected ';'`. Regression for #846.
+#[test]
+fn test_invoking_this_calls_its_invoke_method() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    private int $calls = 0;
+    public function __invoke(string $value, string $suffix = "!"): string {
+        $this->calls++;
+        return $value . $suffix;
+    }
+    public function run(): string { return $this('ok'); }
+    public function named(): string { return $this(suffix: "?", value: "named"); }
+    public function statement(): int { $this('ignored'); $this('twice'); return $this->calls; }
+    public function chained(): int { return strlen($this('abc')); }
+}
+$c = new C();
+echo $c->run(), "\n";
+echo $c->named(), "\n";
+echo $c->statement(), "\n";
+echo $c->chained(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "ok!\n",
+            "named?\n",
+            "4\n",
+            "4\n",
+        )
+    );
+}
