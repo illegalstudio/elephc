@@ -17,6 +17,10 @@ use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
 use super::super::expect_semicolon;
+use super::append_chain::{
+    find_append_dimension, lower_append_chain_stmt, parse_append_dimensions,
+    REFERENCE_APPEND_UNSUPPORTED,
+};
 use super::compound::{assignment_operator, assignment_value, AssignmentOperator};
 
 /// Parses a postfix assignment where the target involves property access, array access,
@@ -42,7 +46,8 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     let is_append = lhs.len() >= 3
         && lhs[lhs.len() - 2].0 == Token::LBracket
         && lhs[lhs.len() - 1].0 == Token::RBracket;
-    if is_append && op != AssignmentOperator::Assign {
+    let append_at = find_append_dimension(lhs);
+    if append_at.is_some() && op != AssignmentOperator::Assign {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
     let contains_postfix = lhs
@@ -51,6 +56,11 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         .any(|(token, _)| matches!(token, Token::Arrow | Token::QuestionArrow | Token::LBracket));
     if !contains_postfix {
         return Ok(None);
+    }
+    if let Some(append_at) = append_at {
+        if let Some(stmt) = try_parse_append_chain(tokens, pos, lhs, append_at, assign_pos, span)? {
+            return Ok(Some(stmt));
+        }
     }
 
     let mut lhs_pos = 0;
@@ -65,6 +75,9 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     *pos = assign_pos + 1;
+    if is_append {
+        reject_reference_append(tokens, *pos)?;
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
@@ -161,6 +174,64 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     Ok(Some(hoisted.finish_if_used(stmt, span)))
 }
 
+/// Parses a plain `=` whose left-hand side holds an append dimension at token `append_at`,
+/// when the shape needs the append-chain desugar: a `[]` followed by further dimensions
+/// (`$a['k'][]['x'] = $v`), or a trailing `[]` on a container that is not a storage location
+/// (`$this[] = $v`, `f()[] = $v`).
+///
+/// Returns `Ok(None)` for a trailing `[]` on a variable, property, or array element, which keeps
+/// its dedicated append statement. `pos` is left untouched in that case.
+fn try_parse_append_chain(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    lhs: &[SpannedToken],
+    append_at: usize,
+    assign_pos: usize,
+    span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    if append_at == 0 {
+        return Err(CompileError::new(span, "Invalid assignment target"));
+    }
+    let container_tokens = &lhs[..append_at];
+    let mut container_pos = 0;
+    let container = parse_expr(container_tokens, &mut container_pos)?;
+    if container_pos != container_tokens.len() {
+        return Err(CompileError::new(span, "Invalid assignment target"));
+    }
+    let dim_tokens = &lhs[append_at + 2..];
+    let mut dim_pos = 0;
+    let dims = parse_append_dimensions(dim_tokens, &mut dim_pos)?;
+    if dim_pos != dim_tokens.len() {
+        return Err(CompileError::new(span, "Invalid assignment target"));
+    }
+    let has_own_append_stmt = matches!(
+        container.kind,
+        ExprKind::Variable(_)
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::ArrayAccess { .. }
+    );
+    if dims.is_empty() && has_own_append_stmt {
+        return Ok(None);
+    }
+    *pos = assign_pos + 1;
+    reject_reference_append(tokens, *pos)?;
+    let rhs = parse_assignment_value_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    lower_append_chain_stmt(container, dims, rhs, span).map(Some)
+}
+
+/// Rejects `$a[] = &$x` with a diagnostic naming the construct: `pos` is the token after `=`.
+fn reject_reference_append(tokens: &[SpannedToken], pos: usize) -> Result<(), CompileError> {
+    match tokens.get(pos) {
+        Some((Token::Ampersand, metadata)) => Err(CompileError::new(
+            metadata.span,
+            REFERENCE_APPEND_UNSUPPORTED,
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// True when `target` writes an element at a plain-VARIABLE index and `rhs` can reassign
 /// that variable before the write lands.
 ///
@@ -188,7 +259,7 @@ fn compound_rhs_can_disturb_index(target: &Expr, rhs: &Expr) -> bool {
 /// synthetic read/append/write-back sequence. The temporary append triggers the
 /// existing copy-on-write split, and the final assignment stores the detached
 /// nested array back into the original slot.
-fn lower_nested_append_assignment(
+pub(super) fn lower_nested_append_assignment(
     target: Expr,
     value: Expr,
     span: Span,
@@ -378,8 +449,16 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     let is_append = lhs.len() >= 3
         && lhs[lhs.len() - 2].0 == Token::LBracket
         && lhs[lhs.len() - 1].0 == Token::RBracket;
-    if is_append && op != AssignmentOperator::Assign {
+    let append_at = find_append_dimension(lhs);
+    if append_at.is_some() && op != AssignmentOperator::Assign {
         return Err(CompileError::new(span, "Invalid assignment target"));
+    }
+    // `self::$b[]['k'] = $v` and `Reg::get()[] = $v`: an append in the middle of the chain,
+    // or onto a call result, takes the same desugar as its variable-rooted sibling.
+    if let Some(append_at) = append_at {
+        if let Some(stmt) = try_parse_append_chain(tokens, pos, lhs, append_at, assign_pos, span)? {
+            return Ok(Some(stmt));
+        }
     }
     let mut lhs_pos = 0;
     let lhs_expr_tokens = if is_append {
@@ -393,6 +472,9 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     *pos = assign_pos + 1;
+    if is_append {
+        reject_reference_append(tokens, *pos)?;
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
@@ -815,7 +897,7 @@ fn lower_effectful_static_assignment(
 
 /// Helper that rewrites complex l-value targets into sequences of temporary-variable
 /// assignments so that source evaluation order is preserved and side effects are not duplicated.
-struct EffectfulTargetLowerer {
+pub(super) struct EffectfulTargetLowerer {
     span: Span,
     next_temp: usize,
     stmts: Vec<Stmt>,
@@ -824,7 +906,7 @@ struct EffectfulTargetLowerer {
 impl EffectfulTargetLowerer {
     /// Initializes the lowerer with the source span used for all synthesized statements
     /// and temporary variable names.
-    fn new(span: Span) -> Self {
+    pub(super) fn new(span: Span) -> Self {
         Self {
             span,
             next_temp: 0,
@@ -835,7 +917,7 @@ impl EffectfulTargetLowerer {
     /// If `expr` is replay-safe, returns it unchanged. Otherwise, emits an `Assign`
     /// statement to a uniquely-named temporary and returns a `Variable` reference to it.
     /// Increments `next_temp` to keep temporary names unique across the same statement.
-    fn stabilize(&mut self, expr: Expr) -> Expr {
+    pub(super) fn stabilize(&mut self, expr: Expr) -> Expr {
         if can_replay_assignment_target(&expr) {
             return expr;
         }
@@ -881,6 +963,33 @@ impl EffectfulTargetLowerer {
         name
     }
 
+    /// Mints a fresh statement-local temporary name for a caller outside this module (the
+    /// append-chain desugar), sharing this lowerer's counter so no two temporaries collide.
+    pub(super) fn fresh_temp_name(&mut self) -> String {
+        self.next_temp_name()
+    }
+
+    /// Appends an already-built statement to the pending sequence.
+    pub(super) fn push_stmt(&mut self, stmt: Stmt) {
+        self.stmts.push(stmt);
+    }
+
+    /// Returns the pending statements without a final statement or `Synthetic` wrapper, for
+    /// a caller that places them in an assignment expression's prelude.
+    pub(super) fn into_stmts(self) -> Vec<Stmt> {
+        self.stmts
+    }
+
+    /// Like `finish`, but for a final statement that is already a full `Stmt` (for instance a
+    /// nested `Synthetic` group); returns it unwrapped when nothing else is pending.
+    pub(super) fn finish_stmt(mut self, final_stmt: Stmt) -> Stmt {
+        if self.stmts.is_empty() {
+            return final_stmt;
+        }
+        self.stmts.push(final_stmt);
+        Stmt::new(StmtKind::Synthetic(self.stmts), self.span)
+    }
+
     /// Mints the temporary that holds the bucket of a nested append, under its own reserved
     /// prefix.
     ///
@@ -919,7 +1028,7 @@ impl EffectfulTargetLowerer {
     /// Stabilizes the base of a nested array access chain. Recursively processes
     /// `ArrayAccess` and `PropertyAccess` chains; returns `Variable`, `This`,
     /// and `StaticPropertyAccess` directly; calls `stabilize` for all other expressions.
-    fn stabilize_array_base(&mut self, expr: Expr) -> Expr {
+    pub(super) fn stabilize_array_base(&mut self, expr: Expr) -> Expr {
         let span = expr.span;
         match expr.kind {
             ExprKind::ArrayAccess { array, index } => Expr::new(
@@ -961,7 +1070,7 @@ impl EffectfulTargetLowerer {
     /// Emits `expr` into a fresh temporary and returns a reference to it, even when the
     /// expression is replay-safe. `stabilize` exists to make an effectful expression
     /// evaluate ONCE; this exists to make it evaluate EARLY.
-    fn stabilize_unconditionally(&mut self, expr: Expr) -> Expr {
+    pub(super) fn stabilize_unconditionally(&mut self, expr: Expr) -> Expr {
         let name = self.next_temp_name();
         self.stmts.push(Stmt::new(
             StmtKind::Assign {

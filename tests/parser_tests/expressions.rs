@@ -17,6 +17,8 @@ mod operators;
 mod modern_ops;
 #[path = "expressions/assignments.rs"]
 mod assignments;
+#[path = "expressions/append_lvalues.rs"]
+mod append_lvalues;
 #[path = "expressions/arrays_match.rs"]
 mod arrays_match;
 

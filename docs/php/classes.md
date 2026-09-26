@@ -113,8 +113,9 @@ classes that extend `Exception` or `Error` can implement those user interfaces.
 
 Classes implementing `ArrayAccess` can use PHP subscript syntax:
 `$obj[$key]` dispatches to `offsetGet()`, `$obj[$key] = $value` dispatches to
-`offsetSet()`, `isset($obj[$key])` dispatches to `offsetExists()`, and
-`unset($obj[$key])` dispatches to `offsetUnset()`.
+`offsetSet()`, `$obj[] = $value` (and `$this[] = $value` inside the class)
+dispatches to `offsetSet(null, $value)`, `isset($obj[$key])` dispatches to
+`offsetExists()`, and `unset($obj[$key])` dispatches to `offsetUnset()`.
 
 `Serializable` is intentionally not provided: it is deprecated since
 PHP 8.1. Use the `__serialize` / `__unserialize` magic methods instead.

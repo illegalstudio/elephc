@@ -164,9 +164,11 @@ pub(super) fn lower_static_property_array_push(
         store_static_property(ctx, receiver, property, property_value.value, span);
         return;
     }
+    let operands =
+        crate::ir_lower::stmt::array_write_storage::object_append_operands(ctx, property_value, value);
     ctx.emit_void(
         Op::RuntimeCall,
-        vec![property_value.value, value.value],
+        operands,
         None,
         effects_lookup::runtime_effects(),
         Some(span),
