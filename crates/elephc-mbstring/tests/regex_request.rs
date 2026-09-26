@@ -48,6 +48,7 @@ fn exception(error: MbError, previous: Value) -> Value {
     let (class, message) = match error {
         MbError::Value(message) => ("ValueError", message.into_bytes()),
         MbError::ValueBytes(message) => ("ValueError", message),
+        MbError::TypeBytes(message) => ("TypeError", message),
         MbError::Runtime(message) => ("Error", message.into_bytes()),
     };
     json!([class, hex(&message), previous])

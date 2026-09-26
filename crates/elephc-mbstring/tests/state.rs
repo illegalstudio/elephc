@@ -85,7 +85,9 @@ fn setting_transitions_match_php() {
         let result = execute(&mut state, case["function"].as_str().unwrap(), &case["argument"], &mut warnings)
             .unwrap_or_else(|error| {
                 let (class, message) = match error { MbError::Value(message) => ("ValueError", message.into_bytes()),
-                    MbError::ValueBytes(message) => ("ValueError", message), MbError::Runtime(message) => ("Error", message.into_bytes()) };
+                    MbError::ValueBytes(message) => ("ValueError", message),
+                    MbError::TypeBytes(message) => ("TypeError", message),
+                    MbError::Runtime(message) => ("Error", message.into_bytes()) };
                 json!({"error": [string(class), string(message)]})
             });
         assert_eq!(result, case["result"], "result {case}");

@@ -29,6 +29,7 @@ fn error_value(error: MbError) -> Value {
     match error {
         MbError::Value(message) => json!({"error": ["ValueError", message]}),
         MbError::ValueBytes(message) => json!({"error": ["ValueError", String::from_utf8(message).expect("UTF-8 operation diagnostic")]}),
+        MbError::TypeBytes(message) => json!({"error": ["TypeError", String::from_utf8(message).expect("UTF-8 operation diagnostic")]}),
         MbError::Runtime(message) => json!({"error": ["Error", message]}),
     }
 }

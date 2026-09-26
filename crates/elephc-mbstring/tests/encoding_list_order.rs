@@ -20,6 +20,7 @@ fn error(error: MbError) -> Value {
     match error {
         MbError::Value(message) => json!(["error", "ValueError", hex(message.as_bytes())]),
         MbError::ValueBytes(message) => json!(["error", "ValueError", hex(&message)]),
+        MbError::TypeBytes(message) => json!(["error", "TypeError", hex(&message)]),
         MbError::Runtime(message) => json!(["error", "Error", hex(message.as_bytes())]),
     }
 }
