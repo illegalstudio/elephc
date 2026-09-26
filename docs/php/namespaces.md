@@ -43,6 +43,9 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
   not participate (they apply to unqualified names only), matching PHP
 - Fully-qualified `\Lib\Tool` always refers to global canonical name; a leading `\` suppresses
   alias expansion, so `\M\double()` is *not* rewritten
+- A reserved word is an ordinary segment inside a qualified name, as in PHP 8:
+  `namespace Vendor\Default\Theme;`, `use Demo\Namespace\Subject;`, `new \Vendor\List\Item()`.
+  Standing alone it is still the keyword, so `namespace Namespace;` is refused
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity

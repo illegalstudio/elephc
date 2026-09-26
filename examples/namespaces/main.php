@@ -8,6 +8,7 @@ use Demo\Domain\User;
 use Demo\Http\Controller\HomeController;
 use function Demo\Support\format_user as formatUser;
 use const Demo\Support\APP_ENV;
+use Demo\Theme\Default\Palette;
 
 $controller = new HomeController();
 $user = new User("nahime", "admin");
@@ -17,3 +18,4 @@ echo $controller->index($user) . "\n";
 echo formatUser($user) . "\n";
 echo function_exists("\\Demo\\Support\\format_user") . "\n";
 echo call_user_func("\\Demo\\Support\\format_user", $user) . "\n";
+echo "accent=" . Palette::accent() . "\n";

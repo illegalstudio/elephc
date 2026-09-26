@@ -118,3 +118,19 @@ fn test_parse_dunder_namespace_magic_constant() {
         &ExprKind::MagicConstant(MagicConstant::Namespace)
     );
 }
+
+/// Verifies a reserved word parses as a segment of a qualified namespace name (#826, #840),
+/// while a lone keyword is still refused as a namespace name.
+#[test]
+fn test_reserved_word_namespace_segments_parse() {
+    for source in [
+        "<?php namespace Demo\\Namespace;",
+        "<?php namespace Vendor\\Default\\Theme;",
+        "<?php use Vendor\\Default\\Theme\\Example;",
+        "<?php new \\Vendor\\List\\Item();",
+    ] {
+        let stmts = parse_source(source);
+        assert!(!stmts.is_empty(), "{source}: expected a statement");
+    }
+    assert!(parse_fails("<?php namespace Namespace;"));
+}

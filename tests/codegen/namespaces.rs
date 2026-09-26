@@ -684,3 +684,56 @@ echo $t->i();
     );
     assert_eq!(out, "i");
 }
+
+/// A reserved word is an ordinary segment of a qualified name, as in `Demo\Namespace` or
+/// `Vendor\Default\Theme`. Namespace declarations, `use` imports, `use function`, calls,
+/// `::class` and `instanceof` all have to accept it. The declaration failed with
+/// `Expected identifier after '\' in qualified name`. Regression for #826 and #840.
+#[test]
+fn test_reserved_words_are_ordinary_qualified_name_segments() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/kwns_lib.php';
+
+use Vendor\Default\Theme\Example;
+use Demo\Namespace\Subject as Aliased;
+use function Demo\Namespace\describe;
+
+echo (new Example())->name(), "\n";
+echo get_class(new Aliased()), "\n";
+echo describe(), "\n";
+echo \Demo\Namespace\describe(), "\n";
+echo Vendor\Default\Theme\Example::class, "\n";
+var_dump(new Aliased() instanceof Demo\Namespace\Subject);
+"#,
+            ),
+            (
+                "kwns_lib.php",
+                r#"<?php
+namespace Vendor\Default\Theme {
+    class Example { public function name(): string { return "default theme"; } }
+}
+namespace Demo\Namespace {
+    final class Subject {}
+    function describe(): string { return __NAMESPACE__; }
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "default theme\n",
+            "Demo\\Namespace\\Subject\n",
+            "Demo\\Namespace\n",
+            "Demo\\Namespace\n",
+            "Vendor\\Default\\Theme\\Example\n",
+            "bool(true)\n",
+        )
+    );
+}

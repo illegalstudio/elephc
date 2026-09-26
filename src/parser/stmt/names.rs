@@ -24,6 +24,28 @@ pub(crate) fn name_part_from_token(
     }
 }
 
+/// Returns the segment spelled by the token at `pos` inside a qualified name.
+///
+/// PHP 8 lexes a qualified name as one token, so a reserved word is an ordinary segment
+/// there (`Demo\Namespace`, `Vendor\Default\Theme`). A keyword counts only when the name
+/// already has a separator before it (`after_separator`) or has one right after it; alone, it
+/// is still the keyword.
+pub(crate) fn qualified_segment_at(
+    tokens: &[SpannedToken],
+    pos: usize,
+    after_separator: bool,
+) -> Option<String> {
+    let (token, metadata) = tokens.get(pos)?;
+    if let Some(part) = name_part_from_token(token, metadata) {
+        return Some(part);
+    }
+    let separator_follows = matches!(tokens.get(pos + 1), Some((Token::Backslash, _)));
+    if after_separator || separator_follows {
+        return crate::parser::keyword_name::bareword_name_from_token(token, metadata);
+    }
+    None
+}
+
 /// Returns whether the token at `pos` starts a PHP class-like name.
 pub(crate) fn name_starts_at(tokens: &[SpannedToken], pos: usize) -> bool {
     match tokens.get(pos) {
@@ -64,12 +86,10 @@ pub(crate) fn parse_name(
 
     let mut parts = Vec::new();
     loop {
-        match tokens.get(*pos) {
-            Some((token, metadata)) if name_part_from_token(token, metadata).is_some() => {
-                parts.push(
-                    name_part_from_token(token, metadata)
-                        .expect("name part was checked immediately above"),
-                );
+        let after_separator = kind == NameKind::FullyQualified || !parts.is_empty();
+        match qualified_segment_at(tokens, *pos, after_separator) {
+            Some(part) => {
+                parts.push(part);
                 *pos += 1;
             }
             _ if parts.is_empty() => return Err(CompileError::new(span, first_error)),
