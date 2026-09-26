@@ -76,7 +76,8 @@ pub use crate::codegen_support::{
 };
 pub use crate::codegen_support::{
     prepare_declared_name_order, set_autoload_rule_count, set_compile_profile,
-    set_linked_extensions,
+    set_ini_overrides, set_linked_extensions, set_opcache_api_restricted,
+    set_opcache_manifest_len,
 };
 
 use std::collections::{HashMap, HashSet};

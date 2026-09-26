@@ -85,6 +85,7 @@ pub(crate) fn compile(config: CliConfig) {
     // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
+    codegen::set_ini_overrides(ini_overrides.clone());
     crate::superglobals::set_compiling_for_web(web);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
@@ -108,6 +109,21 @@ pub(crate) fn compile(config: CliConfig) {
     let mut timings = CompileTimings::new(emit_timings);
 
     let parsed = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);
+
+    // `opcache.preload` becomes an implicit `require_once` at the very top of the entry program,
+    // which is what reference PHP's startup preload pass IS for a compiler: the resolver inlines
+    // the target below, so its declarations are baked into the binary and its top-level code runs
+    // first. Injected BEFORE the autoload registry so a preload file that registers an autoloader
+    // or declares an autoloadable class is seen by both, and before `resolve` so its transitive
+    // requires join the OPcache script manifest. An unresolvable path is refused in here, at the
+    // compile-time position closest to reference's startup fatal.
+    let parsed = opcache_prelude::inject_preload_require(
+        parsed,
+        php_version,
+        web,
+        &ini_overrides,
+        filename,
+    );
 
     crate::progress::phase("autoload-build");
     let phase_started = Instant::now();
@@ -290,6 +306,13 @@ pub(crate) fn compile(config: CliConfig) {
     // manifest deliberately drops entries it cannot stat, so its first element is not a
     // dependable stand-in. See `opcache_prelude::restrict_api_denies`.
     let opcache_entry_path = opcache_prelude::canonical_entry_path(filename);
+    // The SAME verdict for the eval bridge: an OPcache call hidden in a runtime-provided
+    // `eval()` source gets no native body, so the interpreter must refuse it itself.
+    codegen::set_opcache_api_restricted(opcache_prelude::restrict_api_denies(
+        opcache_entry_path.as_deref(),
+        php_version.version_id(),
+        &ini_overrides,
+    ));
     // `opcache.preload` is a COMPILE-TIME decision, resolved here for the same reason
     // `restrict_api` is: reference PHP preloads during STARTUP, before the script runs, and
     // elephc's INI is fixed when the binary is built. The three outcomes mirror reference exactly
@@ -297,11 +320,11 @@ pub(crate) fn compile(config: CliConfig) {
     // - unresolvable path with the cache enabled → HARD COMPILE ERROR, the AOT equivalent of
     //   reference's startup fatal. It fires whether or not the program calls an OPcache function,
     //   because reference's fatal does not depend on that either.
-    // - resolvable but outside the compile-time script manifest → a WARNING only: preloading a file
-    //   this program never includes is a legitimate configuration and must not break a build. That
-    //   arm depends on the COMPLETE manifest, so it is evaluated after `autoload::run` below; only
-    //   the manifest-independent compile ERROR is decided here, matching reference PHP, which
-    //   fatals at startup regardless of what the script does.
+    // - resolvable → the file is preloaded. `inject_preload_require` makes it part of this binary,
+    //   so it is always a member of the script manifest and there is no out-of-manifest diagnostic.
+    //   Only the manifest-independent compile ERROR is decided here, matching reference PHP, which
+    //   fatals at startup regardless of what the script does; the verdict is taken again against
+    //   the COMPLETE manifest after `autoload::run`, for `preload_statistics`.
     // - empty directive, or a disabled cache → nothing at all happens (reference does not preload
     //   when the accelerator is off, and does not even validate the path).
     let opcache_preload =
@@ -393,6 +416,24 @@ pub(crate) fn compile(config: CliConfig) {
     );
     timings.record_since("xml-prelude", phase_started);
 
+    // The resolved `opcache.preload` path, so the web prelude can find that file's guard by
+    // label and lift it out of the per-request handler. Recomputed rather than threaded down
+    // from `inject_preload_require`: the verdict is a pure function of the directives and the
+    // entry, and passing it through six intervening phases to save one call would be worse.
+    let preload_startup_path = if web {
+        match opcache_prelude::preload_verdict(php_version, web, &ini_overrides, &[]) {
+            opcache_prelude::PreloadVerdict::Preloading { resolved, .. }
+                if opcache_prelude::canonical_entry_path(filename)
+                    .is_none_or(|entry| entry != resolved) =>
+            {
+                Some(std::path::PathBuf::from(resolved))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(
@@ -401,6 +442,7 @@ pub(crate) fn compile(config: CliConfig) {
         php_version,
         &ini_overrides,
         &mut prelude_inventory,
+        preload_startup_path.as_deref(),
     );
     timings.record_since("web-prelude", phase_started);
 
@@ -505,16 +547,15 @@ pub(crate) fn compile(config: CliConfig) {
         &opcache_included_files,
         &opcache_autoloaded_files,
     );
-    // Re-decide `opcache.preload` against the complete manifest. Only the `in_manifest` arm can
-    // differ from the verdict taken above (the directive, the SAPI gate and the path resolution
-    // are all manifest-independent), so this second call exists purely to emit the
-    // outside-the-manifest WARNING against the truthful set — reporting it against the
-    // placeholder manifest would warn about files that are, in fact, compiled in.
+    // The manifest's scripts hold hash slots, so the runtime tier gets what they leave.
+    codegen::set_opcache_manifest_len(opcache_manifest.len());
+    // Re-decide `opcache.preload` against the COMPLETE manifest, which is the set
+    // `preload_statistics` reports. Only the `in_manifest` arm can differ from the verdict taken
+    // above (the directive, the SAPI gate and the path resolution are all manifest-independent).
+    // There is no out-of-manifest diagnostic to emit any more: `inject_preload_require` has
+    // already made the preload file part of this binary, so it is always a manifest member.
     let opcache_preload =
         opcache_prelude::preload_verdict(php_version, web, &ini_overrides, &opcache_manifest);
-    if let Some(message) = opcache_preload.compile_warning() {
-        errors::report_warning(&errors::CompileWarning::new(Span::new(0, 0), &message));
-    }
     let opcache_preload_statistics = opcache_prelude::preload_statistics(
         &opcache_preload,
         &opcache_manifest,
@@ -631,7 +672,17 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("decl-reach");
     let phase_started = Instant::now();
-    let exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
+    let mut exported_function_names: HashSet<String> =
+        exported_functions.keys().cloned().collect();
+    // The hoisted `opcache.preload` body is a reachability ROOT. Nothing in PHP calls it —
+    // the `--web` entry stub does, in assembly, before the request loop — so the declaration
+    // pruner sees an unreferenced function and removes it, taking the preload's side effects
+    // with it. That failure is silent: the responses come out clean, which is what the hoist
+    // was for, and the preload simply never runs.
+    if preload_startup_path.is_some() {
+        exported_function_names.insert(crate::web_prelude::PRELOAD_STARTUP_FN.to_string());
+    }
+    let exported_function_names = exported_function_names;
     let ast = optimize::prune_unreachable_declarations(
         ast,
         &mut check_result,

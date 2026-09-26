@@ -288,6 +288,198 @@ pub(super) fn eval_native_global_constant_abi_value(
     }
 }
 
+/// Installs this binary's OPcache configuration in the eval bridge, which governs the
+/// runtime script cache for dynamically included files.
+///
+/// The runtime cannot derive these values: `--ini` is a compile-time flag, so the
+/// effective directive set exists only in the compiler. The bridge defaults to a
+/// DISABLED cache, so a binary that never reaches this call — and every consumer
+/// linking the archive without elephc's codegen — keeps the uncached behaviour.
+///
+/// CALLED FROM THE PROLOGUE, not from here. This used to run lazily at the first
+/// `ensure_eval_context`, which made the cache's configuration depend on whether the
+/// program had already executed an `eval()` — so `opcache_compile_file()` answered `false`
+/// before the first one and `true` after, and `opcache_get_configuration()['blacklist']`
+/// was empty then populated, for the same binary and the same directives. php-src
+/// configures OPcache at startup, before a line of user code runs, and
+/// `crate::codegen::frame` now does the same.
+pub(crate) fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
+    let version_id = crate::codegen::compile_php_version().version_id();
+    let overrides = crate::codegen_support::ini_overrides();
+    let config = crate::opcache::runtime_cache::runtime_cache_config(
+        version_id,
+        crate::codegen_support::compile_is_web_sapi(),
+        &overrides,
+    );
+    let arguments = [
+        i64::from(config.enabled),
+        i64::from(config.validate_timestamps),
+        config.revalidate_freq as i64,
+        config.max_file_size as i64,
+        config.memory_consumption as i64,
+        // THE RUNTIME TIER'S SHARE of the hash: the prime capacity minus the scripts compiled
+        // into this binary, which php-src caches before any dynamic include and which hold a
+        // slot each. MEASURED with `max_accelerated_files=200` (223 slots) and an absolute
+        // entry path: reference admits 222 dynamic scripts beside the entry, 221 beside the
+        // entry and one static `require`; elephc admitted 223 and reported more cached scripts
+        // than `max_cached_keys`. (A RELATIVE entry path costs reference one more key — an
+        // elephc binary has no invocation path, so the resolved form is the model.)
+        config
+            .max_accelerated_files
+            .saturating_sub(crate::codegen_support::opcache_manifest_len() as u64) as i64,
+    ];
+    for (index, value) in arguments.into_iter().enumerate() {
+        let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
+        abi::emit_load_int_immediate(ctx.emitter, arg_reg, value);
+    }
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_configure_opcache");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    configure_eval_opcache_file_cache(ctx, &config);
+}
+
+/// Installs the accelerator diagnostic channel and triggers php-src's startup validation
+/// of `opcache.file_cache`.
+///
+/// A SECOND call, not four more arguments on the one above, because that one already
+/// spends all six integer argument registers x86_64 provides — a seventh would need a
+/// stack slot the emitter cannot express. It is emitted immediately after, because the
+/// validation reads the enabled flag the first call installs.
+///
+/// The bridge fatals (and exits 254) on a bad directory exactly as reference PHP's
+/// startup does, so this call can terminate the process before the program runs.
+fn configure_eval_opcache_file_cache(
+    ctx: &mut FunctionContext<'_>,
+    config: &crate::opcache::runtime_cache::RuntimeCacheConfig,
+) {
+    let (file_cache_label, file_cache_len) = ctx.data.add_string(config.file_cache.as_bytes());
+    let (error_log_label, error_log_len) = ctx.data.add_string(config.error_log.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &file_cache_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        file_cache_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        i64::from(config.file_cache_read_only),
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        config.log_verbosity_level,
+    );
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        &error_log_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        error_log_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_configure_opcache_file_cache");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    load_eval_opcache_blacklist(ctx, config);
+    configure_eval_opcache_swapped_directives(ctx, config);
+}
+
+/// Loads `opcache.blacklist_filename`, the paths that run but are never cached.
+///
+/// A THIRD call for the same reason there is a second one: the two above already spend
+/// every integer argument register. Emitted AFTER the file-cache call because a directive
+/// value matching no file logs through the accelerator channel that call installs.
+///
+/// Skipped entirely when the directive is unset, which is the overwhelmingly common case —
+/// the bridge would return immediately, so the call would be pure code size.
+fn load_eval_opcache_blacklist(
+    ctx: &mut FunctionContext<'_>,
+    config: &crate::opcache::runtime_cache::RuntimeCacheConfig,
+) {
+    if config.blacklist_filename.is_empty() {
+        return;
+    }
+    let (label, len) = ctx.data.add_string(config.blacklist_filename.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_load_blacklist");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// `opcache.file_update_protection`, as the bridge's `swap_directive` addresses it.
+///
+/// The id is a wire contract with `elephc_magician::script_cache::config`; it is matched
+/// by number across the C ABI, so it may never be reordered.
+const OPCACHE_DIRECTIVE_FILE_UPDATE_PROTECTION: i64 = 2;
+
+/// Whether `opcache.restrict_api` denies this binary's OPcache API calls, as the bridge's
+/// `swap_directive` addresses it. A compile-time verdict (see
+/// `opcache_prelude::restrict_api_denies`), never an `ini_set()` target — reference makes the
+/// directive `PHP_INI_SYSTEM`, and the prelude only maps the three `PHP_INI_ALL` ones to ids.
+const OPCACHE_DIRECTIVE_API_RESTRICTED: i64 = 3;
+
+/// Carries the settings that did not fit either configure call's argument budget.
+///
+/// Both calls above spend all six integer argument registers x86_64 SysV provides, so
+/// rather than a third fixed-shape call this reuses the same id/value setter `ini_set()`
+/// uses at run time — one symbol serving the initial install and every later change.
+fn configure_eval_opcache_swapped_directives(
+    ctx: &mut FunctionContext<'_>,
+    config: &crate::opcache::runtime_cache::RuntimeCacheConfig,
+) {
+    emit_opcache_directive_swap(
+        ctx,
+        OPCACHE_DIRECTIVE_FILE_UPDATE_PROTECTION,
+        config.file_update_protection,
+    );
+    emit_opcache_directive_swap(
+        ctx,
+        OPCACHE_DIRECTIVE_API_RESTRICTED,
+        i64::from(crate::codegen_support::opcache_api_restricted()),
+    );
+}
+
+/// Emits one compiled-install `__elephc_eval_opcache_swap_directive` call.
+///
+/// Passes `as_override = 0`: this is the value `--ini` baked, not an `ini_set()`, so it
+/// writes the base configuration and leaves any override in place.
+fn emit_opcache_directive_swap(ctx: &mut FunctionContext<'_>, id: i64, value: i64) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), id);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        value,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_swap_directive");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
 /// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.
 pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
     if !ctx.module.required_runtime_features.regex {

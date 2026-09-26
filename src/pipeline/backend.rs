@@ -441,7 +441,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::clear();
     timings.report();
-    if let Some(warning) = dynamic_eval_capability_warning(runtime_features) {
+    if let Some(warning) = dynamic_eval_capability_warning(
+        runtime_features,
+        crate::ir_lower::module_runs_interpreted_code(&ir_module),
+    ) {
         eprintln!("{warning}");
     }
     crate::progress::finish_ok(

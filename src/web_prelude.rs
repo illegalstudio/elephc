@@ -112,16 +112,88 @@ pub(crate) fn web_wrap_stmt() -> Stmt {
 /// handler body in a catch-all `try`/`catch` so uncaught exceptions become a
 /// pre-commit 500 or abort an already-committed response.
 /// Returns the program unchanged otherwise.
+/// The synthetic function the `--web` entry stub calls before it starts serving.
+pub const PRELOAD_STARTUP_FN: &str = "__elephc_opcache_run_preload";
+
+/// Moves `opcache.preload`'s inlined body out of the per-request handler.
+///
+/// Under `--web` the top-level body IS the request handler, so the preload's executable
+/// statements ran inside the FIRST request of every worker — and again after every
+/// `--max-requests` recycle. MEASURED on reference `php -S`: the preload's output goes to
+/// the SERVER LOG once, no header it sets reaches a response, and a global it assigns reads
+/// back as `NULL` in the request. elephc put that output and those headers into response 1
+/// and let the preload see that request's `$_SERVER`.
+///
+/// ONLY THE EXECUTABLE HALF MOVES, and that is what makes this safe. By this point the
+/// resolver has hoisted the preload file's declarations to the top level — that is what
+/// compiles them into the binary — and what remains inside the `IncludeOnceGuard` is
+/// statements. Wrapping those in a function changes WHEN they run, not whether the
+/// declarations exist.
+///
+/// THE OUTPUT LANDS CORRECTLY WITHOUT ANY ROUTING CODE. `__rt_stdout_write` diverts to
+/// `elephc_web_write` only while `_elephc_web_capture` is set, and nothing sets it until a
+/// request opens. Running from the entry stub — in the master, before the fork, which is
+/// also where php-src runs preload — means the bytes take the plain `write(1, …)` path.
+///
+/// Matched by LABEL, not by position: `include_once_label` is a hash of the resolved
+/// preload path, so a `require_once` the user happened to write first cannot be mistaken
+/// for it.
+fn lift_preload_to_startup(
+    program: Program,
+    preload_path: Option<&std::path::Path>,
+) -> Program {
+    let Some(path) = preload_path else {
+        return program;
+    };
+    let label = crate::resolver::include_once_label(path);
+    let mut program = program;
+    let preload = program
+        .iter_mut()
+        .find_map(|statement| take_preload_boundary(statement, &label));
+    let Some(preload) = preload else {
+        return program;
+    };
+    let wrapper = crate::synthetic_class::function(PRELOAD_STARTUP_FN)
+        .body(vec![preload])
+        .build();
+    program.insert(0, wrapper);
+    program
+}
+
+/// Extracts the resolver's include-once guard for the exact preload include, searching through
+/// resolver-only wrappers but never into user control flow. A `return` nested in the preload is
+/// already confined INSIDE the guard's body (`resolver::engine_includes::confine_nested_returns`),
+/// so moving the guard moves that confinement with it.
+fn take_preload_boundary(statement: &mut Stmt, label: &str) -> Option<Stmt> {
+    let span = statement.span;
+    match &mut statement.kind {
+        StmtKind::IncludeOnceGuard { label: found, .. } if found == label => {
+            Some(std::mem::replace(
+                statement,
+                Stmt::new(StmtKind::Synthetic(Vec::new()), span),
+            ))
+        }
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => body
+            .iter_mut()
+            .find_map(|nested| take_preload_boundary(nested, label)),
+        _ => None,
+    }
+}
+
 pub fn inject_if_web(
     program: Program,
     web: bool,
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
     inventory: &mut crate::optimize::reachability::PreludeInventory,
+    preload_path: Option<&std::path::Path>,
 ) -> Program {
     if !web {
         return program;
     }
+    let program = lift_preload_to_startup(program, preload_path);
     let user_usage = usage::collect(&program);
     let needs_callable_session_handler = user_usage.references("session_set_save_handler")
         || user_usage.dynamic_function_call;
@@ -373,6 +445,8 @@ mod tests {
             php_version,
             ini_overrides,
             &mut inventory,
+            // These tests exercise the declaration selection, not the preload hoist.
+            None,
         )
     }
 

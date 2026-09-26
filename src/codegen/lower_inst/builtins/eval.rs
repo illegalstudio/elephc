@@ -319,6 +319,9 @@ use scope_reload::*;
 #[allow(unused_imports)]
 use status::*;
 
+/// Installing the compiled OPcache configuration is a STARTUP concern, not an eval one, so
+/// `crate::codegen::frame` reaches it directly from the prologue.
+pub(crate) use context_registration::configure_eval_opcache;
 pub(super) use calls::lower_eval;
 pub(super) use dynamic_calls::{
     lower_eval_function_call, lower_eval_function_call_array, lower_eval_method_call,

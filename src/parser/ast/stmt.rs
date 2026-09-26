@@ -47,6 +47,32 @@ impl Stmt {
         }
     }
 
+    /// Creates the `break` an included file's `return` becomes, marked so the checker lets it
+    /// leave a `finally` (see `INCLUDE_RETURN_BREAK_ATTRIBUTE`).
+    pub fn include_return_break(levels: usize, span: Span) -> Self {
+        let mut stmt = Self::new(StmtKind::Break(levels), span);
+        stmt.attributes.push(AttributeGroup {
+            attributes: vec![super::Attribute {
+                name: crate::names::Name::unqualified(super::INCLUDE_RETURN_BREAK_ATTRIBUTE),
+                args: Vec::new(),
+                span,
+            }],
+            span,
+        });
+        stmt
+    }
+
+    /// Whether this is a `break` minted by `include_return_break`.
+    pub fn is_include_return_break(&self) -> bool {
+        matches!(self.kind, StmtKind::Break(_))
+            && self.attributes.iter().any(|group| {
+                group
+                    .attributes
+                    .iter()
+                    .any(|attr| attr.name.as_str() == super::INCLUDE_RETURN_BREAK_ATTRIBUTE)
+            })
+    }
+
     /// Creates a `Stmt` with the given kind, source span, and PHP attribute list.
     pub fn with_attributes(
         kind: StmtKind,

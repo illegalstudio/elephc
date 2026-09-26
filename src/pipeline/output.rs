@@ -22,10 +22,16 @@ pub(super) struct OutputPaths {
 }
 
 /// Returns the post-link reminder for dynamic eval without optional regex support.
+///
+/// `runs_interpreted_code` separates a program that EXECUTES code through the interpreter from
+/// one that links it only for an OPcache operation — see
+/// `crate::ir_lower::module_runs_interpreted_code`. The note is about evaluated code, so it is
+/// printed for the first only.
 pub(super) fn dynamic_eval_capability_warning(
     runtime_features: RuntimeFeatures,
+    runs_interpreted_code: bool,
 ) -> Option<&'static str> {
-    (runtime_features.eval_bridge && !runtime_features.regex).then_some(concat!(
+    (runtime_features.eval_bridge && runs_interpreted_code && !runtime_features.regex).then_some(concat!(
         "warning: dynamic eval was compiled without optional regex support\n",
         "evaluated code that uses preg_* or mb_ereg_match() will fail at runtime; enable it with:\n",
         "  elephc native add pcre2\n",

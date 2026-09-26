@@ -187,6 +187,41 @@ pub(super) fn lower_callable_descriptor_invoke(
 /// Unboxes the callback and dispatches every PHP callable runtime shape: string
 /// function names, closure descriptors, invokable objects, and two-element
 /// instance/static method arrays. Any other tag or malformed array is fatal.
+/// Emits `b.eq <target>` in a form that survives ANY distance to `target`.
+///
+/// AArch64's `b.cond` encodes a ±1 MiB displacement. The arms this dispatch jumps to are one
+/// per callable target in the program, so on a large one the distance from the tag compare
+/// to the arm exceeds that and the ASSEMBLER refuses the whole program:
+///
+/// ```text
+/// error: fixup value out of range
+///     b.eq L_eir__eir_callable_argument_normalizer_mixed_callable_value_array_33079
+/// ```
+///
+/// Not a miscompile — nothing wrong is emitted, the build simply stops — but it stops on a
+/// program the user has every right to write. MEASURED on a two-class fixture whose only
+/// unusual feature is an `eval()`: 1.5M lines of assembly and this error.
+///
+/// The fix is the one `stack_guard` already documents and uses: keep the CONDITIONAL branch
+/// local, jumping over an unconditional `b`, which reaches ±128 MiB and gets linker veneers
+/// beyond that. Two instructions instead of one on the taken path, which is the right trade
+/// against not compiling.
+///
+/// x86_64 needs none of this: `jcc` takes a rel32 and reaches ±2 GiB.
+fn emit_eq_branch_any_distance(ctx: &mut FunctionContext<'_>, target: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let over = ctx.next_label("cond_far_over");
+            ctx.emitter.instruction(&format!("b.ne {over}"));                   // fall through when the tag does not match
+            abi::emit_jump(ctx.emitter, target);                                // `b` reaches the arm however far it is
+            ctx.emitter.label(&over);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("je {target}"));
+        }
+    }
+}
+
 fn lower_mixed_callable_descriptor_invoke(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -222,16 +257,16 @@ fn lower_mixed_callable_descriptor_invoke(
             ctx.load_value_to_reg(callable, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // unbox → x0=tag, x1=payload lo, x2=payload hi
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // is the boxed Mixed payload a string function name?
-            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // dispatch a boxed string-name callable
+            emit_eq_branch_any_distance(ctx, &string_label);                    // dispatch a boxed string-name callable
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // is the boxed Mixed payload a callable descriptor?
-            ctx.emitter.instruction(&format!("b.eq {}", callable_label));       // dispatch a boxed closure/first-class callable descriptor
+            emit_eq_branch_any_distance(ctx, &callable_label);                  // dispatch a boxed closure/first-class callable descriptor
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // is the boxed Mixed payload a two-element callable array?
-                ctx.emitter.instruction(&format!("b.eq {}", array_label));      // dispatch a boxed instance/static-method callable array
+                emit_eq_branch_any_distance(ctx, array_label);                  // dispatch a boxed instance/static-method callable array
             }
             if let Some(object_label) = &object_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_OBJECT)); // is the boxed Mixed payload an invokable object?
-                ctx.emitter.instruction(&format!("b.eq {}", object_label));     // dispatch the object's public __invoke method
+                emit_eq_branch_any_distance(ctx, object_label);                 // dispatch the object's public __invoke method
             }
             abi::emit_jump(ctx.emitter, &fatal_label);
             ctx.emitter.label(&callable_label);
@@ -455,16 +490,16 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             ctx.load_value_to_reg(callable, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // classify an existing callable descriptor
-            ctx.emitter.instruction(&format!("b.eq {}", descriptor_label));     // return the existing descriptor payload
+            emit_eq_branch_any_distance(ctx, &descriptor_label);                // return the existing descriptor payload
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // classify a runtime callable name
-            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // resolve the callable name through the descriptor table
+            emit_eq_branch_any_distance(ctx, &string_label);                    // resolve the callable name through the descriptor table
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // classify a two-element callable array
-                ctx.emitter.instruction(&format!("b.eq {}", array_label));      // resolve an instance/static method descriptor
+                emit_eq_branch_any_distance(ctx, array_label);                  // resolve an instance/static method descriptor
             }
             if let Some(object_label) = &object_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_OBJECT)); // classify an invokable object
-                ctx.emitter.instruction(&format!("b.eq {}", object_label));     // bind the public __invoke descriptor
+                emit_eq_branch_any_distance(ctx, object_label);                 // bind the public __invoke descriptor
             }
         }
         Arch::X86_64 => {
@@ -3219,7 +3254,21 @@ fn emit_runtime_callable_name_compare(
             abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
             ctx.emitter.instruction("cmp x0, #0");                              // did the runtime string callable name match this user function?
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // dispatch to this user function when names match case-insensitively
+            // THE ONE DISPATCH HERE THAT HOISTS EVERY COMPARE ABOVE EVERY ARM.
+            // `lower_runtime_string_call` emits all name compares first and all call arms
+            // after, so this branch jumps over the remaining compares AND every earlier arm —
+            // a distance that grows with the number of user functions the call could name.
+            // The per-case dispatches in this file interleave compare and arm, so their
+            // conditional branches only ever skip one bounded arm; this one does not.
+            //
+            // DEFENSIVE, AND SAID SO: no ordinary PHP reaches this today. `$f()` on a string
+            // lowers to `callable_descriptor_invoke` and takes the descriptor path, whose
+            // normalizer carries the same fix and is pinned by a test. No fixture could be
+            // built that emits this dispatch, so there is no test here — one was written and
+            // its premise guard refused to pass on a dispatch that was never emitted. The form
+            // costs one instruction on the taken path and removes an assembler failure the day
+            // a lowering change routes string callables back here.
+            emit_eq_branch_any_distance(ctx, matched_label);                    // dispatch to this user function when names match case-insensitively
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);

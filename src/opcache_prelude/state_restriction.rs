@@ -68,7 +68,7 @@ pub(super) const RESTRICT_API_WARNING_TEXT: &str =
 /// path. An elephc AOT binary has exactly one entry script, fixed when it was compiled, and
 /// `--ini` is a compile-time flag — so the predicate has no runtime-varying input and baking its
 /// result loses nothing.
-pub(super) fn restrict_api_denies(
+pub(crate) fn restrict_api_denies(
     entry_path: Option<&str>,
     version_id: u32,
     overrides: &[(String, String)],

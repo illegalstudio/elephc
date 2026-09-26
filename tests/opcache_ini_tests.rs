@@ -144,6 +144,45 @@ fn run_binary(bin: &Path) -> (String, String) {
 
 /// REGRESSION ANCHOR for the `ini_get_all(null, false)` SIGSEGV.
 ///
+/// Verifies `ini_get('')` answers `false`, and that fixing it hides nothing real.
+///
+/// `__elephc_opcache_ini_override` keeps its overrides in a `static` array that has to be
+/// seeded with one typed entry, because the EIR backend rejects `static $s = [];`. The seed
+/// occupies the EMPTY key, and `isset($overrides[''])` is true for it — so the presence
+/// probe answered "1" and the value read returned the seed's own `''`, making `ini_get('')`
+/// report an empty string where reference PHP 8.5 reports `false`.
+///
+/// The last three assertions are the ones that make this a fix rather than a special case:
+/// a real directive must still read, still move under `ini_set()`, and the empty key must
+/// stay `false` afterwards — a guard placed too early would have broken all three.
+#[test]
+fn the_override_store_seed_is_invisible_to_ini_get() {
+    let dir = make_test_dir("opcache_ini_empty_key");
+    let bin = compile_with_ini(
+        &dir,
+        r#"<?php
+echo 'empty=', var_export(ini_get(''), true), "\n";
+echo 'unknown=', var_export(ini_get('nope.nothing'), true), "\n";
+echo 'real=', var_export(ini_get('opcache.revalidate_freq'), true), "\n";
+ini_set('opcache.revalidate_freq', '77');
+echo 'after_set=', var_export(ini_get('opcache.revalidate_freq'), true), "\n";
+echo 'empty_after=', var_export(ini_get(''), true), "\n";
+"#,
+        "empty_key",
+        &[("opcache.enable_cli", "1")],
+    );
+    let (stdout, stderr) = run_binary(&bin.0);
+
+    assert!(
+        stdout.contains("empty=false"),
+        "ini_get('') must be false, as reference reports:\n{stdout}{stderr}"
+    );
+    assert!(stdout.contains("unknown=false"), "{stdout}{stderr}");
+    assert!(stdout.contains("real='2'"), "{stdout}{stderr}");
+    assert!(stdout.contains("after_set='77'"), "{stdout}{stderr}");
+    assert!(stdout.contains("empty_after=false"), "{stdout}{stderr}");
+}
+
 /// `$details === false` must yield a FLAT map of raw INI strings (`'opcache.enable' => '1'`),
 /// one entry per opcache directive. Before the two-single-shape-helpers split this program
 /// exited 139 with no output, because the single projection loop wrote an array literal on the
@@ -556,18 +595,28 @@ fn rust_and_php_override_paths_agree() {
         ("opcache.save_comments", "2"),
         ("opcache.save_comments", "on"),
         ("opcache.save_comments", "none"),
-        ("opcache.max_file_size", "12abc"),
-        ("opcache.max_file_size", "0b101"),
-        ("opcache.max_file_size", "12MM"),
-        ("opcache.max_file_size", "garbage"),
-        ("opcache.max_file_size", "on"),
-        ("opcache.error_log", "TRUE"),
-        ("opcache.error_log", "/tmp/o.log"),
+        // The int and string exemplars must be directives elephc only REPORTS, since one half
+        // of this comparison is the `ELEPHC_INI_*` path. `opcache.max_file_size`,
+        // `opcache.error_log` and `opcache.blacklist_filename` used to serve here and no longer
+        // can: they now bake the runtime cache's admission rule, the `zend_accel_error` channel
+        // and the startup-loaded blacklist respectively, so all three are excluded from runtime
+        // override. These two normalize through the identical handlers.
+        ("opcache.jit_debug", "12abc"),
+        ("opcache.jit_debug", "0b101"),
+        ("opcache.jit_debug", "12MM"),
+        ("opcache.jit_debug", "garbage"),
+        ("opcache.jit_debug", "on"),
+        ("opcache.lockfile_path", "TRUE"),
+        ("opcache.lockfile_path", "/tmp/o.log"),
     ];
     // One binary with NO override: the environment path is what moves it.
     let (env_bin, _) = compile_with_ini(
         &dir,
-        &two_surface_probe(&["opcache.save_comments", "opcache.max_file_size", "opcache.error_log"]),
+        &two_surface_probe(&[
+            "opcache.save_comments",
+            "opcache.jit_debug",
+            "opcache.lockfile_path",
+        ]),
         "envapp",
         &[],
     );
@@ -649,13 +698,18 @@ echo 'get=', var_export(ini_get('opcache.file_cache'), true), "\n";
     assert!(stdout.contains("get=''\n"), "ini_get() still reports '':\n{stdout}");
 }
 
-/// ASSIGNING `opcache.file_cache` — at compile time with `--ini`, or at run time through
-/// `ELEPHC_INI_*` — makes `ini_get_all()` report the STRING, exactly as `-d` does in reference
-/// PHP. The NULL means "never set", not "empty".
+/// ASSIGNING `opcache.file_cache` at compile time with `--ini` makes `ini_get_all()` report the
+/// STRING, exactly as `-d` does in reference PHP. The NULL means "never set", not "empty".
 ///
 /// REFERENCE (PHP 8.5.6): `-d opcache.file_cache=/tmp/fcx` reports
 /// `['global_value' => '/tmp/fcx', 'local_value' => '/tmp/fcx', 'access' => 4]`, and
 /// `-d opcache.file_cache=` (the empty string) reports `''`/`''` — NOT NULL.
+///
+/// `ELEPHC_INI_*` does NOT re-point it, and that is the point of the second half below. The
+/// directive now bakes the startup validation that can refuse to run
+/// (`tests/opcache_file_cache_tests.rs`), so honoring it on the reporting surface alone would
+/// report a directory the binary never checked — the exact self-contradiction the runtime-override
+/// scope rule exists to prevent.
 #[test]
 fn assigning_file_cache_replaces_the_null_with_the_string() {
     let dir = make_test_dir("opcache_ini_null_set");
@@ -673,7 +727,8 @@ if (is_array($a)) { echo 'fc=', var_export($a['opcache.file_cache']['global_valu
     let (ini_out, _) = run_binary(&ini_bin);
     assert!(ini_out.contains("fc='/tmp/fcx'"), "--ini must assign it:\n{ini_out}");
 
-    // The same directive re-pointed at RUN time on an un-overridden binary.
+    // The same directive at RUN time on an un-overridden binary: it must stay NULL. A reported
+    // path here would be one the startup validation never looked at.
     let env_bin = compile(&dir, probe, "nullenvapp");
     let output = Command::new(&env_bin)
         .env("ELEPHC_INI_opcache__file_cache", "/tmp/fcx")
@@ -681,7 +736,10 @@ if (is_array($a)) { echo 'fc=', var_export($a['opcache.file_cache']['global_valu
         .expect("failed to run compiled binary");
     assert!(output.status.success(), "env probe exited non-zero");
     let env_out = String::from_utf8_lossy(&output.stdout);
-    assert!(env_out.contains("fc='/tmp/fcx'"), "env override must assign it:\n{env_out}");
+    assert!(
+        env_out.contains("fc=NULL"),
+        "the env override must NOT assign a directive that bakes the startup validation:\n{env_out}"
+    );
 }
 
 /// An OUT-OF-RANGE integer override is REFUSED, leaving the compiled default in BOTH surfaces,
@@ -939,4 +997,264 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
             "8.2 truncates {raw} toward zero"
         );
     }
+}
+
+/// `ini_set()` succeeds for the three `opcache.*` directives php-src registers `PHP_INI_ALL`
+/// AND elephc's runtime script cache actually reads, and moves every reporting surface with
+/// it.
+///
+/// REFERENCE (PHP 8.5.10), the identical sequence, byte for byte:
+/// `before='2'`, `set='2'`, `after='77'`, `cfg=77`, `system=false`, `bool_set='1'`,
+/// `bool_get='off'`, `bool_cfg=false`.
+///
+/// The previous value is returned, `ini_get()` and `opcache_get_configuration()` both move,
+/// and a `PHP_INI_SYSTEM` directive still fails — `opcache.memory_consumption` is access=4
+/// there, so `false` is EXACT rather than a shortfall.
+#[test]
+fn ini_set_moves_every_surface_for_the_settable_directives() {
+    let dir = make_test_dir("opcache_ini_set");
+    let probe = r#"<?php
+echo 'before=', var_export(ini_get('opcache.revalidate_freq'), true), "\n";
+echo 'set=', var_export(ini_set('opcache.revalidate_freq', '77'), true), "\n";
+echo 'after=', var_export(ini_get('opcache.revalidate_freq'), true), "\n";
+echo 'cfg=', var_export(opcache_get_configuration()['directives']['opcache.revalidate_freq'], true), "\n";
+echo 'system=', var_export(ini_set('opcache.memory_consumption', '256'), true), "\n";
+echo 'bool_set=', var_export(ini_set('opcache.validate_timestamps', 'off'), true), "\n";
+echo 'bool_get=', var_export(ini_get('opcache.validate_timestamps'), true), "\n";
+echo 'bool_cfg=', var_export(opcache_get_configuration()['directives']['opcache.validate_timestamps'], true), "\n";
+"#;
+    let (binary, _) = compile_with_ini(&dir, probe, "inisetapp", &[]);
+
+    let (out, _) = run_binary(&binary);
+
+    assert!(out.contains("before='2'"), "{out}");
+    assert!(out.contains("set='2'"), "the previous value is returned:\n{out}");
+    assert!(out.contains("after='77'"), "ini_get must move:\n{out}");
+    assert!(out.contains("cfg=77"), "the configuration must move too:\n{out}");
+    assert!(
+        out.contains("system=false"),
+        "a PHP_INI_SYSTEM directive must still fail:\n{out}"
+    );
+    // `off` is stored VERBATIM and read back verbatim, which is parity: reference echoes
+    // `'off'` from `ini_get()` here. It used to go through the INI scanner and read back
+    // `''` — defensible-sounding, since `-d opcache.validate_timestamps=off` really does
+    // read back `''`, but that is the INI SCANNER's doing on the `-d` path and `ini_set()`
+    // is not that path. The normalization moved to the read, where it belongs.
+    assert!(out.contains("bool_set='1'"), "previous bool value:\n{out}");
+    assert!(
+        out.contains("bool_get='off'"),
+        "ini_set() stores the raw string:\n{out}"
+    );
+    assert!(
+        out.contains("bool_cfg=false"),
+        "and its normalized form:\n{out}"
+    );
+}
+
+/// An `ini_set()` before the program's first `eval()` still reaches the runtime script cache.
+///
+/// This is the ordering the override table exists for: generated code installs the COMPILED
+/// configuration when the eval context is first built, which happens at that first `eval()` —
+/// after this `ini_set()`. Holding overrides separately and applying them on read is what
+/// keeps the later install from clobbering the earlier call.
+///
+/// Raising `opcache.file_update_protection` makes a freshly written include uncacheable, so
+/// both includes miss where they would otherwise hit once.
+#[test]
+fn an_ini_set_before_the_first_eval_reaches_the_cache() {
+    let dir = make_test_dir("opcache_ini_set_cache");
+    let probe = r#"<?php
+ini_set('opcache.file_update_protection', '100000');
+eval('include __DIR__ . "/lib.php"; include __DIR__ . "/lib.php";');
+$s = opcache_get_status();
+echo 'hits=', $s['opcache_statistics']['hits'], "\n";
+echo 'misses=', $s['opcache_statistics']['misses'], "\n";
+"#;
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
+    let (binary, _) = compile_with_ini(&dir, probe, "inisetcacheapp", &[("opcache.enable_cli", "1")]);
+
+    let (out, _) = run_binary(&binary);
+
+    assert!(out.contains("hits=0"), "the raised guard must refuse:\n{out}");
+    assert!(out.contains("misses=2"), "{out}");
+}
+
+
+/// `ini_get_all()` reports `global_value` and `local_value` SEPARATELY, and an `ini_set()`
+/// moves only the second.
+///
+/// They are different questions. `local_value` is what this request currently sees;
+/// `global_value` is what the engine was configured with, which php-src keeps on the
+/// original side where a request-scoped `ini_set` cannot reach. `-d` and an INI file DO set
+/// it, which is why the assertion below configures `2` rather than relying on the default.
+///
+/// Both fields were filled from the same override-aware reader, so a program asking what the
+/// server was configured with got back its own modification. That is a silent wrong answer
+/// to the only question the field exists to answer.
+///
+/// MEASURED against reference PHP 8.5.10, `-d opcache.revalidate_freq=2` then
+/// `ini_set('opcache.revalidate_freq', '2K')`: `global_value='2'`, `local_value='2K'`,
+/// `access=7`. elephc reported `'2K'` for both.
+///
+/// ASSERTING BOTH FIELDS IS THE TEST. Pinning `global_value` alone would pass against a
+/// build that stopped honouring `ini_set` altogether.
+#[test]
+fn ini_get_all_keeps_global_value_out_of_reach_of_ini_set() {
+    let dir = make_test_dir("opcache_ini_global_local");
+    let probe = r#"<?php
+ini_set('opcache.revalidate_freq', '2K');
+$e = ini_get_all()['opcache.revalidate_freq'];
+echo 'global=', var_export($e['global_value'], true), "\n";
+echo 'local=', var_export($e['local_value'], true), "\n";
+echo 'access=', var_export($e['access'], true), "\n";
+echo 'cfg=', var_export(opcache_get_configuration()['directives']['opcache.revalidate_freq'], true), "\n";
+"#;
+    let (binary, _) = compile_with_ini(
+        &dir,
+        probe,
+        "iniglobal",
+        &[("opcache.enable_cli", "1"), ("opcache.revalidate_freq", "2")],
+    );
+
+    let (out, _) = run_binary(&binary);
+
+    assert!(
+        out.contains("global='2'"),
+        "an ini_set() must not move global_value:\n{out}"
+    );
+    assert!(
+        out.contains("local='2K'"),
+        "local_value must carry the raw string ini_set() was given:\n{out}"
+    );
+    assert!(out.contains("access=7"), "{out}");
+    // And the interpreted value still follows the override, through the quantity parser.
+    assert!(out.contains("cfg=2048"), "{out}");
+}
+
+/// `ini_set()` STORES THE RAW STRING and normalizes only when reporting the typed value.
+///
+/// Two surfaces, two different jobs, and conflating them was one bug wearing two faces.
+/// `ini_get()` echoes what the caller passed — reference returns `'off'`, `'On'`, `'yes'`,
+/// `'2K'` unchanged — while `opcache_get_configuration()` reports the interpreted value.
+/// elephc ran the INI scanner on the way IN, so every bareword came back `''` or `'1'` and
+/// the echoed string was a lie about what had been set. The chained `ini_set()` return
+/// inherited it, because that return is the previous raw value.
+///
+/// MEASURED against reference PHP 8.5, all thirteen rows identical including the return
+/// chain. The `cfg` column was already right, which is why only the echo diverged.
+#[test]
+fn ini_set_echoes_the_raw_string_and_normalizes_only_the_report() {
+    let dir = make_test_dir("opcache_ini_raw");
+    let probe = r#"<?php
+foreach (['off', 'On', 'true', 'yes', '0', '1', ''] as $v) {
+    $prev = ini_set('opcache.validate_timestamps', $v);
+    echo 'v=', var_export($v, true),
+         ' prev=', var_export($prev, true),
+         ' get=', var_export(ini_get('opcache.validate_timestamps'), true),
+         ' cfg=', var_export(opcache_get_configuration()['directives']['opcache.validate_timestamps'], true),
+         "\n";
+}
+"#;
+    let (binary, _) = compile_with_ini(&dir, probe, "iniraw", &[("opcache.enable_cli", "1")]);
+
+    let (out, _) = run_binary(&binary);
+
+    // Reference, line for line.
+    let expected = [
+        "v='off' prev='1' get='off' cfg=false",
+        "v='On' prev='off' get='On' cfg=true",
+        "v='true' prev='On' get='true' cfg=true",
+        "v='yes' prev='true' get='yes' cfg=true",
+        "v='0' prev='yes' get='0' cfg=false",
+        "v='1' prev='0' get='1' cfg=true",
+        "v='' prev='1' get='' cfg=false",
+    ];
+    for line in expected {
+        assert!(out.contains(line), "missing `{line}` in:\n{out}");
+    }
+}
+
+/// An INT directive set through `ini_set()` goes through the QUANTITY parser, not a cast.
+///
+/// `zend_ini_parse_quantity` is what php-src hands an `OnUpdateLong` directive, and it is
+/// the same parser on the `ini_set()` path as on the `-d` path — so `2K` is 2048 even for a
+/// directive measured in seconds. elephc cast the string instead and reported `2`.
+///
+/// THE SCANNER MUST NOT RUN HERE, and `on` is the row that proves it: the INI scanner folds
+/// `on` to `1`, while the quantity parser finds no leading digit and yields `0`, which is
+/// what reference reports. Scanning first would make every other row below pass and this
+/// one silently wrong.
+///
+/// MEASURED against reference PHP 8.5 across nineteen spellings; the ones that discriminate
+/// are kept here.
+#[test]
+fn ini_set_parses_an_int_directive_as_a_quantity() {
+    let dir = make_test_dir("opcache_ini_quantity");
+    let probe = r#"<?php
+foreach (['2K', '1M', '0x10', '010', '0b101', '12abc', ' 5 ', '-3', 'on', 'off', '08'] as $v) {
+    ini_set('opcache.revalidate_freq', $v);
+    echo 'v=', var_export($v, true),
+         ' get=', var_export(ini_get('opcache.revalidate_freq'), true),
+         ' cfg=', var_export(opcache_get_configuration()['directives']['opcache.revalidate_freq'], true),
+         "\n";
+}
+"#;
+    let (binary, _) = compile_with_ini(&dir, probe, "iniquant", &[("opcache.enable_cli", "1")]);
+
+    let (out, _) = run_binary(&binary);
+
+    let expected = [
+        "v='2K' get='2K' cfg=2048",
+        "v='1M' get='1M' cfg=1048576",
+        "v='0x10' get='0x10' cfg=16",
+        "v='010' get='010' cfg=8",
+        "v='0b101' get='0b101' cfg=5",
+        "v='12abc' get='12abc' cfg=12",
+        "v=' 5 ' get=' 5 ' cfg=5",
+        "v='-3' get='-3' cfg=-3",
+        // The scanner would make this 1.
+        "v='on' get='on' cfg=0",
+        "v='off' get='off' cfg=0",
+        "v='08' get='08' cfg=0",
+    ];
+    for line in expected {
+        assert!(out.contains(line), "missing `{line}` in:\n{out}");
+    }
+}
+
+/// The `-d` / `--ini` path KEEPS the scanner, and this is the test that says the two paths
+/// are allowed to differ.
+///
+/// It is the other half of the pair above. `--ini opcache.validate_timestamps=off` reads
+/// back `''` in reference too, because the INI scanner folds the bareword before the
+/// directive ever sees it — so making `ini_set()` store raw must not be "fixed" by making
+/// this one store raw as well. MEASURED: reference and elephc agree on both spellings.
+#[test]
+fn the_ini_flag_path_still_folds_barewords() {
+    let dir = make_test_dir("opcache_ini_flag_scan");
+    let probe = r#"<?php
+echo 'get=', var_export(ini_get('opcache.validate_timestamps'), true), "\n";
+echo 'cfg=', var_export(opcache_get_configuration()['directives']['opcache.validate_timestamps'], true), "\n";
+echo 'freq_get=', var_export(ini_get('opcache.revalidate_freq'), true), "\n";
+echo 'freq_cfg=', var_export(opcache_get_configuration()['directives']['opcache.revalidate_freq'], true), "\n";
+"#;
+    let (binary, _) = compile_with_ini(
+        &dir,
+        probe,
+        "iniflagscan",
+        &[
+            ("opcache.validate_timestamps", "off"),
+            ("opcache.revalidate_freq", "3K"),
+        ],
+    );
+
+    let (out, _) = run_binary(&binary);
+
+    assert!(
+        out.contains("get=''"),
+        "the -d path folds `off` to `''`, as reference does:\n{out}"
+    );
+    assert!(out.contains("cfg=false"), "{out}");
+    assert!(out.contains("freq_get='3K'"), "{out}");
+    assert!(out.contains("freq_cfg=3072"), "{out}");
 }

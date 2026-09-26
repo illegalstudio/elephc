@@ -34,7 +34,7 @@
 
 use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_binop, e_bool, e_call, e_cast, e_float, e_index, e_int, e_neg, e_null,
+    e_array, e_binop, e_bool, e_call, e_cast, e_float, e_index, e_int, e_neg, e_null,
     e_post_inc, e_str, e_ternary, e_var, function, internal_declarations, s_assign, s_break,
     s_continue, s_echo, s_expr, s_for, s_foreach, s_if, s_return, t_mixed,
 };
@@ -92,18 +92,58 @@ fn decl_fn_elephc_var_export_float() -> Stmt {
                 vec![],
                 None,
             ),
-            s_assign("s", e_str("")),
-            s_for(Some(s_assign("p", e_int(0))), Some(e_binop(e_var("p"), BinOp::LtEq, e_int(16))), Some(s_expr(e_post_inc("p"))), vec![
-                s_assign("s", e_call("sprintf", vec![e_binop(e_binop(e_str("%."), BinOp::Concat, e_var("p")), BinOp::Concat, e_str("e")), e_var("f")])),
+
+            // The seventeen probe formats as LITERALS, indexed by precision, rather than
+            // `"%." . $p . "e"` built per iteration.
+            //
+            // A concatenation result lives in the shared 64 KiB `_concat_buf` scratch, and
+            // handing a scratch pointer to `sprintf` as its FORMAT is not safe: sprintf stages
+            // its own packed arguments through that same arena, and the statement-boundary
+            // concat reset rewinds it to the frame base. Whether the format survives long
+            // enough to be read therefore depends on where the frame base happens to sit —
+            // i.e. on how much output the caller has already accumulated. That is why the
+            // failure looked like a size threshold rather than a type bug: `var_export()` of
+            // an array containing floats returned a nine-byte string once the result passed
+            // roughly a kilobyte, and fatalled with `Unknown format specifier` or
+            // `sprintf(): formatted result exceeds the 65536-byte string buffer` past that.
+            // `opcache_get_configuration()`, whose directives array carries two floats among
+            // fifty-four entries, hit it exactly.
+            //
+            // A literal never moves: these live in rodata and the array holds pointers to
+            // them, so the format sprintf reads is the format that was written.
+            s_assign("fmts", e_array((0..=16).map(|p| e_str(&format!("%.{p}e"))).collect())),
+            // The probe keeps only the winning PRECISION, and formats once afterwards.
+            //
+            // Assigning the candidate string to `$s` inside the loop kept every one of the up
+            // to seventeen attempts alive: `$s` is read after the loop, so the
+            // statement-boundary reset can never rewind `_concat_off` below the newest one,
+            // and each attempt sits above the last. That is about 2 KB of the shared 64 KiB
+            // arena per float — two dozen floats in one `var_export()` exhausted it and the
+            // next `sprintf` fatalled with `formatted result exceeds the 65536-byte string
+            // buffer`, which reads as an absurd error for a 1 KB result.
+            //
+            // A candidate consumed by `(float)` in the same statement is dead at the end of
+            // it, so the reset reclaims each attempt and only the final result survives.
+            s_assign("p", e_int(16)),
+            s_for(Some(s_assign("q", e_int(0))), Some(e_binop(e_var("q"), BinOp::LtEq, e_int(16))), Some(s_expr(e_post_inc("q"))), vec![
                 s_if(
-                    e_binop(e_cast(CastType::Float, e_var("s")), BinOp::StrictEq, e_var("f")),
+                    e_binop(
+                        e_cast(
+                            CastType::Float,
+                            e_call("sprintf", vec![e_index(e_var("fmts"), e_var("q")), e_var("f")]),
+                        ),
+                        BinOp::StrictEq,
+                        e_var("f"),
+                    ),
                     vec![
+                        s_assign("p", e_var("q")),
                         s_break(1),
                     ],
                     vec![],
                     None,
                 ),
             ]),
+            s_assign("s", e_call("sprintf", vec![e_index(e_var("fmts"), e_var("p")), e_var("f")])),
             s_assign("start", e_ternary(e_binop(e_index(e_var("s"), e_int(0)), BinOp::StrictEq, e_str("-")), e_int(1), e_int(0))),
             s_assign("neg", e_binop(e_var("start"), BinOp::StrictEq, e_int(1))),
             s_assign("epos", e_call("strpos", vec![e_var("s"), e_str("e")])),

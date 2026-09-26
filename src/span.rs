@@ -120,7 +120,12 @@ impl Span {
             return end_col;
         }
         assert!(source_id <= SOURCE_ID_MASK, "source identity exceeds packed span range");
-        assert!(end_col <= PACKED_END_COL_MASK, "included-source column exceeds packed span range");
+        // SATURATED, not asserted. A valid PHP line in an included file can run past 65,535
+        // columns — the root file has no such limit — and the assertion turned that into a
+        // compiler panic (`included-source column exceeds packed span range`). Only the
+        // EXCLUSIVE END of a diagnostic range is lost; the start column keeps its own full-width
+        // field, so spans stay distinct as map keys.
+        let end_col = end_col.min(PACKED_END_COL_MASK);
         PACKED_SOURCE_SPAN | (source_id << 16) | end_col
     }
 
@@ -165,16 +170,6 @@ impl Span {
             end_line: line,
             end_col: 1,
         }
-    }
-
-    /// Does this span point at a place in the program's own source?
-    ///
-    /// Three things carry a span: real source, `dummy()`, and `synthetic()`. Passes that treat a
-    /// node as compiler-generated must ask this rather than testing `line == 0`, which was the
-    /// only spelling of "generated" before synthetic spans existed and now answers wrongly for
-    /// half of them.
-    pub fn is_from_source(self) -> bool {
-        self.line != 0 && self.line < SYNTHETIC_LINE_BASE
     }
 
     /// Can this span single out ONE node?
@@ -254,6 +249,20 @@ mod tests {
         assert_eq!(extended.source_id(), 7);
         assert_eq!(extended.end_column(), 20);
         assert!(extended.has_extent());
+    }
+
+    /// An included-file column past the packed range saturates instead of panicking.
+    ///
+    /// A valid line longer than 65,535 columns in an INCLUDED file used to abort the compile on
+    /// an assertion; the root file never had that limit. Only the end column is clamped — the
+    /// start column and the source identity survive, so spans stay distinct keys.
+    #[test]
+    fn an_included_column_past_the_packed_range_saturates() {
+        let long = Span::new_in_source(2, 70_000, 5);
+        assert_eq!(long.source_id(), 5);
+        assert_eq!(long.col, 70_000);
+        assert_eq!(long.end_column(), 0xffff);
+        assert_ne!(long, Span::new_in_source(2, 70_001, 5));
     }
 
     /// Verifies merge takes the earlier start and later end across lines.

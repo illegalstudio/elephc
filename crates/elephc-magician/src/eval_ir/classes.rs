@@ -10,7 +10,7 @@
 use super::*;
 
 /// Runtime class declared by an eval fragment.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalClass {
     name: String,
     source_location: Option<EvalSourceLocation>,
@@ -409,7 +409,7 @@ impl EvalClass {
 }
 
 /// Adaptation rule declared in a runtime eval class `use Trait { ... }` block.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalTraitAdaptation {
     Alias {
         trait_name: Option<String>,
@@ -425,7 +425,7 @@ pub enum EvalTraitAdaptation {
 }
 
 /// Constant metadata for a runtime eval class.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalClassConstant {
     name: String,
     trait_origin: Option<String>,

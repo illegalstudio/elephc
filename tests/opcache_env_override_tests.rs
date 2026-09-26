@@ -46,26 +46,31 @@ static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 ///
 /// Directive selection, one per type code plus the excluded control:
 /// - `opcache.save_comments` — `'b'` (bool)
-/// - `opcache.max_file_size` — `'i'` (int; accepts decimal, `0x` hex and `K`/`M`/`G`)
+/// - `opcache.jit_debug` — `'i'` (int; accepts decimal, `0x` hex and `K`/`M`/`G`). It stands in
+///   for the whole int normalizer, so it must be a directive elephc only REPORTS: the earlier
+///   pick, `opcache.max_file_size`, now bakes the runtime cache's admission rule and is excluded
+///   from runtime override. VERIFIED on reference PHP 8.5.10 that the two normalize identically
+///   (`1M`→`1048576`, `12abc`→`12`, `8K`→`8192`, `nope`→`0`, `0x10`→`16`), so no row moved.
 /// - `opcache.optimization_level` — `'i'`, and the one whose DEFAULT raw string is hex
 /// - `opcache.max_wasted_percentage` — `'p'` (percent, `atoi` + `1..=50` + `/100`)
 /// - `opcache.jit_prof_threshold` — `'f'` (plain float, `strtod` leading prefix)
-/// - `opcache.error_log` — `'s'` (string, verbatim)
+/// - `opcache.lockfile_path` — `'s'` (string, verbatim). Same substitution, for the same
+///   reason: `opcache.error_log` now selects where the `zend_accel_error` channel writes.
 /// - `opcache.enable_cli` — EXCLUDED (bakes the cache-enabled gate)
 const PROBE: &str = r#"<?php
 $d = opcache_get_configuration()['directives'];
 echo 'cfg.save_comments=', var_export($d['opcache.save_comments'], true), "\n";
 echo 'ini.save_comments=', var_export(ini_get('opcache.save_comments'), true), "\n";
-echo 'cfg.max_file_size=', var_export($d['opcache.max_file_size'], true), "\n";
-echo 'ini.max_file_size=', var_export(ini_get('opcache.max_file_size'), true), "\n";
+echo 'cfg.jit_debug=', var_export($d['opcache.jit_debug'], true), "\n";
+echo 'ini.jit_debug=', var_export(ini_get('opcache.jit_debug'), true), "\n";
 echo 'cfg.optimization_level=', var_export($d['opcache.optimization_level'], true), "\n";
 echo 'ini.optimization_level=', var_export(ini_get('opcache.optimization_level'), true), "\n";
 echo 'cfg.max_wasted_percentage=', var_export($d['opcache.max_wasted_percentage'], true), "\n";
 echo 'ini.max_wasted_percentage=', var_export(ini_get('opcache.max_wasted_percentage'), true), "\n";
 echo 'cfg.jit_prof_threshold=', var_export($d['opcache.jit_prof_threshold'], true), "\n";
 echo 'ini.jit_prof_threshold=', var_export(ini_get('opcache.jit_prof_threshold'), true), "\n";
-echo 'cfg.error_log=', var_export($d['opcache.error_log'], true), "\n";
-echo 'ini.error_log=', var_export(ini_get('opcache.error_log'), true), "\n";
+echo 'cfg.lockfile_path=', var_export($d['opcache.lockfile_path'], true), "\n";
+echo 'ini.lockfile_path=', var_export(ini_get('opcache.lockfile_path'), true), "\n";
 echo 'cfg.enable_cli=', var_export($d['opcache.enable_cli'], true), "\n";
 echo 'ini.enable_cli=', var_export(ini_get('opcache.enable_cli'), true), "\n";
 echo 'status_is_array=', var_export(is_array(opcache_get_status()), true), "\n";
@@ -173,16 +178,16 @@ fn no_env_reports_the_compile_time_values() {
     let out = run_with_env(&binary, &[]);
     assert_eq!(line(&out, "cfg.save_comments"), "true");
     assert_eq!(line(&out, "ini.save_comments"), "'1'");
-    assert_eq!(line(&out, "cfg.max_file_size"), "0");
-    assert_eq!(line(&out, "ini.max_file_size"), "'0'");
+    assert_eq!(line(&out, "cfg.jit_debug"), "0");
+    assert_eq!(line(&out, "ini.jit_debug"), "'0'");
     assert_eq!(line(&out, "cfg.optimization_level"), "2147401727");
     assert_eq!(line(&out, "ini.optimization_level"), "'0x7FFEBFFF'");
     assert_eq!(line(&out, "cfg.max_wasted_percentage"), "0.05");
     assert_eq!(line(&out, "ini.max_wasted_percentage"), "'5'");
     assert_eq!(line(&out, "cfg.jit_prof_threshold"), "0.005");
     assert_eq!(line(&out, "ini.jit_prof_threshold"), "'0.005'");
-    assert_eq!(line(&out, "cfg.error_log"), "''");
-    assert_eq!(line(&out, "ini.error_log"), "''");
+    assert_eq!(line(&out, "cfg.lockfile_path"), "'/tmp'");
+    assert_eq!(line(&out, "ini.lockfile_path"), "'/tmp'");
     assert_eq!(line(&out, "cfg.enable_cli"), "false");
     assert_eq!(line(&out, "ini.enable_cli"), "'0'");
     // A default CLI binary reports the cache disabled (matching reference `php script.php`).
@@ -205,9 +210,9 @@ fn empty_env_value_is_treated_as_unset() {
 /// `opcache_get_configuration()['directives']` — exactly as `-d` moves both in reference PHP.
 ///
 /// The normalizations pinned here are byte-verified against reference PHP 8.5.6 with the matching
-/// `-d` flag: `save_comments=0` → `false` / `'0'`; `max_file_size=1M` → `1048576` / `'1M'`;
+/// `-d` flag: `save_comments=0` → `false` / `'0'`; `jit_debug=1M` → `1048576` / `'1M'`;
 /// `optimization_level=0x10` → `16` / `'0x10'`; `max_wasted_percentage=10` → `0.1` / `'10'`;
-/// `jit_prof_threshold=0.5` → `0.5` / `'0.5'`; `error_log=/tmp/o.log` → the path on both.
+/// `jit_prof_threshold=0.5` → `0.5` / `'0.5'`; `lockfile_path=/tmp/o.log` → the path on both.
 #[test]
 fn underscore_spelling_moves_both_surfaces() {
     let (_dir, binary) = probe_binary("opcache_env_both", &[]);
@@ -215,25 +220,25 @@ fn underscore_spelling_moves_both_surfaces() {
         &binary,
         &[
             ("ELEPHC_INI_opcache__save_comments", "0"),
-            ("ELEPHC_INI_opcache__max_file_size", "1M"),
+            ("ELEPHC_INI_opcache__jit_debug", "1M"),
             ("ELEPHC_INI_opcache__optimization_level", "0x10"),
             ("ELEPHC_INI_opcache__max_wasted_percentage", "10"),
             ("ELEPHC_INI_opcache__jit_prof_threshold", "0.5"),
-            ("ELEPHC_INI_opcache__error_log", "/tmp/o.log"),
+            ("ELEPHC_INI_opcache__lockfile_path", "/tmp/o.log"),
         ],
     );
     assert_eq!(line(&out, "cfg.save_comments"), "false");
     assert_eq!(line(&out, "ini.save_comments"), "'0'");
-    assert_eq!(line(&out, "cfg.max_file_size"), "1048576");
-    assert_eq!(line(&out, "ini.max_file_size"), "'1M'");
+    assert_eq!(line(&out, "cfg.jit_debug"), "1048576");
+    assert_eq!(line(&out, "ini.jit_debug"), "'1M'");
     assert_eq!(line(&out, "cfg.optimization_level"), "16");
     assert_eq!(line(&out, "ini.optimization_level"), "'0x10'");
     assert_eq!(line(&out, "cfg.max_wasted_percentage"), "0.1");
     assert_eq!(line(&out, "ini.max_wasted_percentage"), "'10'");
     assert_eq!(line(&out, "cfg.jit_prof_threshold"), "0.5");
     assert_eq!(line(&out, "ini.jit_prof_threshold"), "'0.5'");
-    assert_eq!(line(&out, "cfg.error_log"), "'/tmp/o.log'");
-    assert_eq!(line(&out, "ini.error_log"), "'/tmp/o.log'");
+    assert_eq!(line(&out, "cfg.lockfile_path"), "'/tmp/o.log'");
+    assert_eq!(line(&out, "ini.lockfile_path"), "'/tmp/o.log'");
 }
 
 /// The DOTTED spelling (`ELEPHC_INI_opcache.save_comments`) is the secondary lookup. It exists
@@ -295,15 +300,15 @@ fn invalid_env_value_falls_back_only_where_reference_refuses_the_store() {
         &binary,
         &[
             ("ELEPHC_INI_opcache__save_comments", "garbage"),
-            ("ELEPHC_INI_opcache__max_file_size", "12abc"),
+            ("ELEPHC_INI_opcache__jit_debug", "12abc"),
             ("ELEPHC_INI_opcache__max_wasted_percentage", "99"),
         ],
     );
     // Stored, not ignored.
     assert_eq!(line(&out, "cfg.save_comments"), "false");
     assert_eq!(line(&out, "ini.save_comments"), "'garbage'");
-    assert_eq!(line(&out, "cfg.max_file_size"), "12");
-    assert_eq!(line(&out, "ini.max_file_size"), "'12abc'");
+    assert_eq!(line(&out, "cfg.jit_debug"), "12");
+    assert_eq!(line(&out, "ini.jit_debug"), "'12abc'");
     // Refused: the percent handler is the one that can say no.
     assert_eq!(line(&out, "cfg.max_wasted_percentage"), "0.05");
     assert_eq!(line(&out, "ini.max_wasted_percentage"), "'5'");
@@ -358,41 +363,41 @@ fn excluded_directive_is_ignored_on_both_surfaces() {
 fn env_overrides_the_compile_time_ini_flag() {
     let (_dir, binary) = probe_binary(
         "opcache_env_over_ini",
-        &["--ini", "opcache.save_comments=1", "--ini", "opcache.max_file_size=4096"],
+        &["--ini", "opcache.save_comments=1", "--ini", "opcache.jit_debug=4096"],
     );
 
     // No env: the `--ini` values are what the binary reports.
     let compiled = run_with_env(&binary, &[]);
     assert_eq!(line(&compiled, "cfg.save_comments"), "true");
-    assert_eq!(line(&compiled, "cfg.max_file_size"), "4096");
-    assert_eq!(line(&compiled, "ini.max_file_size"), "'4096'");
+    assert_eq!(line(&compiled, "cfg.jit_debug"), "4096");
+    assert_eq!(line(&compiled, "ini.jit_debug"), "'4096'");
 
     // Env wins over `--ini` on both surfaces.
     let overridden = run_with_env(
         &binary,
         &[
             ("ELEPHC_INI_opcache__save_comments", "0"),
-            ("ELEPHC_INI_opcache__max_file_size", "8K"),
+            ("ELEPHC_INI_opcache__jit_debug", "8K"),
         ],
     );
     assert_eq!(line(&overridden, "cfg.save_comments"), "false");
     assert_eq!(line(&overridden, "ini.save_comments"), "'0'");
-    assert_eq!(line(&overridden, "cfg.max_file_size"), "8192");
-    assert_eq!(line(&overridden, "ini.max_file_size"), "'8K'");
+    assert_eq!(line(&overridden, "cfg.jit_debug"), "8192");
+    assert_eq!(line(&overridden, "ini.jit_debug"), "'8K'");
 
     // A MALFORMED env value does NOT fall back — `zend_ini_parse_quantity` cannot fail, so the
     // runtime normalizer stores what reference PHP would store (`nope` has no leading digits →
     // `0`) and reports the raw string verbatim, exactly as the compile-time `--ini` path does.
     // Only a directive whose handler can genuinely REFUSE a value (the `'p'` percent code) still
     // falls back; see `invalid_env_value_falls_back_only_where_reference_refuses_the_store`.
-    let invalid = run_with_env(&binary, &[("ELEPHC_INI_opcache__max_file_size", "nope")]);
-    assert_eq!(line(&invalid, "cfg.max_file_size"), "0");
-    assert_eq!(line(&invalid, "ini.max_file_size"), "'nope'");
+    let invalid = run_with_env(&binary, &[("ELEPHC_INI_opcache__jit_debug", "nope")]);
+    assert_eq!(line(&invalid, "cfg.jit_debug"), "0");
+    assert_eq!(line(&invalid, "ini.jit_debug"), "'nope'");
 }
 
 /// The integer normalizer reproduces `parse_ini_int` at runtime: plain decimal, `K`/`M`/`G` byte
 /// suffixes, `0x`/`0X` hex, and a leading sign. Each row is what the equivalent
-/// `php -d opcache.max_file_size=<v>` reports on reference PHP 8.5.6.
+/// `php -d opcache.jit_debug=<v>` reports on reference PHP 8.5.6.
 #[test]
 fn int_normalizer_covers_every_ini_integer_form() {
     let (_dir, binary) = probe_binary("opcache_env_int_forms", &[]);
@@ -408,19 +413,19 @@ fn int_normalizer_covers_every_ini_integer_form() {
         ("0X1f", "31"),
         (" 8 ", "8"),
     ] {
-        let out = run_with_env(&binary, &[("ELEPHC_INI_opcache__max_file_size", raw)]);
-        assert_eq!(line(&out, "cfg.max_file_size"), expected, "raw {raw:?}");
+        let out = run_with_env(&binary, &[("ELEPHC_INI_opcache__jit_debug", raw)]);
+        assert_eq!(line(&out, "cfg.jit_debug"), expected, "raw {raw:?}");
         // The raw INI string is always the environment value VERBATIM, matching reference PHP,
-        // where `-d opcache.max_file_size=1M` makes `ini_get` report `'1M'`.
+        // where `-d opcache.jit_debug=1M` makes `ini_get` report `'1M'`.
         assert_eq!(
-            line(&out, "ini.max_file_size"),
+            line(&out, "ini.jit_debug"),
             format!("'{raw}'"),
             "raw {raw:?}"
         );
     }
     // Malformed integers are STORED, not ignored: `zend_ini_parse_quantity` has no rejection
     // path, so the value is its leading numeric prefix (or 0) and `ini_get` echoes the raw
-    // string. Each row matches `php -d opcache.max_file_size=<v>` on reference PHP 8.5.6.
+    // string. Each row matches `php -d opcache.jit_debug=<v>` on reference PHP 8.5.6.
     for (raw, cfg) in [
         ("abc", "0"),
         ("1.9", "1"),
@@ -429,24 +434,24 @@ fn int_normalizer_covers_every_ini_integer_form() {
         ("12abc", "12"),
         ("08", "0"),
     ] {
-        let out = run_with_env(&binary, &[("ELEPHC_INI_opcache__max_file_size", raw)]);
-        assert_eq!(line(&out, "cfg.max_file_size"), cfg, "raw {raw:?}");
+        let out = run_with_env(&binary, &[("ELEPHC_INI_opcache__jit_debug", raw)]);
+        assert_eq!(line(&out, "cfg.jit_debug"), cfg, "raw {raw:?}");
         assert_eq!(
-            line(&out, "ini.max_file_size"),
+            line(&out, "ini.jit_debug"),
             format!("'{raw}'"),
             "raw {raw:?}"
         );
     }
     // The one exception: an EMPTY environment value is indistinguishable from an unset one
     // (see the `EMPTY MEANS UNSET` note on `ENV_OVERRIDE_HELPERS`), so it keeps the baked value.
-    let empty = run_with_env(&binary, &[("ELEPHC_INI_opcache__max_file_size", "")]);
-    assert_eq!(line(&empty, "cfg.max_file_size"), "0");
-    assert_eq!(line(&empty, "ini.max_file_size"), "'0'");
+    let empty = run_with_env(&binary, &[("ELEPHC_INI_opcache__jit_debug", "")]);
+    assert_eq!(line(&empty, "cfg.jit_debug"), "0");
+    assert_eq!(line(&empty, "ini.jit_debug"), "'0'");
     // The scanner rewrite reaches the integer normalizer too.
     for (raw, cfg, ini) in [("on", "1", "'1'"), ("none", "0", "''")] {
-        let out = run_with_env(&binary, &[("ELEPHC_INI_opcache__max_file_size", raw)]);
-        assert_eq!(line(&out, "cfg.max_file_size"), cfg, "raw {raw:?}");
-        assert_eq!(line(&out, "ini.max_file_size"), ini, "raw {raw:?}");
+        let out = run_with_env(&binary, &[("ELEPHC_INI_opcache__jit_debug", raw)]);
+        assert_eq!(line(&out, "cfg.jit_debug"), cfg, "raw {raw:?}");
+        assert_eq!(line(&out, "ini.jit_debug"), ini, "raw {raw:?}");
     }
 }
 

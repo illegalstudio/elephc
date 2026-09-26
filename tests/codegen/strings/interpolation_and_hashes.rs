@@ -428,3 +428,23 @@ fn md5_sha1_parity_and_binary() {
 }
 
 // --- sscanf() ---
+
+/// A comment inside a complex `{$…}` interpolation is inert: a quote or brace in it does not end
+/// the capture. MEASURED on reference PHP 8.5.10, all four print `v|`; elephc refused each one
+/// ("Unterminated complex interpolation" or an unexpected token).
+#[test]
+fn test_string_interpolation_complex_with_comments() {
+    for source in [
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[/* \" */ \"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[/* } { */ \"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[ // \" } \' \n\"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[ # \" }\n\"k\"]}\", \"|\";",
+    ] {
+        assert_eq!(compile_and_run(source), "v|", "{source}");
+    }
+    // `#[` is an attribute, not a comment.
+    assert_eq!(
+        compile_and_run("<?php $f = fn($x) => \"F\"; echo \"{$f(#[A] fn() => 1)}\", \"|\";"),
+        "F|"
+    );
+}

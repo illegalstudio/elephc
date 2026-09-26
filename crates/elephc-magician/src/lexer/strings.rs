@@ -224,7 +224,51 @@ impl Lexer<'_> {
                     inner.push(quote);
                     self.capture_braced_string(quote, &mut inner)?;
                 }
+                '/' if self.peek_char() == Some('*') => {
+                    inner.push('/');
+                    self.bump_char();
+                    self.capture_braced_block_comment(&mut inner)?;
+                }
+                '/' if self.peek_char() == Some('/') => {
+                    // BOTH slashes are copied: the capture is lexed again as a whole, and a lone
+                    // `/` there is a division — `"{$a[ // " }⏎"k"]}"` then read `" }…` as an
+                    // unterminated string.
+                    inner.push_str("//");
+                    self.bump_char();
+                    self.capture_braced_line_comment(&mut inner);
+                }
+                '#' if self.peek_char() != Some('[') => {
+                    inner.push('#');
+                    self.capture_braced_line_comment(&mut inner);
+                }
                 other => inner.push(other),
+            }
+        }
+    }
+
+    /// Copies a block comment verbatim so its braces and quotes do not affect nesting.
+    fn capture_braced_block_comment(&mut self, inner: &mut String) -> Result<(), EvalParseError> {
+        inner.push('*');
+        self.bump_char();
+        while let Some(ch) = self.peek_char() {
+            self.bump_char();
+            inner.push(ch);
+            if ch == '*' && self.peek_char() == Some('/') {
+                inner.push('/');
+                self.bump_char();
+                return Ok(());
+            }
+        }
+        Err(EvalParseError::UnterminatedString)
+    }
+
+    /// Copies a line comment through its newline, leaving braces and quotes inert.
+    fn capture_braced_line_comment(&mut self, inner: &mut String) {
+        while let Some(ch) = self.peek_char() {
+            self.bump_char();
+            inner.push(ch);
+            if ch == '\n' {
+                break;
             }
         }
     }

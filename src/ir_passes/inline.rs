@@ -34,14 +34,17 @@
 //!   must be released by the callee's exceptional-cleanup frame.
 //!   Objects/closures/resources/`mixed`/`iterable` and by-ref params are excluded
 //!   because their cleanup timing or aliasing cannot be reproduced by a value-copy splice.
-//! - String arguments add one more call-site condition: PHP concatenation builds
-//!   intermediates in a frame-relative scratch buffer that every function rewinds
-//!   at statement boundaries (`ConcatReset`). A real call's separate frame protects
-//!   the caller's in-flight scratch values, but the spliced body runs the callee's
-//!   `ConcatReset` in the host frame, which would free an in-flight scratch string
-//!   argument before the body reads it. So a site is only inlined when every `Str`
-//!   argument comes from a provably non-scratch source (`const_str`/`load_local`);
-//!   see `call_string_args_are_stable`.
+//! - PHP concatenation builds intermediates in a frame-relative scratch buffer that
+//!   every function rewinds at its statement boundaries (`ConcatReset`). A real call's
+//!   separate frame protects the caller's in-flight scratch; a spliced body would run
+//!   that rewind against the HOST's base and free scratch the host still holds. So a
+//!   transplanted `ConcatReset` is neutralized to `Nop` (see `transplant_callee_body`)
+//!   and the host reclaims at its own statement boundary.
+//!   `call_string_args_are_stable` additionally requires every `Str` ARGUMENT to come
+//!   from a non-scratch source (`const_str`/`load_local`). That rule was written as the
+//!   whole protection and could not be: it says nothing about a callee with no
+//!   parameters, nor about a sibling argument of the enclosing call, which is where the
+//!   miscompile was actually found. It is kept as a conservative second line.
 //! - Returns of the callee become `Br` to a continuation block carrying the
 //!   result via a param when the call produced a value; the original call is
 //!   neutralized and parked in an unreachable block to keep value-def records
@@ -266,6 +269,18 @@ fn callee_return_shape(callee: &Function) -> (bool, bool) {
     (saw_value, saw_void)
 }
 
+/// Returns whether `callee`'s CFG has a back edge — that is, whether its body can run a
+/// statement more than once per call.
+///
+/// Uses the shared natural-loop analysis rather than a cheaper "does any terminator target
+/// an earlier block" test, because block order in this EIR is not guaranteed to be
+/// topological and that shortcut answers wrongly in both directions on a function with
+/// `goto`-shaped control flow.
+fn callee_contains_a_loop(callee: &Function) -> bool {
+    let dominance = compute_dominance(callee);
+    !compute_loops(callee, &dominance).is_empty()
+}
+
 /// Eligibility predicate per acceptance: size threshold, non-recursive (direct or
 /// mutual), no try/catch, no generators/fibers, a 0-parameter entry block (EIR
 /// convention), and a provably ownership-safe plain-scalar boundary/body so the
@@ -283,6 +298,33 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
     // emit a `Release` of each transplanted shadow on the continuation edge). Keeping `-O` and
     // `-O0` semantically identical is worth more than inlining these.
     if callee_has_by_value_container_param(callee) {
+        return false;
+    }
+    // A LOOP IN THE CALLEE turns the deferral this pass accepts into an unbounded one.
+    //
+    // `transplant_callee_body` neutralizes the callee's per-statement `ConcatReset`, because
+    // once the frames are merged it would free scratch the HOST still holds. The scratch it
+    // no longer reclaims is then reclaimed at the host's next statement boundary — which for
+    // a straight-line callee is a bounded wait, since a body under the size cap can only
+    // produce a handful of intermediates.
+    //
+    // A loop breaks that argument: the whole loop runs inside ONE host statement, so the
+    // wait is proportional to the iteration count. Under 64 KiB the cost is only scratch and
+    // harmless; past it `__rt_concat_reserve` starts returning OWNED HEAP BLOCKS, and those
+    // accumulate for the rest of the host statement. MEASURED on
+    // `function s(int $n): int { for ($i = 0; $i < $n; $i++) { echo "y" . $i; } return $n; }`
+    // at two million iterations: `--ir-opt=on` died with `Fatal error: heap memory
+    // exhausted` where `--ir-opt=off` completed. An optimization that changes whether a
+    // program finishes is not an optimization.
+    //
+    // THE BETTER FIX IS NOT THIS ONE, and is worth stating so the next reader does not have
+    // to rediscover it: capture `_concat_off` into a host slot at the splice point and
+    // rewrite the transplanted reset to rewind to THAT, rather than to nothing. The callee
+    // would keep its per-statement reclamation while still being unable to reach the
+    // caller's scratch. That needs a `ConcatReset` variant carrying a slot, so it is a
+    // codegen change rather than an eligibility one; this gate is the conservative
+    // equivalent, and it costs only the inlining of small looping callees.
+    if callee_contains_a_loop(callee) {
         return false;
     }
     if has_exception_handlers(callee) {
@@ -463,14 +505,19 @@ fn call_args_bind_directly(host: &Function, call_inst: &Instruction, callee: &Fu
 ///
 /// PHP string concatenation builds intermediate results in a frame-relative scratch
 /// buffer that every function rewinds at its statement boundaries (`Op::ConcatReset`).
-/// In a real call the callee's own frame protects the caller's in-flight scratch values;
-/// but the inliner binds the argument with `store_local` and the spliced body then runs
-/// the callee's `concat_reset` in the *host* frame, freeing an in-flight scratch string
-/// argument before the body reads it back (a miscompile). A `const_str` literal
-/// (persistent) and a `load_local` (already persisted into a slot) are the only string
-/// sources guaranteed not to be scratch-resident; any other source (e.g. a `str_concat`
-/// result passed directly) is conservatively treated as in-flight and the site is left as
-/// an ordinary call.
+/// A `const_str` literal (persistent) and a `load_local` (already persisted into a slot)
+/// are the only string sources guaranteed not to be scratch-resident; any other source
+/// (e.g. a `str_concat` result passed directly) is conservatively treated as in-flight
+/// and the site is left as an ordinary call.
+///
+/// THIS IS NO LONGER THE PROTECTION, and on its own it never was one. A transplanted
+/// `concat_reset` rewinds the HOST frame and so endangers every scratch value live across
+/// the splice, not just the ones this function can see: a callee with no parameters
+/// satisfies it vacuously, and the value actually destroyed in the reported miscompile
+/// was a sibling argument of the enclosing call, which is not an argument to the callee at
+/// all. `transplant_callee_body` now neutralizes the reset, which covers all of those.
+/// This check is retained as a conservative second line — relaxing it would widen the set
+/// of inlined sites, which is a separate change with its own measurements.
 fn call_string_args_are_stable(host: &Function, call_inst: &Instruction, callee: &Function) -> bool {
     for (operand, param) in call_inst.operands.iter().zip(&callee.params) {
         if param.ir_type != IrType::Str {
@@ -790,6 +837,32 @@ fn transplant_callee_body(
             // program.
             if new_inst.op == Op::LoadLocal {
                 new_inst.effects |= Op::LoadLocal.default_effects();
+            }
+            // A `concat_reset` MEANS "rewind the scratch buffer to MY frame's base", and
+            // once the frames are merged that sentence points at the host's base instead.
+            // The spliced statement then frees scratch the HOST is still holding: in
+            // `printf("B:%s|%s\n", "'$v'", var_export(plain(), true))` the interpolated
+            // first argument is live in scratch when `plain()`'s one-statement body is
+            // spliced in, and its reset hands that memory back before `printf` reads it.
+            // Reference prints `B:'garbage'|'2'`; elephc printed `B::garbage'|'2'`, the
+            // temporary's first byte overwritten by the output being assembled on top of it.
+            //
+            // Neutralized rather than dropped, so every `ValueDef::Instruction { index }`
+            // in the block keeps pointing at the same slot.
+            //
+            // NOTHING LEAKS. The scratch the callee allocated now belongs to the host's
+            // statement, and the host rewinds at its own statement boundary — later than
+            // the callee would have, which is the same deferral the inliner already accepts
+            // for the locals it hands to the host epilogue.
+            //
+            // `call_string_args_are_stable` reasoned about this hazard for the callee's
+            // own `Str` ARGUMENTS and stopped there, so a callee with no parameters at all
+            // passed it trivially while a SIBLING argument of the enclosing call sat live
+            // in scratch. That guard is now belt-and-braces; relaxing it would widen
+            // inlining and belongs in its own change.
+            if new_inst.op == Op::ConcatReset {
+                new_inst.op = Op::Nop;
+                new_inst.effects = Op::Nop.default_effects();
             }
             host.instructions.push(new_inst);
             // Re-borrow block only for append.

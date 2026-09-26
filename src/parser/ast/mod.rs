@@ -40,3 +40,18 @@ pub use types::TypeExpr;
 /// what keeps it out of `get_defined_vars()` and eval scope synchronization; the prefix match
 /// here is unaffected by that suffix.
 pub const NESTED_APPEND_TEMP_PREFIX: &str = "__elephc_napp_";
+
+/// Attribute the include rewrite puts on the `break` an included file's `return` becomes.
+///
+/// `resolver::engine_includes::confine_nested_returns` turns each `return` of an included file
+/// into a `break` out to a `do { … } while (false)` wrapper. A `return` inside a `finally` is
+/// legal PHP — it ends the file and discards any pending exception or return — but a `break` out
+/// of a `finally` is not, and the checker refuses it. This marks the breaks that are really
+/// returns, so the checker lets exactly those leave a `finally`.
+///
+/// UNFORGEABLE by construction: the parser rejects attributes on every non-declaration
+/// statement, so no hand-written `break` can carry one. Lowering needs no change: a `finally`
+/// body is duplicated at each exit and lowered after its frame is popped, so a jump out of it
+/// skips the exceptional copy's rethrow — the same path a function's `return` in `finally`
+/// already takes.
+pub const INCLUDE_RETURN_BREAK_ATTRIBUTE: &str = "__elephc_include_return";

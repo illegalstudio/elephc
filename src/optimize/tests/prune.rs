@@ -510,3 +510,63 @@ fn test_prune_switch_drops_leading_non_matching_cases() {
 
     assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(20))]);
 }
+
+/// A `do { } while (false)` whose body holds a `break 2` inside a nested loop — or a `break`
+/// grouped in a `Synthetic` block — has an exit and must be KEPT, not dissolved into its body.
+///
+/// Dissolving it left the `break` with no loop to leave, which lowers to a trap. MEASURED on user
+/// code: `do { foreach ([1, 2] as $x) { echo "in$x "; break 2; } echo "NO "; } while (false);`
+/// prints `in1 ` in reference and crashed elephc after `in1`.
+#[test]
+fn test_prune_keeps_do_while_false_with_a_nested_or_grouped_exit() {
+    let nested = Stmt::new(
+        StmtKind::Foreach {
+            array: Expr::var("items"),
+            key_var: None,
+            value_var: "x".to_string(),
+            value_by_ref: false,
+            body: vec![Stmt::new(StmtKind::Break(2), Span::dummy())],
+        },
+        Span::dummy(),
+    );
+    let grouped = Stmt::new(
+        StmtKind::Synthetic(vec![Stmt::new(StmtKind::Break(1), Span::dummy())]),
+        Span::dummy(),
+    );
+    for exit in [nested, grouped] {
+        let program = vec![Stmt::new(
+            StmtKind::DoWhile {
+                body: vec![exit, Stmt::echo(Expr::int_lit(2))],
+                condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = prune_constant_control_flow(program.clone());
+
+        assert!(
+            matches!(pruned.as_slice(), [Stmt { kind: StmtKind::DoWhile { .. }, .. }]),
+            "the loop the break leaves must survive: {pruned:?}"
+        );
+    }
+
+    // A `break` that only leaves the NESTED loop is not an exit of the `do`.
+    let inner_only = Stmt::new(
+        StmtKind::Foreach {
+            array: Expr::var("items"),
+            key_var: None,
+            value_var: "x".to_string(),
+            value_by_ref: false,
+            body: vec![Stmt::new(StmtKind::Break(1), Span::dummy())],
+        },
+        Span::dummy(),
+    );
+    let pruned = prune_constant_control_flow(vec![Stmt::new(
+        StmtKind::DoWhile {
+            body: vec![inner_only.clone()],
+            condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+        },
+        Span::dummy(),
+    )]);
+    assert_eq!(pruned, vec![inner_only], "a run-once body with no exit of its own is inlined");
+}

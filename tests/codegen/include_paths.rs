@@ -420,3 +420,21 @@ fn test_include_variant_returning_its_parameter_keeps_the_call_site_type() {
     );
     assert_eq!(out, "3:c");
 }
+
+/// A valid line longer than 65,535 columns in an INCLUDED file compiles, as it does in the root.
+///
+/// The packed included-source span asserted its end column fit in 16 bits, so this program made
+/// the compiler panic ("included-source column exceeds packed span range"). MEASURED on reference
+/// PHP 8.5.10: `70000`, then `after`.
+#[test]
+fn test_include_with_a_line_past_65535_columns() {
+    let long = format!("<?php\n$x = '{}'; echo strlen($x), \"\\n\";\n", "a".repeat(70_000));
+    let out = compile_and_run_files(
+        &[
+            ("long.php", &long),
+            ("main.php", "<?php\ninclude __DIR__ . '/long.php';\necho \"after\\n\";\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "70000\nafter\n");
+}

@@ -73,6 +73,9 @@ pub(in crate::interpreter) fn eval_opcache_get_status_call(
 pub(in crate::interpreter) fn eval_opcache_get_status_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(refused) = super::opcache_file_functions::eval_opcache_api_refusal(values)? {
+        return Ok(refused);
+    }
     let enabled = opcache_cache_enabled(crate::eval_php_profile::eval_php_version_id(), false);
     // Disabled cache (the eval/CLI default) → `false`, the complete correct result.
     // An enabled status array is only reachable on the native `--web` prelude, never in

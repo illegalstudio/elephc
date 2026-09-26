@@ -17,6 +17,42 @@ thread_local! {
     /// Selected PHP language profile and whether the current compilation uses web SAPI.
     static COMPILE_PROFILE: Cell<(crate::web_prelude::PhpVersion, bool)> =
         const { Cell::new((crate::web_prelude::PhpVersion::Php85, false)) };
+    /// The compile-time `--ini KEY=VALUE` directive overrides of this compilation.
+    static INI_OVERRIDES: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    /// Whether `opcache.restrict_api` denies this binary's calls into the OPcache API.
+    static OPCACHE_API_RESTRICTED: Cell<bool> = const { Cell::new(false) };
+    /// How many scripts the compile-time OPcache manifest holds.
+    static OPCACHE_MANIFEST_LEN: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Records how many scripts this binary's compile-time OPcache manifest holds.
+///
+/// They occupy hash slots in php-src like any cached script — the entry script and every static
+/// `require` are compiled into the cache before a dynamic include runs — so the runtime tier's
+/// capacity is the prime MINUS these. Read via [`opcache_manifest_len`].
+pub fn set_opcache_manifest_len(len: usize) {
+    OPCACHE_MANIFEST_LEN.with(|cell| cell.set(len));
+}
+
+/// How many scripts this compilation's OPcache manifest holds.
+pub(crate) fn opcache_manifest_len() -> usize {
+    OPCACHE_MANIFEST_LEN.with(Cell::get)
+}
+
+/// Records whether `opcache.restrict_api` denies this binary's OPcache API calls.
+///
+/// Decided ONCE, in the pipeline, by `opcache_prelude::restrict_api_denies` — the same verdict
+/// the injected native bodies bake. Carried here because the eval bridge needs it too: an
+/// OPcache call the compiler cannot see (a runtime-provided `eval()` source) never gets a
+/// native body, and the interpreter's own handler must refuse it just the same. Read via
+/// [`opcache_api_restricted`].
+pub fn set_opcache_api_restricted(restricted: bool) {
+    OPCACHE_API_RESTRICTED.with(|cell| cell.set(restricted));
+}
+
+/// Whether `opcache.restrict_api` denies this compilation's OPcache API calls.
+pub(crate) fn opcache_api_restricted() -> bool {
+    OPCACHE_API_RESTRICTED.with(Cell::get)
 }
 
 /// Records the PHP language profile and SAPI mode of the current compilation.
@@ -64,3 +100,18 @@ pub(crate) fn linked_extensions() -> Vec<String> {
     LINKED_EXTENSIONS.with(|names| names.borrow().clone())
 }
 
+/// Records this compilation's `--ini` directive overrides.
+///
+/// Set from the pipeline alongside the compile profile, because the values are
+/// consumed far below the parameter list that carries them — the OPcache runtime
+/// cache configuration is baked in per-instruction lowering. Read via
+/// [`ini_overrides`].
+pub fn set_ini_overrides(overrides: Vec<(String, String)>) {
+    INI_OVERRIDES.with(|entries| *entries.borrow_mut() = overrides);
+}
+
+/// Returns this compilation's `--ini` directive overrides (empty unless
+/// [`set_ini_overrides`] ran for it, which is the no-override default).
+pub(crate) fn ini_overrides() -> Vec<(String, String)> {
+    INI_OVERRIDES.with(|entries| entries.borrow().clone())
+}

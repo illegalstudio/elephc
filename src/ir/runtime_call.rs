@@ -58,6 +58,12 @@ impl ArrayKeySort {
 pub enum RuntimeCallTarget {
     /// Initializes a builtin Throwable constructor without assuming a compact receiver layout.
     ThrowableInitialize,
+    /// Appends an exception to the END of another's `previous` chain, as php-src's
+    /// `zend_exception_set_previous` does when an exception leaves a `finally` that was entered
+    /// with one pending. Borrows the new exception (operand 0) and CONSUMES the pending one
+    /// (operand 1); an overlap between the two chains drops the pending owner instead of
+    /// creating a cycle.
+    ExceptionChain,
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
@@ -96,6 +102,10 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str, IrType::I64, IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Void,
             }),
+            RuntimeCallTarget::ExceptionChain => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Object)],
+                result: IrType::Void,
+            }),
             RuntimeCallTarget::ArrayFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
@@ -130,6 +140,7 @@ impl RuntimeCallTarget {
     pub fn as_eir(self) -> &'static str {
         match self {
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
+            RuntimeCallTarget::ExceptionChain => "object.exception_chain",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
             RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {

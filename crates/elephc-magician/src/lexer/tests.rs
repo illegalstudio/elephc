@@ -507,3 +507,18 @@ fn malformed_numeric_literals_are_refused() {
     assert_eq!(error("0x"), EvalParseError::InvalidNumber);
     assert_eq!(error("1e"), EvalParseError::InvalidNumber);
 }
+
+/// A comment inside `{$…}` is inert to the eval lexer too: the fragment lexes exactly as it does
+/// without the comment. A quote or brace in the comment used to end the capture or open a string.
+#[test]
+fn a_comment_inside_a_complex_interpolation_is_inert() {
+    let plain = kinds(r#""{$a["k"]}";"#);
+    for source in [
+        r#""{$a[/* " */ "k"]}";"#,
+        r#""{$a[/* } { */ "k"]}";"#,
+        "\"{$a[ // \" } '\n\"k\"]}\";",
+        "\"{$a[ # \" }\n\"k\"]}\";",
+    ] {
+        assert_eq!(kinds(source), plain, "{source}");
+    }
+}

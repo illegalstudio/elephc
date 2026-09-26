@@ -42,29 +42,67 @@ pub(super) fn lower_static_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    let value = lower_expr(ctx, value);
-    let value = static_property_type(ctx, receiver, property)
-        .map(|slot_ty| coerce_typed_assign_value(ctx, value, &slot_ty, span))
-        .unwrap_or(value);
-    if static_property_store_retains_independent_value(ctx, receiver, property, value) {
-        store_static_property(ctx, receiver, property, value.value, span);
-        if ctx.value_is_owning_temporary(value) {
-            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    let source = lower_expr(ctx, value);
+    let source = static_property_type(ctx, receiver, property)
+        .map(|slot_ty| coerce_typed_assign_value(ctx, source, &slot_ty, span))
+        .unwrap_or(source);
+    if static_property_store_retains_independent_value(ctx, receiver, property, source) {
+        store_static_property(ctx, receiver, property, source.value, span);
+        if ctx.value_is_owning_temporary(source) {
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
         }
         return;
     }
-    let provisional_load = ctx.value_is_owned_unboxed_local_load(value.value);
-    let stored = if ctx.value_is_owning_temporary(value) && !provisional_load {
-        value
+    // A `Str` is PERSISTED into the slot whatever its ownership says, and the source is then
+    // released. Ownership is the wrong question for a string here: "owning" distinguishes who
+    // must release, not WHERE the bytes live, and a great many string producers hand back a
+    // pointer into the shared 64 KiB `_concat_buf` scratch. Moving such a pointer into a slot
+    // that outlives the statement stores the right LENGTH over bytes the next producer
+    // overwrites — `B::$s = strtoupper($x)` read back a later `str_repeat`'s bytes.
+    //
+    // Fixing this at the producer instead (reclassifying runtime-call `Str` results as
+    // non-owning) was tried and is wrong twice over: it only reaches the producers someone
+    // thought to list — `$x . "c"`, `"v=$x!"`, `(string)$i`, `strval($i)` all still clobbered —
+    // and above 64 KiB `__rt_concat_reserve` returns an OWNED heap block, so suppressing the
+    // release leaked one block per call. The consumer is the only place that knows the value is
+    // about to outlive the frame, so it is the only place the question can be answered once.
+    //
+    // The three storage classes all land correctly, which is why this is safe rather than
+    // merely conservative:
+    // - scratch slice: `Acquire` is `__rt_str_persist`, which duplicates it onto the heap; the
+    //   paired `Release` reaches `__rt_heap_free_safe`, which skips a non-heap pointer.
+    // - owned heap block (a unary-string result over 64 KiB): duplicated, then the original is
+    //   freed — this is the leak the producer-side attempt introduced.
+    // - `CONCAT_TEMP_HEAP_KIND` block (a `.` result over 64 KiB): `__rt_str_persist` takes it
+    //   over IN PLACE, and the release cannot double-free it because codegen classifies
+    //   `Op::StrConcat` as a scratch string and drops its `Release` entirely.
+    //
+    // `store_local` reached the same answer for `static` LOCALS at `context.rs`'s
+    // `static_local_store_needs_string_retain`; a static property has the identical lifetime
+    // problem and now has the identical rule.
+    let stores_a_string = matches!(
+        ctx.builder.value_php_type(source.value).codegen_repr(),
+        PhpType::Str
+    );
+    let source_is_owning_temporary = ctx.value_is_owning_temporary(source);
+    let provisional_load = ctx.value_is_owned_unboxed_local_load(source.value);
+    let stored = if stores_a_string || !source_is_owning_temporary || provisional_load {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span))
     } else {
-        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+        source
     };
     // A concrete local load can still be borrowed after final frame typing.
     // Retain its published owner, then retire only an actual Mixed unbox owner.
     if provisional_load {
-        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
     store_static_property(ctx, receiver, property, stored.value, span);
+    // The string rule's own release, SKIPPED when the provisional-load arm already issued
+    // one: the two conditions overlap for an owned unboxed local load of a `Str`, and
+    // releasing the same source twice is a double free rather than a tidy-up.
+    if stores_a_string && source_is_owning_temporary && !provisional_load {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
 }
 
 /// Returns true when codegen gives the static-property slot an independently retained value.
