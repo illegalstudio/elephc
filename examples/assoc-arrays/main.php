@@ -26,6 +26,12 @@ echo "Code 1: " . $codes[1] . "\n";
 echo "Code 2: " . $codes["2"] . "\n";
 echo "Code 01: " . $codes["01"] . "\n";
 echo "Codes JSON: " . json_encode($codes) . "\n";
+// A fractional float key truncates toward zero, so 1.9 is stored as integer key 1.
+// The write emits one deprecation on stderr:
+// Deprecated: Implicit conversion from float 1.9 to int loses precision
+$codes[1.9] = "truncated";
+echo "Code 1 from 1.9: " . $codes[1] . "\n";
+echo "Codes after float key: " . json_encode($codes) . "\n";
 
 // Iterate with key => value
 echo "\nAll fields:\n";

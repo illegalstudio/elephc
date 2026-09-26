@@ -22,7 +22,16 @@ echo "substr(0, 5): " . substr($str, 0, 5) . "\n";
 echo "strstr(@): " . strstr("user@example.com", "@") . "\n";
 echo "index[1]: " . $str[1] . "\n";
 echo "index[-1]: " . $str[-1] . "\n";
+// Reading past the end returns an empty string and warns on stderr:
+// Warning: Uninitialized string offset 99
 echo "index[99]: [" . $str[99] . "]\n";
+// isset, empty, and ?? probe that same offset quietly.
+echo "isset[99]: " . (isset($str[99]) ? "yes" : "no") . "\n";
+echo "empty[99]: " . (empty($str[99]) ? "yes" : "no") . "\n";
+echo "coalesce[99]: " . ($str[99] ?? "missing") . "\n";
+// A float offset truncates toward zero, so 1.9 selects the same byte as 1
+// and warns once on stderr: Warning: String offset cast occurred
+echo "index[1.9]: " . $str[1.9] . "\n";
 
 // Case
 echo "\n--- Case ---\n";
