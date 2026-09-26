@@ -175,12 +175,12 @@ fn emit_class_named_throw_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow) 
     emitter.instruction("mov r12, 6");                                          // fallback name length
     emitter.label(&ready);
 
-    emitter.instruction(&format!("lea rax, [rip + {}]", spec.prefix_symbol));  // concat left operand pointer
+    emitter.instruction(&format!("lea rax, [rip + {}]", spec.prefix_symbol));   // concat left operand pointer
     emitter.instruction(&format!("mov rdx, {}", spec.prefix_len));              // concat left operand length
     emitter.instruction("mov rdi, r11");                                        // right operand: the resolved class name
     emitter.instruction("mov rsi, r12");                                        // and its byte length
     abi::emit_call_label(emitter, "__rt_concat");                               // build `<prefix><Class>`
-    emitter.instruction(&format!("lea rdi, [rip + {}]", spec.suffix_symbol));  // right operand pointer
+    emitter.instruction(&format!("lea rdi, [rip + {}]", spec.suffix_symbol));   // right operand pointer
     emitter.instruction(&format!("mov rsi, {}", spec.suffix_len));              // right operand length
     abi::emit_call_label(emitter, "__rt_concat");                               // append the message suffix
     abi::emit_call_label(emitter, "__rt_str_persist");                          // give the Throwable stable message ownership
