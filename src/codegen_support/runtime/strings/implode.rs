@@ -300,10 +300,10 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #56]");                                   // preserve the live result cursor across formatting
     emitter.instruction("str x10, [sp, #64]");                                  // preserve array length across formatting
     emitter.instruction("str x11, [sp, #72]");                                  // preserve the element cursor across formatting
-    emitter.instruction("mov x1, x9");                                         // format directly in the reserved implode destination window
+    emitter.instruction("mov x1, x9");                                          // format directly in the reserved implode destination window
     emitter.instruction("bl __rt_itoa_into");                                   // write decimal digits without using concat scratch
-    emitter.instruction("mov x2, x1");                                         // move the formatted length into the copy-loop argument
-    emitter.instruction("mov x1, x0");                                         // move the formatted slice pointer into the copy-loop argument
+    emitter.instruction("mov x2, x1");                                          // move the formatted length into the copy-loop argument
+    emitter.instruction("mov x1, x0");                                          // move the formatted slice pointer into the copy-loop argument
     emitter.instruction("ldr x9, [sp, #56]");                                   // restore the live result cursor
     emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length
     emitter.instruction("ldr x11, [sp, #72]");                                  // restore the element cursor
@@ -608,9 +608,9 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer
     emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // recompute the tagged slot address after the array header
     emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the non-null integer payload
-    emitter.instruction("mov rdi, rax");                                       // pass the tagged integer to the destination formatter
-    emitter.instruction("mov rsi, r10");                                       // format directly in the reserved implode destination window
-    emitter.instruction("call __rt_itoa_into");                                // write decimal digits without using concat scratch
+    emitter.instruction("mov rdi, rax");                                        // pass the tagged integer to the destination formatter
+    emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
+    emitter.instruction("call __rt_itoa_into");                                 // write decimal digits without using concat scratch
     emit_x86_64_scalar_copy_setup(emitter);
     emitter.instruction("jmp __rt_implode_copy");                               // compact the right-aligned digits to the destination cursor
     emitter.label("__rt_implode_tagged_scalar_null_x");

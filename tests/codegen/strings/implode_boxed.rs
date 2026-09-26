@@ -312,3 +312,21 @@ echo f([maybe(false)]), '|', f([maybe(true)]);
     );
     assert_eq!(out, "|7");
 }
+
+/// Verifies the boxed-array path is reached however the call is spelled: in another case
+/// (`IMPLODE`, `Join`), fully qualified (`\implode`, `\JOIN`), and from inside a namespace, where
+/// an unqualified name falls back to the global builtin. Expected output is PHP 8.5.10's.
+#[test]
+fn test_implode_on_a_boxed_array_through_case_insensitive_and_namespaced_names() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+function f(?array $a): string { return IMPLODE(',', $a); }
+function g(mixed $a): string { return \implode('|', $a); }
+function h(?array $a): string { return Join('-', $a); }
+function k(?array $a): string { return \JOIN('+', $a); }
+echo f([1, 2.5, true]), "|", g([3, "x"]), "|", h([-4, false]), "|", k([9223372036854775807, 0.1]), "\n";
+"#,
+    );
+    assert_eq!(out, "1,2.5,1|3|x|-4-|9223372036854775807+0.1\n");
+}
