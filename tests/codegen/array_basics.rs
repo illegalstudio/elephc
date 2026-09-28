@@ -1894,3 +1894,35 @@ var_dump(isset($neverIndexed["k"]));
     );
     assert_eq!(out, "bool(false)\n");
 }
+
+/// A float sort over `NAN` elements terminates, and so does `usort()` with a comparator that
+/// answers "greater" both ways. `<=>` against `NAN` is 1 in both directions, which made the
+/// runtime's bubble sort swap the same pair forever. The finite elements still come out in
+/// order, `rsort()` gives PHP's exact result, and `INF`/`-INF` order like PHP.
+/// Regression for #1353.
+#[test]
+fn sort_over_nan_elements_and_an_inconsistent_comparator_terminates() {
+    let out = compile_and_run(
+        r#"<?php
+function fl(int $n): array { return $n > 5 ? [] : [3.5, NAN, 1.0, -2.0, NAN, 0.5]; }
+$a = fl($argc);
+sort($a);
+echo count($a), ":", implode(",", array_values(array_filter($a, fn($v) => !is_nan($v)))), "\n";
+$b = fl($argc);
+rsort($b);
+echo implode(",", array_map(fn($v) => is_nan($v) ? "nan" : $v, $b)), "\n";
+$d = [1.0, INF, -INF, 0.0];
+sort($d);
+echo implode(",", $d), "\n";
+rsort($d);
+echo implode(",", $d), "\n";
+$u = [3, 1, 2];
+usort($u, fn($x, $y) => 1);
+echo count($u), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "6:-2,0.5,1,3.5\n3.5,nan,1,-2,nan,0.5\n-INF,0,1,INF\nINF,1,0,-INF\n3\n"
+    );
+}
