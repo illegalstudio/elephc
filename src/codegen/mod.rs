@@ -31,6 +31,7 @@ mod fibers;
 mod frame;
 mod function_variants;
 mod literal_defaults;
+mod mixed_array_literals;
 mod local_analysis;
 mod mbstring_configuration;
 pub(crate) mod lower_inst;

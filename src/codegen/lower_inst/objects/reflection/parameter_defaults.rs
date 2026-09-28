@@ -179,6 +179,9 @@ pub(super) fn reflection_literal_parameter_default_value(
     {
         return Some(ReflectionParameterDefaultValue::Str(value));
     }
+    if let Some(folded) = crate::codegen::mixed_array_literals::fold_spreadless_mixed_array_literal(&default.kind) {
+        return reflection_literal_parameter_default_value(&Expr::new(folded, default.span));
+    }
     match &default.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionParameterDefaultValue::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionParameterDefaultValue::Bool(*value)),

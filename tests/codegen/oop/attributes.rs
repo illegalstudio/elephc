@@ -3497,7 +3497,8 @@ echo $c ? json_encode($c->getValue()) : "false", "\n";
     );
 }
 
-/// Reflection and runtime array appends use the implicit integer-key rule for the selected PHP profile.
+/// Reflection folds a constant array's implicit integer keys with the selected PHP profile's rule:
+/// PHP 8.2 restarts at 0 after a negative key, PHP 8.3+ continues at max + 1.
 #[test]
 fn test_reflection_constant_array_implicit_keys_follow_php_profile() {
     let source = r#"<?php
@@ -3507,20 +3508,18 @@ class NegativeKeyConstHolder {
 $class = new ReflectionClass(NegativeKeyConstHolder::class);
 $constant = $class->getConstant("VALUE");
 $constants = $class->getConstants();
-$array = [-5 => "a", "b"];
-$array[] = "c";
-echo PHP_VERSION, " ", json_encode($constant), " ", json_encode($constants["VALUE"]), " ", json_encode($array), "\n";
+echo PHP_VERSION, " ", json_encode($constant), " ", json_encode($constants["VALUE"]), "\n";
 "#;
     let php82 = compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php82);
     assert_eq!(
         php82,
-        "8.2.0 {\"-5\":\"a\",\"0\":\"b\"} {\"-5\":\"a\",\"0\":\"b\"} {\"-5\":\"a\",\"0\":\"b\",\"1\":\"c\"}\n"
+        "8.2.0 {\"-5\":\"a\",\"0\":\"b\"} {\"-5\":\"a\",\"0\":\"b\"}\n"
     );
 
     let php83 = compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php83);
     assert_eq!(
         php83,
-        "8.3.0 {\"-5\":\"a\",\"-4\":\"b\"} {\"-5\":\"a\",\"-4\":\"b\"} {\"-5\":\"a\",\"-4\":\"b\",\"-3\":\"c\"}\n"
+        "8.3.0 {\"-5\":\"a\",\"-4\":\"b\"} {\"-5\":\"a\",\"-4\":\"b\"}\n"
     );
 }
 
@@ -4678,4 +4677,32 @@ eval('echo implode(",", array_keys((new ReflectionClass("E"))->getConstants())),
          A,P,Q,TB,TA\n\
          B,X,A\n"
     );
+}
+
+/// A default spelled `[-5 => "a", "b"]` (which the parser keeps as a mixed literal, because the
+/// bare entry's key depends on the PHP profile) materializes and reflects exactly like the hash
+/// PHP 8.5 makes of it: property and static property defaults, method and function parameter
+/// defaults called directly, through `call_user_func()` and through a first-class callable, and
+/// `ReflectionParameter`/`ReflectionProperty::getDefaultValue()`. Regression for #1340.
+#[test]
+fn test_mixed_literal_defaults_materialize_and_reflect() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public array $p = [-5 => "a", "b"];
+    public static array $s = [-5 => "a", "b"];
+    public function m(array $x = [-5 => "a", "b"]): array { return $x; }
+}
+function f(array $x = [-5 => "a", "b"]): array { return $x; }
+var_dump((new C())->p, C::$s, (new C())->m(), f());
+var_dump((new ReflectionFunction('f'))->getParameters()[0]->getDefaultValue());
+var_dump((new ReflectionMethod('C', 'm'))->getParameters()[0]->getDefaultValue());
+var_dump((new ReflectionProperty('C', 'p'))->getDefaultValue());
+var_dump(call_user_func('f'));
+$fn = f(...);
+var_dump($fn());
+"#,
+    );
+    let pair = "array(2) {\n  [-5]=>\n  string(1) \"a\"\n  [-4]=>\n  string(1) \"b\"\n}\n";
+    assert_eq!(out, pair.repeat(9));
 }
