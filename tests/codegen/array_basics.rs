@@ -1926,3 +1926,19 @@ echo count($u), "\n";
         "6:-2,0.5,1,3.5\n3.5,nan,1,-2,nan,0.5\n-INF,0,1,INF\nINF,1,0,-INF\n3\n"
     );
 }
+
+/// `array_multisort()` over boxed `mixed` arrays terminates when a key is `NAN`. Its bubble sort
+/// had the same unbounded "repeat until no swap" loop as `__rt_usort` (#1353); it is now bounded
+/// to `length - 1` passes too, and a consistent comparison still orders the rows like PHP.
+#[test]
+fn array_multisort_over_a_nan_key_terminates() {
+    let out = compile_and_run(
+        r#"<?php
+function rank(array $keys, array $rows): int { array_multisort($keys, $rows); return count($rows); }
+echo rank([NAN, 1.0, NAN], [10, 20, 30]), "\n";
+function order(array $keys, array $rows): array { array_multisort($keys, $rows); return $rows; }
+echo implode(",", order([3, 1, 2], ["c", "a", "b"])), "\n";
+"#,
+    );
+    assert_eq!(out, "3\na,b,c\n");
+}

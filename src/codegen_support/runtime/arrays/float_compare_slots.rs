@@ -73,7 +73,10 @@ fn emit_one(emitter: &mut Emitter, label: &str, descending: bool) {
             emitter.instruction("xor r9d, r9d");                                // floats carry no high word
             if descending {
                 // -- descending needs a frame: the call is no longer in tail position --
-                emitter.instruction("push rbp");                                // preserve the caller frame pointer
+                // Reached through `__rt_usort`, whose x86_64 frame calls this comparator 8 bytes
+                // off the SysV boundary (allowlisted in `sysv_call_alignment`). That is safe only
+                // because a float/float comparison makes no nested call inside `__rt_php_compare`.
+                emitter.instruction("push rbp");                               // preserve the caller frame pointer
                 emitter.instruction("mov rbp, rsp");                            // establish a stable comparator frame
                 abi::emit_call_label(emitter, "__rt_php_compare");              // ordering as rax = -1, 0, or 1
                 emitter.instruction("neg rax");                                 // reverse the order, not the equal elements
