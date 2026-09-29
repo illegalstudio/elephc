@@ -20,7 +20,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    CastType, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
+    BinOp, CastType, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
 };
 
 /// Describes which visible parameters a callable result may reuse as storage.
@@ -82,6 +82,13 @@ struct AliasState<'a> {
     /// `lower_cast` elides. It starts as the `string` parameters and shrinks as they are
     /// assigned: a declaration says what a slot began as, not what it holds now.
     str_slot_locals: HashSet<String>,
+    /// The locals whose lowered type holds, or may hold, a string RIGHT HERE: a parameter
+    /// declared `string`, `?string`, `mixed`, a union with `string` or left untyped (all but
+    /// the first lower to boxed storage), or a local whose last binding was a string-valued
+    /// assignment. An offset write into one is a string offset write, whose expression result
+    /// is a fresh one-byte string (or `null`), never the value. Every other binding form drops
+    /// the name, which can only cost a leak, never a crash.
+    string_valued_locals: HashSet<String>,
 }
 
 impl<'a> AliasState<'a> {
@@ -95,6 +102,7 @@ impl<'a> AliasState<'a> {
             string_parameters,
             string_parameter_indices,
             str_slot_locals: string_parameters.iter().cloned().collect(),
+            string_valued_locals: HashSet::new(),
         }
     }
 
@@ -240,6 +248,11 @@ pub(crate) fn summarize_callable_return_alias<'a>(
         .map(|(index, _)| index)
         .collect();
     let mut state = AliasState::new(&string_parameters, &string_parameter_indices);
+    state.string_valued_locals = params
+        .iter()
+        .filter(|(_, hint)| hint.is_none_or(type_hint_may_hold_string))
+        .map(|(name, _)| (*name).to_string())
+        .collect();
     for (index, (name, _)) in params.iter().enumerate() {
         state
             .locals
@@ -253,6 +266,22 @@ pub(crate) fn summarize_callable_return_alias<'a>(
     let mut returned = ReturnArgAlias::None;
     analyze_body(body, &mut state, &mut returned);
     returned
+}
+
+/// Returns whether `name` currently holds the value of a parameter declared `string`.
+///
+/// Either the local still has its bare `Str` parameter slot, or its provenance names only
+/// `string` parameters. An element write into such a local is a string offset write.
+fn holds_string_parameter_value(name: &str, state: &AliasState<'_>) -> bool {
+    if state.has_str_slot(name) {
+        return true;
+    }
+    matches!(
+        state.locals.get(name),
+        Some(ReturnArgAlias::Parameters(parameters))
+            if !parameters.is_empty()
+                && parameters.iter().all(|index| state.is_string_parameter_index(*index))
+    )
 }
 
 /// Applies statement provenance effects and accumulates every reachable return path.
@@ -286,8 +315,14 @@ fn analyze_stmt(
             // alone leaked one copy per call for both of those.
             let keeps_str_slot =
                 state.is_string_parameter(name) && expr_keeps_str_slot(value, state);
+            let string_valued = expr_is_string_valued(value, state);
             apply_expr_effects(value, state);
             state.locals.insert(name.clone(), alias);
+            if string_valued {
+                state.string_valued_locals.insert(name.clone());
+            } else {
+                state.string_valued_locals.remove(name);
+            }
             if keeps_str_slot {
                 state.str_slot_locals.insert(name.clone());
             } else {
@@ -297,6 +332,7 @@ fn analyze_stmt(
         StmtKind::RefAssign { target, source } => {
             apply_expr_effects(source, state);
             state.locals.insert(target.clone(), ReturnArgAlias::Unknown);
+            state.string_valued_locals.remove(target);
             state.str_slot_locals.remove(target);
             // The new ref cell can connect either name to storage whose later
             // writes are not represented by ordinary assignment statements.
@@ -380,10 +416,12 @@ fn analyze_stmt(
             let mut iteration = state.clone();
             if let Some(key) = key_var {
                 iteration.locals.insert(key.clone(), ReturnArgAlias::None);
+                iteration.string_valued_locals.remove(key);
             }
             // A by-value element can still borrow nested refcounted storage from
             // the iterated parameter, so only the container itself is known fresh.
             iteration.locals.insert(value_var.clone(), ReturnArgAlias::Unknown);
+            iteration.string_valued_locals.remove(value_var);
             analyze_body(body, &mut iteration, returned);
             *state = merge_states(vec![state.clone(), iteration]);
         }
@@ -429,6 +467,7 @@ fn analyze_stmt(
                 invalidate_all_aliases(&mut catch_state);
                 if let Some(variable) = &catch.variable {
                     catch_state.locals.insert(variable.clone(), ReturnArgAlias::Unknown);
+                    catch_state.string_valued_locals.remove(variable);
                 }
                 analyze_body(&catch.body, &mut catch_state, returned);
                 paths.push(catch_state);
@@ -450,10 +489,18 @@ fn analyze_stmt(
         } => {
             apply_expr_effects(index, state);
             apply_expr_effects(value, state);
-            state
-                .locals
-                .entry(array.clone())
-                .or_insert(ReturnArgAlias::Unknown);
+            if holds_string_parameter_value(array, state) {
+                // A string offset write (`$s[$i] = $v`) never mutates the string it read: it
+                // builds the updated string as new storage and stores that into the local. A
+                // local that held a `string` parameter's value therefore owns fresh storage
+                // afterwards, and returning it must let the caller release its reference.
+                state.locals.insert(array.clone(), ReturnArgAlias::None);
+            } else {
+                state
+                    .locals
+                    .entry(array.clone())
+                    .or_insert(ReturnArgAlias::Unknown);
+            }
         }
         StmtKind::ArrayPush { array, value } => {
             apply_expr_effects(value, state);
@@ -493,16 +540,19 @@ fn analyze_stmt(
             apply_expr_effects(value, state);
             for name in vars {
                 state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.string_valued_locals.remove(name);
             }
         }
         StmtKind::Global { vars } => {
             for name in vars {
                 state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.string_valued_locals.remove(name);
             }
         }
         StmtKind::StaticVar { name, init } => {
             apply_expr_effects(init, state);
             state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+            state.string_valued_locals.remove(name);
         }
         StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) | StmtKind::Throw(expr) => {
             apply_expr_effects(expr, state);
@@ -563,6 +613,42 @@ fn analyze_loop(
     }
 }
 
+/// Returns whether a parameter type hint admits a string, so the parameter's lowered slot is
+/// `string`, or boxed storage that a string offset write dispatches on at run time.
+fn type_hint_may_hold_string(hint: &TypeExpr) -> bool {
+    match hint {
+        TypeExpr::Str => true,
+        TypeExpr::Named(name) => name.as_str().eq_ignore_ascii_case("mixed"),
+        TypeExpr::Nullable(inner) => type_hint_may_hold_string(inner),
+        TypeExpr::Union(members) => members.iter().any(type_hint_may_hold_string),
+        _ => false,
+    }
+}
+
+/// Returns whether an assigned expression is certainly a string, so the local it is stored in
+/// is lowered as a string (or as boxed storage holding one).
+fn expr_is_string_valued(expr: &Expr, state: &AliasState<'_>) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_) => true,
+        ExprKind::BinaryOp { op: BinOp::Concat, .. } => true,
+        ExprKind::Cast { target: CastType::String, .. } => true,
+        ExprKind::Variable(name) => state.string_valued_locals.contains(name),
+        _ => false,
+    }
+}
+
+/// Returns whether an assignment target `$name[...]` writes a string offset: the local holds,
+/// or may hold, a string, so EIR lowering takes the string offset path whose result is fresh.
+fn is_string_offset_write_target(target: &Expr, state: &AliasState<'_>) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &target.kind else {
+        return false;
+    };
+    let ExprKind::Variable(name) = &array.kind else {
+        return false;
+    };
+    state.string_valued_locals.contains(name) || holds_string_parameter_value(name, state)
+}
+
 /// Merges local provenance across mutually exclusive control-flow paths.
 fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
     static NO_PARAMETERS: std::sync::LazyLock<BTreeSet<String>> =
@@ -606,11 +692,18 @@ fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
         .map(|state| state.str_slot_locals.clone())
         .reduce(|acc, next| acc.intersection(&next).cloned().collect())
         .unwrap_or_default();
+    // Likewise, a local only still holds a string if it does on every path.
+    let string_valued_locals = states
+        .iter()
+        .map(|state| state.string_valued_locals.clone())
+        .reduce(|acc, next| acc.intersection(&next).cloned().collect())
+        .unwrap_or_default();
     AliasState {
         locals,
         string_parameters,
         string_parameter_indices,
         str_slot_locals,
+        string_valued_locals,
     }
 }
 
@@ -646,6 +739,7 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
             alias
         }
         ExprKind::Assignment {
+            target,
             value,
             result_target,
             prelude,
@@ -654,6 +748,11 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
             let mut after_prelude = state.clone();
             let mut ignored_return = ReturnArgAlias::None;
             analyze_body(prelude, &mut after_prelude, &mut ignored_return);
+            if is_string_offset_write_target(target, &after_prelude) {
+                // `($s[$i] = $v)` on a string evaluates to a fresh one-byte string (or `null`)
+                // held in an owned temporary, not to `$v`'s storage.
+                return ReturnArgAlias::None;
+            }
             expr_alias(result_target.as_deref().unwrap_or(value), &after_prelude)
         }
         ExprKind::ArrayLiteral(_)
@@ -792,6 +891,10 @@ fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
             let mut after_prelude = state.clone();
             let mut ignored_return = ReturnArgAlias::None;
             analyze_body(prelude, &mut after_prelude, &mut ignored_return);
+            if is_string_offset_write_target(target, &after_prelude) {
+                // The string offset result is boxed (`?string`), never a bare `Str` slot.
+                return false;
+            }
             match &target.kind {
                 ExprKind::Variable(name) if result_target.is_none() => {
                     after_prelude.has_str_slot(name)
@@ -827,6 +930,9 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
             apply_expr_effects(value, state);
             if let Some(result_target) = result_target {
                 apply_expr_effects(result_target, state);
+            }
+            if let ExprKind::Variable(name) = &target.kind {
+                state.string_valued_locals.remove(name);
             }
             // Expression-position assignments can appear inside conditions and
             // carry compound/ref-cell semantics. Keep statement assignments
@@ -977,6 +1083,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
             // EIR stores a boxed Mixed result even when this was a bare string slot.
             state.str_slot_locals.remove(name);
             state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+            state.string_valued_locals.remove(name);
         }
         ExprKind::Yield { key, value } => {
             if let Some(key) = key {
@@ -989,6 +1096,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
         ExprKind::Closure { capture_refs, .. } => {
             for name in capture_refs {
                 state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.string_valued_locals.remove(name);
             }
         }
         ExprKind::StringLiteral(_)
@@ -1049,6 +1157,7 @@ fn invalidate_call_variables(args: &[Expr], state: &mut AliasState<'_>) {
         };
         if let ExprKind::Variable(name) = &value.kind {
             state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+            state.string_valued_locals.remove(name);
         }
     }
 }
@@ -1100,6 +1209,51 @@ mod tests {
         let summaries = collect_return_alias_summaries(&program);
         assert_eq!(
             summaries.function("choose"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
+        );
+    }
+
+    /// Verifies a string offset write makes a `string` parameter (or a local copy of one) fresh.
+    ///
+    /// `$w[0] = "X"` builds a new string, so returning `$w` no longer hands back the caller's
+    /// argument; claiming the passthrough leaked one string per call. An array parameter keeps
+    /// its previous provenance.
+    #[test]
+    fn string_offset_write_makes_a_string_parameter_fresh() {
+        let program = parse(
+            "<?php function up(string $w): string { $w[0] = 'X'; return $w; } function copy(string $w): string { $x = $w; $x[0] = 'X'; return $x; } function arr(array $a): array { $a[0] = 1; return $a; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("up"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("copy"), Some(&ReturnArgAlias::None));
+        assert_eq!(
+            summaries.function("arr"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
+        );
+    }
+
+    /// Verifies a string offset assignment expression returns fresh storage, not its value.
+    ///
+    /// `($s[0] = $v)` on a string (or a boxed local that may hold one) evaluates to a new
+    /// one-byte string in an owned temporary; claiming `$v`'s passthrough leaked it once per
+    /// call. An array element write still evaluates to the value, so it keeps the claim, and
+    /// so does a local whose last binding was not a string.
+    #[test]
+    fn string_offset_assignment_expression_result_is_fresh() {
+        let program = parse(
+            "<?php function lit(string $v) { $s = 'abc'; return ($s[0] = $v); } function via(string $s, string $v) { $r = ($s[0] = $v); return $r; } function boxed(mixed $s, string $v) { return ($s[0] = $v); } function untyped($s, $v) { return ($s[0] = $v); } function arr(array $a, array $v) { return ($a[0] = $v); } function rebound(mixed $s, array $v) { $s = [1]; return ($s[0] = $v); }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("lit"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("via"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("boxed"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("untyped"), Some(&ReturnArgAlias::None));
+        assert_eq!(
+            summaries.function("arr"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
+        );
+        assert_eq!(
+            summaries.function("rebound"),
             Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
         );
     }

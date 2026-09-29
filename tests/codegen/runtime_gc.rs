@@ -159,3 +159,5 @@ mod class_param_return;
 mod reflection_attribute_filter;
 #[path = "runtime_gc/tagged_scalar_boxing.rs"]
 mod tagged_scalar_boxing;
+#[path = "runtime_gc/string_offset_writes.rs"]
+mod string_offset_writes;

@@ -209,7 +209,8 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh
             ) || matches!(target, crate::ir::RuntimeFnId::GetClass | crate::ir::RuntimeFnId::GetParentClass),
             Some(crate::ir::Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::UnaryString(_),
+                crate::ir::RuntimeCallTarget::UnaryString(_)
+                | crate::ir::RuntimeCallTarget::StringOffsetSet,
             )) => true,
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::Pcntl(target),

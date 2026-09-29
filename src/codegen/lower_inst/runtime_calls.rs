@@ -45,6 +45,7 @@ pub(super) fn lower(
         | RuntimeCallTarget::CallArgumentCollectPositionals
         | RuntimeCallTarget::CallArgumentCollectNamed => super::call_argument_unpack::lower(ctx, inst, target),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
+        RuntimeCallTarget::StringOffsetSet => lower_string_offset_set(ctx, inst),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)
         }
@@ -286,6 +287,40 @@ fn lower_unary_string(
         abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
         ctx.emitter.label(&ready);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers PHP's string offset write through `__rt_str_offset_set`.
+///
+/// Operands are the subject string, the already-resolved integer offset, and the string value.
+/// ARM64 passes the subject in `x1`/`x2`, the offset in `x0`, and the value in `x3`/`x4`;
+/// x86_64 passes the subject in `rax`/`rdx`, the offset in `rcx`, and the value in `rdi`/`rsi`.
+/// The result is the updated string in the target's string result pair.
+fn lower_string_offset_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime string.offset_set expected 3 operands, got {}",
+            inst.operands.len(),
+        )));
+    }
+    let subject = expect_operand(inst, 0)?;
+    let offset = expect_operand(inst, 1)?;
+    let value = expect_operand(inst, 2)?;
+    let (subject_ptr, subject_len, offset_reg, value_ptr, value_len) = match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => ("x1", "x2", "x0", "x3", "x4"),
+        crate::codegen::platform::Arch::X86_64 => ("rax", "rdx", "rcx", "rdi", "rsi"),
+    };
+    // Plain frame-slot or register-home loads: none of them clobbers another argument register.
+    ctx.load_string_value_to_regs(value, value_ptr, value_len)?;
+    let offset_ty = ctx.load_value_to_reg(offset, offset_reg)?.codegen_repr();
+    if !matches!(offset_ty, PhpType::Int | PhpType::Bool) {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime string.offset_set expected an integer offset, got {:?}",
+            offset_ty,
+        )));
+    }
+    ctx.load_string_value_to_regs(subject, subject_ptr, subject_len)?;
+    abi::emit_call_label(ctx.emitter, "__rt_str_offset_set");
     store_if_result(ctx, inst)
 }
 

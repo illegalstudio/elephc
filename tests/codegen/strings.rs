@@ -50,6 +50,8 @@ mod openssl;
 mod parse_url;
 #[path = "strings/offset_warnings.rs"]
 mod offset_warnings;
+#[path = "strings/offset_writes.rs"]
+mod offset_writes;
 
 #[path = "strings/mbstring.rs"]
 mod mbstring;

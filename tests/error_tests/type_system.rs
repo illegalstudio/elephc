@@ -68,13 +68,88 @@ fn test_error_string_index_requires_integer() {
     );
 }
 
-/// Verifies that assigning to a string offset (character replacement) is rejected.
-/// Input: `$s = "hello"; $s[0] = "H";` — offset assignment on a string is unsupported.
+/// Verifies a string offset write keeps the string read's offset rule: a non-numeric string
+/// literal or an array offset is refused.
 #[test]
-fn test_error_string_offset_assignment_is_not_supported() {
+fn test_error_string_offset_write_requires_integer_offset() {
     expect_error(
-        "<?php $s = \"hello\"; $s[0] = \"H\";",
-        "String offset assignment is not supported",
+        "<?php $s = \"hello\"; $s[\"x\"] = \"H\";",
+        "String index must be integer",
+    );
+    expect_error(
+        "<?php $s = \"hello\"; $s[[1]] = \"H\";",
+        "String index must be integer",
+    );
+}
+
+/// Verifies compound operators on a string offset are refused with PHP's `Error` text, in the
+/// statement and the expression form; `$s[0] = $s[0] . "x"` written out stays valid.
+#[test]
+fn test_error_string_offset_compound_assignment() {
+    expect_error(
+        "<?php $s = \"hello\"; $s[0] .= \"H\";",
+        "Cannot use assign-op operators with string offsets",
+    );
+    expect_error(
+        "<?php $s = \"hello\"; $s[0] += 1;",
+        "Cannot use assign-op operators with string offsets",
+    );
+    expect_error(
+        "<?php $s = \"hello\"; $r = ($s[0] .= \"H\");",
+        "Cannot use assign-op operators with string offsets",
+    );
+}
+
+/// Verifies `++`/`--` on a string offset are refused with PHP's `Error` text.
+#[test]
+fn test_error_string_offset_increment_decrement() {
+    expect_error(
+        "<?php $s = \"hello\"; $s[0]++;",
+        "Cannot increment/decrement string offsets",
+    );
+    expect_error(
+        "<?php $s = \"hello\"; --$s[1];",
+        "Cannot increment/decrement string offsets",
+    );
+    expect_error(
+        "<?php $s = \"hello\"; $r = $s[0]++;",
+        "Cannot increment/decrement string offsets",
+    );
+}
+
+/// Verifies `$s[] = $v` on a string is refused with PHP's `Error` text.
+#[test]
+fn test_error_string_push_is_not_supported() {
+    expect_error(
+        "<?php $s = \"hello\"; $s[] = \"H\";",
+        "[] operator not supported for strings",
+    );
+}
+
+/// Verifies a nested write through a string offset is refused with PHP's `Error` text.
+#[test]
+fn test_error_string_offset_used_as_array() {
+    expect_error(
+        "<?php $s = \"hello\"; $s[0][0] = \"H\";",
+        "Cannot use string offset as an array",
+    );
+}
+
+/// Verifies string offset writes into a property or an array element are refused with a
+/// diagnostic that names the workaround (they are valid PHP, not lowered yet).
+#[test]
+fn test_error_string_offset_write_on_property_or_element() {
+    expect_error(
+        "<?php class B { public string $s = \"abc\"; } $o = new B(); $o->s[0] = \"X\";",
+        "String offset assignment on a property is not supported",
+    );
+    expect_error(
+        "<?php class B { public static string $s = \"abc\"; } B::$s[0] = \"X\";",
+        "String offset assignment on a property is not supported",
+    );
+    expect_error(
+        "<?php $a = [\"k\" => \"abc\"]; $a[\"k\"][1] = \"y\";",
+        "String offset assignment on an array element is not supported",
     );
 }
 

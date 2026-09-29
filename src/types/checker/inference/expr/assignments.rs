@@ -45,9 +45,33 @@ impl Checker {
         span: Span,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        let string_offset_write = string_offset_write_target(target, env);
+        if let Some((array, index)) = string_offset_write {
+            refuse_string_offset_read_modify_write(array, index, prelude, span)?;
+        }
         for stmt in prelude {
             self.check_assignment_like_stmt(stmt, env)?;
         }
+        if let Some((array, index)) = string_offset_write {
+            // PHP's `($s[$i] = $v)` evaluates to the one-byte string it stored, never to `$v`
+            // itself, and to `null` when the offset lies before the start and nothing was
+            // written. Lowering materializes that `?string` as a boxed value; the checker calls
+            // it `mixed`, because a `?string` would refuse `return ($w[0] = 'x');` from a
+            // function declared `: string`, which php accepts whenever the offset is legal.
+            let stmt = Stmt::new(
+                StmtKind::ArrayAssign {
+                    array: array.to_string(),
+                    index: index.clone(),
+                    value: value.clone(),
+                },
+                span,
+            );
+            self.check_assignment_like_stmt(&stmt, env)?;
+            return Ok(PhpType::Mixed);
+        }
+        // A boxed local that may hold a string makes the result depend on its runtime type:
+        // the stored byte (or `null`) for a string, the assigned value otherwise.
+        let may_be_string_offset_write = boxed_string_offset_write_candidate(target, env);
 
         if let ExprKind::Variable(name) = &target.kind {
             return self.check_local_assignment_expression(name, value, span, env);
@@ -116,7 +140,11 @@ impl Checker {
             Some(result_target) if result_target != target => result_target,
             _ => value,
         };
-        self.infer_type(result_expr, env)
+        let result_ty = self.infer_type(result_expr, env)?;
+        if may_be_string_offset_write {
+            return Ok(PhpType::Mixed);
+        }
+        Ok(result_ty)
     }
 
     /// Type-checks `$object->{$property} = $value` assignment expressions.
@@ -168,4 +196,66 @@ impl Checker {
         }
         Ok(())
     }
+}
+
+/// Returns the local name and index when `target` is `$name[$index]` on a local typed `string`.
+fn string_offset_write_target<'e>(target: &'e Expr, env: &TypeEnv) -> Option<(&'e str, &'e Expr)> {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return None;
+    };
+    let ExprKind::Variable(name) = &array.kind else {
+        return None;
+    };
+    matches!(env.get(name), Some(PhpType::Str)).then_some((name.as_str(), index.as_ref()))
+}
+
+/// Returns whether `target` is `$name[...]` on a local typed `mixed` or a union with a `string`
+/// member, i.e. a write that is a string offset write whenever the local holds a string.
+///
+/// EIR lowering branches on the runtime tag for exactly these locals
+/// (`crate::ir_lower::stmt::local_may_hold_boxed_string`), so the expression is `mixed`.
+fn boxed_string_offset_write_candidate(target: &Expr, env: &TypeEnv) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &target.kind else {
+        return false;
+    };
+    let ExprKind::Variable(name) = &array.kind else {
+        return false;
+    };
+    match env.get(name) {
+        Some(PhpType::Mixed) => true,
+        Some(PhpType::Union(members)) => members.iter().any(|member| *member == PhpType::Str),
+        _ => false,
+    }
+}
+
+/// Refuses the read-modify-write forms PHP rejects on a string offset.
+///
+/// The parser desugars them into a prelude that reads the target first: `$s[0]++` / `--$s[0]`
+/// capture the old byte with `$old = $s[0]`, and the expression form of `$s[0] .= "x"` binds
+/// `$tmp = $s[0] . "x"`. PHP throws `Error` for both before touching the string, so they can
+/// never succeed and are refused here with PHP's wording.
+fn refuse_string_offset_read_modify_write(
+    array: &str,
+    index: &Expr,
+    prelude: &[Stmt],
+    span: Span,
+) -> Result<(), CompileError> {
+    let is_target = |expr: &Expr| {
+        crate::types::checker::stmt_check::expr_is_string_offset_target(expr, array, index)
+    };
+    for stmt in prelude {
+        let StmtKind::Assign { value, .. } = &stmt.kind else {
+            continue;
+        };
+        if is_target(value) {
+            return Err(CompileError::new(span, "Cannot increment/decrement string offsets"));
+        }
+        if matches!(&value.kind, ExprKind::BinaryOp { left, .. } if is_target(left)) {
+            return Err(CompileError::new(
+                span,
+                "Cannot use assign-op operators with string offsets",
+            ));
+        }
+    }
+    Ok(())
 }

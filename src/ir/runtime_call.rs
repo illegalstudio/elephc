@@ -98,6 +98,10 @@ pub enum RuntimeCallTarget {
     CallArgumentCollectNamed,
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
+    /// PHP's string offset write `$s[$i] = $v`: takes the subject, the resolved integer offset,
+    /// and the string value, and returns the updated string as a fresh value. It can warn
+    /// (illegal offset, multi-byte value) and throw `Error` (empty value).
+    StringOffsetSet,
     /// A typed PCNTL process-control operation with target-aware availability.
     Pcntl(crate::ir::PcntlRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
@@ -171,6 +175,10 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
             }),
+            RuntimeCallTarget::StringOffsetSet => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Str, IrType::I64, IrType::Str],
+                result: IrType::Str,
+            }),
             RuntimeCallTarget::Pcntl(target) => Some(target.signature()),
             RuntimeCallTarget::Function(target) => {
                 target.descriptor().logical_signature
@@ -215,6 +223,7 @@ impl RuntimeCallTarget {
             }
             RuntimeCallTarget::CallArgumentCollectNamed => "call_argument.collect_named",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
+            RuntimeCallTarget::StringOffsetSet => "string.offset_set",
             RuntimeCallTarget::Pcntl(target) => target.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),
             RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),

@@ -14,6 +14,8 @@ mod properties;
 mod properties_null_coalesce;
 mod static_properties;
 
+pub(in crate::types::checker) use arrays::expr_is_string_offset_target;
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX};
 use crate::types::{normalized_array_key_type, PhpType, TypeEnv};

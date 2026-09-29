@@ -215,6 +215,12 @@ pub(super) fn check_property_array_assign(
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
+            if prop_ty == PhpType::Str {
+                return Err(CompileError::new(
+                    span,
+                    super::arrays::STRING_OFFSET_ON_PROPERTY_UNSUPPORTED,
+                ));
+            }
             if let PhpType::Object(prop_class_name) = &prop_ty {
                 if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
                     return Ok(());
