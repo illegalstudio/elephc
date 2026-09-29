@@ -89,7 +89,8 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
     store_if_result(ctx, inst)
 }
 
-/// Recreates an unset untyped property as boxed null before its mutable fetch.
+/// Recreates an unset untyped property as boxed null before its mutable fetch, clearing the
+/// removed-state marker so the property is present again, as it is in PHP.
 ///
 /// PHP materializes null for a compound write through an unset untyped slot. The following
 /// iterator operation then reports the ordinary non-array warning. Publishing the box first
@@ -131,6 +132,10 @@ fn emit_recreate_removed_untyped_property_for_write(
         object_reg,
         slot.offset,
     );
+    // PHP's write fetch RECREATES the removed property as null, so the removed-state marker is
+    // cleared too: a later read answers null without the undefined-property warning, and
+    // `print_r()`/`get_object_vars()` list the property again.
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, slot.offset + 8);
     ctx.emitter.label(&initialized_label);
     Ok(())
 }

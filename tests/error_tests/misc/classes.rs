@@ -217,6 +217,21 @@ fn test_error_nullsafe_method_rejects_scalar_receiver() {
     );
 }
 
+/// `unset()` is a write context, so PHP refuses a nullsafe link anywhere in the chain it writes
+/// through at compile time: a property, a property array element, and an element reached through
+/// a nullsafe method call.
+#[test]
+fn test_error_nullsafe_in_unset_is_rejected() {
+    let class = "class S { public array $items = [\"a\" => 1]; public $p = 1; \
+                 public function me(): S { return $this; } }";
+    for target in ["$s?->p", "$s?->items[\"a\"]", "$s?->me()->items[\"a\"]", "$s->me()?->items[\"a\"]"] {
+        expect_error(
+            &format!("<?php {class} $s = $argc > 5 ? null : new S(); unset({target});"),
+            "Can't use nullsafe operator in write context",
+        );
+    }
+}
+
 /// Verifies the error diagnostic for nullsafe first class callable is rejected.
 #[test]
 fn test_error_nullsafe_first_class_callable_is_rejected() {
