@@ -433,6 +433,7 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 - Inside a namespace that declares its own constant named after a predefined one (`const NAN = …;`, `const PHP_EOL = …;`), an unqualified `NAN` / `PHP_EOL` still reads the global constant, where PHP reads the namespaced one first. Read the namespaced constant through `constant(__NAMESPACE__ . '\NAN')`, or give it a name no predefined constant uses (#1349).
 - A `mixed` or union bound passed to `random_int()`, `mt_rand()` or `rand()` is coerced like `(int)`: an int passes through, a float truncates, a numeric string parses. A non-numeric string becomes `0`, where PHP throws a `TypeError` for the `int` parameter.
 - A property default of `self::class` or `parent::class` is refused in the backend; PHP resolves it to the declaring class (or its parent). A named `Foo::class` default works. Spell the class out, or assign the value in the constructor (#1351).
+- `sort()`, `rsort()` and `usort()` over a comparison that is not a consistent order (a `NAN` element, whose `<=>` is 1 both ways, or a callback that ignores its arguments) always terminate and keep every element, but the resulting order can differ from PHP's, which comes from zend_sort's hybrid insertion sort. Any consistent comparison gives PHP's order, stable for equal elements.
 - Variable variables (`$$name`, `${$expr}`) are not supported yet. Native AOT
   locals use fixed compile-time stack slots; supporting a runtime-computed name
   will require routing the access through Magician's materialized named scope
