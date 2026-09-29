@@ -151,6 +151,29 @@ but it can only be called through a runtime-resolved callable — `$holder->$nam
 `CallableDescriptorInvoke` — so a module containing one treats every getter as named. That cost
 falls only on programs that build a holder and make such a call.
 
+## Reflection `__toString()` Dumps
+
+`ReflectionMethod`, `ReflectionFunction` and `ReflectionParameter` answer `__toString()` from a
+`__string` slot filled when the owner object is materialized. The dump is rendered at compile time
+by `src/codegen/lower_inst/objects/reflection/callable_to_string.rs`, so a compiled program never
+walks metadata to print it:
+
+- The text follows PHP 8.5. The one exception is the `@@ <file> <line> - <line>` header: a compiled
+  binary cannot honestly name a source that need not exist where it runs.
+- A union type prints its members in PHP's order, not the declared one. The rank is
+  `reflection_union_member_rank` in `property_members.rs`, which the compiled property dump shares.
+  The eval bridge still prints the declared order (#1117).
+- A function or method is marked internal by the same answer `isInternal()` gives, and its module
+  comes from the builtin contract.
+- `getDeclaringFunction()` reflectors are built without parameters, to avoid an infinite
+  `ReflectionParameter` → declaring function → `ReflectionParameter` emission. Their dump is
+  rebuilt from the member's name and stored as a string, which carries no such cycle.
+
+A parameter default whose dump PHP prints from its written AST, rather than from its value
+(`new Foo(...)`, `Foo::BAR`), goes through
+`src/codegen/lower_inst/objects/reflection/default_export.rs`. It exports only the subset PHP
+8.5.10 was measured on; anything else falls back to the evaluated value.
+
 ## Eval Lowering Boundary
 
 Literal `eval()` calls reach EIR as `EvalLiteralCall`. The shared planner in

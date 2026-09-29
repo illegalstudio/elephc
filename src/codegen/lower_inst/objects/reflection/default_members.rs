@@ -197,6 +197,13 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
 ) -> Result<Vec<ReflectionParameterMember>> {
     let mut parameters = Vec::new();
     for (index, (name, ty)) in sig.params.iter().enumerate() {
+        // A scope that calls `func_get_args()` carries the compiler's own `...$__elephc_func_args`
+        // (and a `$__elephc_func_argc` before it). They are ABI slots, not PHP parameters, and
+        // leaving them here made `getNumberOfParameters()` answer 2 and `isVariadic()` true for
+        // `function f($a) { return func_get_args(); }`, where PHP answers 1 and false.
+        if crate::names::is_generated_local_name(name) {
+            continue;
+        }
         let is_variadic = sig.variadic.as_deref() == Some(name.as_str());
         // `declared_params` doubles as the runtime invoker's boxed-ABI marker
         // (see `eir_runtime_metadata_signature`), which only ever raises the
@@ -230,6 +237,9 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
         let default_value_constant_name = source_default_expr
             .or(default_expr)
             .and_then(reflection_parameter_default_constant_name);
+        let default_value_export = source_default_expr.or(default_expr).and_then(|default| {
+            reflection_parameter_default_export(ctx, current_class, current_info, default)
+        });
         let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
         let is_callable_type =
             reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
@@ -247,7 +257,8 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
                 .get(index)
                 .map(|groups| crate::types::collect_attribute_args(groups))
                 .unwrap_or_default(),
-            position: index as i64,
+            // Numbered among the visible parameters, so a hidden slot leaves no gap.
+            position: parameters.len() as i64,
             is_optional: is_variadic
                 || sig
                     .defaults
@@ -270,6 +281,7 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
             type_metadata,
             default_value,
             default_value_constant_name,
+            default_value_export,
         });
     }
     Ok(parameters)

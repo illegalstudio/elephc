@@ -474,6 +474,11 @@ echo ":" . $label->getValue($target);
 
 /// Verifies AOT `ReflectionProperty::__toString()` formats retained generated
 /// property metadata.
+///
+/// The union prints as `string|int` although it was DECLARED `int|string`: PHP renders a union
+/// from its type mask, which has a fixed order, not from the declaration. Measured on 8.5.10,
+/// where this exact class answers `Property [ public string|int $union ]`. This test pinned the
+/// declared order until #1080.
 #[test]
 fn test_reflection_property_to_string_formats_aot_metadata() {
     let out = compile_and_run(
@@ -498,7 +503,7 @@ echo (new ReflectionClass(ReflectPropertyStringTarget::class))->getProperty("lab
     );
     assert_eq!(
         out,
-        "Property [ public int $id = 7 ]|Property [ protected static string $label = 'ok' ]|Property [ private $implicit = NULL ]|Property [ public int|string $union ]|Property [ protected static string $label = 'ok' ]"
+        "Property [ public int $id = 7 ]|Property [ protected static string $label = 'ok' ]|Property [ private $implicit = NULL ]|Property [ public string|int $union ]|Property [ protected static string $label = 'ok' ]"
     );
 }
 

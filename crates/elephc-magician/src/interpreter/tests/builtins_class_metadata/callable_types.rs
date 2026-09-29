@@ -204,7 +204,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "Method [ <user> final static public method run ] {|  - Parameters [2] {|    Parameter #0 [ <required> ?int $id ]|    Parameter #1 [ <optional> string $label = 'ok' ]|  }|  - Return [ ?string ]|}|"
+        "Method [ <user> final static public method run ] {||  - Parameters [2] {|    Parameter #0 [ <required> ?int $id ]|    Parameter #1 [ <optional> string $label = 'ok' ]|  }|  - Return [ ?string ]|}|"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

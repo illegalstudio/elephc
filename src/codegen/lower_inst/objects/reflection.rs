@@ -49,6 +49,7 @@ mod method_members;
 mod property_members;
 mod default_members;
 mod parameter_defaults;
+mod default_export;
 mod names_constants;
 mod operand_extract;
 mod string_attrs_emit;
@@ -57,6 +58,7 @@ mod collection_emit;
 mod default_emit;
 mod member_object_emit;
 mod parameter_property_emit;
+mod callable_to_string;
 mod type_object_emit;
 mod flags_offsets;
 
@@ -72,6 +74,7 @@ use method_members::*;
 use property_members::*;
 use default_members::*;
 use parameter_defaults::*;
+use default_export::*;
 use names_constants::*;
 use operand_extract::*;
 use string_attrs_emit::*;
@@ -80,6 +83,7 @@ use collection_emit::*;
 use default_emit::*;
 use member_object_emit::*;
 use parameter_property_emit::*;
+use callable_to_string::*;
 use type_object_emit::*;
 use flags_offsets::*;
 
@@ -133,6 +137,13 @@ struct ReflectionOwnerMetadata {
     is_iterable: bool,
     modifiers: i64,
     member_flags: ReflectionMemberFlags,
+    /// A `__toString()` dump to use instead of rendering one from the fields above.
+    ///
+    /// `getDeclaringFunction()` builds its reflector from metadata that deliberately carries NO
+    /// parameters: emitting them would emit a `ReflectionParameter` for each, and each of those
+    /// emits its own declaring function, which does not terminate. The dump is a string, so it
+    /// does not recurse — it is rendered from the real member and carried across (#1080).
+    rendered_to_string: Option<String>,
 }
 
 /// Compile-time metadata for one class/interface/trait/enum constant reflector.
@@ -190,6 +201,8 @@ struct ReflectionParameterMember {
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
     default_value_constant_name: Option<String>,
+    /// The default as PHP's dump prints its written AST, for the shapes the value cannot rebuild.
+    default_value_export: Option<String>,
 }
 
 /// Metadata needed for `ReflectionParameter::getDeclaringFunction()`.
@@ -258,7 +271,12 @@ enum ReflectionParameterDefaultValue {
     Null,
     Object {
         class_name: String,
+        /// Every constructor argument the object ends up with, the written ones followed by the
+        /// constructor defaults that fill the rest — what `getDefaultValue()` has to construct.
         args: Vec<ReflectionParameterDefaultValue>,
+        /// How many of those were WRITTEN. PHP's dump exports the source, so `new Foo()` prints
+        /// `new \Foo()` however many defaults the constructor would supply.
+        written_args: usize,
     },
     Array(Vec<ReflectionParameterDefaultValue>),
     AssocArray(Vec<ReflectionDefaultAssocEntry>),
@@ -320,7 +338,7 @@ enum ReflectionParameterSelector {
     Position(i64),
 }
 
-/// Boolean metadata exposed by ReflectionMethod and ReflectionProperty predicates.
+/// Method and property flags plus inherited-origin metadata used by Reflection dumps.
 #[derive(Clone, Copy, Default)]
 struct ReflectionMemberFlags {
     is_static: bool,
@@ -332,6 +350,8 @@ struct ReflectionMemberFlags {
     is_readonly: bool,
     is_promoted: bool,
     is_virtual: bool,
+    /// The reflected class inherits this method from another class-like.
+    is_inherited: bool,
 }
 
 /// Runtime class candidate used when object reflection must dispatch by object class id.
