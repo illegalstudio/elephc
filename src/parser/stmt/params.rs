@@ -213,6 +213,13 @@ fn parse_atomic_type_expr(
     span: Span,
 ) -> Result<TypeExpr, CompileError> {
     match tokens.get(*pos).map(|(t, _)| t) {
+        // A builtin type word followed by `\` is the first segment of a class name, as in
+        // `Int\Money $m` or `Array\Cursor $c` (#826): it is a class type, not `int`/`array`.
+        Some(Token::Identifier(_))
+            if matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::Backslash)) =>
+        {
+            Ok(TypeExpr::Named(parse_name(tokens, pos, span, "Expected type name")?))
+        }
         Some(Token::Identifier(name)) if ident_matches(name, &["int", "integer"]) => {
             *pos += 1;
             Ok(TypeExpr::Int)

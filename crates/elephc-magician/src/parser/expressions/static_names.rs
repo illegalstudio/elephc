@@ -246,7 +246,7 @@ impl Parser {
     /// Parses a simple or explicitly qualified PHP name.
     pub(in crate::parser) fn parse_qualified_name(&mut self) -> Result<ParsedQualifiedName, EvalParseError> {
         let absolute = self.consume(TokenKind::Backslash);
-        let TokenKind::Ident(first) = self.current() else {
+        let (TokenKind::Ident(first) | TokenKind::ReservedNameHead(first)) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
         let mut name = first.clone();

@@ -49,7 +49,7 @@ impl Parser {
             TokenKind::PlusPlus | TokenKind::MinusMinus => {
                 self.parse_prefix_inc_dec_stmt(false)
             }
-            TokenKind::Ident(_) | TokenKind::Backslash
+            TokenKind::Ident(_) | TokenKind::ReservedNameHead(_) | TokenKind::Backslash
                 if self.current_starts_static_property_postfix_inc_dec() =>
             {
                 self.parse_static_property_inc_dec_stmt(false, false)

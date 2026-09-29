@@ -519,3 +519,34 @@ fn malformed_numeric_literals_are_refused() {
     assert_eq!(error("0x"), EvalParseError::InvalidNumber);
     assert_eq!(error("1e"), EvalParseError::InvalidNumber);
 }
+
+/// Verifies a reserved word glued to `\` and a further segment lexes as the head of a qualified
+/// name (#826), while the same word with a space before the `\`, an ordinary identifier, and a
+/// leading `namespace\` (the relative-name prefix) keep their `Ident` token.
+#[test]
+fn reserved_word_glued_into_a_name_is_a_name_head() {
+    let ident = |name: &str| TokenKind::Ident(name.to_string());
+    assert_eq!(
+        kinds(r"Function\Lib; use function \f; Vendor\Lib; namespace\x;"),
+        vec![
+            TokenKind::ReservedNameHead("Function".to_string()),
+            TokenKind::Backslash,
+            ident("Lib"),
+            TokenKind::Semicolon,
+            ident("use"),
+            ident("function"),
+            TokenKind::Backslash,
+            ident("f"),
+            TokenKind::Semicolon,
+            ident("Vendor"),
+            TokenKind::Backslash,
+            ident("Lib"),
+            TokenKind::Semicolon,
+            ident("namespace"),
+            TokenKind::Backslash,
+            ident("x"),
+            TokenKind::Semicolon,
+            TokenKind::Eof,
+        ]
+    );
+}

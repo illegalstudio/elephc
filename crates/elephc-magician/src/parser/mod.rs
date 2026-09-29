@@ -25,6 +25,8 @@ use crate::eval_ir::EvalProgram;
 use crate::lexer::tokenize;
 use state::Parser;
 
+pub(crate) use cursor::is_reserved_class_like_name as is_reserved_word;
+
 /// Parses an eval fragment into by-name EvalIR statements.
 pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseError> {
     if contains_php_open_tag(code) {

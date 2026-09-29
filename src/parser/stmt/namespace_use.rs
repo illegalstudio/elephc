@@ -36,6 +36,18 @@ pub(super) fn parse_namespace_stmt(
 
     let name = if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
         None
+    } else if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
+        // `namespace\CONFIG;` is a relative name, not a declaration, and a declared name is
+        // never fully qualified. Read as one, `\CONFIG` silently renamed the rest of the file.
+        return Err(CompileError::new(
+            span,
+            "Expected namespace name after 'namespace'; a namespace declaration cannot start with '\\'",
+        ));
+    } else if let Some(word) = single_reserved_namespace_name(tokens, *pos) {
+        // PHP accepts any reserved word but `namespace` as a one-segment namespace name:
+        // `namespace Default;`, `namespace List { ... }` (#840).
+        *pos += 1;
+        Some(Name::unqualified(word))
     } else {
         Some(parse_name(
             tokens,
@@ -77,6 +89,22 @@ pub(super) fn parse_namespace_stmt(
         return Err(CompileError::from_many(errors));
     }
     Ok(Stmt::new(StmtKind::NamespaceBlock { name, body }, span))
+}
+
+/// Returns the spelling of a reserved word used alone as a namespace declaration name, as in
+/// `namespace Default;` or `namespace List { ... }`, or `None` when the token at `pos` is not a
+/// keyword followed by `;` or `{`. `namespace` itself is refused, as PHP refuses it ("Cannot
+/// use 'Namespace' as namespace name"); a keyword glued into a longer name is already an
+/// identifier (see `crate::lexer::qualified_names`).
+fn single_reserved_namespace_name(tokens: &[SpannedToken], pos: usize) -> Option<String> {
+    let (token, metadata) = tokens.get(pos)?;
+    if matches!(token, Token::Identifier(_) | Token::Namespace) {
+        return None;
+    }
+    if !matches!(tokens.get(pos + 1), Some((Token::Semicolon | Token::LBrace, _))) {
+        return None;
+    }
+    crate::parser::keyword_name::bareword_name_from_token(token, metadata)
 }
 
 /// Parses a `use` import statement.

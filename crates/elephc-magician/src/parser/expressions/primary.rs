@@ -86,7 +86,7 @@ impl Parser {
             TokenKind::Ident(name) if is_unsupported_expression_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
             }
-            TokenKind::Backslash => self.parse_qualified_name_expr(),
+            TokenKind::Backslash | TokenKind::ReservedNameHead(_) => self.parse_qualified_name_expr(),
             TokenKind::Ident(_)
                 if matches!(self.peek(), TokenKind::Backslash | TokenKind::DoubleColon) =>
             {

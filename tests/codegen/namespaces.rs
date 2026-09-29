@@ -718,3 +718,266 @@ var_dump(\true, \false, \null, \TRUE);
         "eol\nmax\npi\nmin|/\ninf nan\ne sqrt2 eps\nstdout os\neight\nbool(true)\nbool(false)\nNULL\nbool(true)\n"
     );
 }
+
+/// A reserved word is an ordinary segment of a qualified name, as in `Demo\Namespace` or
+/// `Vendor\Default\Theme`. Namespace declarations, `use` imports, `use function`, calls,
+/// `::class` and `instanceof` all have to accept it. The declaration failed with
+/// `Expected identifier after '\' in qualified name`. Regression for #826 and #840.
+#[test]
+fn test_reserved_words_are_ordinary_qualified_name_segments() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/kwns_lib.php';
+
+use Vendor\Default\Theme\Example;
+use Demo\Namespace\Subject as Aliased;
+use function Demo\Namespace\describe;
+
+echo (new Example())->name(), "\n";
+echo get_class(new Aliased()), "\n";
+echo describe(), "\n";
+echo \Demo\Namespace\describe(), "\n";
+echo Vendor\Default\Theme\Example::class, "\n";
+var_dump(new Aliased() instanceof Demo\Namespace\Subject);
+"#,
+            ),
+            (
+                "kwns_lib.php",
+                r#"<?php
+namespace Vendor\Default\Theme {
+    class Example { public function name(): string { return "default theme"; } }
+}
+namespace Demo\Namespace {
+    final class Subject {}
+    function describe(): string { return __NAMESPACE__; }
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "default theme\n",
+            "Demo\\Namespace\\Subject\n",
+            "Demo\\Namespace\n",
+            "Demo\\Namespace\n",
+            "Vendor\\Default\\Theme\\Example\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+/// A qualified name whose FIRST segment is a reserved word, as in `Default\Theme\Palette`,
+/// must work everywhere a name can stand: calls, static calls and properties, class constants,
+/// typed and nullable parameters, return and property types, `implements`, `catch`, `new`,
+/// `instanceof`, `::class`, attributes, and plain, comma and group `use` imports whose first
+/// segment is `function`. Before the fix these reached the keyword's own parser (statement
+/// dispatch, expression prefix, type and catch parsing) and failed. A keyword separated from
+/// `\` by a space stays the keyword, so `\strlen()` after `+` and `new \X` keep working.
+/// Regression for #826. Expected output is PHP 8.5's.
+#[test]
+fn test_reserved_word_first_segments_work_in_every_name_position() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Function\Lib { class Foo {} function g() { return __FUNCTION__; } const K = 3; }
+namespace Default\Theme {
+    #[\Attribute]
+    class Attr { }
+    class Palette { public static $hits = 0; public static function accent() { return "teal"; } const X = 1; }
+    interface I {}
+    class E extends \Exception {}
+}
+namespace Static\Kit { class Factory { public function make() { return "made"; } } }
+namespace Main {
+use Function\Lib\Foo;
+use Default\Theme\Palette, Function\Lib\Foo as Foo2;
+use Default\Theme\{Attr, I};
+echo get_class(new Foo), " ", get_class(new Foo2), "\n";
+echo \Default\Theme\Palette::accent(), "\n";
+function t(\Default\Theme\Palette $p): \Default\Theme\Palette { return $p; }
+echo get_class(t(new Palette)), "\n";
+}
+namespace {
+#[Default\Theme\Attr]
+function attributed() { return "attr ok"; }
+echo attributed(), "\n";
+echo Default\Theme\Palette::accent(), "\n";
+echo Default\Theme\Palette::X, "\n";
+echo Function\Lib\g(), "\n";
+echo Function\Lib\K, "\n";
+Default\Theme\Palette::$hits = 5;
+Default\Theme\Palette::$hits++;
+echo Default\Theme\Palette::$hits, "\n";
+function t2(Default\Theme\Palette $p): Default\Theme\Palette { return $p; }
+echo get_class(t2(new Default\Theme\Palette)), "\n";
+function t3(?Default\Theme\Palette $p = null): string { return $p === null ? "null" : "set"; }
+echo t3(), " ", t3(new Default\Theme\Palette), "\n";
+class Z implements Default\Theme\I {}
+var_dump(new Z instanceof Default\Theme\I);
+try { throw new Default\Theme\E("x"); } catch (Default\Theme\E $e) { echo "caught ", get_class($e), "\n"; }
+$n = Default\Theme\Palette::class; echo $n, "\n";
+echo (new Static\Kit\Factory())->make(), "\n";
+var_dump((new Static\Kit\Factory()) instanceof Static\Kit\Factory);
+class Holder { public Default\Theme\Palette $p; public function __construct() { $this->p = new Default\Theme\Palette; } }
+echo get_class((new Holder)->p), "\n";
+$f = fn(Default\Theme\Palette $p) => get_class($p);
+echo $f(new Default\Theme\Palette), "\n";
+echo strlen("x") + \strlen("yz"), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Function\\Lib\\Foo Function\\Lib\\Foo\n",
+            "teal\n",
+            "Default\\Theme\\Palette\n",
+            "attr ok\n",
+            "teal\n",
+            "1\n",
+            "Function\\Lib\\g\n",
+            "3\n",
+            "6\n",
+            "Default\\Theme\\Palette\n",
+            "null set\n",
+            "bool(true)\n",
+            "caught Default\\Theme\\E\n",
+            "Default\\Theme\\Palette\n",
+            "made\n",
+            "bool(true)\n",
+            "Default\\Theme\\Palette\n",
+            "Default\\Theme\\Palette\n",
+            "3\n",
+        )
+    );
+}
+
+/// A reserved word glued into a qualified name is a name in EVERY parser position, including the
+/// keyword checks that run before a statement or expression is dispatched: a statement led by
+/// `Default\...` or `Case\...` inside a `switch` case body (`Case\Kit\pick();` was silently
+/// read as another case label), a `match` arm pattern led by `Default\...`, the `endif`, `else`
+/// and `finally` checks after a body, `catch (Self\X ...)` and `Parent\X`, the `static` and
+/// `readonly` member modifiers (`public Static\Factory $f` is a typed property, not a static
+/// one), `insteadof`, `instanceof Name::$prop`, a builtin type word (`Int\Money`), string and
+/// heredoc interpolation, and a one-word namespace declaration (`namespace Else { }`). The lexer
+/// now emits such a word as an identifier, as PHP 8 lexes the whole name as one token.
+/// Regression for #826 (review round 2); expected output is PHP 8.5's.
+#[test]
+fn test_reserved_word_names_survive_every_keyword_check() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Default\Theme {
+    class Palette {
+        const X = 1;
+        public static $hits = 0;
+        public static $cls = "Default\\Theme\\Palette";
+        public static function accent() { return "teal"; }
+        public function tone($n) { return "tone" . $n; }
+    }
+}
+namespace Case\Kit { function pick() { echo "picked\n"; return 1; } }
+namespace EndIf { class Marker { public static function ping() { echo "ping\n"; } } }
+namespace Else { class Gate { public static function go() { echo "else-go\n"; } } }
+namespace Finally\Kit { function done() { echo "done\n"; } }
+namespace Self { class Boom extends \Exception {} }
+namespace Parent { class Boom extends \Exception {} }
+namespace Static { class Factory {} }
+namespace Readonly { class Config {} }
+namespace Int { class Money { public function __construct(public int $cents) {} } }
+namespace List {
+    trait A { public function m() { return "A"; } }
+    trait B { public function m() { return "B"; } }
+}
+namespace {
+switch ($argc) {
+    case 1:
+        Default\Theme\Palette::accent();
+        echo "switch default-led\n";
+        Case\Kit\pick();
+        break;
+}
+$v = $argc;
+echo match ($v) { Default\Theme\Palette::X => "match one", default => "match other" }, "\n";
+if ($argc > 0):
+    EndIf\Marker::ping();
+endif;
+if ($argc > 5) { echo "no\n"; } Else\Gate::go();
+try { echo "try\n"; } catch (Exception $e) { } Finally\Kit\done();
+try { throw new Self\Boom("s"); } catch (Self\Boom $e) { echo "caught ", get_class($e), "\n"; }
+try { throw new Parent\Boom("p"); } catch (Parent\Boom | Self\Boom $e) { echo "caught ", get_class($e), "\n"; }
+class Holder {
+    public Static\Factory $f;
+    public Readonly\Config $c;
+    public function __construct() { $this->f = new Static\Factory(); $this->c = new Readonly\Config(); }
+}
+$h = new Holder();
+$r = new ReflectionProperty("Holder", "f");
+var_dump($r->isStatic());
+$r = new ReflectionProperty("Holder", "c");
+var_dump($r->isReadOnly());
+$h->c = new Readonly\Config();
+echo get_class($h->f), " ", get_class($h->c), "\n";
+class Picker { use List\A, List\B { List\A::m insteadof List\B; } }
+echo (new Picker())->m(), "\n";
+function money(Int\Money $m): Int\Money { return $m; }
+echo money(new Int\Money(250))->cents, "\n";
+$p = new Default\Theme\Palette();
+var_dump($p instanceof Default\Theme\Palette::$cls);
+echo "{$p->tone(Default\Theme\Palette::X)}\n";
+echo <<<TXT
+heredoc {$p->tone(Default\Theme\Palette::X + 1)}
+TXT;
+echo "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "switch default-led\n",
+            "picked\n",
+            "match one\n",
+            "ping\n",
+            "else-go\n",
+            "try\n",
+            "done\n",
+            "caught Self\\Boom\n",
+            "caught Parent\\Boom\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "Static\\Factory Readonly\\Config\n",
+            "A\n",
+            "250\n",
+            "bool(true)\n",
+            "tone1\n",
+            "heredoc tone2\n",
+        )
+    );
+}
+
+/// `eval()` of a runtime string (the Magician interpreter, not the AOT parser) reads a reserved
+/// word glued into a qualified name as a name too: `Function\Lib\g();` was dispatched as a
+/// function declaration, `Static\Kit\Factory::make();` as a `static` variable, and
+/// `use Function\Lib\Foo;` imported the FUNCTION `Lib\Foo`, where PHP and the compiled path
+/// import the class `Function\Lib\Foo`. Regression for #826; expected output is PHP 8.5's.
+#[test]
+fn test_eval_reads_reserved_word_first_segments_as_names() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Function\Lib { class Foo {} function g() { return "Function\\Lib\\g"; } }
+namespace Static\Kit { class Factory { public static function make() { echo "made\n"; } } }
+namespace {
+    $code = $argc > 5 ? 'return 0;' : 'namespace Probe; use Function\Lib\Foo; echo \Function\Lib\g(), "|", get_class(new Foo()), "\n";';
+    eval($code);
+    $code = $argc > 5 ? 'return 0;' : 'Static\Kit\Factory::make(); Function\Lib\g(); echo Function\Lib\g(), "\n";';
+    eval($code);
+}
+"#,
+    );
+    assert_eq!(out, "Function\\Lib\\g|Function\\Lib\\Foo\nmade\nFunction\\Lib\\g\n");
+}

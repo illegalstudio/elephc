@@ -177,6 +177,10 @@ public  protected  private  readonly  parent  insteadof  instanceof  enum  packe
 
 Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`). Multi-word keyword spellings use camel-cased variants such as `Token::IncludeOnce` and `Token::RequireOnce`; `readonly` is `Token::ReadOnly`, while the alternative-syntax terminators map to `Token::EndDeclare`, `Token::EndIf`, `Token::EndWhile`, `Token::EndFor`, `Token::EndForeach`, and `Token::EndSwitch`. `declare` / `enddeclare` drive the `declare(directive=literal)` statement and its alternative `declare(...): ... enddeclare;` block form. Keywords are matched case-insensitively; non-canonical casing is preserved in `TokenMetadata` (see [Token metadata](#token-metadata)).
 
+#### Reserved words inside a qualified name
+
+PHP 8 lexes a whole qualified name (`Default\Theme\Palette`, `\Demo\Namespace\Subject`) as one token, so a reserved word inside it is never a keyword. elephc lexes the segments separately, so after scanning a source (or an interpolated `{$...}` fragment) `lexer::qualified_names::identify_reserved_name_segments()` turns such a word back into `Token::Identifier` with its source spelling: a word glued to a preceding `\`, or a leading word glued to a `\` that is itself glued to a further word. "Glued" is read from the token spans (no whitespace or comment between them). Every parser position then sees an ordinary name, including the keyword checks that run before a statement is dispatched (`switch` case labels, `match` arms, `else`/`endif`, member modifiers, `use function`). Three exceptions keep their tokens: a keyword separated from the `\` by a space (`new \Foo`, `use function \f`), a leading `namespace\` (the relative-name prefix), and the literal and predefined-constant tokens (`\true`, `\PHP_EOL`), which are values the parser reads as the global constant.
+
 ### Constants (keyword tokens)
 
 ```

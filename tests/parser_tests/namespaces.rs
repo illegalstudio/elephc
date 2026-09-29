@@ -130,3 +130,114 @@ fn test_fully_qualified_predefined_constant_span_starts_at_the_backslash() {
     // `<?php echo ` is eleven columns, so the `\` is at column 12.
     assert_eq!((expr.span.line, expr.span.col), (1, 12));
 }
+
+/// Verifies a reserved word parses as a segment of a qualified namespace name (#826, #840),
+/// while a lone keyword is still refused as a namespace name.
+#[test]
+fn test_reserved_word_namespace_segments_parse() {
+    for source in [
+        "<?php namespace Demo\\Namespace;",
+        "<?php namespace Vendor\\Default\\Theme;",
+        "<?php use Vendor\\Default\\Theme\\Example;",
+        "<?php new \\Vendor\\List\\Item();",
+    ] {
+        let stmts = parse_source(source);
+        assert!(!stmts.is_empty(), "{source}: expected a statement");
+    }
+    assert!(parse_fails("<?php namespace Namespace;"));
+}
+
+/// Verifies a leading `namespace\` is never read as a literal first segment spelled
+/// `namespace`. It is PHP's relative-name prefix, so `new namespace\Foo()` inside `App` means
+/// `App\Foo`; reading it as a segment bound it to `App\namespace\Foo`, a silent miscompile
+/// through every `parse_name` caller (`new`, `extends`, `instanceof`, trait `use`, types,
+/// `catch`). The parser may refuse the form or resolve it, but must never produce that segment.
+/// A `namespace` segment after a separator is still an ordinary segment.
+#[test]
+fn test_relative_namespace_prefix_is_never_a_literal_segment() {
+    for body in [
+        "new namespace\\Foo();",
+        "class B extends namespace\\Foo {}",
+        "class C implements namespace\\I {}",
+        "$ok = $x instanceof namespace\\Foo;",
+        "class D { use namespace\\T; }",
+        "function f(namespace\\Foo $x): namespace\\Foo { return $x; }",
+        "try {} catch (namespace\\E $e) {}",
+        "#[namespace\\Attr] function g() {}",
+        "echo namespace\\Foo::class;",
+    ] {
+        let source = format!("<?php namespace App; {body}");
+        let Ok(tokens) = tokenize(&source) else { continue };
+        if let Ok(stmts) = parse(&tokens) {
+            let dump = format!("{stmts:?}").to_ascii_lowercase();
+            assert!(
+                !dump.contains("\"namespace\""),
+                "{body}: `namespace\\` became a literal name segment: {dump}"
+            );
+        }
+    }
+    let stmts = parse_source("<?php new \\Demo\\Namespace\\Subject();");
+    let dump = format!("{stmts:?}");
+    assert!(dump.contains("\"Namespace\""), "a trailing segment must stay a segment: {dump}");
+}
+
+/// Verifies `namespace\CONFIG;` at statement position is never read as the declaration
+/// `namespace \CONFIG;`, which silently moved every later declaration of the file into a
+/// namespace named `CONFIG` (#826 review). The parser may refuse it or read it as the relative
+/// constant fetch it is in PHP, but the only namespace declared must stay `App`.
+#[test]
+fn test_relative_prefix_statement_is_never_a_namespace_declaration() {
+    let tokens = tokenize("<?php namespace App; namespace\\CONFIG; class Widget {}").unwrap();
+    if let Ok(stmts) = parse(&tokens) {
+        let declared: Vec<String> = stmts
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::NamespaceDecl { name } => {
+                    Some(name.as_ref().map(|name| name.as_canonical()).unwrap_or_default())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(declared, vec!["App".to_string()]);
+    }
+}
+
+/// Verifies the reserved-word FIRST segment of a qualified name starts a name in statement,
+/// expression, type, `implements`, `catch`, attribute and `use` positions (#826), and that the
+/// word must touch the `\`: a keyword followed by a space and a fully qualified name is still
+/// the keyword (`use function \Lib\f;`, `new \Foo()`).
+#[test]
+fn test_reserved_word_first_segment_starts_a_name_everywhere() {
+    for source in [
+        "<?php Default\\Palette::accent();",
+        "<?php echo Default\\Palette::X;",
+        "<?php Function\\run();",
+        "<?php Default\\Palette::$hits = 1;",
+        "<?php function f(Default\\Palette $p): ?Default\\Palette { return $p; }",
+        "<?php class C implements Default\\Marker {}",
+        "<?php try {} catch (Default\\Failure | List\\Failure $e) {}",
+        "<?php #[Vendor\\Default\\Attr] #[Default\\Attr] function g() {}",
+        "<?php $x = new Static\\Factory();",
+        "<?php $ok = $x instanceof Static\\Factory;",
+        "<?php class H { public Default\\Palette $p; }",
+    ] {
+        let stmts = parse_source(source);
+        assert!(!stmts.is_empty(), "{source}: expected a statement");
+    }
+
+    let stmts = parse_source("<?php use Function\\Lib\\Tool, function \\Lib\\helper;");
+    let StmtKind::UseDecl { imports } = &stmts[0].kind else {
+        panic!("expected a use declaration, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(imports[0].kind, UseKind::Class);
+    assert_eq!(imports[0].name.parts, vec!["Function", "Lib", "Tool"]);
+    assert_eq!(imports[1].kind, UseKind::Function);
+    assert_eq!(imports[1].name.parts, vec!["Lib", "helper"]);
+
+    let stmts = parse_source("<?php $o = new \\Foo();");
+    let dump = format!("{stmts:?}");
+    assert!(dump.contains("NewObject"), "`new \\Foo` must stay a `new`: {dump}");
+    // A lone keyword is not a name, and a group-use prefix needs a glued segment too.
+    assert!(parse_fails("<?php Default::accent();"));
+    assert!(parse_fails("<?php use Default\\{Palette};"));
+}

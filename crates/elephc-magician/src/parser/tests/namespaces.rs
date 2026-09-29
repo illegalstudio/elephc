@@ -266,3 +266,38 @@ fn parse_fragment_rejects_use_import_inside_function_body() {
         Err(EvalParseError::UnsupportedConstruct)
     );
 }
+/// Verifies a reserved word glued into a qualified name is a name in eval code (#826): a
+/// statement led by `Function\...` is a call, not a function declaration, and
+/// `use Function\Lib\Foo;` imports the CLASS `Function\Lib\Foo` rather than the function
+/// `Lib\Foo`, matching PHP and the compiled path.
+#[test]
+fn parse_fragment_reads_reserved_word_first_segments_as_names() {
+    let program = parse_fragment(
+        br#"namespace Eval\Kw;
+use Function\Lib\Foo;
+\Function\Lib\g();
+return new Foo();"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::Expr(EvalExpr::Call {
+                name: "function\\lib\\g".to_string(),
+                args: Vec::new(),
+            }),
+            EvalStmt::Return(Some(EvalExpr::NewObject {
+                class_name: "Function\\Lib\\Foo".to_string(),
+                args: Vec::new(),
+            })),
+        ]
+    );
+    let program = parse_fragment(br#"Function\Lib\g();"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Expr(EvalExpr::Call {
+            name: "function\\lib\\g".to_string(),
+            args: Vec::new(),
+        })]
+    );
+}

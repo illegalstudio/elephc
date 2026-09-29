@@ -141,7 +141,7 @@ impl Parser {
         &mut self,
     ) -> Result<(String, bool), EvalParseError> {
         let _ = self.consume(TokenKind::Backslash);
-        let TokenKind::Ident(first) = self.current() else {
+        let (TokenKind::Ident(first) | TokenKind::ReservedNameHead(first)) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
         let mut name = first.clone();

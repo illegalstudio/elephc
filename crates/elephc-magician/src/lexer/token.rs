@@ -47,6 +47,11 @@ pub(crate) enum TokenKind {
     DollarLBrace,
     DollarIdent(String),
     Ident(String),
+    /// A reserved word glued to a following `\` and segment, as `Default` in
+    /// `Default\Theme\Palette` (#826). PHP 8 lexes the whole name as one token, so the word is
+    /// the first segment of a qualified name and never the keyword: keyword arms match
+    /// `Ident` only, and every name-start position accepts this kind too.
+    ReservedNameHead(String),
     Magic(EvalMagicConst),
     Int(i64),
     Float(f64),

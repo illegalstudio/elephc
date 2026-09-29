@@ -822,3 +822,20 @@ fn test_error_for_condition_comma_list_is_named() {
         "not supported in a for CONDITION",
     );
 }
+
+/// Verifies `namespace` itself stays refused as a one-word namespace name, as in PHP ("Cannot
+/// use 'Namespace' as namespace name"), now that every other reserved word is accepted as one
+/// (`namespace Default;`, #840).
+#[test]
+fn test_error_namespace_is_not_a_namespace_name() {
+    expect_error("<?php namespace Namespace;", "Expected namespace name after 'namespace'");
+    expect_error("<?php namespace namespace { }", "Expected namespace name after 'namespace'");
+}
+
+/// Verifies a reserved word is a name only when glued into a qualified name (#826): standing
+/// alone, or before a group-use `\{`, it is still the keyword, as in PHP.
+#[test]
+fn test_error_lone_reserved_word_is_not_a_name() {
+    expect_error("<?php Default::accent();", "Unexpected token");
+    expect_error("<?php use Default\\{Palette};", "Expected imported name");
+}

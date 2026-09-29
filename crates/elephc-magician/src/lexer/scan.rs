@@ -319,7 +319,13 @@ impl<'a> Lexer<'a> {
             }
             _ if is_ident_start(ch) => {
                 let ident = self.lex_ident();
-                Ok(magic_const_token(&ident, line).unwrap_or(TokenKind::Ident(ident)))
+                if let Some(magic) = magic_const_token(&ident, line) {
+                    Ok(magic)
+                } else if self.reserved_word_leads_qualified_name(&ident) {
+                    Ok(TokenKind::ReservedNameHead(ident))
+                } else {
+                    Ok(TokenKind::Ident(ident))
+                }
             }
             _ => Err(EvalParseError::UnexpectedToken),
         }?;
@@ -341,6 +347,18 @@ impl<'a> Lexer<'a> {
     }
 
     /// Reads a PHP identifier body at the current byte offset.
+    /// Returns whether the reserved word just read is glued to a `\` and a further segment, so
+    /// that PHP 8 reads it as the first segment of a qualified name (`Function\Lib\g()`,
+    /// `use Default\Theme\Palette;`). `namespace` never qualifies: a leading `namespace\` is
+    /// the relative-name prefix. Ordinary identifiers stay `Ident` either way.
+    fn reserved_word_leads_qualified_name(&self, word: &str) -> bool {
+        let mut rest = self.source[self.pos..].chars();
+        !word.eq_ignore_ascii_case("namespace")
+            && crate::parser::is_reserved_word(word)
+            && rest.next() == Some('\\')
+            && rest.next().is_some_and(is_ident_start)
+    }
+
     pub(super) fn lex_ident(&mut self) -> String {
         let mut ident = String::new();
         while let Some(ch) = self.peek_char() {

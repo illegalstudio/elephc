@@ -79,6 +79,87 @@ fn test_ifdef_keyword_token() {
     );
 }
 
+/// Verifies a reserved word glued into a qualified name lexes as an identifier (#826), as PHP 8
+/// lexes the whole name as one token: a leading word glued to `\` and a further word
+/// (`Default\Palette`, `use Function\Lib`), and any word glued after a `\` (`\Demo\Namespace`).
+/// A keyword separated from the `\` by a space (`new \Foo`, `use function \f`), a keyword before
+/// `\{`, and a leading `namespace\` (the relative-name prefix) keep their keyword tokens.
+#[test]
+fn test_reserved_words_glued_into_a_name_lex_as_identifiers() {
+    let ident = |name: &str| Token::Identifier(name.into());
+    assert_eq!(
+        tokens("<?php Default\\Palette; use Function\\Lib; \\Demo\\Namespace\\X;"),
+        vec![
+            Token::OpenTag,
+            ident("Default"),
+            Token::Backslash,
+            ident("Palette"),
+            Token::Semicolon,
+            Token::Use,
+            ident("Function"),
+            Token::Backslash,
+            ident("Lib"),
+            Token::Semicolon,
+            Token::Backslash,
+            ident("Demo"),
+            Token::Backslash,
+            ident("Namespace"),
+            Token::Backslash,
+            ident("X"),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+    assert_eq!(
+        tokens("<?php new \\Foo; use function \\f; Default \\X; Default\\{A}; namespace\\Foo;"),
+        vec![
+            Token::OpenTag,
+            Token::New,
+            Token::Backslash,
+            ident("Foo"),
+            Token::Semicolon,
+            Token::Use,
+            Token::Function,
+            Token::Backslash,
+            ident("f"),
+            Token::Semicolon,
+            Token::Default,
+            Token::Backslash,
+            ident("X"),
+            Token::Semicolon,
+            Token::Default,
+            Token::Backslash,
+            Token::LBrace,
+            ident("A"),
+            Token::RBrace,
+            Token::Semicolon,
+            Token::Namespace,
+            Token::Backslash,
+            ident("Foo"),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+    // An interpolated `{$...}` fragment is lexed on its own before its tokens take the string's
+    // span, so the rule applies inside strings too.
+    assert!(tokens("<?php \"{$o->f(Default\\X::Y)}\";").contains(&ident("Default")));
+    // Literal and predefined-constant tokens are values, not keywords: `\true` and `\PHP_EOL`
+    // keep their own tokens so they still name the global constant.
+    assert_eq!(
+        tokens("<?php \\true; \\PHP_EOL;"),
+        vec![
+            Token::OpenTag,
+            Token::Backslash,
+            Token::True,
+            Token::Semicolon,
+            Token::Backslash,
+            Token::PhpEol,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
 /// Verifies `namespace Foo\Bar;` and `use Baz\Qux;` token sequences.
 #[test]
 fn test_namespace_and_backslash_tokens() {
