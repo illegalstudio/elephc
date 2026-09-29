@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_add() - internals"
 description: "Compiler internals for __elephc_curl_multi_add(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1094
+  order: 1096
 ---
 
 ## `__elephc_curl_multi_add()` - internals

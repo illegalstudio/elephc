@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_linear() - internals"
 description: "Compiler internals for cairo_pattern_create_linear(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 425
+  order: 427
 ---
 
 ## `cairo_pattern_create_linear()` - internals

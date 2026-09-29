@@ -2,7 +2,7 @@
 title: "__elephc_curl_share_setopt() - internals"
 description: "Compiler internals for __elephc_curl_share_setopt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1109
+  order: 1111
 ---
 
 ## `__elephc_curl_share_setopt()` - internals

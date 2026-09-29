@@ -2,7 +2,7 @@
 title: "current() - internals"
 description: "Compiler internals for current(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 53
+  order: 55
 ---
 
 ## `current()` - internals

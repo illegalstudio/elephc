@@ -2,7 +2,7 @@
 title: "mysqli_fetch_row()"
 description: "Returns the next row as a numeric array."
 sidebar:
-  order: 124
+  order: 126
 ---
 
 ## mysqli_fetch_row()

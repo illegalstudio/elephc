@@ -2,7 +2,7 @@
 title: "imagecolorat()"
 description: "Returns the color index or packed color of one pixel."
 sidebar:
-  order: 466
+  order: 468
 ---
 
 ## imagecolorat()

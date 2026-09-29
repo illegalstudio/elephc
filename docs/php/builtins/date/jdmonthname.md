@@ -2,7 +2,7 @@
 title: "jdmonthname()"
 description: "Returns the month name for a Julian Day count in the requested calendar."
 sidebar:
-  order: 229
+  order: 231
 ---
 
 ## jdmonthname()

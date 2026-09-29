@@ -2,7 +2,7 @@
 title: "timezone_name_get() - internals"
 description: "Compiler internals for timezone_name_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 248
+  order: 250
 ---
 
 ## `timezone_name_get()` - internals

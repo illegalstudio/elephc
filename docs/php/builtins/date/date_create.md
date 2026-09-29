@@ -2,7 +2,7 @@
 title: "date_create()"
 description: "Creates a DateTime from a date/time string."
 sidebar:
-  order: 191
+  order: 193
 ---
 
 ## date_create()

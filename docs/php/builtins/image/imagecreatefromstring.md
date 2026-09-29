@@ -2,7 +2,7 @@
 title: "imagecreatefromstring()"
 description: "Creates an image from encoded bytes, detecting the format."
 sidebar:
-  order: 491
+  order: 493
 ---
 
 ## imagecreatefromstring()

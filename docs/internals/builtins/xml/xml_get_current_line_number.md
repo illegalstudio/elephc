@@ -2,7 +2,7 @@
 title: "xml_get_current_line_number() - internals"
 description: "Compiler internals for xml_get_current_line_number(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1006
+  order: 1008
 ---
 
 ## `xml_get_current_line_number()` - internals

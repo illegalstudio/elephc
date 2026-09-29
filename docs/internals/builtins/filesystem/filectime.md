@@ -2,7 +2,7 @@
 title: "filectime() - internals"
 description: "Compiler internals for filectime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 266
+  order: 268
 ---
 
 ## `filectime()` - internals

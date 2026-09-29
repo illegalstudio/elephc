@@ -2,7 +2,7 @@
 title: "natcasesort()"
 description: "Sorts an array using a case-insensitive natural order algorithm."
 sidebar:
-  order: 59
+  order: 61
 ---
 
 ## natcasesort()

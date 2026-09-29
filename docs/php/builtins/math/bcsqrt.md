@@ -2,7 +2,7 @@
 title: "bcsqrt()"
 description: "Returns the square root of an arbitrary-precision decimal number."
 sidebar:
-  order: 564
+  order: 566
 ---
 
 ## bcsqrt()

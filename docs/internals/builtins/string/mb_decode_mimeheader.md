@@ -2,7 +2,7 @@
 title: "mb_decode_mimeheader() - internals"
 description: "Compiler internals for mb_decode_mimeheader(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 834
+  order: 836
 ---
 
 ## `mb_decode_mimeheader()` - internals

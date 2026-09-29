@@ -303,10 +303,12 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_any",
     "array_diff_assoc",
     "array_find",
+    "array_first",
     "array_intersect_assoc",
     "array_is_list",
     "array_key_first",
     "array_key_last",
+    "array_last",
     "array_merge_recursive",
     "array_multisort",
     "array_replace",
@@ -376,12 +378,13 @@ mod tests {
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
         assert_eq!(eval_internal, 100);
-        // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
+        // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 353);
+        assert_eq!(eval_pending, 355);
         // The shared mbstring catalog adds sixty-four registry contracts, including
-        // its internal INI helper, to the prior compiler registry surface.
-        assert_eq!(aot_registry, 724);
+        // its internal INI helper, to the prior compiler registry surface, and the PHP 8.4
+        // `array_first` / `array_last` pair adds two more.
+        assert_eq!(aot_registry, 726);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 409 + curl_surface);
@@ -432,7 +435,7 @@ mod tests {
         assert_eq!(shared_runtime, 85);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 593 + curl_surface);
-        assert_eq!(unsupported, 453);
+        assert_eq!(unsupported, 455);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

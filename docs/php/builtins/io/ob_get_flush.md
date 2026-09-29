@@ -2,7 +2,7 @@
 title: "ob_get_flush()"
 description: "Flushes the output buffer, returns it as a string and turns off output buffering."
 sidebar:
-  order: 347
+  order: 349
 ---
 
 ## ob_get_flush()

@@ -2,7 +2,7 @@
 title: "get_extension_funcs() - internals"
 description: "Compiler internals for get_extension_funcs(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 626
+  order: 628
 ---
 
 ## `get_extension_funcs()` - internals

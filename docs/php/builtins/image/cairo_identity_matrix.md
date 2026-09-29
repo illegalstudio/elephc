@@ -2,7 +2,7 @@
 title: "cairo_identity_matrix()"
 description: "Resets the context's transformation to the identity matrix."
 sidebar:
-  order: 407
+  order: 409
 ---
 
 ## cairo_identity_matrix()

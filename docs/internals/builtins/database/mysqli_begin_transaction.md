@@ -2,7 +2,7 @@
 title: "mysqli_begin_transaction() - internals"
 description: "Compiler internals for mysqli_begin_transaction(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 101
+  order: 103
 ---
 
 ## `mysqli_begin_transaction()` - internals

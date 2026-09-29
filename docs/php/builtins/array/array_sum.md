@@ -2,7 +2,7 @@
 title: "array_sum()"
 description: "Calculate an integer or float sum of array values; an empty array returns integer 0."
 sidebar:
-  order: 40
+  order: 42
 ---
 
 ## array_sum()

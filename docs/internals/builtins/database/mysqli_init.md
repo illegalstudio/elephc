@@ -2,7 +2,7 @@
 title: "mysqli_init() - internals"
 description: "Compiler internals for mysqli_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 137
+  order: 139
 ---
 
 ## `mysqli_init()` - internals

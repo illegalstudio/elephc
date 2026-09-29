@@ -2,7 +2,7 @@
 title: "pcntl_errno() - internals"
 description: "Compiler internals for pcntl_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 647
+  order: 649
 ---
 
 ## `pcntl_errno()` - internals

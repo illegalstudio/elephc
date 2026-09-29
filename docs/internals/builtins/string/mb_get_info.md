@@ -2,7 +2,7 @@
 title: "mb_get_info() - internals"
 description: "Compiler internals for mb_get_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 853
+  order: 855
 ---
 
 ## `mb_get_info()` - internals

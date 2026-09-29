@@ -2,7 +2,7 @@
 title: "cairo_stroke_preserve() - internals"
 description: "Compiler internals for cairo_stroke_preserve(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 443
+  order: 445
 ---
 
 ## `cairo_stroke_preserve()` - internals

@@ -2,7 +2,7 @@
 title: "session_cache_limiter() - internals"
 description: "Compiler internals for session_cache_limiter(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 980
+  order: 982
 ---
 
 ## `session_cache_limiter()` - internals

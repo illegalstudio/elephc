@@ -2,7 +2,7 @@
 title: "mb_send_mail()"
 description: "Encodes the subject and body with the active language settings and sends the message through the configured mail transport."
 sidebar:
-  order: 869
+  order: 871
 ---
 
 ## mb_send_mail()

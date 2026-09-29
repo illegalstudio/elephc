@@ -2,7 +2,7 @@
 title: "array_flip() - internals"
 description: "Compiler internals for array_flip(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 14
+  order: 15
 ---
 
 ## `array_flip()` - internals

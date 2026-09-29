@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_translate() - internals"
 description: "Compiler internals for cairo_matrix_init_translate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 416
+  order: 418
 ---
 
 ## `cairo_matrix_init_translate()` - internals

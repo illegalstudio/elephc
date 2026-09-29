@@ -2,7 +2,7 @@
 title: "mysqli_set_opt()"
 description: "Alias of mysqli_options()."
 sidebar:
-  order: 157
+  order: 159
 ---
 
 ## mysqli_set_opt()

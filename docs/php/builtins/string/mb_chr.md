@@ -2,7 +2,7 @@
 title: "mb_chr()"
 description: "Encodes a Unicode codepoint, or returns false when it cannot be represented."
 sidebar:
-  order: 829
+  order: 831
 ---
 
 ## mb_chr()

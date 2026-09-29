@@ -2,7 +2,7 @@
 title: "mysqli_query()"
 description: "Runs one statement and returns a result set or a success flag."
 sidebar:
-  order: 147
+  order: 149
 ---
 
 ## mysqli_query()

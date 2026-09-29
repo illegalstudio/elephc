@@ -2,7 +2,7 @@
 title: "readfile()"
 description: "Outputs a file."
 sidebar:
-  order: 293
+  order: 295
 ---
 
 ## readfile()

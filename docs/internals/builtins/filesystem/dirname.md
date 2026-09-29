@@ -2,7 +2,7 @@
 title: "dirname() - internals"
 description: "Compiler internals for dirname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 261
+  order: 263
 ---
 
 ## `dirname()` - internals

@@ -2,7 +2,7 @@
 title: "mysqli_report()"
 description: "Selects which mysqli conditions raise exceptions or warnings."
 sidebar:
-  order: 152
+  order: 154
 ---
 
 ## mysqli_report()

@@ -2,7 +2,7 @@
 title: "pcntl_signal()"
 description: "Installs a callable, default, or ignored disposition for one signal."
 sidebar:
-  order: 659
+  order: 661
 ---
 
 ## pcntl_signal()

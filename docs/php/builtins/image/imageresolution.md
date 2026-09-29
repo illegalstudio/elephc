@@ -2,7 +2,7 @@
 title: "imageresolution()"
 description: "Reads or sets an image's horizontal and vertical resolution in DPI."
 sidebar:
-  order: 524
+  order: 526
 ---
 
 ## imageresolution()

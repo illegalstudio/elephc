@@ -2,7 +2,7 @@
 title: "getimagesizefromstring()"
 description: "Returns the size, type, and MIME type of an image held in a string."
 sidebar:
-  order: 453
+  order: 455
 ---
 
 ## getimagesizefromstring()

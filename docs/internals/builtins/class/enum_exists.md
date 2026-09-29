@@ -2,7 +2,7 @@
 title: "enum_exists() - internals"
 description: "Compiler internals for enum_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 82
+  order: 84
 ---
 
 ## `enum_exists()` - internals

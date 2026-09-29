@@ -2,7 +2,7 @@
 title: "opcache_jit_blacklist()"
 description: "Excludes a function from JIT compilation."
 sidebar:
-  order: 642
+  order: 644
 ---
 
 ## opcache_jit_blacklist()

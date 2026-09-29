@@ -2,7 +2,7 @@
 title: "prev() - internals"
 description: "Compiler internals for prev(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 62
+  order: 64
 ---
 
 ## `prev()` - internals

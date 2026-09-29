@@ -2,7 +2,7 @@
 title: "imagesy()"
 description: "Returns an image's height in pixels."
 sidebar:
-  order: 534
+  order: 536
 ---
 
 ## imagesy()

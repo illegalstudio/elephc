@@ -2,7 +2,7 @@
 title: "quotemeta()"
 description: "Prefixes each regular-expression metacharacter in a string with a backslash."
 sidebar:
-  order: 903
+  order: 905
 ---
 
 ## quotemeta()

@@ -2,7 +2,7 @@
 title: "gmstrftime()"
 description: "Formats a UTC timestamp with locale-aware strftime specifiers. Deprecated since PHP 8.1."
 sidebar:
-  order: 224
+  order: 226
 ---
 
 ## gmstrftime()

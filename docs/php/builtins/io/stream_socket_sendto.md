@@ -2,7 +2,7 @@
 title: "stream_socket_sendto()"
 description: "Sends a message to a socket, whether it is connected or not."
 sidebar:
-  order: 391
+  order: 393
 ---
 
 ## stream_socket_sendto()

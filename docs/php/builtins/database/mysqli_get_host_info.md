@@ -2,7 +2,7 @@
 title: "mysqli_get_host_info()"
 description: "Returns the server host name and connection type."
 sidebar:
-  order: 132
+  order: 134
 ---
 
 ## mysqli_get_host_info()

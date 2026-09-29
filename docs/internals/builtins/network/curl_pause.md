@@ -2,7 +2,7 @@
 title: "curl_pause() - internals"
 description: "Compiler internals for curl_pause(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 714
+  order: 716
 ---
 
 ## `curl_pause()` - internals

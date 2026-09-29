@@ -2,7 +2,7 @@
 title: "timezone_offset_get() - internals"
 description: "Compiler internals for timezone_offset_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 249
+  order: 251
 ---
 
 ## `timezone_offset_get()` - internals

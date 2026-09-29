@@ -2,7 +2,7 @@
 title: "mysqli_multi_query()"
 description: "Runs several semicolon-separated statements in one call."
 sidebar:
-  order: 140
+  order: 142
 ---
 
 ## mysqli_multi_query()

@@ -2,7 +2,7 @@
 title: "session_decode() - internals"
 description: "Compiler internals for session_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 983
+  order: 985
 ---
 
 ## `session_decode()` - internals

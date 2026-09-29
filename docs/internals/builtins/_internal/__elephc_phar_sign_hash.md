@@ -2,7 +2,7 @@
 title: "__elephc_phar_sign_hash() - internals"
 description: "Compiler internals for __elephc_phar_sign_hash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1144
+  order: 1146
 ---
 
 ## `__elephc_phar_sign_hash()` - internals

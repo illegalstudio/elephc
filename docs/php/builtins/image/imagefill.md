@@ -2,7 +2,7 @@
 title: "imagefill()"
 description: "Flood-fills from a point with a color."
 sidebar:
-  order: 500
+  order: 502
 ---
 
 ## imagefill()

@@ -2,7 +2,7 @@
 title: "date_timezone_set()"
 description: "Sets a date's timezone, converting the wall-clock time to it."
 sidebar:
-  order: 216
+  order: 218
 ---
 
 ## date_timezone_set()

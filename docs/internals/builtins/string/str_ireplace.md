@@ -2,7 +2,7 @@
 title: "str_ireplace() - internals"
 description: "Compiler internals for str_ireplace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 912
+  order: 914
 ---
 
 ## `str_ireplace()` - internals

@@ -2,7 +2,7 @@
 title: "mysqli_get_server_info()"
 description: "Returns the server version as a string."
 sidebar:
-  order: 134
+  order: 136
 ---
 
 ## mysqli_get_server_info()

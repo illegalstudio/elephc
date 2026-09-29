@@ -2,7 +2,7 @@
 title: "date_parse_from_format()"
 description: "Parses a date/time string against a format into components, warnings, and errors."
 sidebar:
-  order: 207
+  order: 209
 ---
 
 ## date_parse_from_format()

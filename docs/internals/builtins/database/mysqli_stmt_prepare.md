@@ -2,7 +2,7 @@
 title: "mysqli_stmt_prepare() - internals"
 description: "Compiler internals for mysqli_stmt_prepare(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 174
+  order: 176
 ---
 
 ## `mysqli_stmt_prepare()` - internals

@@ -2,7 +2,7 @@
 title: "jewishtojd()"
 description: "Converts a Jewish date into a Julian Day count."
 sidebar:
-  order: 235
+  order: 237
 ---
 
 ## jewishtojd()

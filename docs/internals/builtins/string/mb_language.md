@@ -2,7 +2,7 @@
 title: "mb_language() - internals"
 description: "Compiler internals for mb_language(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 857
+  order: 859
 ---
 
 ## `mb_language()` - internals

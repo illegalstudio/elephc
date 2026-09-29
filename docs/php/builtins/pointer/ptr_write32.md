@@ -2,7 +2,7 @@
 title: "ptr_write32()"
 description: "Writes one 32-bit word through a raw pointer."
 sidebar:
-  order: 741
+  order: 743
 ---
 
 ## ptr_write32()

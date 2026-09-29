@@ -2,7 +2,7 @@
 title: "imagegif()"
 description: "Writes an image as GIF, to a file or to the output buffer."
 sidebar:
-  order: 512
+  order: 514
 ---
 
 ## imagegif()

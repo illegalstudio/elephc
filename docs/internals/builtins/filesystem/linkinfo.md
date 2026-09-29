@@ -2,7 +2,7 @@
 title: "linkinfo() - internals"
 description: "Compiler internals for linkinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 288
+  order: 290
 ---
 
 ## `linkinfo()` - internals

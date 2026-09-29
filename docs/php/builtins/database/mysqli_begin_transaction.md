@@ -2,7 +2,7 @@
 title: "mysqli_begin_transaction()"
 description: "Starts a transaction."
 sidebar:
-  order: 101
+  order: 103
 ---
 
 ## mysqli_begin_transaction()

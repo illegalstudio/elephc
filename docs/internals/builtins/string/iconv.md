@@ -2,7 +2,7 @@
 title: "iconv() - internals"
 description: "Compiler internals for iconv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 810
+  order: 812
 ---
 
 ## `iconv()` - internals

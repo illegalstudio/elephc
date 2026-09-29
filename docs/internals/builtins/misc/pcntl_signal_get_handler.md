@@ -2,7 +2,7 @@
 title: "pcntl_signal_get_handler() - internals"
 description: "Compiler internals for pcntl_signal_get_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 661
+  order: 663
 ---
 
 ## `pcntl_signal_get_handler()` - internals

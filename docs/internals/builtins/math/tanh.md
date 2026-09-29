@@ -2,7 +2,7 @@
 title: "tanh() - internals"
 description: "Compiler internals for tanh(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 602
+  order: 604
 ---
 
 ## `tanh()` - internals

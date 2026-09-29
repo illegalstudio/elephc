@@ -2,7 +2,7 @@
 title: "cairo_restore()"
 description: "Restores the context state saved by the matching cairo_save()."
 sidebar:
-  order: 430
+  order: 432
 ---
 
 ## cairo_restore()

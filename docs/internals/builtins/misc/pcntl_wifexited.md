@@ -2,7 +2,7 @@
 title: "pcntl_wifexited() - internals"
 description: "Compiler internals for pcntl_wifexited(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 672
+  order: 674
 ---
 
 ## `pcntl_wifexited()` - internals

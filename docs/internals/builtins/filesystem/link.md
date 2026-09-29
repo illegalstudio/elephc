@@ -2,7 +2,7 @@
 title: "link() - internals"
 description: "Compiler internals for link(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 287
+  order: 289
 ---
 
 ## `link()` - internals

@@ -2,7 +2,7 @@
 title: "gc_disable() - internals"
 description: "Compiler internals for gc_disable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 616
+  order: 618
 ---
 
 ## `gc_disable()` - internals

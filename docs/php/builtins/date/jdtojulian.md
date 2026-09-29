@@ -2,7 +2,7 @@
 title: "jdtojulian()"
 description: "Converts a Julian Day count into a Julian calendar date string."
 sidebar:
-  order: 233
+  order: 235
 ---
 
 ## jdtojulian()

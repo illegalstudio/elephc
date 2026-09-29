@@ -2,7 +2,7 @@
 title: "array_is_list() - internals"
 description: "Compiler internals for array_is_list(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 18
+  order: 19
 ---
 
 ## `array_is_list()` - internals

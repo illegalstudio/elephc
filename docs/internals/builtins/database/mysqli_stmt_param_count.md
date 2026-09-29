@@ -2,7 +2,7 @@
 title: "mysqli_stmt_param_count() - internals"
 description: "Compiler internals for mysqli_stmt_param_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 173
+  order: 175
 ---
 
 ## `mysqli_stmt_param_count()` - internals

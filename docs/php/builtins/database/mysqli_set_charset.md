@@ -2,7 +2,7 @@
 title: "mysqli_set_charset()"
 description: "Sets the character set used by the connection."
 sidebar:
-  order: 156
+  order: 158
 ---
 
 ## mysqli_set_charset()

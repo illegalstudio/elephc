@@ -2,7 +2,7 @@
 title: "curl_strerror() - internals"
 description: "Compiler internals for curl_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 724
+  order: 726
 ---
 
 ## `curl_strerror()` - internals

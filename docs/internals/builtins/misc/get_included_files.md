@@ -2,7 +2,7 @@
 title: "get_included_files() - internals"
 description: "Compiler internals for get_included_files(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 627
+  order: 629
 ---
 
 ## `get_included_files()` - internals

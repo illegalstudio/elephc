@@ -2,7 +2,7 @@
 title: "mysqli_get_proto_info()"
 description: "Returns the MySQL protocol version in use."
 sidebar:
-  order: 133
+  order: 135
 ---
 
 ## mysqli_get_proto_info()

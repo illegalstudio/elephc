@@ -2,7 +2,7 @@
 title: "array_uintersect()"
 description: "Returns entries from the first of exactly two arrays whose values occur in the second according to an integer-cast callback comparator, preserving keys."
 sidebar:
-  order: 42
+  order: 44
 ---
 
 ## array_uintersect()

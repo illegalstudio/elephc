@@ -2,7 +2,7 @@
 title: "zend_version()"
 description: "Returns the version of the Zend engine the runtime reports."
 sidebar:
-  order: 693
+  order: 695
 ---
 
 ## zend_version()

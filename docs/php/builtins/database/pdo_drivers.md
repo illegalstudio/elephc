@@ -2,7 +2,7 @@
 title: "pdo_drivers()"
 description: "Returns the names of the PDO drivers this build provides."
 sidebar:
-  order: 183
+  order: 185
 ---
 
 ## pdo_drivers()

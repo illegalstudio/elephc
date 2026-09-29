@@ -2,7 +2,7 @@
 title: "array_slice()"
 description: "Extracts a slice of an array."
 sidebar:
-  order: 38
+  order: 40
 ---
 
 ## array_slice()

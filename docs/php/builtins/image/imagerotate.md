@@ -2,7 +2,7 @@
 title: "imagerotate()"
 description: "Returns a copy of an image rotated by an angle."
 sidebar:
-  order: 525
+  order: 527
 ---
 
 ## imagerotate()

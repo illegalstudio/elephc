@@ -2,7 +2,7 @@
 title: "closedir() - internals"
 description: "Compiler internals for closedir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 309
+  order: 311
 ---
 
 ## `closedir()` - internals

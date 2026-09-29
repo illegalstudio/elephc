@@ -2,7 +2,7 @@
 title: "unlink() - internals"
 description: "Compiler internals for unlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 308
+  order: 310
 ---
 
 ## `unlink()` - internals

@@ -2,7 +2,7 @@
 title: "juliantojd()"
 description: "Converts a Julian calendar date into a Julian Day count."
 sidebar:
-  order: 236
+  order: 238
 ---
 
 ## juliantojd()

@@ -2,7 +2,7 @@
 title: "cairo_set_line_join()"
 description: "Selects how corners between stroked segments are drawn."
 sidebar:
-  order: 436
+  order: 438
 ---
 
 ## cairo_set_line_join()

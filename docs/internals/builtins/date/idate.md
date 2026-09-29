@@ -2,7 +2,7 @@
 title: "idate() - internals"
 description: "Compiler internals for idate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 227
+  order: 229
 ---
 
 ## `idate()` - internals

@@ -2,7 +2,7 @@
 title: "mb_regex_set_options() - internals"
 description: "Compiler internals for mb_regex_set_options(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 866
+  order: 868
 ---
 
 ## `mb_regex_set_options()` - internals

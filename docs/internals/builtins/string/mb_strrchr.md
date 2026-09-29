@@ -2,7 +2,7 @@
 title: "mb_strrchr() - internals"
 description: "Compiler internals for mb_strrchr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 879
+  order: 881
 ---
 
 ## `mb_strrchr()` - internals

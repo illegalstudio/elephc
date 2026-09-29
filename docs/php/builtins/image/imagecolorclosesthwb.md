@@ -2,7 +2,7 @@
 title: "imagecolorclosesthwb()"
 description: "Returns the palette index closest in hue, whiteness, and blackness."
 sidebar:
-  order: 469
+  order: 471
 ---
 
 ## imagecolorclosesthwb()

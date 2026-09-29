@@ -2,7 +2,7 @@
 title: "jddayofweek()"
 description: "Returns the day of the week for a Julian Day count, as a number or a name."
 sidebar:
-  order: 228
+  order: 230
 ---
 
 ## jddayofweek()

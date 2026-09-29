@@ -2,7 +2,7 @@
 title: "imagecreatefromstring() - internals"
 description: "Compiler internals for imagecreatefromstring(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 491
+  order: 493
 ---
 
 ## `imagecreatefromstring()` - internals

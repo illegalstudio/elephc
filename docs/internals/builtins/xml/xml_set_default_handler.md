@@ -2,7 +2,7 @@
 title: "xml_set_default_handler() - internals"
 description: "Compiler internals for xml_set_default_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1016
+  order: 1018
 ---
 
 ## `xml_set_default_handler()` - internals

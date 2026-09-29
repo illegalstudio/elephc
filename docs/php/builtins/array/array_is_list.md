@@ -2,7 +2,7 @@
 title: "array_is_list()"
 description: "Checks whether an array is a list (sequential 0-based integer keys)."
 sidebar:
-  order: 18
+  order: 19
 ---
 
 ## array_is_list()

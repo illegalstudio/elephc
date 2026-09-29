@@ -2,7 +2,7 @@
 title: "imageaffinematrixconcat() - internals"
 description: "Compiler internals for imageaffinematrixconcat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 457
+  order: 459
 ---
 
 ## `imageaffinematrixconcat()` - internals

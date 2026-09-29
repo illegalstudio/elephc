@@ -1126,6 +1126,7 @@ real-world validation rather than by speculative pass work.
 - [ ] `pkg-config` generation
 - [ ] FFI documentation for C, Rust, Python, Go
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
+- [x] `array_first()` / `array_last()` (PHP 8.4) — first/last value in insertion order, or `null` for an empty array; rejected under `--php-version 8.3` like `array_find()`
 
 ### curl follow-ups
 

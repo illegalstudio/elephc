@@ -2,7 +2,7 @@
 title: "mb_ereg_search_setpos() - internals"
 description: "Compiler internals for mb_ereg_search_setpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 850
+  order: 852
 ---
 
 ## `mb_ereg_search_setpos()` - internals

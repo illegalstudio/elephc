@@ -2,7 +2,7 @@
 title: "ptr_write16() - internals"
 description: "Compiler internals for ptr_write16(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 740
+  order: 742
 ---
 
 ## `ptr_write16()` - internals

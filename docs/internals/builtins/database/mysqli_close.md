@@ -2,7 +2,7 @@
 title: "mysqli_close() - internals"
 description: "Compiler internals for mysqli_close(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 103
+  order: 105
 ---
 
 ## `mysqli_close()` - internals

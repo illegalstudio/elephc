@@ -2,7 +2,7 @@
 title: "ob_get_level() - internals"
 description: "Compiler internals for ob_get_level(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 349
+  order: 351
 ---
 
 ## `ob_get_level()` - internals

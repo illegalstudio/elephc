@@ -2,7 +2,7 @@
 title: "strptime()"
 description: "Parses a time string against a strftime format. Deprecated since PHP 8.1."
 sidebar:
-  order: 241
+  order: 243
 ---
 
 ## strptime()

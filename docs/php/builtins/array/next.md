@@ -2,7 +2,7 @@
 title: "next()"
 description: "Advances the array's internal pointer and returns the new element."
 sidebar:
-  order: 61
+  order: 63
 ---
 
 ## next()

@@ -2,7 +2,7 @@
 title: "func_get_args()"
 description: "Returns the arguments passed to the current function call."
 sidebar:
-  order: 613
+  order: 615
 ---
 
 ## func_get_args()

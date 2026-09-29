@@ -2,7 +2,7 @@
 title: "imagepalettecopy() - internals"
 description: "Compiler internals for imagepalettecopy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 519
+  order: 521
 ---
 
 ## `imagepalettecopy()` - internals

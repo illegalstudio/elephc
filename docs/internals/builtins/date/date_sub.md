@@ -2,7 +2,7 @@
 title: "date_sub() - internals"
 description: "Compiler internals for date_sub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 208
+  order: 210
 ---
 
 ## `date_sub()` - internals

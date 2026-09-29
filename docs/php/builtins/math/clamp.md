@@ -2,7 +2,7 @@
 title: "clamp()"
 description: "Clamps a value to be within a specified range."
 sidebar:
-  order: 568
+  order: 570
 ---
 
 ## clamp()

@@ -2,7 +2,7 @@
 title: "_gmagick_pixel_from_int() - internals"
 description: "Compiler internals for _gmagick_pixel_from_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1158
+  order: 1160
 ---
 
 ## `_gmagick_pixel_from_int()` - internals

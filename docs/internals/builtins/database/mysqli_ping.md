@@ -2,7 +2,7 @@
 title: "mysqli_ping() - internals"
 description: "Compiler internals for mysqli_ping(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 145
+  order: 147
 ---
 
 ## `mysqli_ping()` - internals

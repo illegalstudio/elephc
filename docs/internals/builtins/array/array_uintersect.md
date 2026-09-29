@@ -2,7 +2,7 @@
 title: "array_uintersect() - internals"
 description: "Compiler internals for array_uintersect(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 42
+  order: 44
 ---
 
 ## `array_uintersect()` - internals

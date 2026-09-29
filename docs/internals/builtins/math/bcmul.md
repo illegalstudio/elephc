@@ -2,7 +2,7 @@
 title: "bcmul() - internals"
 description: "Compiler internals for bcmul(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 559
+  order: 561
 ---
 
 ## `bcmul()` - internals
