@@ -199,6 +199,11 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value_value, span);
         return;
     }
+    let array_value = if op == Op::HashSet {
+        widen_hash_local_for_value(ctx, array, array_value, value_value, span)
+    } else {
+        array_value
+    };
     ctx.emit_void(
         op,
         vec![array_value.value, index_value.value, value_value.value],
@@ -208,6 +213,61 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+}
+
+/// Converts a local hash to boxed-Mixed entries before a write whose value its entries cannot
+/// hold, and returns the reloaded write handle.
+///
+/// A hash stamps every entry with its declared value type, so an `int` written into a
+/// string-valued hash read back as `""`, and a string written into an int-valued one as its
+/// pointer (#1508). The checker already widens the local's value type to `mixed` for such a write;
+/// this makes the storage agree before the write lands. A hash whose entries are already boxed,
+/// or a value of the entries' own type, is returned unchanged. So is a `static` local: its slot
+/// takes its initializer's type, which the widening would contradict, so it keeps the old
+/// behaviour (documented in `docs/php/types.md`).
+pub(super) fn widen_hash_local_for_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let PhpType::AssocArray { key, value: entry } = ctx.builder.value_php_type(array_value.value).codegen_repr()
+    else {
+        return array_value;
+    };
+    let entry = entry.codegen_repr();
+    if ctx.is_static_local(array)
+        || matches!(entry, PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable)
+    {
+        return array_value;
+    }
+    if ctx.builder.value_php_type(value.value).codegen_repr() == entry {
+        return array_value;
+    }
+    let storage_ty = PhpType::AssocArray {
+        key,
+        value: Box::new(PhpType::Mixed),
+    };
+    // HashToMixed consumes its input owner at the copy-on-write boundary. A reference-bound
+    // local loads the cell's payload borrowed, so the conversion gets its own owner first, the
+    // way `promote_by_ref_foreach_source` does; the store-back then retires the cell's old one.
+    let source = if ctx.is_ref_bound_local(array) {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, array_value, Some(span))
+    } else {
+        array_value
+    };
+    ctx.prepare_mutated_local_owner(array, source, storage_ty.clone(), Some(span));
+    let widened = ctx.emit_value(
+        Op::HashToMixed,
+        vec![source.value],
+        None,
+        storage_ty.clone(),
+        Op::HashToMixed.default_effects(),
+        Some(span),
+    );
+    ctx.store_mutated_local(array, widened, storage_ty, Some(span));
+    load_array_local_for_write(ctx, array, span)
 }
 
 /// Roots and retires operands borrowed by the boxed writer, including on same-frame catches.

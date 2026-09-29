@@ -72,6 +72,11 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
+    let array_value = if op == Op::HashAppend {
+        super::array_write_core::widen_hash_local_for_value(ctx, array, array_value, value, span)
+    } else {
+        array_value
+    };
     ctx.emit_void(
         op,
         vec![array_value.value, value.value],

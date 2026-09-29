@@ -717,6 +717,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .unwrap_or(PhpType::Mixed)
     }
 
+    /// Returns true when `name` is a function's `static` local.
+    pub(crate) fn is_static_local(&self, name: &str) -> bool {
+        self.local_kinds.get(name) == Some(&LocalKind::StaticLocal)
+    }
+
     /// Records a foreach loop-key local whose source is a concretely-indexed
     /// array, so its runtime key is always an integer (see `foreach_int_key_locals`).
     pub(crate) fn mark_foreach_int_key(&mut self, name: &str) {
