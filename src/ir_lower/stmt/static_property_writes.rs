@@ -121,8 +121,39 @@ pub(super) fn lower_static_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    // A value that may reassign the static property is lowered, and pinned, before the property
+    // is fetched, so the append lands in the array it holds afterwards (see
+    // `element_write_order`).
+    let mut slots = Vec::new();
+    let prelowered =
+        super::element_write_order::static_property_element_operands_may_write_property(
+            property,
+            &[value],
+        )
+        .then(|| {
+            let lowered = lower_expr(ctx, value);
+            let (pinned, slot) = crate::ir_lower::expr::root_call_operand(ctx, lowered, span);
+            slots.extend(slot);
+            pinned
+        });
+    lower_static_property_array_push_into(ctx, receiver, property, value, span, prelowered);
+    for slot in slots.into_iter().rev() {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+    }
+}
+
+/// Lowers `Class::$prop[] = value`; `prelowered` is the value when the caller lowered it before
+/// the property fetch.
+fn lower_static_property_array_push_into(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    value: &Expr,
+    span: Span,
+    prelowered: Option<LoweredValue>,
+) {
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
-        let value = lower_expr(ctx, value);
+        let value = prelowered.unwrap_or_else(|| lower_expr(ctx, value));
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![array.value, value.value],
@@ -139,7 +170,7 @@ pub(super) fn lower_static_property_array_push(
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
-        let value = lower_expr(ctx, value);
+        let value = prelowered.unwrap_or_else(|| lower_expr(ctx, value));
         ctx.emit_void(
             Op::ArrayPush,
             vec![property_value.value, value.value],
@@ -152,7 +183,7 @@ pub(super) fn lower_static_property_array_push(
     }
 
     let property_value = load_static_property(ctx, receiver, property, span);
-    let value = lower_expr(ctx, value);
+    let value = prelowered.unwrap_or_else(|| lower_expr(ctx, value));
     if static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::MixedArrayAppend,
@@ -236,9 +267,46 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     span: Span,
     key_already_diagnosed: bool,
 ) {
+    // A key or value that may reassign the static property is lowered, and pinned, before the
+    // property is fetched, so the write lands in the array it holds afterwards (see
+    // `element_write_order`).
+    let mut slots = Vec::new();
+    let prelowered =
+        super::element_write_order::static_property_element_operands_may_write_property(
+            property,
+            &[index, value],
+        )
+        .then(|| {
+            let (index, value, pinned) =
+                array_write_core::lower_pinned_write_key_and_value(ctx, index, value, span);
+            slots = pinned;
+            (index, value)
+        });
+    lower_static_property_array_assign_into(
+        ctx, receiver, property, index, value, span, key_already_diagnosed, prelowered,
+    );
+    for slot in slots.into_iter().rev() {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+    }
+}
+
+/// Lowers `Class::$prop[index] = value`; `prelowered` is the key and value when the caller
+/// lowered them before the property fetch.
+#[allow(clippy::too_many_arguments)]
+fn lower_static_property_array_assign_into(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+    prelowered: Option<(LoweredValue, LoweredValue)>,
+) {
     let key_marker = key_already_diagnosed.then_some(Immediate::Bool(true));
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
-        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+        let (index, value) = prelowered
+            .unwrap_or_else(|| array_write_core::lower_write_key_and_value(ctx, index, value));
         ctx.emit_void(
             Op::RuntimeCall,
             vec![array.value, index.value, value.value],
@@ -261,8 +329,9 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
         // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+        let (index, value) = prelowered.unwrap_or_else(|| {
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value)
+        });
         let index =
             coerce_array_key_to_int_at_span(ctx, index, Some(span), key_already_diagnosed);
         let value = coerce_indexed_array_set_value(ctx, &array_ty, value, Some(span));
@@ -290,8 +359,9 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
     // rule; sharing the helper is what keeps the two from answering differently for
     // the same source line.
-    let (index, value) =
-        crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+    let (index, value) = prelowered.unwrap_or_else(|| {
+        crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value)
+    });
     if static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::RuntimeCall,
