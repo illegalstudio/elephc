@@ -456,7 +456,8 @@ fn parse_optional_property_type(
     if !matches!(
         tokens.get(*pos).map(|(t, _)| t),
         Some(Token::Identifier(_)) | Some(Token::Question) | Some(Token::Backslash)
-    ) {
+    ) && !crate::parser::relative_name_starts_at(tokens, *pos)
+    {
         return Ok(None);
     }
     Ok(Some(parse_type_expr(tokens, pos, span)?))

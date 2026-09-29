@@ -97,7 +97,9 @@ pub(in crate::parser::stmt) fn parse_trait_use(
                     let mut instead_of = Vec::new();
                     loop {
                         match tokens.get(*pos).map(|(t, _)| t) {
-                            Some(Token::Identifier(_)) | Some(Token::Backslash) => {
+                            // `name_starts_at` also takes the relative `insteadof namespace\B`
+                            // (#825), like the adaptation target before it.
+                            Some(_) if super::super::name_starts_at(tokens, *pos) => {
                                 instead_of.push(parse_name(
                                     tokens,
                                     pos,

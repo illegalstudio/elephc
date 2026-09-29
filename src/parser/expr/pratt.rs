@@ -755,6 +755,11 @@ fn names_static_property(tokens: &[SpannedToken], pos: usize) -> bool {
     match tokens.get(cursor).map(|(token, _)| token) {
         Some(Token::Self_ | Token::Parent | Token::Static) => cursor += 1,
         _ => {
+            // `$x instanceof namespace\Cfg::$cls` reads a static property of a class named
+            // relative to the current namespace (#825).
+            if crate::parser::relative_name_starts_at(tokens, cursor) {
+                cursor += 2;
+            }
             while matches!(
                 tokens.get(cursor).map(|(token, _)| token),
                 Some(Token::Identifier(_) | Token::Backslash)

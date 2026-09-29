@@ -102,6 +102,31 @@ fn test_namespace_and_backslash_tokens() {
     );
 }
 
+/// Verifies a relative name `namespace\helper()` (#825) keeps the `namespace` keyword token
+/// followed by `\`, in any letter case, so the parser can tell the relative-name prefix from a
+/// namespace declaration by the token after it.
+#[test]
+fn test_relative_namespace_name_tokens() {
+    let t = tokens("<?php namespace\\helper(); NameSpace\\LIMIT;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Namespace,
+            Token::Backslash,
+            Token::Identifier("helper".into()),
+            Token::LParen,
+            Token::RParen,
+            Token::Semicolon,
+            Token::Namespace,
+            Token::Backslash,
+            Token::Identifier("LIMIT".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
 /// Verifies `enum Color: int { case Red; }` token sequence.
 #[test]
 fn test_enum_tokens() {

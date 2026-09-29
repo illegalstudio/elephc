@@ -258,6 +258,50 @@ function dyn() { return alias(); }"#,
         }]
     );
 }
+/// Verifies a relative name `namespace\name` resolves in the current namespace (#825): once,
+/// with no `namespace` segment, no import alias and no global fallback. The eval parser read
+/// `namespace` as an ordinary first segment and prefixed the namespace again, so a call in
+/// `Eval\Rel` became `Eval\Rel\namespace\helper`.
+#[test]
+fn parse_fragment_resolves_relative_names_in_the_current_namespace() {
+    let program = parse_fragment(
+        br#"namespace Eval\Rel;
+use Lib\Box as Box;
+namespace\helper();
+return namespace\LIMIT;
+return new namespace\Box();"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::Expr(EvalExpr::Call {
+                name: "eval\\rel\\helper".to_string(),
+                args: Vec::new(),
+            }),
+            EvalStmt::Return(Some(EvalExpr::ConstFetch("Eval\\Rel\\LIMIT".to_string()))),
+            EvalStmt::Return(Some(EvalExpr::NewObject {
+                class_name: "Eval\\Rel\\Box".to_string(),
+                args: Vec::new(),
+            })),
+        ]
+    );
+}
+/// Verifies a relative name in the global namespace is the plain global name, and that PHP's
+/// refusal of a relative name in an import is kept.
+#[test]
+fn parse_fragment_resolves_global_relative_names_and_refuses_relative_imports() {
+    let program = parse_fragment(br#"return namespace\helper();"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Call {
+            name: "helper".to_string(),
+            args: Vec::new(),
+        }))]
+    );
+    assert!(parse_fragment(br#"namespace Eval\Rel; use namespace\Box;"#).is_err());
+    assert!(parse_fragment(br#"namespace Eval\Rel; use function namespace\helper;"#).is_err());
+}
 /// Verifies import declarations are rejected inside eval-declared function bodies.
 #[test]
 fn parse_fragment_rejects_use_import_inside_function_body() {

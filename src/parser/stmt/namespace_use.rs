@@ -32,10 +32,26 @@ pub(super) fn parse_namespace_stmt(
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    // PHP refuses a namespace declaration anywhere but the top level of a file ("syntax
+    // error, unexpected token namespace"). The resolver would scope one inside a function or
+    // `if` body to that body while the relative-name tracking below is file-wide, so the two
+    // could disagree on what `namespace\X` means after it.
+    if !crate::parser::at_top_level_statement() {
+        return Err(CompileError::new(
+            span,
+            "Namespace declarations are only allowed at the top level of a file, not inside a block, a function or another namespace",
+        ));
+    }
     *pos += 1; // consume namespace
 
     let name = if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
         None
+    } else if crate::parser::relative_name_starts_at(tokens, *pos) {
+        // `namespace namespace\X;` would declare a name relative to itself; PHP refuses it.
+        return Err(CompileError::new(
+            span,
+            "Expected namespace name after 'namespace'",
+        ));
     } else {
         Some(parse_name(
             tokens,
@@ -45,8 +61,11 @@ pub(super) fn parse_namespace_stmt(
         )?)
     };
 
+    let declared_parts = name.as_ref().map(|name| name.parts.clone()).unwrap_or_default();
     if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
         *pos += 1;
+        // `namespace X;` is the current namespace for relative names until the next declaration.
+        crate::parser::enter_namespace(declared_parts);
         return Ok(Stmt::new(StmtKind::NamespaceDecl { name }, span));
     }
 
@@ -56,6 +75,9 @@ pub(super) fn parse_namespace_stmt(
         &Token::LBrace,
         "Expected ';' or '{' after namespace name",
     )?;
+    // A braced block is the current namespace for its body only; its `}` restores the one
+    // before it, as the name resolver scopes the block.
+    let previous_namespace = crate::parser::enter_namespace(declared_parts);
     let mut body = Vec::new();
     let mut errors = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
@@ -67,6 +89,7 @@ pub(super) fn parse_namespace_stmt(
             }
         }
     }
+    crate::parser::restore_namespace(previous_namespace);
     expect_token(
         tokens,
         pos,
@@ -309,6 +332,14 @@ fn parse_use_name(
     first_error: &str,
     allow_group_prefix: bool,
 ) -> Result<Name, CompileError> {
+    // PHP's grammar refuses a relative name in an import ("unexpected namespace-relative
+    // name"), so `use namespace\Foo;` and `use function namespace\f;` are syntax errors.
+    if crate::parser::relative_name_starts_at(tokens, *pos) {
+        return Err(CompileError::new(
+            span,
+            "A relative name (namespace\\...) cannot be imported with 'use'; write the fully qualified name",
+        ));
+    }
     let mut kind = NameKind::Unqualified;
     if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
         kind = NameKind::FullyQualified;

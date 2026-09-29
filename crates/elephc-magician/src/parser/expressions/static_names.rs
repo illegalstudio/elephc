@@ -244,8 +244,35 @@ impl Parser {
     }
 
     /// Parses a simple or explicitly qualified PHP name.
+    ///
+    /// A relative name `namespace\foo` (#825) means `foo` in the current namespace, so it is
+    /// returned already resolved and marked absolute: no import alias or further namespace
+    /// prefix applies to it.
     pub(in crate::parser) fn parse_qualified_name(&mut self) -> Result<ParsedQualifiedName, EvalParseError> {
+        if self.at_relative_name() {
+            self.advance();
+            self.advance();
+            let relative = self.parse_qualified_name_segments()?;
+            let name = if self.namespace.is_empty() {
+                relative
+            } else {
+                format!("{}\\{}", self.namespace, relative)
+            };
+            return Ok(ParsedQualifiedName { name, absolute: true });
+        }
         let absolute = self.consume(TokenKind::Backslash);
+        let name = self.parse_qualified_name_segments()?;
+        Ok(ParsedQualifiedName { name, absolute })
+    }
+
+    /// Returns whether the cursor is on the relative-name prefix `namespace\`.
+    pub(in crate::parser) fn at_relative_name(&self) -> bool {
+        matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "namespace"))
+            && matches!(self.peek(), TokenKind::Backslash)
+    }
+
+    /// Parses the backslash-separated segments of a name, without any leading separator.
+    fn parse_qualified_name_segments(&mut self) -> Result<String, EvalParseError> {
         let TokenKind::Ident(first) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
@@ -259,7 +286,7 @@ impl Parser {
             name.push_str(part);
             self.advance();
         }
-        Ok(ParsedQualifiedName { name, absolute })
+        Ok(name)
     }
 
     /// Parses a class-like reference name while rejecting PHP-reserved unqualified names.

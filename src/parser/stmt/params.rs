@@ -169,7 +169,7 @@ fn type_starts_at(tokens: &[SpannedToken], index: usize) -> bool {
                 | Token::Static
                 | Token::Parent
         )
-    )
+    ) || crate::parser::relative_name_starts_at(tokens, index)
 }
 
 /// Collapses a parsed union member list into its canonical `TypeExpr`.

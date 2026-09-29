@@ -24,3 +24,11 @@ echo \constant(__NAMESPACE__ . "\\NAN") . "\n";
 
 // Predefined constants can be written fully qualified, as namespaced code often does.
 echo "max int digits: " . strlen((string) \PHP_INT_MAX) . \PHP_EOL;
+
+// `namespace\name` is a relative name: `banner` in the current namespace, Demo\App.
+function banner(string $text): string
+{
+    return "== " . $text . " ==";
+}
+
+echo namespace\banner("relative names") . "\n";

@@ -46,6 +46,16 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - A predefined constant can be written fully qualified too, as namespaced code often does to skip
   the namespace lookup: `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\STDERR`, `\true`, `\null`. Each
   names the same global constant as its bare spelling
+- A relative name `namespace\helper()` names `helper` in the current namespace: inside
+  `namespace Demo;` it is exactly `\Demo\helper()`, and in the global namespace it is `\helper()`.
+  It works wherever a name does (calls, constants, `new`, static calls, `::class`, `instanceof`,
+  `extends`, `implements`, trait `use` and `insteadof`, type declarations, `catch`, attributes,
+  `instanceof namespace\Cfg::$class`) and in `eval()` code. Inside braced `namespace X { ... }`
+  blocks each block's own name applies. It is fully resolved, so it never falls back to a global
+  function or constant: `namespace\NAN` inside `Demo` is `Demo\NAN`, while in the global
+  namespace `namespace\PHP_EOL` is `\PHP_EOL`. As in PHP, a `use` import cannot name it
+  (`use namespace\Foo;` is a syntax error), and a namespace declaration is only accepted at the
+  top level of a file, never inside a function, a block or another namespace
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity

@@ -117,7 +117,10 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "interface") => {
                 self.parse_interface_decl_stmt()
             }
-            TokenKind::Ident(name) if ident_eq(name, "namespace") => self.parse_namespace_stmt(),
+            // `namespace\helper();` is a relative name leading an expression statement.
+            TokenKind::Ident(name) if ident_eq(name, "namespace") && !self.at_relative_name() => {
+                self.parse_namespace_stmt()
+            }
             TokenKind::Ident(name) if ident_eq(name, "return") => {
                 self.advance();
                 if self.consume_semicolon() {

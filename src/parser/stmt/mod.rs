@@ -57,6 +57,8 @@ pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, Comp
     }
     let span = tokens[*pos].1.span;
 
+    // Counts statement nesting, so a namespace declaration can tell it is not at the top level.
+    let _nesting = crate::parser::enter_statement();
     let stmt = parse_stmt_dispatch(tokens, pos, span)?;
     attach_attributes_to_stmt(stmt, attributes, span)
 }
@@ -159,6 +161,10 @@ fn parse_stmt_dispatch(
         Token::Function => params::parse_function_decl(tokens, pos, span),
         // `fn (…) => …` is always an arrow-function expression; it has no declaration form.
         Token::Fn => simple::parse_expr_stmt(tokens, pos, span),
+        // `namespace\helper();` is a relative name leading an expression statement (#825).
+        Token::Namespace if crate::parser::relative_name_starts_at(tokens, *pos) => {
+            parse_expression_led_stmt(tokens, pos, span)
+        }
         Token::Namespace => namespace_use::parse_namespace_stmt(tokens, pos, span),
         Token::Use => namespace_use::parse_use_stmt(tokens, pos, span),
         Token::Declare => declare::parse_declare(tokens, pos, span),
@@ -223,32 +229,7 @@ fn parse_stmt_dispatch(
         | Token::New
         | Token::LParen
         | Token::LBracket
-        | Token::Match => {
-            if matches!(&tokens[*pos].0, Token::Identifier(name) if name.eq_ignore_ascii_case("list"))
-                && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LParen))
-            {
-                return assign::parse_list_construct_unpack(tokens, pos, span);
-            }
-            if assign::looks_like_typed_assign(tokens, *pos) {
-                return assign::parse_typed_assign(tokens, pos, span);
-            }
-            if statement_lhs_contains_double_colon(tokens, *pos) {
-                if let Some(stmt) =
-                    assign::try_parse_scoped_property_assignment(tokens, pos, span)?
-                {
-                    return Ok(stmt);
-                }
-                if let Some(stmt) = assign::try_parse_scoped_postfix_incdec(tokens, pos, span)? {
-                    return Ok(stmt);
-                }
-            }
-            if let Some(stmt) = assign::try_parse_postfix_assignment(tokens, pos, span)? {
-                return Ok(stmt);
-            }
-            let expr = parse_expr(tokens, pos)?;
-            expect_semicolon(tokens, pos)?;
-            Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
-        }
+        | Token::Match => parse_expression_led_stmt(tokens, pos, span),
         // Control flow — delegated to control.rs
         Token::Switch => control::parse_switch(tokens, pos, span),
         Token::If => control::parse_if(tokens, pos, span),
@@ -275,6 +256,38 @@ fn parse_stmt_dispatch(
             &format!("Unexpected token at statement position: {:?}", other),
         )),
     }
+}
+
+/// Parses a statement that starts with a name or an expression rather than a keyword:
+/// `list(...) = ...`, a typed local, a static property assignment or increment, a postfix
+/// assignment, or an expression statement ending in `;`.
+fn parse_expression_led_stmt(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    if matches!(&tokens[*pos].0, Token::Identifier(name) if name.eq_ignore_ascii_case("list"))
+        && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LParen))
+    {
+        return assign::parse_list_construct_unpack(tokens, pos, span);
+    }
+    if assign::looks_like_typed_assign(tokens, *pos) {
+        return assign::parse_typed_assign(tokens, pos, span);
+    }
+    if statement_lhs_contains_double_colon(tokens, *pos) {
+        if let Some(stmt) = assign::try_parse_scoped_property_assignment(tokens, pos, span)? {
+            return Ok(stmt);
+        }
+        if let Some(stmt) = assign::try_parse_scoped_postfix_incdec(tokens, pos, span)? {
+            return Ok(stmt);
+        }
+    }
+    if let Some(stmt) = assign::try_parse_postfix_assignment(tokens, pos, span)? {
+        return Ok(stmt);
+    }
+    let expr = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
 }
 
 /// Distinguishes bracket destructuring from array expressions by the matching closing bracket.

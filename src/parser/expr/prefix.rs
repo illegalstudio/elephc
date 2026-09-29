@@ -239,6 +239,14 @@ pub(super) fn parse_prefix(
         Token::Identifier(_) | Token::Enum | Token::Backslash => {
             parse_named_expr(tokens, pos, span)
         }
+        // `namespace\helper()`, `namespace\LIMIT`, `namespace\Box::make()`: a relative name
+        // (#825), resolved against the current namespace by the name parser.
+        Token::Namespace if crate::parser::relative_name_starts_at(tokens, *pos) => {
+            if let Some(expr) = parse_relative_constant_token(tokens, pos, span)? {
+                return Ok(expr);
+            }
+            parse_named_expr(tokens, pos, span)
+        }
         Token::Self_ => {
             *pos += 1;
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Self_, "self")
@@ -273,6 +281,46 @@ pub(super) fn parse_prefix(
             &format!("Unexpected token: {:?}", other),
         )),
     }
+}
+
+/// Parses a relative name whose only segment is a literal or predefined constant the lexer gives
+/// its own token: `namespace\PHP_EOL`, `namespace\NAN`, `namespace\true` (#825).
+///
+/// The name parser reads identifiers only, so these failed with "Expected identifier". In the
+/// global namespace the name is exactly the fully qualified `\PHP_EOL`, so it parses through
+/// that form and names the global constant. Inside a namespace it names the constant of that
+/// namespace (`Demo\NAN`, which a namespaced `const NAN` declares), never the global one, as in
+/// PHP. Returns `None`, consuming nothing, for any other relative name.
+fn parse_relative_constant_token(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<Expr>, CompileError> {
+    let Some((token, metadata)) = tokens.get(*pos + 2) else {
+        return Ok(None);
+    };
+    let constant_token = matches!(token, Token::True | Token::False | Token::Null)
+        || crate::parser::stmt::token_as_import_name(token, metadata).is_some();
+    if !constant_token || matches!(tokens.get(*pos + 3), Some((Token::Backslash, _))) {
+        return Ok(None);
+    }
+    let mut parts = crate::parser::current_namespace_parts();
+    if parts.is_empty() {
+        *pos += 1; // `namespace`; the `\` arm above reads the rest as the global constant
+        let mut expr = parse_prefix(tokens, pos)?;
+        expr.span = Span::with_end_from(span, expr.span);
+        return Ok(Some(expr));
+    }
+    let spelling = token
+        .word_spelling(metadata)
+        .expect("literal and predefined constant tokens have a word spelling");
+    parts.push(spelling.to_string());
+    let end = metadata.span;
+    *pos += 3;
+    Ok(Some(Expr::new(
+        ExprKind::ConstRef(Name::from_parts(crate::names::NameKind::FullyQualified, parts)),
+        Span::with_end_from(span, end),
+    )))
 }
 
 /// Parses `yield` and `yield from` expressions. Consumes the `yield` token and optionally

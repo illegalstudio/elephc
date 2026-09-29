@@ -130,3 +130,88 @@ fn test_fully_qualified_predefined_constant_span_starts_at_the_backslash() {
     // `<?php echo ` is eleven columns, so the `\` is at column 12.
     assert_eq!((expr.span.line, expr.span.col), (1, 12));
 }
+
+/// Returns the fully qualified class names of every `new X()` statement in `stmts`, in order,
+/// descending into braced namespace blocks. Each must be fully qualified.
+fn new_object_names(stmts: &[Stmt]) -> Vec<String> {
+    let mut names = Vec::new();
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } => names.extend(new_object_names(body)),
+            StmtKind::ExprStmt(Expr {
+                kind: ExprKind::NewObject { class_name, .. },
+                ..
+            }) => {
+                assert!(class_name.is_fully_qualified(), "{class_name:?} is not fully qualified");
+                names.push(class_name.as_canonical());
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+/// Verifies a relative name `namespace\Foo` resolves at parse time to the fully qualified name
+/// in the namespace being parsed (#825): the unbraced form, each braced block, the global
+/// namespace, and the global code the resolver sees after a braced block, whose `}` restores
+/// the namespace before it.
+#[test]
+fn test_parse_relative_names_resolve_in_the_current_namespace() {
+    let stmts = parse_source("<?php namespace App\\Core; new namespace\\Foo();");
+    assert_eq!(new_object_names(&stmts), vec!["App\\Core\\Foo"]);
+
+    let stmts = parse_source(
+        "<?php namespace A { new namespace\\Foo(); } namespace B\\C { new namespace\\Sub\\Foo(); } \
+         namespace { new namespace\\Foo(); }",
+    );
+    assert_eq!(new_object_names(&stmts), vec!["A\\Foo", "B\\C\\Sub\\Foo", "Foo"]);
+
+    let stmts = parse_source("<?php new namespace\\Foo();");
+    assert_eq!(new_object_names(&stmts), vec!["Foo"]);
+
+    let stmts = parse_source("<?php namespace A { new namespace\\Foo(); } new namespace\\Foo();");
+    assert_eq!(new_object_names(&stmts), vec!["A\\Foo", "Foo"]);
+}
+
+/// Verifies the word `namespace` used as an enum case, a method, a property or a class
+/// constant never changes the namespace relative names resolve against (#825). A token scan
+/// read `case namespace;` as the declaration `namespace;` and moved later names to the global
+/// namespace.
+#[test]
+fn test_parse_relative_names_ignore_namespace_used_as_a_member_name() {
+    let stmts = parse_source(
+        "<?php namespace App; \
+         enum Mode { case namespace; case other; } \
+         class K { const namespace = 1; public $namespace; public function namespace() {} } \
+         $o->namespace(); $o->namespace; K::namespace; Mode::namespace; \
+         new namespace\\Foo();",
+    );
+    assert_eq!(new_object_names(&stmts), vec!["App\\Foo"]);
+}
+
+/// Verifies a relative name resolves in every name position: `extends`, `implements`, trait
+/// `use`, parameter, return, property and intersection types, `catch`, `instanceof`,
+/// attributes, calls, constants and `::class`. None may keep a segment spelled `namespace`.
+#[test]
+fn test_parse_relative_names_in_every_name_position() {
+    let stmts = parse_source(
+        "<?php namespace App; \
+         #[namespace\\Tag] \
+         class B extends namespace\\Base implements namespace\\Shape { \
+             use namespace\\Greets; \
+             public namespace\\Box $box; \
+             public function f(namespace\\Box&namespace\\Shape $x): ?namespace\\Box { return null; } \
+         } \
+         try {} catch (namespace\\Failure $e) {} \
+         $ok = $x instanceof namespace\\Box; \
+         echo namespace\\helper(), namespace\\LIMIT, namespace\\Box::class;",
+    );
+    let dump = format!("{stmts:?}");
+    assert!(!dump.to_ascii_lowercase().contains("\"namespace\""), "{dump}");
+    for class in ["Tag", "Base", "Shape", "Greets", "Box", "Failure", "helper", "LIMIT"] {
+        assert!(
+            dump.contains(&format!("parts: [\"App\", \"{class}\"]")),
+            "`namespace\\{class}` did not resolve to `App\\{class}`: {dump}"
+        );
+    }
+}
