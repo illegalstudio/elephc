@@ -23,6 +23,13 @@ echo "\nAfter adding a row:\n";
 echo "Rows: " . count($matrix) . "\n";
 echo "New row: " . $matrix[3][0] . " " . $matrix[3][1] . " " . $matrix[3][2] . "\n";
 
+// Build a request body: each `[]` in the middle of a write appends a new element
+$body = [];
+$body['personalizations'][]['to'][]['email'] = 'ada@example.com';
+$body['personalizations'][0]['to'][]['email'] = 'linus@example.com';
+echo "Recipients: " . count($body['personalizations'][0]['to']) . "\n";
+echo "Second recipient: " . $body['personalizations'][0]['to'][1]['email'] . "\n";
+
 // Extract a report column from rows returned through the PHP array contract.
 function reportRows(): array {
     return ["first" => ["name" => "Ada"], "second" => ["name" => "Linus"]];

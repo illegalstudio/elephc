@@ -41,7 +41,9 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         Op::ArrayPush
     } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Hash) {
         Op::HashAppend
-    } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed) {
+    } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed)
+        && !is_array_access_union_receiver(ctx, array_value)
+    {
         Op::MixedArrayAppend
     } else {
         Op::RuntimeCall
@@ -72,14 +74,51 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
-    ctx.emit_void(
-        op,
-        vec![array_value.value, value.value],
-        None,
-        op.default_effects(),
-        Some(span),
-    );
+    let operands = if op == Op::RuntimeCall {
+        object_append_operands(ctx, array_value, value)
+    } else {
+        vec![array_value.value, value.value]
+    };
+    ctx.emit_void(op, operands, None, op.default_effects(), Some(span));
     release_persisted_string_operand(ctx, value, span);
+}
+
+/// Returns true when a boxed receiver is a non-nullable union of `ArrayAccess` objects.
+///
+/// `codegen_repr` boxes such a union into `Mixed`, but the Mixed append helper leaves a boxed
+/// object untouched, so an append on it must take the runtime call that reaches
+/// `offsetSet(null, $value)`, like a keyed write on the same receiver. A nullable union stays on
+/// the Mixed append helper, which turns a `null` receiver into a new array the way PHP does.
+fn is_array_access_union_receiver(ctx: &LoweringContext<'_, '_>, receiver: LoweredValue) -> bool {
+    let receiver_ty = ctx.builder.value_php_type(receiver.value);
+    matches!(
+        &receiver_ty,
+        PhpType::Union(members) if !members.iter().any(|member| matches!(member, PhpType::Void))
+    ) && type_satisfies_array_access_for_ir(ctx, &receiver_ty)
+}
+
+/// Returns the runtime-call operands for `$receiver[] = $value` on a non-array receiver.
+///
+/// PHP turns an append on an `ArrayAccess` object into `offsetSet(null, $value)` and never calls
+/// an `append()` method, even when the class declares or inherits one. The runtime call
+/// dispatches on its operand count, and a two-operand write means `append`, so every object
+/// receiver (a concrete class, the `ArrayAccess` interface, or a union of `ArrayAccess` objects)
+/// gets an explicit null key. Unions are matched on the declared type, since `codegen_repr`
+/// boxes them into `Mixed`. The SPL containers already treat `offsetSet(null, $value)` as an
+/// append, and a subclass that overrides `offsetSet` sees the call the way PHP makes it.
+pub(in crate::ir_lower) fn object_append_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    value: LoweredValue,
+) -> Vec<crate::ir::ValueId> {
+    let receiver_ty = ctx.builder.value_php_type(receiver.value);
+    if !matches!(receiver_ty.codegen_repr(), PhpType::Object(_))
+        && !type_satisfies_array_access_for_ir(ctx, &receiver_ty)
+    {
+        return vec![receiver.value, value.value];
+    }
+    let null_key = ctx.builder.emit_const_null();
+    vec![receiver.value, null_key, value.value]
 }
 
 /// Prepares an indexed-array local for an offset assignment.

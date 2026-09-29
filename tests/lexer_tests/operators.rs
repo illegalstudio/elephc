@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration or regression tests for lexer tokenization coverage of operators, including arithmetic operators, assignment and dot, and comparison operators.
+//! Integration or regression tests for lexer tokenization coverage of operators, including arithmetic operators, assignment and dot, comparison operators, and array subscript and append brackets in write targets.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -129,6 +129,56 @@ fn test_array_subscript_brackets() {
             Token::IntLiteral(0),
             Token::RBracket,
             Token::Semicolon,
+        ]
+    );
+}
+
+/// Verifies append dimensions inside write targets tokenize as adjacent `LBracket`/`RBracket`
+/// pairs with no placeholder token: in the middle of a nested write, as an assignment expression,
+/// on `$this`, and on a call result.
+#[test]
+fn test_append_dimensions_in_write_targets() {
+    let t = tokens("<?php $a['k'][]['to'] = $v; $x = ($b[] = 1); $this[] = 2; f()[] = 3;");
+    assert_eq!(
+        t[1..],
+        [
+            Token::Variable("a".into()),
+            Token::LBracket,
+            Token::StringLiteral("k".into()),
+            Token::RBracket,
+            Token::LBracket,
+            Token::RBracket,
+            Token::LBracket,
+            Token::StringLiteral("to".into()),
+            Token::RBracket,
+            Token::Assign,
+            Token::Variable("v".into()),
+            Token::Semicolon,
+            Token::Variable("x".into()),
+            Token::Assign,
+            Token::LParen,
+            Token::Variable("b".into()),
+            Token::LBracket,
+            Token::RBracket,
+            Token::Assign,
+            Token::IntLiteral(1),
+            Token::RParen,
+            Token::Semicolon,
+            Token::This,
+            Token::LBracket,
+            Token::RBracket,
+            Token::Assign,
+            Token::IntLiteral(2),
+            Token::Semicolon,
+            Token::Identifier("f".into()),
+            Token::LParen,
+            Token::RParen,
+            Token::LBracket,
+            Token::RBracket,
+            Token::Assign,
+            Token::IntLiteral(3),
+            Token::Semicolon,
+            Token::Eof,
         ]
     );
 }
