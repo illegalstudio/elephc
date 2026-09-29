@@ -107,7 +107,9 @@ echo get_class($type), ":";
 foreach ($type->getTypes() as $member) { echo $member->getName(), ","; }
 "#,
     );
-    assert_eq!(out, "ReflectionUnionType:int,string,");
+    // PHP lists a union's members in its canonical order, string before int, whatever order the
+    // declaration used (#1118); PHP 8.5.10 prints exactly this.
+    assert_eq!(out, "ReflectionUnionType:string,int,");
 }
 
 /// A getter name assembled at run time reaches the companion through `$holder->$name()`.

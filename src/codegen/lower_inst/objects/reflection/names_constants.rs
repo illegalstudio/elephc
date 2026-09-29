@@ -70,6 +70,7 @@ pub(super) fn reflection_member_flags(
         is_readonly,
         is_promoted,
         is_virtual: false,
+        is_inherited: false,
     }
 }
 
@@ -255,6 +256,22 @@ pub(super) fn reflection_constant_value(
             name,
             depth + 1,
         ),
+        // A GLOBAL constant. Only the scoped form was folded, so a parameter declared
+        // `int $n = LIMIT` reached the reflector with no value: `isDefaultValueAvailable()`
+        // answered false and `getDefaultValue()` threw, where PHP answers `true` and `7`
+        // (#1080). The module carries the declared value, so this resolves the same way the
+        // class form does.
+        ExprKind::ConstRef(name) => {
+            let key = name.as_str().trim_start_matches('\\');
+            let Some((value, _)) = ctx.module.global_constants.get(key) else {
+                return Err(CodegenIrError::unsupported(format!(
+                    "ReflectionClass constant metadata for undeclared constant {}",
+                    key
+                )));
+            };
+            let value = Expr::new(value.clone(), expr.span);
+            reflection_constant_value(ctx, current_class, current_info, &value, depth + 1)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "ReflectionClass constant metadata expression {:?}",
             other

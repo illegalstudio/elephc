@@ -113,7 +113,7 @@ echo ($plain->hasReturnType() ? "P" : "p") . ":";
 echo $plain->getReturnType() === null ? "Q" : "q";
 "#,
     );
-    assert_eq!(out, "T:int:N:B:int:2:intBstringB:never:n:B:p:Q");
+    assert_eq!(out, "T:int:N:B:int:2:stringBintB:never:n:B:p:Q");
 }
 
 /// Verifies `ReflectionFunction::isVariadic()` reports the function-level variadic flag.

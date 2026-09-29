@@ -37,9 +37,6 @@ unset($source);
 fn test_eval_reflection_parameter_public_name_releases_string_owner() {
     let baseline = compile_and_run_with_heap_debug(r#"<?php
 eval('function eval_parameter_owner_target(string $argument) {}');
-$parameter = new ReflectionParameter('strlen', 'string');
-if ($parameter->name !== 'string') { echo 'bad'; }
-unset($parameter);
 echo 'baseline';
 "#);
     assert!(baseline.success, "stdout={:?}\nstderr={}", baseline.stdout, baseline.stderr);
@@ -54,11 +51,14 @@ echo 'done';
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "done");
-    // Eval retains four metadata blocks and three boxed array owners beyond the AOT object;
-    // the public-name slot must not retain another string allocation after the object is unset.
+    // The baseline declares the same eval function and builds no ReflectionParameter, so it
+    // measures eval's own metadata only. An AOT ReflectionParameter would put its leaked metadata
+    // subtree (#1352) in the baseline, and that subtree's size changes whenever Reflection gains a
+    // property. The eval-created parameter still leaves 21 blocks; a public-name slot retaining
+    // one more string after the object is unset would make it 22.
     assert_eq!(
         eval_operand_owner_live_blocks(&out.stderr),
-        baseline_live_blocks + 7,
+        baseline_live_blocks + 21,
         "discarded ReflectionParameter objects must release their public-name string: {}",
         out.stderr,
     );

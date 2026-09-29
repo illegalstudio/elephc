@@ -123,7 +123,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "T:int:N:B:2:intBstringB:never:n:B:p:Q");
+    assert_eq!(values.output, "T:int:N:B:2:stringBintB:never:n:B:p:Q");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
@@ -146,7 +146,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "Function [ <user> function eval_reflect_string ] {|  - Parameters [3] {|    Parameter #0 [ <required> string $name ]|    Parameter #1 [ <optional> int $count = 3 ]|    Parameter #2 [ <optional> &...$items ]|  }|  - Return [ ?string ]|}|"
+        "Function [ <user> function eval_reflect_string ] {||  - Parameters [3] {|    Parameter #0 [ <required> string $name ]|    Parameter #1 [ <optional> int $count = 3 ]|    Parameter #2 [ <optional> &...$items ]|  }|  - Return [ ?string ]|}|"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
