@@ -246,6 +246,24 @@
       },
       "extension": false,
       "internal": false,
+      "kind": "interface",
+      "module": "core",
+      "name": "BackedEnum",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "kind": "class",
       "module": "spl",
       "name": "BadFunctionCallException",
@@ -3438,6 +3456,24 @@
       "kind": "class",
       "module": "core",
       "name": "UnhandledMatchError",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "interface",
+      "module": "core",
+      "name": "UnitEnum",
       "php_manual": null,
       "since": null
     },

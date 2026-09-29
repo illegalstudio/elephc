@@ -30,13 +30,21 @@ const BUILTIN_INTERFACE_NAMES: &[&str] = &[
     "SplObserver",
     "SplSubject",
     "Stringable",
+    "UnitEnum",
+    "BackedEnum",
 ];
 
 /// Injects PHP SPL builtin interfaces into the type environment.
 ///
 /// Adds `Traversable`, `Iterator`, `IteratorAggregate`, `ArrayAccess`, `Countable`,
 /// `OuterIterator`, `RecursiveIterator`, `SeekableIterator`, `SplObserver`, `SplSubject`,
-/// and `Stringable` as declared interfaces with their full method signatures.
+/// `Stringable`, `UnitEnum` and `BackedEnum` as declared interfaces with their full method
+/// signatures.
+///
+/// The last two are what PHP gives every enum implicitly, and `BackedEnum extends UnitEnum`.
+/// They have to be declared here before an enum can name them: an interface in a class's list
+/// with no metadata registered makes codegen fail with `missing interface metadata for class`
+/// (#1224).
 ///
 /// ## Errors
 /// Returns an error if any user-defined interface or class has a PHP-case-insensitive
@@ -131,6 +139,30 @@ pub(crate) fn inject_builtin_interfaces(
                     TypeExpr::Void,
                 ),
             ],
+            span: crate::span::Span::dummy(),
+            constants: Vec::new(),
+        },
+    );
+
+    interface_map.insert(
+        "UnitEnum".to_string(),
+        InterfaceDeclInfo {
+            name: "UnitEnum".to_string(),
+            extends: Vec::new(),
+            properties: Vec::new(),
+            methods: Vec::new(),
+            span: crate::span::Span::dummy(),
+            constants: Vec::new(),
+        },
+    );
+
+    interface_map.insert(
+        "BackedEnum".to_string(),
+        InterfaceDeclInfo {
+            name: "BackedEnum".to_string(),
+            extends: vec!["UnitEnum".to_string()],
+            properties: Vec::new(),
+            methods: Vec::new(),
             span: crate::span::Span::dummy(),
             constants: Vec::new(),
         },

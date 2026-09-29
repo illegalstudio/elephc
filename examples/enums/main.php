@@ -66,3 +66,20 @@ echo $config->level->name, " ",
      $config->promoted->name, " ",
      Config::$shared->name, " ",
      ($config->level === Level::Low ? "same" : "DIFF");
+echo PHP_EOL;
+
+// Every enum implements UnitEnum, and a backed one also implements BackedEnum,
+// without saying so in its declaration. That lets code accept "any enum"
+// without naming each one.
+function describe(object $value): string {
+    if ($value instanceof BackedEnum) {
+        return "backed";
+    }
+    if ($value instanceof UnitEnum) {
+        return "pure";
+    }
+    return "not an enum";
+}
+
+echo describe(Color::Red), " ", describe(Level::Low), " ", describe($config);
+echo PHP_EOL;

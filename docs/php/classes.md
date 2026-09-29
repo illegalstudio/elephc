@@ -101,11 +101,26 @@ The compiler injects the following interfaces, available without any
 | `SplObserver` | `update(SplSubject $subject): void` |
 | `SplSubject` | `attach(SplObserver $observer): void`, `detach(SplObserver $observer): void`, `notify(): void` |
 | `Stringable` | `__toString(): string` |
+| `UnitEnum` | (marker) — every enum implements it implicitly |
+| `BackedEnum` extends `UnitEnum` | (marker) — every BACKED enum implements it implicitly |
 | `JsonSerializable` | `jsonSerialize(): mixed` |
 | `Throwable` | `getMessage(): string`, `getCode(): int`, `getFile(): string`, `getLine(): int`, `getTrace(): array`, `getTraceAsString(): string`, `getPrevious(): ?Throwable`, `__toString(): string` |
 
 `count($obj)` automatically dispatches to `Countable::count()` when
 `$obj` is an instance of a class implementing `Countable`.
+
+An enum's interface list is its `implements` clause plus `UnitEnum`, plus
+`BackedEnum` when it is backed, plus everything those and the declared interfaces
+extend — the same transitive closure a class gets. `class_implements()` reports
+them in that order: declared, implicit, then inherited.
+
+Only an enum may implement `UnitEnum` or `BackedEnum`. A class that names either,
+or implements an interface that extends one, is a compile error (`Non-enum class
+C cannot implement interface UnitEnum`), as in PHP. An enum may not name them
+itself either, since it already has them (`Enum E cannot implement previously
+implemented interface UnitEnum`), and a pure enum naming `BackedEnum` has no
+backing type to satisfy it. Declaring an interface that extends `UnitEnum`, and
+implementing it from an enum, is fine.
 
 User classes cannot implement `Throwable` directly, matching PHP. Extend
 `Exception` or `Error` instead; user interfaces may extend `Throwable`, and
