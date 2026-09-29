@@ -35,7 +35,26 @@ pub(super) fn lower_nested_array_assign(
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
         let deferred = nested_target_is_all_bare_variables(target);
-        let value_first = deferred.then(|| lower_expr(ctx, value));
+        // The same deferral holds when the right-hand side may write the chain's ROOT (a local,
+        // a property or a static property) and every index is free of side effects:
+        // `$m["a"]["b"] = ($m = [...]) ? ...` must write into the array the reassignment
+        // installed (see `element_write_order`). That value is pinned until the write, since
+        // the parent fetch may separate the container it borrows from.
+        let root_written = !deferred
+            && nested_target_keys_are_pure(target)
+            && nested_value_may_write_root(ctx, target, value);
+        let mut pinned_slot = None;
+        let value_first = if deferred {
+            Some(lower_expr(ctx, value))
+        } else if root_written {
+            let lowered = lower_expr(ctx, value);
+            let (pinned, slot) = crate::ir_lower::expr::root_call_operand(ctx, lowered, span);
+            pinned_slot = slot;
+            rebox_nested_root_local(ctx, target, span);
+            Some(pinned)
+        } else {
+            None
+        };
         let parent = lower_nested_assign_parent(ctx, array, span);
         let key = lower_expr(ctx, index);
         let value = match value_first {
@@ -50,7 +69,11 @@ pub(super) fn lower_nested_array_assign(
             Some(span),
         );
         release_persisted_string_operand(ctx, key, span);
-        release_persisted_string_operand(ctx, value, span);
+        if let Some(slot) = pinned_slot {
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+        } else {
+            release_persisted_string_operand(ctx, value, span);
+        }
         // Parent subscript reads of Mixed/refcounted elements are owning
         // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
         // reference — fresh, retained, or installed by autovivification). The
@@ -248,6 +271,81 @@ pub(super) fn lower_hash_parent_fetch_for_write(
         Op::HashGetForWrite.default_effects(),
         Some(span),
     )
+}
+
+/// Puts a nested write's root local back into boxed `Mixed` storage after a value that
+/// reassigned it to a concrete array.
+///
+/// The checker accepted the nested write for a `Mixed` root, the only kind the nested writer
+/// supports (besides `ArrayAccess`). A value such as `($m = ["a" => [...]])` retypes the local to
+/// a concrete hash before the parent chain is fetched, which that writer would refuse. Boxing
+/// retains the payload, and the store releases the slot's previous owner.
+fn rebox_nested_root_local(ctx: &mut LoweringContext<'_, '_>, target: &Expr, span: Span) {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    let ExprKind::Variable(name) = &root.kind else {
+        return;
+    };
+    let ty = ctx.local_type(name).codegen_repr();
+    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return;
+    }
+    let current = ctx.load_local(name, Some(span));
+    let boxed = ctx.box_value_as_mixed(current, PhpType::Mixed, Some(span));
+    ctx.store_call_argument_local(name, boxed, PhpType::Mixed, Some(span));
+}
+
+/// Returns true when the value of a nested write may write the chain's root, so the value has to
+/// run before the parent chain is fetched. The root is the innermost container: a local, a
+/// property or a static property, each checked by its own `element_write_order` gate.
+fn nested_value_may_write_root(ctx: &LoweringContext<'_, '_>, target: &Expr, value: &Expr) -> bool {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    match &root.kind {
+        ExprKind::Variable(name) => {
+            super::element_write_order::element_write_operands_may_write_receiver(ctx, name, &[value])
+        }
+        ExprKind::PropertyAccess { property, .. } => {
+            super::element_write_order::property_element_operands_may_write_property(property, &[value])
+        }
+        ExprKind::StaticPropertyAccess { property, .. } => {
+            super::element_write_order::static_property_element_operands_may_write_property(
+                property,
+                &[value],
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when every index of a nested write target is a literal, a constant or a bare
+/// variable, and its root is a local, `$this`/a local's property, or a static property, so
+/// fetching the chain later moves no side effect.
+fn nested_target_keys_are_pure(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => {
+            matches!(object.kind, ExprKind::Variable(_) | ExprKind::This)
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            matches!(
+                index.kind,
+                ExprKind::Variable(_)
+                    | ExprKind::IntLiteral(_)
+                    | ExprKind::StringLiteral(_)
+                    | ExprKind::FloatLiteral(_)
+                    | ExprKind::BoolLiteral(_)
+                    | ExprKind::Null
+                    | ExprKind::ConstRef(_)
+                    | ExprKind::ClassConstant { .. }
+            ) && nested_target_keys_are_pure(array)
+        }
+        _ => false,
+    }
 }
 
 /// Returns true when every part of a nested write target is a bare variable.
