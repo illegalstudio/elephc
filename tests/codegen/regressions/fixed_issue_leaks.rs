@@ -359,3 +359,34 @@ echo $c(), "\n";
         out.stderr
     );
 }
+
+/// A ternary whose arms are an int and a function-returned string leaked the call's string
+/// once it was boxed into the `int|string` merge temp. Pins the value and a clean heap for the
+/// local form and for the ternary passed straight to `int|string` and `?array` parameters.
+/// Regression for #1565.
+#[test]
+fn test_issue_1565_int_or_call_string_ternary_releases_the_call_result() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function str_of(int $i): string { return "s" . $i; }
+function take(int|string $v): int { return strlen((string) $v); }
+function arr_of(int $i): array { return [$i, $i]; }
+function take2(?array $v): int { return $v === null ? 0 : count($v); }
+$t = 0;
+for ($i = 0; $i < 100; $i++) {
+    $u = $i % 2 ? $i : str_of($i);
+    $t += strlen((string) $u);
+    $t += take($i % 2 ? $i : str_of($i));
+    $t += take2($i % 2 ? null : arr_of($i));
+}
+echo $t, "\n";
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(out.stdout, "580\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}

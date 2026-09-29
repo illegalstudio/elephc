@@ -520,3 +520,44 @@ foreach ([[1, "b"], [3, "d"]] as $p) { $q = $p; echo implode(",", $q), ";"; } ec
     );
     assert_eq!(out, "1: 1,2 3,4 5\n1,2;3,4;5;\n1,2;3,4;\n1.5,2.5;3.5,4.5;\n1,;\n1,2;\n1,b;3,d;\n");
 }
+
+/// A zero-parameter closure reached through a dynamic call site was reported to ignore extra
+/// arguments where PHP throws. PHP 8.5 does not throw for a USER closure: surplus arguments are
+/// accepted and stay visible to `func_num_args()`. Pins that PHP behaviour for a union-typed
+/// callee, a closure held in a static property, and a `func_num_args()` closure.
+/// Regression for #1536.
+#[test]
+fn test_issue_1536_dynamic_zero_param_closure_call_accepts_extra_args_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+class Reg { public static $cb; }
+Reg::$cb = static fn () => 'ok';
+$f = static fn () => 'ok';
+$g = $argc > 5 ? 'strlen' : $f;
+echo $g('extra'), "\n";
+echo (Reg::$cb)('extra', 2), "\n";
+$h = function () { return func_num_args(); };
+$d = $argc > 5 ? 'strlen' : $h;
+echo $d(1, 2, 3), "\n";
+"#,
+    );
+    assert_eq!(out, "ok\nok\n3\n");
+}
+
+/// A negative first key followed by appends lost an element through `array_keys()`. Pins the
+/// related shape the issue names (PHP 8.3+ continues from the negative key); the in-function
+/// `$x[-1]` then `$x[5]` shape from the same issue is still open.
+/// Partial regression for #1564.
+#[test]
+fn test_issue_1564_negative_first_key_then_appends_keeps_every_key() {
+    let out = compile_and_run(
+        r#"<?php
+$c = []; $c[-3] = 1; $c[] = 2; $c[] = 3;
+echo implode(",", array_keys($c)), "\n";
+echo implode(",", $c), "\n";
+$d = []; $d[-5] = "a"; $d[] = "b";
+echo implode(",", array_keys($d)), "|", count($d), "\n";
+"#,
+    );
+    assert_eq!(out, "-3,-2,-1\n1,2,3\n-5,-4|2\n");
+}
