@@ -731,6 +731,11 @@ pub(crate) fn lower_postfix_incdec_assignment(
     let one = Expr::new(ExprKind::IntLiteral(1), span);
 
     if !can_replay_assignment_target(&lhs_expr) {
+        if matches!(&lhs_expr.kind, ExprKind::ArrayAccess { array, .. }
+            if matches!(array.kind, ExprKind::StaticPropertyAccess { .. }))
+        {
+            return lower_effectful_static_assignment(lhs_expr, op, one, span);
+        }
         return lower_effectful_postfix_assignment(lhs_expr, op, one, span);
     }
 
@@ -749,6 +754,14 @@ pub(crate) fn lower_postfix_incdec_assignment(
                 property,
                 index: *index,
                 value,
+            },
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index: *index,
+                    value,
+                }
             },
             _ => StmtKind::NestedArrayAssign {
                 target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
