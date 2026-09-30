@@ -1,9 +1,10 @@
 //! Purpose:
-//! Normalizes class-constant value expressions while class schema metadata is built.
+//! Normalizes class-constant values and validates compile-time property default expressions.
 //! Resolves lexical `self::` and `parent::` constant receivers to concrete class names.
 //!
 //! Called from:
 //! - `crate::types::checker::schema::classes::state::ClassBuildState::into_class_info()`
+//! - `crate::types::checker::schema::classes::properties::apply_properties()`
 //!
 //! Key details:
 //! - Class constant values are later re-inferred and emitted outside the declaring class scope.
@@ -29,6 +30,19 @@ pub(super) fn resolve_lexical_class_constant_value(
     class: &FlattenedClass,
 ) -> Result<Expr, CompileError> {
     rewrite_expr(value, &class.name, class.extends.as_deref())
+}
+
+/// Checks nested lexical constant receivers without changing stored property-default expressions.
+pub(super) fn validate_lexical_property_default(
+    value: &Expr,
+    class: &FlattenedClass,
+) -> Result<(), CompileError> {
+    rewrite_expr(value, &class.name, class.extends.as_deref()).map(|_| ()).map_err(|mut error| {
+        if error.message == "Cannot use static:: in class constant expression" {
+            error.message = "Cannot use static:: in property default expression".to_string();
+        }
+        error
+    })
 }
 
 /// Recursively rewrites all expressions in a class-constant value, resolving lexical
@@ -306,6 +320,12 @@ fn rewrite_expr(
             element_type: element_type.clone(),
             len: Box::new(rewrite_expr(len, class_name, parent_name)?),
         },
+        ExprKind::ClassConstant { receiver: StaticReceiver::Static } => {
+            return Err(CompileError::new(
+                expr.span,
+                "static::class cannot be used for compile-time class name resolution",
+            ));
+        }
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant {
             receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,
         },
