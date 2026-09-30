@@ -32,6 +32,9 @@ pub(super) fn apply_properties(
     checker: &Checker,
 ) -> Result<(), CompileError> {
     for prop in &class.properties {
+        if let Some(default) = &prop.default {
+            super::constants::validate_lexical_property_default(default, class)?;
+        }
         if prop.is_static {
             apply_static_property(state, class, checker, prop)?;
         } else {

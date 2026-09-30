@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Late-static class names cannot be evaluated in instance or static property defaults.
+#[test]
+fn test_error_late_static_class_name_in_property_defaults() {
+    for source in [
+        "<?php class Probe { public string $name = static::class; }",
+        "<?php class Probe { public static string $name = static::class; }",
+        "<?php class Probe { public array $names = [static::class]; }",
+    ] {
+        expect_error(source, "static::class cannot be used for compile-time class name resolution");
+    }
+}
+
+/// Early-bound class names remain valid in property defaults after late-static validation.
+#[test]
+fn test_property_defaults_accept_early_bound_class_names() {
+    check_source("<?php class Base {} class Probe extends Base { public string $name = self::class; public static string $parent = parent::class; public array $names = [Base::class]; }")
+        .expect("early-bound class names are valid constant property defaults");
+}
+
 /// Runs the frontend with PDO prelude injection and asserts its first diagnostic.
 fn expect_pdo_error(src: &str, expected_substr: &str) {
     let tokens = tokenize(src).expect("PDO diagnostic fixture must tokenize");
