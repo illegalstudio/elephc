@@ -392,6 +392,12 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
 
+    // A static property followed by object access is an instance-property target,
+    // so its write must use the ordinary postfix lowering rather than the static store.
+    if matches!(lhs_expr.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }) {
+        return try_parse_postfix_assignment(tokens, pos, span);
+    }
+
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
