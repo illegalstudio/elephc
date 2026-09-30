@@ -870,6 +870,13 @@ generated AOT class/interface metadata and eval-created object metadata.
 `interface_exists()`, `trait_exists()`, and `enum_exists()` can probe generated
 AOT metadata. `class_implements()` and `class_parents()` materialize
 generated/AOT interface and parent metadata when the bridge exposes it.
+For an enum declared in the compiled program, the generated interface metadata
+contains only its directly declared interfaces: `class_implements()` called
+from `eval()` still omits their transitive parents and the implicit `UnitEnum`
+and `BackedEnum` interfaces. Relation probes such as `is_a()` and
+`is_subclass_of()` use the same incomplete metadata for those compiled enums.
+Enums declared inside `eval()` do report transitive interface parents and
+`UnitEnum`, plus `BackedEnum` for backed enums, like PHP.
 `class_uses()` reports direct trait uses for eval-declared and generated/AOT
 classes, traits, and enums. `class_alias()` can
 alias eval-declared and generated/AOT
