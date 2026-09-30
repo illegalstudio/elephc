@@ -53,5 +53,5 @@ echo 'done';
 "#);
     assert!(output.success);
     assert_eq!(output.stdout, "done");
-    assert_eq!(output.stderr, "Warning: Undefined array key \"missing1\n\"\n");
+    assert_eq!(output.diagnostics, "Warning: Undefined array key \"missing1\n\"\n");
 }

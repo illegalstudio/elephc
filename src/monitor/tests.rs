@@ -286,6 +286,8 @@
                 alloc_exclusive: 0,
                 io_inclusive: 0,
                 io_exclusive: 0,
+                stream_inclusive: 0,
+                stream_exclusive: 0,
                 retained_inclusive: 0,
                 retained_exclusive: 0,
                 wait_inclusive: 0,
@@ -318,6 +320,7 @@
             ],
             total: 1000,
             queries: Vec::new(),
+            stream_ops: Vec::new(),
             lines: None,
             trace: None,
         };
@@ -403,6 +406,7 @@
             GraphNode {
                 name: name.to_string(), inclusive, exclusive, call_count: None,
                 alloc_inclusive: 0, alloc_exclusive: 0, io_inclusive: 0, io_exclusive: 0,
+                stream_inclusive: 0, stream_exclusive: 0,
                 retained_inclusive: 0, retained_exclusive: 0,
                 wait_inclusive: 0, wait_exclusive: 0,
                 network_inclusive: 0,
@@ -439,7 +443,8 @@
         }
         nodes.push(node("leaf", w, w)); // index 3n, where the last arms point
         let graph = CallGraph {
-            nodes, edges, total: run_ns, queries: Vec::new(), lines: None, trace: None,
+            nodes, edges, total: run_ns, queries: Vec::new(), stream_ops: Vec::new(),
+            lines: None, trace: None,
         };
 
         let run: u64 = graph.nodes.iter().map(|n| n.exclusive).sum();
@@ -1204,6 +1209,57 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     }
 
     #[test]
+    /// Stream operations are parsed per function and broken down by call.
+    ///
+    /// Two dimensions, not one. The per-function counts say WHERE the stream work
+    /// happens; the breakdown says WHAT it is, and the two answer different
+    /// questions about the same total — 60 operations is a read loop if it is one
+    /// `fopen` and many `fgets`, and a reopen loop if it is many `fopen`.
+    fn parses_instrument_stream_lines_and_their_breakdown() {
+        let dump = "\
+elephc-instr: slow calls=1 incl_ns=100 excl_ns=100 incl_allocs=0 excl_allocs=0 incl_io=0 excl_io=0 incl_stream=60 excl_stream=60
+elephc-instr: quick calls=1 incl_ns=10 excl_ns=10 incl_allocs=0 excl_allocs=0 incl_io=0 excl_io=0 incl_stream=1 excl_stream=1
+elephc-instr-stream: 20 fopen
+elephc-instr-stream: 20 fgets
+elephc-instr-stream: 20 fclose
+elephc-instr-stream: 1 file_get_contents
+";
+        let graph = parse_instrument_dump(dump);
+        let slow = graph.nodes.iter().find(|n| n.name == "slow").expect("slow");
+        assert_eq!(slow.stream_inclusive, 60);
+        assert_eq!(slow.stream_exclusive, 60);
+        let quick = graph.nodes.iter().find(|n| n.name == "quick").expect("quick");
+        assert_eq!(quick.stream_exclusive, 1);
+        assert_eq!(graph.stream_ops.len(), 4);
+        assert!(graph.stream_ops.contains(&("fopen".to_string(), 20)));
+        assert!(graph.stream_ops.contains(&("file_get_contents".to_string(), 1)));
+        // The dimension is assertable by name, like `queries`, and `*` sums the
+        // SELF counts across functions rather than double-counting the inclusive.
+        let root = graph.nodes.iter().map(|n| n.inclusive).max().unwrap_or(1);
+        assert_eq!(
+            crate::monitor::assert_metric_value("streams", slow, root),
+            Some(60.0)
+        );
+        assert_eq!(
+            crate::monitor::assert_run_total("streams", &graph, root),
+            Some(61.0)
+        );
+    }
+
+    #[test]
+    /// A dump with no stream work leaves the dimension at zero rather than absent,
+    /// so an older capture — written before the counter existed — still parses.
+    fn a_dump_without_stream_fields_reads_as_zero() {
+        let dump = "\
+elephc-instr: only calls=1 incl_ns=10 excl_ns=10 incl_allocs=0 excl_allocs=0 incl_io=0 excl_io=0
+";
+        let graph = parse_instrument_dump(dump);
+        assert_eq!(graph.nodes[0].stream_inclusive, 0);
+        assert_eq!(graph.nodes[0].stream_exclusive, 0);
+        assert!(graph.stream_ops.is_empty());
+    }
+
+    #[test]
     /// Emitted symbol names map back to what the programmer wrote.
     ///
     /// The symbols come from the compiler's own builders, so both of
@@ -1437,6 +1493,8 @@ echo call_hot(1);
             alloc_exclusive: ae,
             io_inclusive: 0,
             io_exclusive: 0,
+            stream_inclusive: 0,
+            stream_exclusive: 0,
             retained_inclusive: 0,
             retained_exclusive: 0,
             wait_inclusive: 0,
@@ -1455,6 +1513,7 @@ echo call_hot(1);
             edges: vec![GraphEdge { from: 0, to: 1, weight: 990_000, count: Some(1200) }],
             total: 1_000_000,
             queries: Vec::new(),
+            stream_ops: Vec::new(),
             lines: None,
             trace: None,
         }
@@ -1754,6 +1813,7 @@ echo call_hot(1);
             "elephc-instr-edge: a -> b count=1 ns=2",
             "elephc-instr-query: 3 SELECT ?",
             "elephc-instr-query-dropped: 2",
+            "elephc-instr-stream: 20 fopen",
             "elephc-instr-trace: wrote /tmp/t.json",
             "elephc-probe: {main};hot 12",
             "elephc-probe-io: 4",

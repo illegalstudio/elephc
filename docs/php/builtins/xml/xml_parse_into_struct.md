@@ -2,7 +2,7 @@
 title: "xml_parse_into_struct()"
 description: "Parses a whole XML document into an array of tag structures and an index by tag name."
 sidebar:
-  order: 1011
+  order: 1044
 ---
 
 ## xml_parse_into_struct()

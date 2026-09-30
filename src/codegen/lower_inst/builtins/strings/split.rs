@@ -252,19 +252,6 @@ fn emit_explode_separator_guard(
     ctx.emitter.label(&ok_label);
 }
 
-/// Lowers `sscanf(string, format)` into the shared scanner helper.
-pub(crate) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.len() < 2 {
-        return Err(CodegenIrError::invalid_module(format!(
-            "sscanf expected at least 2 args, got {}",
-            inst.operands.len()
-        )));
-    }
-    load_input_and_pattern_args(ctx, inst, "sscanf")?;
-    abi::emit_call_label(ctx.emitter, "__rt_sscanf");
-    store_if_result(ctx, inst)
-}
-
 /// Lowers `str_split(string, length?)` into the fixed-width string-array splitter.
 pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
@@ -476,52 +463,6 @@ pub(super) fn emit_split_string_temp_cleanups(
     }
     abi::emit_release_temporary_stack(ctx.emitter, cleanups.bytes);
 }
-/// Materializes primary input and pattern strings for scanner-style helpers.
-pub(super) fn load_input_and_pattern_args(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-) -> Result<()> {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => load_input_and_pattern_args_aarch64(ctx, inst, name),
-        Arch::X86_64 => load_input_and_pattern_args_x86_64(ctx, inst, name),
-    }
-}
-
-/// Materializes AArch64 input and pattern strings for `sscanf()`.
-pub(super) fn load_input_and_pattern_args_aarch64(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-) -> Result<()> {
-    let input = expect_string_operand(ctx, inst, 0, name)?;
-    let pattern = expect_string_operand(ctx, inst, 1, name)?;
-    ctx.load_string_value_to_regs(input, "x1", "x2")?;
-    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the scanner input while materializing the pattern string
-    ctx.load_string_value_to_regs(pattern, "x1", "x2")?;
-    ctx.emitter.instruction("mov x3, x1");                                      // pass the pattern pointer as the secondary scanner argument
-    ctx.emitter.instruction("mov x4, x2");                                      // pass the pattern length as the secondary scanner argument
-    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the scanner input into primary argument registers
-    Ok(())
-}
-
-/// Materializes x86_64 input and pattern strings for `sscanf()`.
-pub(super) fn load_input_and_pattern_args_x86_64(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-) -> Result<()> {
-    let input = expect_string_operand(ctx, inst, 0, name)?;
-    let pattern = expect_string_operand(ctx, inst, 1, name)?;
-    ctx.load_string_value_to_regs(input, "rax", "rdx")?;
-    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    ctx.load_string_value_to_regs(pattern, "rax", "rdx")?;
-    ctx.emitter.instruction("mov rdi, rax");                                    // pass the pattern pointer as the secondary scanner argument
-    ctx.emitter.instruction("mov rsi, rdx");                                    // pass the pattern length as the secondary scanner argument
-    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
-    Ok(())
-}
-
 /// Materializes AArch64 source string and optional chunk length for `str_split()`.
 pub(super) fn lower_str_split_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let source = expect_string_operand(ctx, inst, 0, "str_split")?;

@@ -48,6 +48,9 @@ pub(in crate::interpreter) fn eval_builtin_array_key_set(
     };
     let left = eval_expr(left, context, scope, values)?;
     let right = eval_expr(right, context, scope, values)?;
+    // `name` is `array_diff_key` or `array_intersect_key`; both name #1 `$array` and
+    // leave the variadic tail unnamed.
+    super::array_arg_check::eval_check_array_args(name, &[left, right], context, values)?;
     eval_array_key_set_result(name, left, right, values)
 }
 

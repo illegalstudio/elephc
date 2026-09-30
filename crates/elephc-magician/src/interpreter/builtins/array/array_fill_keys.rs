@@ -47,6 +47,7 @@ pub(in crate::interpreter) fn eval_builtin_array_fill_keys(
     };
     let keys = eval_expr(keys, context, scope, values)?;
     let value = eval_expr(value, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("array_fill_keys", &[keys], context, values)?;
     eval_array_fill_keys_result(keys, value, values)
 }
 

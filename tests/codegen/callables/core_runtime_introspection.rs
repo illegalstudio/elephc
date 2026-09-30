@@ -313,10 +313,10 @@ fn test_core_trigger_error_aot_unhandled_user_error_is_fatal() {
     assert!(!out.success, "E_USER_ERROR must terminate the process");
     assert_eq!(out.stdout, "");
     assert!(
-        out.stderr.contains("Fatal error: boom in ")
-            && out.stderr.contains(" on line 2\n"),
-        "unexpected stderr: {:?}",
-        out.stderr
+        out.located_diagnostics.contains("Fatal error: boom in ")
+            && out.located_diagnostics.contains(" on line 2\n"),
+        "unexpected diagnostics: {:?}",
+        out.located_diagnostics
     );
 }
 
@@ -333,11 +333,12 @@ fn test_core_trigger_error_eval_unhandled_user_error_is_fatal() {
     assert!(!out.success, "eval E_USER_ERROR must terminate the process");
     assert_eq!(out.stdout, "");
     assert!(
-        out.stderr.contains("Fatal error: boom in ")
-            && out.stderr.contains(" on line ")
+        out.located_diagnostics.contains("Fatal error: boom in ")
+            && out.located_diagnostics.contains(" on line ")
+            && !out.located_diagnostics.contains("eval() runtime failed")
             && !out.stderr.contains("eval() runtime failed"),
-        "unexpected stderr: {:?}",
-        out.stderr
+        "unexpected diagnostics: {:?}",
+        out.located_diagnostics
     );
 }
 

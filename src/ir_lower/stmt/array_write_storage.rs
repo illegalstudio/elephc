@@ -35,6 +35,9 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
+    // php appends to a null container by vivifying an array first — MEASURED, `$u[] = 5; $u[] = 7;`
+    // on an undefined name builds `[5, 7]` and warns nothing. See `vivify_undefined_container`.
+    super::array_write_core::vivify_undefined_container(ctx, array, span);
     let array_value = load_array_local_for_write(ctx, array, span);
     let value = lower_expr(ctx, value);
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {

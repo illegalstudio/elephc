@@ -31,6 +31,9 @@ pub(crate) fn stat_result_type(checker: &Checker) -> PhpType {
             key: Box::new(PhpType::Mixed),
             value: Box::new(PhpType::Int),
         },
-        PhpType::Bool,
+        // php's signature is `array|false`, and the difference is not cosmetic: the union-unwrap
+        // family that lets `array_keys(stat($p))` compile asks for exactly ONE array member beside
+        // `false`, and a `bool` member could hold `true`, which is not a thing `stat()` returns.
+        PhpType::False,
     ])
 }

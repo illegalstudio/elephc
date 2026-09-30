@@ -86,7 +86,10 @@ fn eval_fopen_path_result(
     match context.stream_resources_mut().open_path(filename, mode) {
         Some(id) => values.resource(id),
         None => {
-            values.warning("Warning: fopen(): Failed to open stream\n")?;
+            let reason = context.stream_resources_mut().last_open_reason();
+            values.warning(&format!(
+                "Warning: fopen({filename}): Failed to open stream: {reason}\n"
+            ))?;
             values.bool_value(false)
         }
     }

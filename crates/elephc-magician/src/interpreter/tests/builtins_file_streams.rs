@@ -251,6 +251,11 @@ return true;"#
 }
 
 /// Verifies eval CSV stream builtins format and parse local stream records.
+///
+/// `fscanf()`'s `%d` is compared to the INT `42`, not the string `"42"`: the strict
+/// comparison used to read `=== "42"` and passed only because the old scanf subset
+/// answered with the matched text. `php -n` (8.5.6) answers `int(42)` there, so the old
+/// assertion was pinning a divergence rather than catching it.
 #[test]
 fn execute_program_dispatches_file_stream_csv_builtins() {
     let pid = std::process::id();
@@ -281,9 +286,9 @@ fclose($call);
 file_put_contents("{scan}", "42 alpha\n7 beta\n");
 $scan = fopen("{scan}", "r");
 $matched = fscanf($scan, "%d %s");
-echo $matched[0] === "42" && $matched[1] === "alpha" ? "scan" : "bad"; echo ":";
+echo $matched[0] === 42 && $matched[1] === "alpha" ? "scan" : "bad"; echo ":";
 $call_matched = call_user_func("fscanf", $scan, "%d %s");
-echo $call_matched[0] === "7" && $call_matched[1] === "beta" ? "callscan" : "bad"; echo ":";
+echo $call_matched[0] === 7 && $call_matched[1] === "beta" ? "callscan" : "bad"; echo ":";
 fclose($scan);
 echo unlink("{file}") && unlink("{semi}") && unlink("{call}") && unlink("{scan}") ? "cleanup" : "bad"; echo ":";
 echo function_exists("fgetcsv"); echo function_exists("fputcsv"); echo function_exists("fscanf");

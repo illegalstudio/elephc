@@ -256,6 +256,41 @@ fn printf_family_effects_cover_userland_string_conversion() {
     }
 }
 
+/// Counted stream operations declare an evented stream policy, and handle
+/// queries the monitor deliberately leaves uncounted do not.
+///
+/// `runtime_calls::lower` emits the count note for exactly
+/// `is_stream_operation()`, so a policy that disagreed would describe a
+/// boundary the monitor does not observe, or hide one it does.
+#[test]
+fn stream_operations_declare_an_evented_stream_policy() {
+    use elephc_monitoring_contract::{IoKind, MonitoringPolicy, TraceContextPolicy, WaitPolicy};
+    for target in [
+        RuntimeFnId::Fopen,
+        RuntimeFnId::Fclose,
+        RuntimeFnId::Fread,
+        RuntimeFnId::Fwrite,
+        RuntimeFnId::Fgets,
+        RuntimeFnId::FileGetContents,
+        RuntimeFnId::FilePutContents,
+    ] {
+        assert!(target.is_stream_operation(), "{target:?}");
+        assert_eq!(
+            target.monitoring_policy(),
+            MonitoringPolicy::Io {
+                kind: IoKind::Stream,
+                wait: WaitPolicy::GenericTiming,
+                trace_context: TraceContextPolicy::NotApplicable,
+            },
+            "{target:?}",
+        );
+    }
+    for target in [RuntimeFnId::Feof, RuntimeFnId::Ftell] {
+        assert!(!target.is_stream_operation(), "{target:?}");
+        assert!(!target.monitoring_policy().is_evented(), "{target:?}");
+    }
+}
+
 /// Flip warnings may call handlers that throw, write globals or release objects.
 #[test]
 fn array_flip_effects_preserve_warning_handlers() {

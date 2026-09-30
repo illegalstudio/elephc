@@ -425,9 +425,7 @@ echo $vars["local"] . ":" . $callbackVars["local"] . ":";
 echo $arrayCallbackVars["local"] . ":" . $constants["user"]["LOCAL_CONSTANT"] . ":";
 echo $constants["Core"]["PHP_INT_SIZE"] . ":";
 echo $constants["Core"]["PHP_FLOAT_MAX"] > 1.0 ? "float:" : "bad-float:";
-echo isset($constants["Core"]["PHP_MAXPATHLEN"])
-    || isset($constants["Core"]["PATH_SEPARATOR"])
-    ? "extra:" : "catalog:";
+echo isset($constants["Core"]["PHP_MAXPATHLEN"]) ? "extra:" : "catalog:";
 echo in_array("local_function", $functions["user"]) ? "function:" : "bad:";
 echo count($functions["internal"]) === count($includeDisabled["internal"])
     && count($functions["user"]) === count($includeDisabled["user"])

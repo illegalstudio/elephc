@@ -114,6 +114,16 @@ struct FnAcc {
     /// Nanoseconds blocked in outgoing network work, inclusive and exclusive.
     incl_network_wait: u64,
     excl_network_wait: u64,
+    /// STREAM operations attributed to this function: every `fopen`, `fread`,
+    /// `fwrite`, `fgets`, … the program performed while it was on the stack.
+    ///
+    /// Counted apart from `io`, which is DB queries, and from `network`. A
+    /// function that reads a file a thousand times and one that runs a thousand
+    /// statements are different problems with the same shape, and a single
+    /// dimension cannot tell them apart — the whole reason the query counter
+    /// exists rather than a generic "I/O" one.
+    incl_stream: u64,
+    excl_stream: u64,
     /// Live activations on the stack — inclusive is credited only when this
     /// returns to zero, so recursion is not double counted.
     depth: u32,
@@ -163,6 +173,10 @@ struct Frame {
     /// Network work issued by direct and transitive callees.
     children_network: u64,
     children_network_wait: u64,
+    /// Stream operations performed directly by this activation.
+    stream: u64,
+    /// Stream operations performed by direct and transitive callees.
+    children_stream: u64,
 }
 
 /// One suspended coroutine's activations, off the shadow stack until it resumes.
@@ -300,6 +314,10 @@ struct Throw {
     /// Network work performed by functions called from the handler.
     children_network: u64,
     children_network_wait: u64,
+    /// Stream operations performed directly by the handler before its catcher is known.
+    stream: u64,
+    /// Stream operations performed by functions called from the handler.
+    children_stream: u64,
     /// `(callee, calls, summed inclusive ns)` for what this handler called.
     edges: Vec<(u32, u64, u64)>,
 }
@@ -508,6 +526,8 @@ impl State {
             network_wait: 0,
             children_network: 0,
             children_network_wait: 0,
+            stream: 0,
+            children_stream: 0,
         });
     }
 
@@ -689,6 +709,8 @@ impl State {
                 network_wait: 0,
                 children_network: 0,
                 children_network_wait: 0,
+                stream: 0,
+                children_stream: 0,
             });
         }
     }
@@ -809,6 +831,10 @@ impl State {
                 frame.children_network_wait = frame
                     .children_network_wait
                     .wrapping_add(throw.children_network_wait);
+                frame.stream = frame.stream.wrapping_add(throw.stream);
+                frame.children_stream = frame
+                    .children_stream
+                    .wrapping_add(throw.children_stream);
                 for (callee, calls, ns) in throw.edges {
                     let entry = self.edges.entry((id, callee)).or_insert((0, 0));
                     entry.0 = entry.0.wrapping_add(calls);
@@ -948,6 +974,7 @@ impl State {
         let inclusive_network_wait = frame
             .network_wait
             .wrapping_add(frame.children_network_wait);
+        let inclusive_stream = frame.stream.wrapping_add(frame.children_stream);
         // Children can only exceed their parent's own span if the accounting
         // has gone wrong somewhere, and no sequence found so far reaches this —
         // the two that did were both fixed at their cause. It stays because of
@@ -975,6 +1002,7 @@ impl State {
             .wrapping_add(elapsed_wait.wrapping_sub(frame.children_wait));
         acc.excl_network = acc.excl_network.wrapping_add(frame.network);
         acc.excl_network_wait = acc.excl_network_wait.wrapping_add(frame.network_wait);
+        acc.excl_stream = acc.excl_stream.wrapping_add(frame.stream);
         acc.depth = acc.depth.saturating_sub(1);
         if acc.depth == 0 {
             acc.incl_ns = acc.incl_ns.wrapping_add(t.wrapping_sub(acc.t_outer));
@@ -986,6 +1014,7 @@ impl State {
             acc.incl_network_wait = acc
                 .incl_network_wait
                 .wrapping_add(inclusive_network_wait);
+            acc.incl_stream = acc.incl_stream.wrapping_add(inclusive_stream);
         }
         // Charging this to the frame below would hand the handler's cost to a
         // function the exception had already stopped. It waits with the unwind
@@ -1000,6 +1029,7 @@ impl State {
             u.children_network_wait = u
                 .children_network_wait
                 .wrapping_add(inclusive_network_wait);
+            u.children_stream = u.children_stream.wrapping_add(inclusive_stream);
             match u.edges.iter_mut().find(|(c, ..)| *c == id) {
                 Some(edge) => edge.2 = edge.2.wrapping_add(elapsed_ns),
                 None => u.edges.push((id, 0, elapsed_ns)),
@@ -1017,6 +1047,7 @@ impl State {
             top.children_network_wait = top
                 .children_network_wait
                 .wrapping_add(inclusive_network_wait);
+            top.children_stream = top.children_stream.wrapping_add(inclusive_stream);
         }
         if let Some(pid) = parent {
             let entry = self.edges.entry((pid, id)).or_insert((0, 0));
@@ -1039,6 +1070,20 @@ impl State {
             unwind.network_wait = unwind.network_wait.wrapping_add(ns);
         } else if let Some(frame) = self.stack.last_mut() {
             frame.network_wait = frame.network_wait.wrapping_add(ns);
+        }
+    }
+
+    /// Attributes one stream operation to the active PHP activation.
+    ///
+    /// Charged directly to the frame on top, the way network operations are,
+    /// rather than read as a delta of a global counter at enter and exit. While
+    /// an exception is unwinding, the frame on top may be one it already
+    /// destroyed, so the charge waits with the throw and reaches the catcher.
+    fn note_stream(&mut self) {
+        if let Some(unwind) = self.pending_charge() {
+            unwind.stream = unwind.stream.wrapping_add(1);
+        } else if let Some(frame) = self.stack.last_mut() {
+            frame.stream = frame.stream.wrapping_add(1);
         }
     }
 
@@ -1154,7 +1199,7 @@ impl State {
             let incl_ret = acc.incl_allocs as i64 - acc.incl_frees as i64;
             let excl_ret = acc.excl_allocs as i64 - acc.excl_frees as i64;
             out.push_str(&format!(
-                "elephc-instr: {} calls={} incl_ns={} excl_ns={} incl_allocs={} excl_allocs={} incl_io={} excl_io={} incl_ret={} excl_ret={} incl_wait={} excl_wait={} incl_network={} excl_network={} incl_network_wait={} excl_network_wait={}\n",
+                "elephc-instr: {} calls={} incl_ns={} excl_ns={} incl_allocs={} excl_allocs={} incl_io={} excl_io={} incl_ret={} excl_ret={} incl_wait={} excl_wait={} incl_network={} excl_network={} incl_network_wait={} excl_network_wait={} incl_stream={} excl_stream={}\n",
                 name_of(id),
                 acc.calls,
                 // Ticks became nanoseconds here, once, rather than twice per
@@ -1174,6 +1219,8 @@ impl State {
                 acc.excl_network,
                 acc.incl_network_wait,
                 acc.excl_network_wait,
+                acc.incl_stream,
+                acc.excl_stream,
             ));
         }
         let mut edges: Vec<(&(u32, u32), &(u64, u64))> = self.edges.iter().collect();
@@ -1250,6 +1297,76 @@ pub extern "C" fn elephc_instr_network_wait(ns: u64) {
         return;
     }
     STATE.with(|state| state.borrow_mut().note_network_wait(ns));
+}
+
+/// How many distinct stream OPERATION names one slice may record.
+///
+/// The name comes from a fixed table in the compiler — `fopen`, `fread`, … — so
+/// this can only be reached by a build that added more stream builtins than the
+/// cap, never by a program's own data. It exists so the list has a stated bound
+/// like the query list, not because anything is expected to hit it.
+const MAX_STREAM_OPS: usize = 64;
+
+/// Distinct stream operations and how many times each ran, in first-seen order.
+///
+/// The stream analogue of `QUERIES`: a count alone says a function did 1,200
+/// stream operations, and the breakdown says whether that is one `fopen` and
+/// 1,199 `fgets` — a read loop — or 1,200 `fopen` calls, which is a different
+/// bug entirely. Cleared with the slice, like `QUERIES`.
+static STREAM_NAMES: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
+
+/// Records one stream operation, named, against the active function. Reached
+/// from the emitted runtime through the `_elephc_instr_stream_fn` pointer slot,
+/// which is null unless `--with-monitoring` linked and initialized this crate —
+/// and the emitted call itself only exists in such a build.
+///
+/// The bytes are copied here, so the caller may pass a pointer into its own
+/// read-only data and need not keep it alive.
+#[no_mangle]
+pub extern "C" fn elephc_instr_stream(ptr: *const u8, len: usize) {
+    // Dormant means dormant, exactly as for the query and network counters: the
+    // slot is filled at init, so without this a binary nobody asked to profile
+    // would still count every read it performed.
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    STATE.with(|state| state.borrow_mut().note_stream());
+    if ptr.is_null() || len == 0 {
+        return;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let Ok(name) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    let mut names = STREAM_NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = names.iter_mut().find(|(seen, _)| seen == name) {
+        entry.1 += 1;
+    } else if names.len() < MAX_STREAM_OPS {
+        names.push((name.to_string(), 1));
+    }
+}
+
+/// The stream operations recorded so far, most-run first.
+fn stream_operations() -> Vec<(String, u64)> {
+    let names = STREAM_NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut out = names.clone();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out
+}
+
+/// Renders the recorded stream operations as `elephc-instr-stream: <count> <op>`
+/// lines, most-run first.
+///
+/// The stream analogue of `render_queries`, and there for the same reason: a
+/// count alone says a function performed 1,200 stream operations, and only the
+/// breakdown says whether that is one `fopen` and 1,199 `fgets` — a read loop —
+/// or 1,200 `fopen` calls, which is a different bug.
+fn render_stream_operations() -> String {
+    let mut out = String::new();
+    for (name, count) in stream_operations() {
+        out.push_str(&format!("elephc-instr-stream: {count} {name}\n"));
+    }
+    out
 }
 
 /// How many distinct statement shapes one slice may record.
@@ -2824,7 +2941,13 @@ pub extern "C" fn elephc_instr_dump() {
         end_slice();
         return;
     }
-    let slice = format!("{}{}{}", render_trace(), text, render_queries());
+    let slice = format!(
+        "{}{}{}{}",
+        render_trace(),
+        text,
+        render_queries(),
+        render_stream_operations()
+    );
     // Someone asked for this one over the endpoint: hand it over instead of
     // logging it. Doing both would write a request's profile into the service's
     // log every time an operator looked at it — and so would logging the ones
@@ -2852,10 +2975,10 @@ pub extern "C" fn elephc_instr_dump() {
 
 /// Ends the current slice: everything that describes it, dropped together.
 ///
-/// The per-thread accumulators and the process-wide query list are two places,
-/// and clearing one without the other is what let an idle worker's empty dump
-/// carry its statement shapes into the next profiled request. Callers get one
-/// function so a third exit cannot clear half.
+/// The per-thread accumulators and the process-wide query and stream-operation
+/// lists are separate places, and clearing one without the others is what let
+/// an idle worker's empty dump carry its statement shapes into the next profiled
+/// request. Callers get one function so a third exit cannot clear half.
 ///
 /// `IO_OPS` and `WAIT_NS` are deliberately NOT reset: they are only ever read as
 /// deltas against a per-frame snapshot, so letting them run keeps every
@@ -2867,6 +2990,12 @@ fn end_slice() {
         q.clear();
     }
     DROPPED_QUERY_SHAPES.store(0, Ordering::Relaxed);
+    // The stream breakdown describes the slice exactly as the statement list
+    // does, so it ends with it: an idle worker's dump must not carry one
+    // request's `fopen` count into the next.
+    if let Ok(mut names) = STREAM_NAMES.lock() {
+        names.clear();
+    }
 }
 
 #[cfg(test)]
@@ -5261,6 +5390,97 @@ mod tests {
         assert_eq!(s.fns[0].incl_network_wait, 12);
     }
 
+    /// Stream operations are attributed inclusive and exclusive like the other
+    /// counted dimensions, rendered in the row `monitor` parses, and kept apart
+    /// from DB queries and network transfers.
+    #[test]
+    fn stream_operations_are_attributed_per_function() {
+        let _serial = ticks_are_nanoseconds();
+        let mut s = State::default();
+        let root = s.enter_sim(0, 0, 0, 0, 0, 0);
+        s.note_stream(); // {main} opens the file itself
+        for tick in 0..3u64 {
+            // load_line reopens and reads, twice per call.
+            let child = s.enter_sim(1, 10 + tick * 10, 0, 0, 0, 0);
+            s.note_stream();
+            s.note_stream();
+            s.exit_at(1, child, 15 + tick * 10, 0, 0, 0, 0);
+        }
+        // Recursion does not count the inner activation's operations twice.
+        let outer = s.enter_sim(2, 50, 0, 0, 0, 0);
+        let inner = s.enter_sim(2, 51, 0, 0, 0, 0);
+        s.note_stream();
+        s.exit_at(2, inner, 52, 0, 0, 0, 0);
+        s.exit_at(2, outer, 53, 0, 0, 0, 0);
+        s.exit_at(0, root, 60, 0, 0, 0, 0);
+
+        assert_eq!((s.fns[1].incl_stream, s.fns[1].excl_stream), (6, 6));
+        assert_eq!((s.fns[2].incl_stream, s.fns[2].excl_stream), (1, 1));
+        assert_eq!((s.fns[0].incl_stream, s.fns[0].excl_stream), (8, 1));
+        let self_total: u64 = s.fns.iter().map(|acc| acc.excl_stream).sum();
+        assert_eq!(self_total, s.fns[0].incl_stream, "self counts must partition the root");
+        assert_eq!(s.fns[1].excl_io, 0, "a stream operation is not a DB query");
+        assert_eq!(s.fns[1].excl_network, 0, "a stream operation is not a network transfer");
+
+        let names = ["{main}".to_string(), "load_line".to_string(), "rec".to_string()];
+        let out = s.render(&names);
+        let row = out
+            .lines()
+            .find(|line| line.starts_with("elephc-instr: load_line "))
+            .expect("load_line row");
+        assert!(row.contains("incl_stream=6 excl_stream=6"), "{out}");
+        let main = out
+            .lines()
+            .find(|line| line.starts_with("elephc-instr: {main} "))
+            .expect("main row");
+        assert!(main.contains("incl_stream=8 excl_stream=1"), "{out}");
+    }
+
+    /// Stream work in an exception handler stays on the catcher and its live
+    /// callees, never on the frame the exception destroyed.
+    #[test]
+    fn stream_operations_survive_exception_resynchronization() {
+        let mut s = State::default();
+        let root = s.enter_sim(0, 0, 0, 0, 0, 0);
+        let catcher = s.enter_sim(1, 10, 0, 0, 0, 0);
+        s.enter_sim(2, 20, 0, 0, 0, 0);
+        s.note_throw(30, 0, 0, 0, 0);
+
+        s.note_stream(); // the handler logs to a file itself
+        let child = s.enter_sim(3, 40, 0, 0, 0, 0);
+        s.note_stream(); // and through a helper
+        s.note_stream();
+        s.exit_at(3, child, 50, 0, 0, 0, 0);
+
+        s.exit_at(1, catcher, 100, 0, 0, 0, 0);
+        s.exit_at(0, root, 110, 0, 0, 0, 0);
+
+        assert_eq!((s.fns[2].incl_stream, s.fns[2].excl_stream), (0, 0));
+        assert_eq!((s.fns[3].incl_stream, s.fns[3].excl_stream), (2, 2));
+        assert_eq!((s.fns[1].incl_stream, s.fns[1].excl_stream), (3, 1));
+        assert_eq!((s.fns[0].incl_stream, s.fns[0].excl_stream), (3, 0));
+    }
+
+    /// A generator's stream work before and after a `yield` stays on the
+    /// generator, and what the consumer reads in between stays on the consumer.
+    #[test]
+    fn stream_operations_follow_a_suspended_coroutine() {
+        let mut s = State::default();
+        s.enter_sim(0, 0, 0, 0, 0, 0); // the consumer
+        s.enter_at(1, CORO_BASE, 10, 0, 0, 0, 0); // the generator body
+        s.note_stream(); // fopen
+        s.suspend_sim(1, CORO_BASE, 20, 0, 0, 0, 0);
+        s.note_stream(); // the consumer writes what it was given
+        s.resume_at(1, CORO_BASE, 30, 0, 0, 0, 0);
+        s.note_stream(); // fgets
+        s.exit_at(1, CORO_BASE, 40, 0, 0, 0, 0);
+        s.exit_sim(0, 50, 0, 0, 0, 0);
+
+        assert_eq!(s.fns[1].excl_stream, 2, "both halves of the body are the generator's");
+        assert_eq!(s.fns[0].excl_stream, 1, "the consumer's own write is the consumer's");
+        assert_eq!(s.fns[0].incl_stream, 3);
+    }
+
     #[test]
     /// Retained objects go negative for a function that frees what it did not
     /// allocate, and still partition — clamping at zero would hide a release.
@@ -5610,10 +5830,14 @@ mod tests {
         let wait_before = WAIT_NS.load(Ordering::Relaxed);
         let shapes_before = QUERIES.lock().map(|q| q.len()).unwrap_or(0);
 
+        let stream_ops_before = STREAM_NAMES.lock().map(|names| names.len()).unwrap_or(0);
+
         let sql = "SELECT * FROM dormant WHERE id = 42";
         elephc_instr_query(sql.as_ptr(), sql.len());
         elephc_instr_io();
         elephc_instr_wait(1_000_000);
+        let op = "fopen_dormant";
+        elephc_instr_stream(op.as_ptr(), op.len());
 
         assert_eq!(IO_OPS.load(Ordering::Relaxed), io_before, "counted an I/O op");
         assert_eq!(WAIT_NS.load(Ordering::Relaxed), wait_before, "counted wait time");
@@ -5621,6 +5845,36 @@ mod tests {
             QUERIES.lock().map(|q| q.len()).unwrap_or(0),
             shapes_before,
             "kept a statement shape"
+        );
+        assert_eq!(
+            STREAM_NAMES.lock().map(|names| names.len()).unwrap_or(0),
+            stream_ops_before,
+            "kept a stream operation"
+        );
+        ENABLED.store(was_enabled, Ordering::Relaxed);
+    }
+
+    /// Stream operations are broken down by name, most-run first, and the
+    /// breakdown ends with the slice it describes.
+    #[test]
+    fn instr_stream_breaks_operations_down_and_the_slice_clears_them() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let was_enabled = ENABLED.swap(true, Ordering::Relaxed);
+        end_slice();
+        for op in ["fopen", "fgets", "fgets", "fclose", "fopen", "fgets"] {
+            elephc_instr_stream(op.as_ptr(), op.len());
+        }
+        let out = render_stream_operations();
+        assert_eq!(
+            out,
+            "elephc-instr-stream: 3 fgets\n\
+             elephc-instr-stream: 2 fopen\n\
+             elephc-instr-stream: 1 fclose\n",
+        );
+        end_slice();
+        assert!(
+            render_stream_operations().is_empty(),
+            "the breakdown outlived its slice"
         );
         ENABLED.store(was_enabled, Ordering::Relaxed);
     }

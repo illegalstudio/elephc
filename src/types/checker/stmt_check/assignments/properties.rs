@@ -228,8 +228,7 @@ pub(super) fn check_property_array_assign(
                 checker,
                 &prop_ty,
                 property_has_declared_type,
-                class_name,
-                property,
+                &format!("Property {}::${}[]", class_name, property),
                 index,
                 &normalized_idx_ty,
                 &val_ty,
@@ -839,12 +838,11 @@ fn updated_array_property_push_type(
 ///   for untyped properties.
 /// - For `AssocArray`: merges the key type with the index type and merges the value type with
 ///   the assigned value, preserving declared-type constraints.
-fn updated_array_property_assign_type(
+pub(super) fn updated_array_property_assign_type(
     checker: &Checker,
     prop_ty: &PhpType,
     property_has_declared_type: bool,
-    class_name: &str,
-    property: &str,
+    label: &str,
     index: &Expr,
     normalized_idx_ty: &PhpType,
     val_ty: &PhpType,
@@ -864,7 +862,7 @@ fn updated_array_property_assign_type(
                         elem_ty.as_ref(),
                         val_ty,
                         span,
-                        &format!("Property {}::${}[]", class_name, property),
+                        label,
                     )?;
                 }
                 return Ok(assoc_property_type_after_keyed_write(
@@ -880,7 +878,7 @@ fn updated_array_property_assign_type(
                     elem_ty.as_ref(),
                     val_ty,
                     span,
-                    &format!("Property {}::${}[]", class_name, property),
+                    label,
                 )?;
                 Ok(PhpType::Array(elem_ty.clone()))
             } else if elem_ty.as_ref() == val_ty {
@@ -901,7 +899,7 @@ fn updated_array_property_assign_type(
                     existing_value.as_ref(),
                     val_ty,
                     span,
-                    &format!("Property {}::${}[]", class_name, property),
+                    label,
                 )?;
             }
             let merged_key = merge_array_key_types(*key.clone(), normalized_idx_ty.clone());
@@ -928,7 +926,7 @@ fn updated_array_property_assign_type(
 }
 
 /// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).
-fn is_php_array_key_type(ty: &PhpType) -> bool {
+pub(super) fn is_php_array_key_type(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed)
 }
 
@@ -1003,7 +1001,7 @@ fn update_object_property_type(
 /// Currently returns true only when the property is declared as `array<PhpType::Mixed>` and the
 /// updated type is an `AssocArray` with `PhpType::Mixed` values. This guards against widening
 /// a typed array to an associative storage with a narrower element type.
-fn declared_generic_array_can_use_assoc_storage(current: &PhpType, updated: &PhpType) -> bool {
+pub(super) fn declared_generic_array_can_use_assoc_storage(current: &PhpType, updated: &PhpType) -> bool {
     matches!(
         (current, updated),
         (

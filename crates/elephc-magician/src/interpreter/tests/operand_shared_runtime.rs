@@ -45,9 +45,11 @@ fn shared_runtime_calls_balance_operand_owners() {
 /// Operand evaluation and runtime-hook failures retire all previously evaluated arguments.
 #[test]
 fn shared_runtime_call_failures_release_evaluated_operands() {
-    for source in [
-        "return array_key_exists('released', missingSharedOperand());",
-        "return array_key_exists('released', 0);",
+    // A non-array haystack no longer reaches the runtime hook: php's `TypeError` is raised by
+    // the shared argument check first, and that failure has to retire the operands just the same.
+    for (source, expected) in [
+        ("return array_key_exists('released', missingSharedOperand());", EvalStatus::UnsupportedConstruct),
+        ("return array_key_exists('released', 0);", EvalStatus::UncaughtThrowable),
     ] {
         let mut values = FakeOps::default();
         let mut context = ElephcEvalContext::new();
@@ -55,7 +57,11 @@ fn shared_runtime_call_failures_release_evaluated_operands() {
         let program = parse_fragment(source.as_bytes())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
         assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values),
-            Err(EvalStatus::UnsupportedConstruct), "{source}");
+            Err(expected), "{source}");
+        // The TypeError itself is owned by the context as its pending throw, not leaked.
+        if let Some(thrown) = context.take_pending_throw() {
+            values.release(thrown).unwrap();
+        }
         for (id, count) in &values.cell_owners {
             assert_eq!(*count, 0, "{source}: {:?}", values.values[id]);
         }
@@ -67,7 +73,8 @@ fn shared_runtime_call_failures_release_evaluated_operands() {
 fn shared_runtime_operand_cleanup_preserves_primary_errors() {
     for (source, expected) in [
         ("return array_key_exists('released', []);", EvalStatus::UncaughtThrowable),
-        ("return array_key_exists('released', 0);", EvalStatus::UnsupportedConstruct),
+        // php's `TypeError` for the non-array haystack is the primary error here.
+        ("return array_key_exists('released', 0);", EvalStatus::UncaughtThrowable),
     ] {
         let mut values = FakeOps { fail_release_call: Some(0), ..FakeOps::default() };
         let mut context = ElephcEvalContext::new();

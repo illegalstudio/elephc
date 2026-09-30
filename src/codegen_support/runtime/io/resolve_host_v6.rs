@@ -27,6 +27,7 @@
 //! - `freeaddrinfo` is called after the address bytes are copied so the
 //!   libc allocation does not leak across resolver invocations.
 
+use super::socket_errno::{emit_publish_gai_code, emit_publish_gai_host};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// resolve_host_v6: resolve a host-name slice to a 16-byte IPv6 address.
@@ -65,6 +66,9 @@ pub fn emit_resolve_host_v6(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov w9, #{}", af_inet6));                     // AF_INET6 (10 Linux / 30 macOS)
     emitter.instruction("str w9, [sp, #4]");                                    // ai_family at offset 4
 
+    // See `resolve_host`: the host is published while the argument pair is still live.
+    emit_publish_gai_host(emitter, "x0", "x1");
+
     // -- null-terminate the host slice for getaddrinfo --
     emitter.instruction("mov x2, x1");                                          // host length into __rt_cstr's length register
     emitter.instruction("mov x1, x0");                                          // host pointer into __rt_cstr's pointer register
@@ -77,6 +81,7 @@ pub fn emit_resolve_host_v6(emitter: &mut Emitter) {
     emitter.instruction("mov x2, sp");                                          // arg 3: &hints
     emitter.instruction("add x3, sp, #48");                                     // arg 4: &res (output slot)
     emitter.bl_c("getaddrinfo");                                                // returns 0 on success, error code otherwise
+    emit_publish_gai_code(emitter, "x0");                                       // success publishes 0, which is the no-failure state
     emitter.instruction("cbnz x0, __rt_rhv6_fail");                             // non-zero means resolution failed
 
     // -- copy res->ai_addr->sin6_addr (16 bytes) into the caller's out buffer --
@@ -104,6 +109,7 @@ pub fn emit_resolve_host_v6(emitter: &mut Emitter) {
     emitter.bl_c("freeaddrinfo");                                               // free even though we found no usable addr
     // fall through
     emitter.label("__rt_rhv6_fail");
+    emitter.instruction("bl __rt_gai_publish");                                 // compose the message PHP reports for this
     emitter.instruction("mov x0, #0");                                          // failure
     emitter.instruction("ldp x29, x30, [sp, #72]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release runtime stack frame
@@ -138,6 +144,9 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], 0");                          // store runtime value
     emitter.instruction(&format!("mov DWORD PTR [rbp - 44], {}", af_inet6));    // ai_family at hints+4 (rbp-48+4 = rbp-44)
 
+    // See `resolve_host`: the host is published while the argument pair is still live.
+    emit_publish_gai_host(emitter, "rdi", "rsi");
+
     // -- null-terminate the host slice --
     emitter.instruction("mov rax, rdi");                                        // host pointer into __rt_cstr's pointer register
     emitter.instruction("mov rdx, rsi");                                        // host length into __rt_cstr's length register
@@ -150,6 +159,8 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 48]");                                 // arg 3: &hints
     emitter.instruction("lea rcx, [rbp - 56]");                                 // arg 4: &res
     emitter.instruction("call getaddrinfo");                                    // call external helper
+    emitter.instruction("movsxd r11, eax");                                     // widen the resolver's code before publishing it
+    emit_publish_gai_code(emitter, "r11");                                      // success publishes 0, which is the no-failure state
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jnz __rt_rhv6_fail_x86");                              // non-zero return = error
 
@@ -180,6 +191,7 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call freeaddrinfo");                                   // call external helper
     // fall through
     emitter.label("__rt_rhv6_fail_x86");
+    emitter.instruction("call __rt_gai_publish");                               // compose the message PHP reports for this
     emitter.instruction("xor eax, eax");                                        // failure
     emitter.instruction("add rsp, 80");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

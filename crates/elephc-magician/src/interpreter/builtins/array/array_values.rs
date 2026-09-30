@@ -28,6 +28,7 @@ pub(in crate::interpreter) fn eval_builtin_array_values(
         return Err(EvalStatus::RuntimeFatal);
     };
     let array = eval_expr(array, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("array_values", &[array], context, values)?;
     eval_array_values_result(array, values)
 }
 

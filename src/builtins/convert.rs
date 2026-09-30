@@ -40,8 +40,31 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Callable => PhpType::Callable,
         TypeSpec::Array => PhpType::Array(Box::new(PhpType::Mixed)),
         // The checker's type model carries nullability through flow narrowing rather than a
-        // type constructor, so a nullable declaration converts to its inner type.
+        // type constructor, so a nullable declaration converts to its inner type. Builtins whose
+        // lowering tells a written `null` apart opt into the union through
+        // `builtin_param_php_type`.
         TypeSpec::Nullable(inner) => type_spec_to_php(inner),
+    }
+}
+
+/// Converts one fixed parameter of `spec` for the checker and argument lowering.
+///
+/// php's `?T` is `T|null`, and for the stream layer the difference is behaviour, not typing:
+/// `stream_select($r, $w, $e, null)` blocks forever where `0` returns at once, and
+/// `fgets($h, null)` reads a line where `0` is a `ValueError`. The I/O area's lowering handles
+/// the null itself, so its parameters keep the union — as do the builtins that preserve their
+/// values for a shared runtime. Everywhere else the inner type stands, as `type_spec_to_php`
+/// gives it.
+pub(crate) fn builtin_param_php_type(spec: &crate::builtins::spec::BuiltinSpec, ty: &TypeSpec) -> PhpType {
+    if spec.area == crate::builtins::spec::Area::Io
+        || matches!(
+            spec.semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+        )
+    {
+        type_spec_to_php_preserving_null(ty)
+    } else {
+        type_spec_to_php(ty)
     }
 }
 

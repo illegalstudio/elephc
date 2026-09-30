@@ -67,6 +67,25 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("curl_prelude", parsed_curl_prelude()),
         ("xml_prelude", crate::xml_prelude::xml_declarations()),
         (
+            "dir_prelude",
+            parsed_php_prelude("dir", crate::dir_prelude::DIR_PRELUDE_SRC),
+        ),
+        (
+            "gz_prelude",
+            parsed_php_prelude("gz", crate::gz_prelude::GZ_PRELUDE_SRC),
+        ),
+        (
+            "similar_text_prelude",
+            parsed_php_prelude(
+                "similar_text",
+                crate::similar_text_prelude::SIMILAR_TEXT_PRELUDE_SRC,
+            ),
+        ),
+        (
+            "scanf_prelude",
+            parsed_php_prelude("scanf", crate::scanf_prelude::SCANF_PRELUDE_SRC),
+        ),
+        (
             "version_prelude",
             crate::version_prelude::version_declarations(
                 &["zend_version", "php_sapi_name", "ini_restore"],
@@ -154,10 +173,62 @@ fn opcache_api_program() -> crate::parser::ast::Program {
 
 /// Parses `CURL_PRELUDE_SRC` exactly as `curl_prelude::inject_if_used_for_version` does.
 fn parsed_curl_prelude() -> crate::parser::ast::Program {
-    let tokens = crate::lexer::tokenize(crate::curl_prelude::CURL_PRELUDE_SRC)
-        .expect("curl prelude must tokenize");
-    crate::parser::parse_internal(&tokens).expect("curl prelude must parse")
+    parsed_php_prelude("curl", crate::curl_prelude::CURL_PRELUDE_SRC)
 }
+
+/// Preludes whose canonical representation remains hand-written PHP source text.
+const PHP_SOURCE_PRELUDES: &[(&str, &str)] = &[
+    ("curl_prelude", crate::curl_prelude::CURL_PRELUDE_SRC),
+    ("dir_prelude", crate::dir_prelude::DIR_PRELUDE_SRC),
+    ("gz_prelude", crate::gz_prelude::GZ_PRELUDE_SRC),
+    ("similar_text_prelude", crate::similar_text_prelude::SIMILAR_TEXT_PRELUDE_SRC),
+    ("scanf_prelude", crate::scanf_prelude::SCANF_PRELUDE_SRC),
+];
+
+/// Tokenizes and parses one PHP-source prelude, naming it in a failure message.
+fn parsed_php_prelude(label: &str, source: &str) -> crate::parser::ast::Program {
+    let tokens = crate::lexer::tokenize(source)
+        .unwrap_or_else(|error| panic!("the {label} prelude must tokenize: {error:?}"));
+    crate::parser::parse_internal(&tokens)
+        .unwrap_or_else(|error| panic!("the {label} prelude must parse: {error:?}"))
+}
+
+/// Parameters a prelude declares LOOSER than its contract, on purpose, with the measurement.
+///
+/// A contract records what PHP DECLARES. A prelude declaration is what elephc's CHECKER
+/// enforces, and the two are not the same instrument: php's coercive mode converts at the
+/// boundary, elephc's checker refuses there. Where php's own declaration would make elephc
+/// reject a program php runs, the prelude keeps the looser spelling and the divergence is
+/// written down here.
+///
+/// SHRINK-ONLY. An entry whose prelude and contract have come to agree FAILS, so this list
+/// cannot quietly outlive its reason.
+const LOOSER_THAN_CONTRACT_PARAMS: &[(&str, &str, &str)] = &[
+    (
+        "gzencode",
+        "data",
+        "MEASURED on `php -n` 8.5.6: php declares `string $data` and still runs \
+         `gzdecode(gzencode($s))`, because its encoders answer `string|false` and coercive mode \
+         converts the `false` to `\"\"`. elephc's checker has no such coercion, so declaring \
+         `string` here refuses at COMPILE TIME a program php executes.",
+    ),
+    (
+        "zlib_encode",
+        "data",
+        "the encode half of the same measurement as gzencode()",
+    ),
+    (
+        "gzdecode",
+        "data",
+        "the decode half: `gzdecode(gzencode($s))` is the shape php runs and a `string` \
+         declaration rejects",
+    ),
+    (
+        "zlib_decode",
+        "data",
+        "the decode half of the same measurement as zlib_encode()",
+    ),
+];
 
 /// Every injected prelude rendered back to PHP source, for the two audits that read
 /// DECLARATION TEXT rather than call sites.
@@ -166,8 +237,8 @@ fn parsed_curl_prelude() -> crate::parser::ast::Program {
 /// EXPRESSION against the catalog, and `crate::synthetic_class::print` is the faithful
 /// rendering of a built program — `printing_round_trips` re-parses its output and compares
 /// node for node over every built prelude, so an assertion made against this text is as
-/// strong as one made against hand-written source. The curl prelude contributes its real
-/// source, which is the artifact in its case.
+/// strong as one made against hand-written source. The PHP-source preludes contribute their
+/// real source, which is their authoritative artifact.
 ///
 /// `prelude_contracts_match_their_injected_signatures` requires each
 /// `BackendImplementation::Prelude` contract to be declared by exactly one of these, so a
@@ -176,10 +247,9 @@ fn prelude_sources() -> Vec<(&'static str, String)> {
     injected_prelude_programs()
         .into_iter()
         .map(|(name, program)| {
-            let source = if name == "curl_prelude" {
-                crate::curl_prelude::CURL_PRELUDE_SRC.to_string()
-            } else {
-                crate::synthetic_class::print::print_program(&program)
+            let source = match PHP_SOURCE_PRELUDES.iter().find(|(known, _)| *known == name) {
+                Some((_, source)) => (*source).to_string(),
+                None => crate::synthetic_class::print::print_program(&program),
             };
             (name, source)
         })
@@ -387,12 +457,26 @@ fn prelude_contracts_match_their_injected_signatures() {
             let at = format!("{name}(${}) in {prelude}", param.name);
             assert_eq!(actual.by_ref, param.by_ref, "{at}: by-reference marker");
             assert!(!actual.variadic, "{at}: fixed parameter declared variadic");
-            assert!(
-                php_type_matches(param.ty, &actual.php_type),
-                "{at}: declared type `{}` is not the contract's {:?}",
-                actual.php_type,
-                param.ty
-            );
+            let recorded = LOOSER_THAN_CONTRACT_PARAMS
+                .iter()
+                .find(|(fn_name, param_name, _)| {
+                    *fn_name == name && *param_name == param.name
+                })
+                .map(|(_, _, reason)| *reason);
+            if let Some(reason) = recorded {
+                assert!(
+                    !php_type_matches(param.ty, &actual.php_type),
+                    "{at}: the prelude and the contract agree now — drop it from \
+                     LOOSER_THAN_CONTRACT_PARAMS (recorded reason: {reason})"
+                );
+            } else {
+                assert!(
+                    php_type_matches(param.ty, &actual.php_type),
+                    "{at}: declared type `{}` is not the contract's {:?}",
+                    actual.php_type,
+                    param.ty
+                );
+            }
             match (param.default, actual.default.as_deref()) {
                 (None, None) => {}
                 (Some(expected), Some(text)) => assert!(
@@ -603,7 +687,10 @@ fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
         // Parsed rather than string-compared so `1.0`, `1.00` and `1e0` all agree with
         // `Float(1.0)` while `5.0` does not.
         DefaultSpec::Float(value) => declared.parse::<f64>() == Ok(*value),
-        DefaultSpec::Int(value) => declared.parse::<i64>() == Ok(*value),
+        DefaultSpec::Int(value) => {
+            declared.parse::<i64>() == Ok(*value)
+                || elephc_builtin_contract::php_constants::int_constant(declared) == Some(*value)
+        }
         DefaultSpec::Str(value) => {
             declared == format!("\"{value}\"") || declared == format!("'{value}'")
         }

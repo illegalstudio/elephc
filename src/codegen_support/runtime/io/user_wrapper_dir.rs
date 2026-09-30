@@ -92,10 +92,11 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (x9=scheme len) --
     emitter.label("__rt_uwod_check");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
+    super::emit_load_table_base(emitter, "x10");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uwod_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "x12");
+    emitter.instruction("cmp x11, x12");                                        // checked every allocated wrapper slot?
     emitter.instruction("b.ge __rt_uwod_none");                                 // no registered wrapper matched the scheme
     emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
@@ -122,8 +123,12 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
     emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
+    emitter.instruction("bl __rt_user_wrapper_construct");                      // php constructs before it asks
     emitter.instruction("cbz x0, __rt_uwod_fail_noobj");                        // unknown class → false (no object to free)
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper instance
+    // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
+    emitter.instruction("bl __rt_wrapper_context_notice");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload for the vtable lookup below
 
     // -- look up dir_opendir (vtable slot 19) for the object's class --
     emitter.instruction("ldr x9, [x0]");                                        // class_id at the head of every wrapper object
@@ -147,19 +152,17 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
     emitter.label("__rt_uwod_called");
     emitter.instruction("cbz x0, __rt_uwod_fail");                              // dir_opendir returned false → free obj, false
 
-    // -- success: allocate the first free slot in _user_wrapper_handles --
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("mov x12, #0");                                         // start scanning from handle slot 0
-    emitter.label("__rt_uwod_hslot");
-    emitter.instruction("cmp x12, #256");                                       // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
-    emitter.instruction("b.ge __rt_uwod_fail");                                 // no free handle slot → free obj, false
-    emitter.instruction("ldr x13, [x10, x12, lsl #3]");                         // load slot — null means free
-    emitter.instruction("cbz x13, __rt_uwod_hfound");                           // free slot found
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next handle slot
-    emitter.instruction("b __rt_uwod_hslot");                                   // keep scanning for a free handle slot
-    emitter.label("__rt_uwod_hfound");
+    // -- success: reserve a stream-handle slot, growing the table on demand --
+    // PHP places no limit on simultaneously open wrapper directories, so the only
+    // failure left is heap exhaustion, reported as -1.
+    emitter.instruction("bl __rt_user_wrapper_handles_reserve");                // x0 = free handle slot (-1 on heap exhaustion)
+    emitter.instruction("cmp x0, #0");                                          // did the reservation fail?
+    emitter.instruction("b.lt __rt_uwod_fail");                                 // no handle slot → free obj, false
+    emitter.instruction("mov x12, x0");                                         // allocated handle slot index
+    // The base is loaded AFTER the reservation: growth may have moved the table.
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the wrapper object
-    emitter.instruction("str x13, [x10, x12, lsl #3]");                         // _user_wrapper_handles[slot] = obj
+    emitter.instruction("str x13, [x10, x12, lsl #3]");                         // handle table[slot] = obj
     emitter.instruction("mov x0, #0x4000");                                     // low 16 bits of USER_WRAPPER_FD_BASE = 0x40000000
     emitter.instruction("lsl x0, x0, #16");                                     // shift into bits 30..16 to form 0x40000000
     emitter.instruction("orr x0, x0, x12");                                     // synthetic fd = USER_WRAPPER_FD_BASE | slot index
@@ -218,10 +221,11 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uwod_check_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // base of the registered-wrapper table
+    super::emit_load_table_base(emitter, "r10");                 // base of the registered-wrapper table
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwod_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "r12");
+    emitter.instruction("cmp r11, r12");                                         // checked every allocated wrapper slot?
     emitter.instruction("jge __rt_uwod_none_x86");                              // no registered wrapper matched the scheme
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
     emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
@@ -251,9 +255,14 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
     emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length from the registry slot
     emitter.instruction("call __rt_new_by_name");                               // instantiate the wrapper class → rax = obj, or 0 when unknown
+    emitter.instruction("call __rt_user_wrapper_construct");                    // php constructs before it asks
     emitter.instruction("test rax, rax");                                       // did instantiation fail?
     emitter.instruction("jz __rt_uwod_failnoobj_x86");                          // unknown class → false (no object to free)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the wrapper instance
+    // php assigns `$context` to this instance too; see `emit_wrapper_context_notice`.
+    emitter.instruction("mov rdi, rax");
+    emitter.instruction("call __rt_wrapper_context_notice");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                   // reload for the vtable lookup below
 
     // -- look up dir_opendir (vtable slot 19) for the object's class --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of every wrapper object
@@ -280,26 +289,23 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did dir_opendir return false?
     emitter.instruction("jz __rt_uwod_fail_x86");                               // dir_opendir returned false → free obj, false
 
-    // -- success: allocate the first free slot in _user_wrapper_handles --
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("xor r12, r12");                                        // start scanning from handle slot 0
-    emitter.label("__rt_uwod_hslot_x86");
-    emitter.instruction("cmp r12, 256");                                        // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
-    emitter.instruction("jge __rt_uwod_fail_x86");                              // no free handle slot → free obj, false
-    emitter.instruction("mov r13, QWORD PTR [r10 + r12 * 8]");                  // load slot — null means free
-    emitter.instruction("test r13, r13");                                       // is this slot free?
-    emitter.instruction("jz __rt_uwod_hfound_x86");                             // free slot found
-    emitter.instruction("inc r12");                                             // advance to the next handle slot
-    emitter.instruction("jmp __rt_uwod_hslot_x86");                             // keep scanning for a free handle slot
-    emitter.label("__rt_uwod_hfound_x86");
+    // -- success: reserve a stream-handle slot, growing the table on demand --
+    // PHP places no limit on simultaneously open wrapper directories, so the only
+    // failure left is heap exhaustion, reported as -1.
+    emitter.instruction("call __rt_user_wrapper_handles_reserve");              // rax = free handle slot (-1 on heap exhaustion)
+    emitter.instruction("test rax, rax");                                       // did the reservation fail?
+    emitter.instruction("js __rt_uwod_fail_x86");                               // no handle slot → free obj, false
+    emitter.instruction("mov r12, rax");                                        // allocated handle slot index
+    // The base is loaded AFTER the reservation: growth may have moved the table.
+    super::emit_load_handles_base(emitter, "r10");                              // handle table base
     emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // reload the wrapper object
-    emitter.instruction("mov QWORD PTR [r10 + r12 * 8], r13");                  // _user_wrapper_handles[slot] = obj
+    emitter.instruction("mov QWORD PTR [r10 + r12 * 8], r13");                  // handle table[slot] = obj
     emitter.instruction("mov rax, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("or rax, r12");                                         // synthetic fd = USER_WRAPPER_FD_BASE | slot index
     emitter.instruction("jmp __rt_uwod_ret_x86");                               // return the synthetic directory descriptor
 
     emitter.label("__rt_uwod_fail_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the wrapper object
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the wrapper object; decref reads rax
     emitter.instruction("call __rt_decref_any");                                // free the instance before returning false
     emitter.label("__rt_uwod_failnoobj_x86");
     emitter.instruction("mov rax, -1");                                         // -1: matched wrapper failed → opendir() boxes false
@@ -337,7 +343,7 @@ pub fn emit_user_wrapper_dir_readdir(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov x9, #0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("sub x9, x0, x9");                                      // x9 = handle slot index = fd - BASE
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
     emitter.instruction("cbz x0, __rt_uwrd_empty");                             // empty slot → end of directory
 
@@ -394,7 +400,7 @@ fn emit_user_wrapper_dir_readdir_linux_x86_64(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
     emitter.instruction("sub r9, 0x40000000");                                  // r9 = handle slot index = fd - USER_WRAPPER_FD_BASE
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
     emitter.instruction("test rdi, rdi");                                       // empty slot?
     emitter.instruction("jz __rt_uwrd_empty_x86");                              // empty slot → end of directory
@@ -472,7 +478,7 @@ pub fn emit_user_wrapper_dir_closedir(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov x9, #0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("sub x9, x0, x9");                                      // x9 = handle slot index = fd - BASE
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
     emitter.instruction("cbz x0, __rt_uwcd_clear");                             // empty slot → just clear and report success
 
@@ -489,7 +495,7 @@ pub fn emit_user_wrapper_dir_closedir(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the synthetic file descriptor
     emitter.instruction("mov x9, #0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("sub x9, x0, x9");                                      // x9 = handle slot index = fd - BASE
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the freed handle slot
     emitter.instruction("mov x0, #1");                                          // closedir() on a wrapper always reports success
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -511,7 +517,7 @@ fn emit_user_wrapper_dir_closedir_linux_x86_64(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
     emitter.instruction("sub r9, 0x40000000");                                  // r9 = handle slot index = fd - USER_WRAPPER_FD_BASE
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
     emitter.instruction("test rdi, rdi");                                       // empty slot?
     emitter.instruction("jz __rt_uwcd_clear_x86");                              // empty slot → just clear and report success
@@ -530,7 +536,7 @@ fn emit_user_wrapper_dir_closedir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the synthetic file descriptor
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
     emitter.instruction("sub r9, 0x40000000");                                  // r9 = handle slot index = fd - USER_WRAPPER_FD_BASE
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // clear the freed handle slot
     emitter.instruction("mov eax, 1");                                          // closedir() on a wrapper always reports success
     emitter.instruction("add rsp, 16");                                         // release the helper frame
@@ -560,7 +566,7 @@ pub fn emit_user_wrapper_dir_rewinddir(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov x9, #0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("sub x9, x0, x9");                                      // x9 = handle slot index = fd - BASE
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
     emitter.instruction("cbz x0, __rt_uwrw_false");                             // empty slot → false
 
@@ -596,7 +602,7 @@ fn emit_user_wrapper_dir_rewinddir_linux_x86_64(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
     emitter.instruction("sub r9, 0x40000000");                                  // r9 = handle slot index = fd - USER_WRAPPER_FD_BASE
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
     emitter.instruction("test rdi, rdi");                                       // empty slot?
     emitter.instruction("jz __rt_uwrw_false_x86");                              // empty slot → false

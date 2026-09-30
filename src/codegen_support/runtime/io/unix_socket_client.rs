@@ -18,6 +18,8 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
 
+use super::socket_errno;
+
 /// unix_socket_client: open a connected Unix-domain socket.
 /// Input:  AArch64 x0 = path pointer, x1 = path length, x2 = sock_type
 ///         x86_64  rdi = path pointer, rsi = path length, rdx = sock_type
@@ -51,6 +53,7 @@ pub fn emit_unix_socket_client(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative descriptor means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_client_sock_ok")); // continue when socket succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why socket() failed
     emitter.instruction("b __rt_unix_socket_client_fail");                      // socket() failed
     emitter.label("__rt_unix_socket_client_sock_ok");
     emitter.instruction("str x0, [sp, #0]");                                    // save the socket descriptor
@@ -91,6 +94,7 @@ pub fn emit_unix_socket_client(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_client_ok")); // continue when connect succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why connect() failed, before close() overwrites x0
     emitter.instruction("b __rt_unix_socket_client_fail_close");                // connect() failed
 
     emitter.label("__rt_unix_socket_client_ok");
@@ -128,7 +132,10 @@ fn emit_unix_socket_client_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 41");                                         // Linux x86_64 syscall 41 = socket
     emitter.instruction("syscall");                                             // create the socket
     emitter.instruction("test rax, rax");                                       // did socket() fail?
-    emitter.instruction("js __rt_unix_socket_client_fail_x86");                 // socket() failed
+    emitter.instruction("jns __rt_unix_socket_client_sock_ok_x86");             // continue when socket succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "rax");                    // record why socket() failed
+    emitter.instruction("jmp __rt_unix_socket_client_fail_x86");                // socket() failed
+    emitter.label("__rt_unix_socket_client_sock_ok_x86");
     emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // save the socket descriptor
 
     // -- build the sockaddr_un at [rsp + 24]: family then sun_path --
@@ -155,7 +162,10 @@ fn emit_unix_socket_client_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 42");                                         // Linux x86_64 syscall 42 = connect
     emitter.instruction("syscall");                                             // connect the socket
     emitter.instruction("test rax, rax");                                       // did connect() fail?
-    emitter.instruction("js __rt_unix_socket_client_fail_close_x86");           // connect() failed
+    emitter.instruction("jns __rt_unix_socket_client_connect_ok_x86");          // continue when connect succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "rax");                    // record why connect() failed, before close() overwrites rax
+    emitter.instruction("jmp __rt_unix_socket_client_fail_close_x86");          // connect() failed
+    emitter.label("__rt_unix_socket_client_connect_ok_x86");
 
     emitter.instruction("mov rax, QWORD PTR [rsp + 0]");                        // return the connected descriptor
     emitter.instruction("add rsp, 160");                                        // release the frame

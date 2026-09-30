@@ -280,6 +280,31 @@ pub(in crate::interpreter) fn eval_declared_builtin_default_value(
     eval_declared_builtin_spec(name).and_then(|spec| spec.default_value(param_index))
 }
 
+/// Applies php's argument TypeErrors before a shared-runtime dispatch.
+///
+/// The generated runtime's boxed-cell builtins assume well-typed arguments — the
+/// compiled checker enforces their contracts at compile time — so `eval()` must
+/// enforce the same contract, with php's exact wording, before crossing the ABI.
+fn eval_runtime_builtin_arg_check(
+    runtime_builtin: elephc_builtin_contract::RuntimeBuiltinId,
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    // Every array-taking builtin the shared runtime serves raises php's `TypeError` here, BEFORE
+    // the call: the runtime helpers take the array as given, and the check's table carries php's
+    // per-slot wording. A name outside that table passes through untouched.
+    let Some(contract) = elephc_builtin_contract::lookup_id(runtime_builtin.builtin_id()) else {
+        return Ok(());
+    };
+    super::array::array_arg_check::eval_check_array_args(
+        contract.name,
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
 /// Dispatches a declaratively migrated builtin from unevaluated positional expressions.
 pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
     name: &str,
@@ -327,6 +352,7 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call_from_scope(
     };
     if let Some(runtime_builtin) = spec.runtime_builtin {
         if runtime_builtin.supports_arity(evaluated_args.len()) || RuntimeBuiltinId::MBSTRING.contains(&runtime_builtin) {
+            eval_runtime_builtin_arg_check(runtime_builtin, evaluated_args, context, values)?;
             if let Some(result) = call_shared_runtime_builtin(runtime_builtin, evaluated_args, context, values)? {
                 return Ok(Some(result));
             }
@@ -337,6 +363,12 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call_from_scope(
     let Some(hook) = spec.values else {
         return Ok(None);
     };
+    // The one door every evaluated-argument call passes through, so the array-taking family
+    // raises php's `TypeError` here whichever route reached it. `implode()` is the exception: its
+    // two arguments swap roles by type, so only its own hook can tell which slot is wrong.
+    if spec.name != "implode" {
+        super::array::array_arg_check::eval_check_array_args(spec.name, evaluated_args, context, values)?;
+    }
     hook.call(spec.name, evaluated_args, lexical_scope, context, values)
         .map(Some)
 }

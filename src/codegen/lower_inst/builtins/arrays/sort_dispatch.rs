@@ -10,19 +10,26 @@
 use super::*;
 use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
-/// Calls a value set-operation helper after validating compatible indexed-array layouts.
+/// Calls a key-preserving value set-operation helper after validating indexed-array layouts.
+///
+/// php keeps the FIRST operand's keys: `array_diff(["a","b","c"], ["b"])` is `{0:"a", 2:"c"}` and
+/// `array_intersect(["a","b","c"], ["b","c"])` is `{1:"b", 2:"c"}`. A dense indexed array cannot
+/// hold a gap, so both lower to `__rt_array_*_to_hash`, which inserts each survivor at its
+/// ORIGINAL index. The helper reads the element layout from the source header at runtime, so the
+/// scalar, refcounted and string element types share one entry point instead of the three-way
+/// helper split the reindexing form needed. The result carries the hash's own header, so the
+/// indexed-array value_type stamp the dense form applied would be meaningless here.
 pub(super) fn lower_indexed_array_set_op(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
-    scalar_helper: &str,
-    refcounted_helper: &str,
+    hash_helper: &str,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let first_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(first)?, name)?;
-    let second_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(second)?, name)?;
+    let first_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(first)?, name, true)?;
+    let second_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(second)?, name, true)?;
     require_set_op_compatible_element_types(name, &first_elem_ty, &second_elem_ty)?;
     require_set_op_result_type(name, &first_elem_ty, &inst.result_php_type.codegen_repr())?;
     match ctx.emitter.target.arch {
@@ -35,17 +42,7 @@ pub(super) fn lower_indexed_array_set_op(
             ctx.load_value_to_reg(second, "rsi")?;
         }
     }
-    let helper = if first_elem_ty.is_refcounted() {
-        refcounted_helper
-    } else {
-        scalar_helper
-    };
-    abi::emit_call_label(ctx.emitter, helper);
-    crate::codegen::emit_array_value_type_stamp(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        &first_elem_ty,
-    );
+    abi::emit_call_label(ctx.emitter, hash_helper);
     store_if_result(ctx, inst)
 }
 
@@ -189,13 +186,68 @@ pub(super) fn lower_indexed_array_sort(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    if matches!(name, "sort" | "rsort")
-        && ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed
-    {
+    let operand_ty = ctx.value_php_type(array)?;
+    // An `array|false` union — `$d = scandir($dir); sort($d);` — arrives BOXED. The payload is
+    // sorted in place, so the box keeps pointing at the sorted storage and no write-back is
+    // needed; a runtime `false` throws php's TypeError, worded exactly as php words it. The
+    // copy-on-write split is skipped: the box owns its array, so the sort mutates the only
+    // storage the value has, which is also why `ensure_unique_sort_source` has nothing to do.
+    if let Some(member) = operand_ty.array_or_false_member().cloned() {
+        let elem_ty = indexed_sort_element_type(member, name, str_helper.is_some())?;
+        ctx.load_value_to_result(array)?;
+        let sortable = ctx.next_label(&format!("{}_union_array", name));
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x9, [x0]");                        // the boxed payload tag
+                ctx.emitter.instruction("cmp x9, #4");                          // an indexed array?
+                ctx.emitter.instruction(&format!("b.eq {}", sortable));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov r9, QWORD PTR [rax]");             // the boxed payload tag
+                ctx.emitter.instruction("cmp r9, 4");                           // an indexed array?
+                ctx.emitter.instruction(&format!("je {}", sortable));
+            }
+        }
+        let message = format!(
+            "{}(): Argument #1 ($array) must be of type array, false given",
+            name
+        );
+        let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, &message_label);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, message_len as i64);
+        super::super::exceptions::emit_type_error_from_string_result(ctx);
+        ctx.emitter.label(&sortable);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x0, [x0, #8]");                    // the raw array the box owns
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");        // the raw array the box owns
+                ctx.emitter.instruction("mov rdi, rax");                        // the sort helpers take rdi
+            }
+        }
+        if elem_ty == PhpType::Mixed {
+            emit_mixed_slot_sort(ctx, name)?;
+        } else {
+            let helper = if elem_ty == PhpType::Str {
+                str_helper.expect("string sort helper is required after validation")
+            } else {
+                int_helper
+            };
+            abi::emit_call_label(ctx.emitter, helper);
+        }
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            0x7fff_ffff_ffff_fffe,
+        );
+        return store_if_result(ctx, inst);
+    }
+    if matches!(name, "sort" | "rsort") && operand_ty.codegen_repr() == PhpType::Mixed {
         return super::boxed_mutation::lower_boxed_array_sort(ctx, inst, array, name);
     }
-    let elem_ty =
-        indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
+    let elem_ty = indexed_sort_element_type(operand_ty, name, str_helper.is_some())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable(name)?;
     receiver.prepare_consuming_storeback(ctx, array)?;
@@ -216,19 +268,14 @@ pub(super) fn lower_indexed_array_sort(
         // second, behind the comparator address, and takes no capture
         // environment.
         emit_mixed_slot_sort(ctx, name)?;
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            0x7fff_ffff_ffff_fffe,
-        );
-        return store_if_result(ctx, inst);
-    }
-    let helper = if elem_ty == PhpType::Str {
-        str_helper.expect("string sort helper is required after validation")
     } else {
-        int_helper
-    };
-    abi::emit_call_label(ctx.emitter, helper);
+        let helper = if elem_ty == PhpType::Str {
+            str_helper.expect("string sort helper is required after validation")
+        } else {
+            int_helper
+        };
+        abi::emit_call_label(ctx.emitter, helper);
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -241,7 +288,15 @@ pub(super) fn lower_indexed_array_sort(
 pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "shuffle", 1)?;
     let array = expect_operand(inst, 0)?;
-    eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "shuffle")?;
+    // String arrays store 16-byte (ptr, len) slots the 8-byte swap would tear in half,
+    // pairing one string's pointer with another's length; they get their own helper.
+    let helper = match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => "__rt_shuffle_str",
+        ty => {
+            eight_byte_indexed_array_element_type(ty, "shuffle")?;
+            "__rt_shuffle"
+        }
+    };
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable("shuffle")?;
     receiver.prepare_consuming_storeback(ctx, array)?;
@@ -255,7 +310,7 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
             ctx.load_value_to_reg(array, "rdi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_shuffle");
+    abi::emit_call_label(ctx.emitter, helper);
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -615,6 +670,10 @@ pub(super) fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: 
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
+            // `Mixed` rides the same route as a user comparator: an 8-byte boxed cell per slot,
+            // ordered by `__rt_php_compare`. Only the sorts that take a comparator can carry it,
+            // which is the same condition `allow_strings` already expresses — `asort`/`arsort`
+            // permute slots with no comparator at all.
             if matches!(elem, PhpType::Int | PhpType::Void | PhpType::Never)
                 || (allow_strings && matches!(elem, PhpType::Str | PhpType::Mixed))
             {

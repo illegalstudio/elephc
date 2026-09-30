@@ -2,7 +2,7 @@
 title: "getimagesize()"
 description: "Returns an image file's size, type, and MIME type."
 sidebar:
-  order: 452
+  order: 478
 ---
 
 ## getimagesize()

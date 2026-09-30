@@ -2,7 +2,7 @@
 title: "opcache_invalidate() - internals"
 description: "Compiler internals for opcache_invalidate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 640
+  order: 666
 ---
 
 ## `opcache_invalidate()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:439](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L439) (`opcache_invalidate`)
+- **Lowering**: [`src/opcache_prelude/build.rs`:444](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L444) (`opcache_invalidate`)
 - **Function symbol**: `opcache_invalidate()`
 
 

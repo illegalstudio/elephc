@@ -42,6 +42,8 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         collect_declared_interface_names(program, &check_result.interfaces);
     module.declared_trait_names = collect_declared_trait_names(program);
     module.declared_trait_source_lines = collect_declared_trait_source_lines(program);
+    module.tentative_return_deprecations = check_result.tentative_return_deprecations.clone();
+    module.link_time_fatal = check_result.link_time_fatal.clone();
     module.declared_trait_uses = collect_declared_trait_uses(program);
     module.declared_trait_method_names = collect_declared_trait_method_names(program);
     module.declared_trait_methods = collect_declared_trait_methods(program);
@@ -104,6 +106,11 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     // Retain their checker requirements alongside calls already present in EIR.
     module.required_runtime_features.mbstring = check_result.required_libraries
         .iter().any(|library| library == "elephc_mbstring");
+    // Lowering publishes the PHAR bridge (and the libz/libbz2 entries beside it) only when the
+    // program links it; deciding that here, rather than only in the CLI backend, lets library
+    // callers such as the test harness reach the same verdict.
+    module.required_runtime_features.phar_archive |= check_result.required_libraries
+        .iter().any(|library| library == "elephc_phar");
     let features = module.required_runtime_features;
     if features.mbstring || features.mbregex || features.eval_bridge {
         // Library callers need the same default MIME provider and request initialization as CLI.
@@ -146,11 +153,9 @@ pub(super) fn normalize_method_map_for_eir(
     // Stream-wrapper and user-filter contract methods are invoked through
     // runtime vtables with raw fixed-ABI arguments; widening their untyped
     // params to boxed Mixed would desynchronize the dispatcher and the body.
-    // Directory-only and metadata-only wrappers need not implement stream_open.
-    // Match the same method inventory that populates the runtime wrapper vtable.
-    let is_wrapper_class = methods.keys().any(|method| {
-        crate::codegen_support::runtime::is_user_wrapper_contract_method(method)
-    });
+    let is_wrapper_class = methods
+        .keys()
+        .any(|key| crate::codegen_support::runtime::is_user_wrapper_marker_method(key));
     let is_filter_class = methods.contains_key("filter");
     for (method_key, signature) in methods.iter_mut() {
         if (is_wrapper_class

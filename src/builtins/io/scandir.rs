@@ -21,8 +21,17 @@ builtin! {
     ),
 }
 
-/// Returns `Array<Str>` reflecting that `scandir` yields directory entry names.
+/// Returns `array|false`, the signature php documents.
+///
+/// `False`, not `Bool`: the member a `!== false` narrowing removes, following `fgetcsv`.
+/// The union is what lets the failure case exist at all — with a bare `Array<Str>` the
+/// runtime's `false` had no representation and a failed listing was indistinguishable from
+/// an empty directory. The array-taking consumers accept the union by unboxing at their own
+/// call sites.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
-    Ok(PhpType::Array(Box::new(PhpType::Str)))
+    Ok(PhpType::Union(vec![
+        PhpType::Array(Box::new(PhpType::Str)),
+        PhpType::False,
+    ]))
 }

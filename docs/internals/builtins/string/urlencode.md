@@ -2,7 +2,7 @@
 title: "urlencode() - internals"
 description: "Compiler internals for urlencode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 942
+  order: 972
 ---
 
 ## `urlencode()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/urlencode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/urlencode.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

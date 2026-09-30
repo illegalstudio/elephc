@@ -134,26 +134,53 @@ fn assert_program_output(prefix: &str, source: &str, expected: &str) {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Compiles `source`, runs it, and asserts stdout then stderr equal `expected`.
+/// Compiles `source`, runs it, and asserts its stdout equals `expected`, warnings included.
 ///
 /// Used where the PHP program is expected to emit a runtime warning: `??` must SUPPRESS the
-/// undefined-key warning while a plain read must still raise it, and the difference is only
-/// visible on the combined streams. The two streams are captured separately, so `expected`
-/// carries the program's whole stdout first and its whole stderr after — not the interleaving
-/// a terminal would show.
+/// undefined-key warning while a plain read must still raise it.
+///
+/// ONE stream, INTERLEAVED, because that is what php does — `display_errors` is `STDOUT` by CLI
+/// default, so a diagnostic lands in the program's own output where it happened rather than in a
+/// separate pile after it. Stderr is asserted EMPTY for the same reason.
+///
+/// php's ` in <file> on line <n>` tail is folded out. It is real and elephc emits it, but the
+/// path is a per-run temp directory, so a pin that kept it could not be written down. The
+/// location has its own mechanism and its own tests; what these pins are about is the VALUE.
 fn assert_program_output_with_warnings(prefix: &str, source: &str, expected: &str) {
     let dir = make_test_dir(prefix);
     let bin = compile(&dir, source, prefix);
     let output = Command::new(&bin)
         .output()
         .expect("failed to run compiled binary");
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(combined, expected);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(stderr.is_empty(), "php writes its diagnostics to stdout: {stderr:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let located = regex_free_strip_location(&stdout);
+    assert_eq!(located, expected);
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Removes php's ` in <file> on line <n>` tail from every line that carries one.
+///
+/// Hand-rolled rather than a regex: this crate's test binaries carry no regex dependency, and the
+/// shape is fixed enough to match by hand — the LAST ` in ` on a line that also ends in
+/// ` on line <digits>`.
+fn regex_free_strip_location(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (index, line) in text.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        let stripped = line
+            .rfind(" in ")
+            .filter(|_| {
+                line.rsplit_once(" on line ")
+                    .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            })
+            .map_or(line, |at| &line[..at]);
+        out.push_str(stripped);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +327,11 @@ probe("zz");
 /// float read start rendering as `NAN` anywhere a program was not already asking about null.
 /// (Reference PHP evaluates the read to `NULL`; matching that is a separate, untouched gap —
 /// what is pinned here is that this fix did not move the needle in the WRONG direction.)
+///
+/// MEASURED on `php -n`: `\nWarning: Undefined array key "zz" in <file> on line 2\nNULL\n`. The
+/// warning comes FIRST — `raw("zz")` is evaluated before `var_dump` prints — and shares stdout
+/// with the dump. elephc now agrees on all of that; `float(0)` for php's `NULL` is the whole of
+/// the remaining difference, which is what this pins.
 #[test]
 fn warned_float_miss_keeps_its_zero_value_shape() {
     assert_program_output_with_warnings(
@@ -308,7 +340,7 @@ fn warned_float_miss_keeps_its_zero_value_shape() {
 function raw(string $k) { $m = ["a" => 1.5]; return $m[$k]; }
 var_dump(raw("zz"));
 "#,
-        "float(0)\nWarning: Undefined array key \"zz\"\n",
+        "\nWarning: Undefined array key \"zz\"\nfloat(0)\n",
     );
 }
 

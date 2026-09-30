@@ -10,9 +10,13 @@
 //!   produce the boxed `mixed` value before calling `__rt_user_wrapper_path_op`.
 //!
 //! Key details:
-//! - PHP always passes `touch()` a 2-element indexed int array; an omitted /
-//!   "now" timestamp resolves to `time(NULL)` here via `__rt_time`. The flags
-//!   byte mirrors `touch.rs`: bit0 = atime-now, bit1 = mtime-now.
+//! - MEASURED on `php -n` 8.5.6: `touch($p)` passes an EMPTY array, `touch($p, 100)`
+//!   passes `[100, 100]` and `touch($p, 100, 200)` passes `[100, 200]`. So the array
+//!   is 2-element only when the call NAMED a timestamp; with none named the wrapper
+//!   is told "now" by the array being empty, which is the only way it can tell the
+//!   two apart. An omitted-but-present timestamp resolves to `time(NULL)` here via
+//!   `__rt_time`. The flags byte mirrors `touch.rs`: bit0 = atime-now,
+//!   bit1 = mtime-now, so both bits set is exactly the no-timestamp call.
 //! - Refcount lifecycle: `__rt_array_new` returns the array at refcount 1;
 //!   boxing it as `Mixed(tag 4)` increfs it to 2, so this helper decrefs the
 //!   array once (back to 1) before returning, leaving the boxed `Mixed` as the
@@ -68,6 +72,12 @@ pub fn emit_touch_meta_array(emitter: &mut Emitter) {
     emit_array_value_type_stamp(emitter, "x0", &PhpType::Mixed);
     emitter.instruction("str x0, [sp, #24]");                                   // save the array pointer while filling slots
 
+    // -- a call that named no timestamp gets an EMPTY array; see the module preamble --
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the current-time flags
+    emitter.instruction("and x9, x9, #3");                                      // keep the two now-flags
+    emitter.instruction("cmp x9, #3");                                          // both omitted?
+    emitter.instruction("b.eq __rt_tma_empty");                                 // touch($p): php passes array()
+
     // -- element 0: box mtime as Mixed(int) and store at array[0] --
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = int
     emitter.instruction("ldr x1, [sp, #0]");                                    // value_lo = mtime seconds
@@ -85,6 +95,11 @@ pub fn emit_touch_meta_array(emitter: &mut Emitter) {
     emitter.instruction("str x0, [x9, #32]");                                   // array[1] = boxed atime
     emitter.instruction("mov x10, #2");                                         // logical length after both inserts
     emitter.instruction("str x10, [x9]");                                       // publish the indexed-array length
+    emitter.instruction("b __rt_tma_boxed");                                    // skip the empty-array arm
+    emitter.label("__rt_tma_empty");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the array pointer
+    emitter.instruction("str xzr, [x9]");                                       // publish length 0: php's array()
+    emitter.label("__rt_tma_boxed");
 
     // -- box the array as Mixed(tag 4); this increfs the array to refcount 2 --
     emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
@@ -140,6 +155,12 @@ fn emit_touch_meta_array_linux_x86_64(emitter: &mut Emitter) {
     emit_array_value_type_stamp(emitter, "rax", &PhpType::Mixed);
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the array pointer while filling slots
 
+    // -- a call that named no timestamp gets an EMPTY array; see the module preamble --
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the current-time flags
+    emitter.instruction("and rcx, 3");                                          // keep the two now-flags
+    emitter.instruction("cmp rcx, 3");                                          // both omitted?
+    emitter.instruction("je __rt_tma_empty_x86");                               // touch($p): php passes array()
+
     // -- element 0: box mtime as Mixed(int) and store at array[0] --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // value_lo = mtime seconds
     emitter.instruction("xor esi, esi");                                        // value_hi = 0 for an integer scalar
@@ -156,6 +177,11 @@ fn emit_touch_meta_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the array pointer
     emitter.instruction("mov QWORD PTR [r11 + 32], rax");                       // array[1] = boxed atime
     emitter.instruction("mov QWORD PTR [r11], 2");                              // publish the indexed-array length
+    emitter.instruction("jmp __rt_tma_boxed_x86");                              // skip the empty-array arm
+    emitter.label("__rt_tma_empty_x86");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the array pointer
+    emitter.instruction("mov QWORD PTR [r11], 0");                              // publish length 0: php's array()
+    emitter.label("__rt_tma_boxed_x86");
 
     // -- box the array as Mixed(tag 4); this increfs the array to refcount 2 --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // value_lo = array pointer

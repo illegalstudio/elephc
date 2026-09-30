@@ -113,13 +113,17 @@ Two consequences worth knowing when adding one:
 
 **Source:** `src/codegen_support/runtime/diagnostics.rs`
 
-These helpers implement PHP's `@` error-suppression operator and the runtime warning channel. The suppression depth lives in `_rt_diag_suppression`; while it is non-zero, suppressible warnings are silently dropped instead of written to stderr. They are emitted before any PHP-visible helper so the rest of the runtime can report warnings through a single path.
+These helpers implement PHP's `@` error-suppression operator and the runtime warning channel. The suppression depth lives in `_rt_diag_suppression`; while it is non-zero, suppressible warnings are silently dropped instead of written out. They are emitted before any PHP-visible helper so the rest of the runtime can report warnings through a single path.
+
+Warnings go to **stdout, through `__rt_stdout_write`** — not to stderr. That is what PHP's CLI does, measured on `php -n` 8.5.6: `2>&1 1>/dev/null` shows an empty stderr, and an `ob_start()` callback wraps a warning exactly as it wraps an `echo`, so a program that captures its own output captures its diagnostics too.
+
+One diagnostic is composed from several `__rt_diag_warning` calls (head, name, tail). The pieces accumulate in `_rt_diag_buf` and the whole line is written when the piece ending in a newline arrives, so PHP's ` in FILE on line N` suffix is appended once per line rather than once per piece. The location itself is published per instruction by the lowering (`_rt_diag_loc_ptr`/`_rt_diag_loc_len`, gated on `Effects::MAY_WARN`) and rendered at compile time, because `__rt_itoa` writes through the shared concat buffer and would corrupt a string being concatenated when a warning interrupts it.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_diag_push_suppression` | Enter one nested `@` suppression scope (increment `_rt_diag_suppression`) | — | — |
 | `__rt_diag_pop_suppression` | Leave one `@` suppression scope, clamped against underflow | — | — |
-| `__rt_diag_warning` | Write a runtime warning string to stderr unless suppression is active | `x1`/`x2` = message string | — |
+| `__rt_diag_warning` | Buffer one piece of a diagnostic, and write the whole line through `__rt_stdout_write` once it ends in a newline, unless suppression is active | `x1`/`x2` = message piece | — |
 
 Array-key conversion uses `__rt_float_key_to_int` to apply PHP's integer
 conversion and report precision loss or an unrepresentable float through the
@@ -362,7 +366,6 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_inet_ntop` / `__rt_inet_pton` | IPv4/IPv6 address ↔ packed-binary conversion. IPv4 is parsed and rendered here (`__rt_ip2long`/`__rt_long2ip`); IPv6 goes through libc `inet_pton(3)`/`inet_ntop(3)`, which own `::` compression and the embedded-IPv4 form — and which disagree about zone identifiers (macOS accepts and ignores one, glibc refuses it), a split PHP inherits too. Both destinations come from `__rt_concat_reserve` and are published with `__rt_concat_publish`, so a 16-byte packed address or a 45-byte rendering cannot run off the end of the 64 KiB scratch buffer. The family is chosen the way php-src chooses it — a `:` in the text, the packed LENGTH on the way back — and `AF_INET6` is the TARGET's value (30 on Darwin, 10 on Linux), pinned by emitter tests because a wrong one turns every IPv6 address into `false` only on the cross-compiled binary | address | `x1`/`x2` |
 | `__rt_long2ip` / `__rt_ip2long` | Dotted-quad string ↔ integer conversion | `x0` or `x1`/`x2` | `x1`/`x2` or `x0` |
 | `__rt_vsprintf` | `vsprintf()` formatting with an argument array | format + array + optional eval context | `x1`/`x2` |
-| `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |
 
 The mbstring engine borrows string arguments and validated, pointer-free array
 graphs through `elephc_mbstring_call_v1`. The separate

@@ -57,20 +57,26 @@ pub fn emit_rawurlencode(emitter: &mut Emitter) {
     emitter.instruction("ldrb w12, [x1], #1");                                  // load source byte, advance
     emitter.instruction("sub x11, x11, #1");                                    // decrement remaining
 
-    // -- check alphanumeric: A-Z --
+    // -- check alphanumeric, IN ASCII ORDER --
+    //
+    // The order is the correctness argument, not a style choice: each "below this range" branch
+    // has to fall to the NEXT range. Testing 'A' first sent every digit — which is below 'A' —
+    // past its own arm to the punctuation check, which knows only `-`, `_`, `.` and `~`, so every
+    // digit was percent-encoded and the 0-9 arm below was unreachable text.
+    // -- check 0-9 --
+    emitter.instruction("cmp w12, #48");                                        // >= '0'?
+    emitter.instruction("b.lt __rt_rawurlencode_chk_safe");                     // below every alphanumeric range
+    emitter.instruction("cmp w12, #57");                                        // <= '9'?
+    emitter.instruction("b.le __rt_rawurlencode_pass");                         // yes -> pass through
+    // -- check A-Z --
     emitter.instruction("cmp w12, #65");                                        // >= 'A'?
-    emitter.instruction("b.lt __rt_rawurlencode_chk_safe");                     // no -> check safe chars
+    emitter.instruction("b.lt __rt_rawurlencode_chk_safe");                     // between '9' and 'A'
     emitter.instruction("cmp w12, #90");                                        // <= 'Z'?
     emitter.instruction("b.le __rt_rawurlencode_pass");                         // yes -> pass through
     // -- check a-z --
     emitter.instruction("cmp w12, #97");                                        // >= 'a'?
-    emitter.instruction("b.lt __rt_rawurlencode_chk_safe");                     // no -> check safe chars
+    emitter.instruction("b.lt __rt_rawurlencode_chk_safe");                     // between 'Z' and 'a'
     emitter.instruction("cmp w12, #122");                                       // <= 'z'?
-    emitter.instruction("b.le __rt_rawurlencode_pass");                         // yes -> pass through
-    // -- check 0-9 --
-    emitter.instruction("cmp w12, #48");                                        // >= '0'?
-    emitter.instruction("b.lt __rt_rawurlencode_chk_safe");                     // no -> check safe chars
-    emitter.instruction("cmp w12, #57");                                        // <= '9'?
     emitter.instruction("b.le __rt_rawurlencode_pass");                         // yes -> pass through
 
     // -- check safe chars: - (45), _ (95), . (46), ~ (126) --
@@ -160,18 +166,19 @@ fn emit_rawurlencode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov dl, BYTE PTR [rsi]");                              // load one source byte before deciding whether rawurlencode() must encode it
     emitter.instruction("add rsi, 1");                                          // advance the borrowed source string cursor after consuming one byte
     emitter.instruction("sub rcx, 1");                                          // decrement the remaining source length after consuming one byte
+    // See the AArch64 arm: ASCII order, so each "below" branch falls to the next range.
+    emitter.instruction("cmp dl, 48");                                          // is the current source byte at least '0', which could make it a decimal digit safe to pass through?
+    emitter.instruction("jb __rt_rawurlencode_chk_safe_linux_x86_64");          // below every alphanumeric range, so only the punctuation set can save it
+    emitter.instruction("cmp dl, 57");                                          // is the current source byte at most '9', which keeps it inside the decimal-digit safe range?
+    emitter.instruction("jbe __rt_rawurlencode_passthru_linux_x86_64");         // pass decimal digits straight through without percent-encoding them
     emitter.instruction("cmp dl, 65");                                          // is the current source byte at least 'A', which could make it an uppercase ASCII safe character?
-    emitter.instruction("jb __rt_rawurlencode_chk_safe_linux_x86_64");          // continue with the remaining safe-byte checks when the byte falls below 'A'
+    emitter.instruction("jb __rt_rawurlencode_chk_safe_linux_x86_64");          // between '9' and 'A'
     emitter.instruction("cmp dl, 90");                                          // is the current source byte at most 'Z', which keeps it inside the uppercase ASCII safe range?
     emitter.instruction("jbe __rt_rawurlencode_passthru_linux_x86_64");         // pass uppercase ASCII letters straight through without percent-encoding them
     emitter.instruction("cmp dl, 97");                                          // is the current source byte at least 'a', which could make it a lowercase ASCII safe character?
-    emitter.instruction("jb __rt_rawurlencode_chk_safe_linux_x86_64");          // continue with the remaining safe-byte checks when the byte falls below 'a'
+    emitter.instruction("jb __rt_rawurlencode_chk_safe_linux_x86_64");          // between 'Z' and 'a'
     emitter.instruction("cmp dl, 122");                                         // is the current source byte at most 'z', which keeps it inside the lowercase ASCII safe range?
     emitter.instruction("jbe __rt_rawurlencode_passthru_linux_x86_64");         // pass lowercase ASCII letters straight through without percent-encoding them
-    emitter.instruction("cmp dl, 48");                                          // is the current source byte at least '0', which could make it a decimal digit safe to pass through?
-    emitter.instruction("jb __rt_rawurlencode_chk_safe_linux_x86_64");          // continue with the punctuation safe-byte checks when the byte falls below '0'
-    emitter.instruction("cmp dl, 57");                                          // is the current source byte at most '9', which keeps it inside the decimal-digit safe range?
-    emitter.instruction("jbe __rt_rawurlencode_passthru_linux_x86_64");         // pass decimal digits straight through without percent-encoding them
 
     emitter.label("__rt_rawurlencode_chk_safe_linux_x86_64");
     emitter.instruction("cmp dl, 45");                                          // is the current source byte '-' which rawurlencode() leaves untouched?

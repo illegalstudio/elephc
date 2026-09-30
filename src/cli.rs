@@ -143,7 +143,8 @@ Target:
   --php-version VERSION   8.0 through 8.6 (detected; fallback: 8.5)
 
 Codegen:
-  --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
+  --heap-size=BYTES       Fixed heap size in bytes (default: 134217728, php's memory_limit)
+                          `--ini memory_limit=256M` sets it too; this flag wins.
   --null-repr=MODE        tagged (default) | sentinel
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
@@ -153,10 +154,10 @@ Codegen:
   --with-monitoring       Embed the profiling capability, dormant until `elephc monitor`
                           asks. Local/--exact captures report exact wall time,
                           allocations, retained objects, DB queries/wait, outgoing
-                          network operations/wait and calls, rooted at {main}; file
-                          I/O is not measured. A service's
-                          default answer is sampled CPU time. Inlined functions
-                          fold into their caller (as with --counters).
+                          network operations/wait, STREAM operations and calls,
+                          rooted at {main}; file I/O is counted, not timed. A
+                          service's default answer is sampled CPU time. Inlined
+                          functions fold into their caller (as with --counters).
   --with-monitoring=NAMES Embed it for the named functions only (comma list; trailing
                           `*` matches by prefix; name `{main}` for the top-level root;
                           or use @file with one name per line)
@@ -312,7 +313,18 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         process::exit(0);
     }
 
-    let mut heap_size: usize = 8_388_608; // 8MB default
+    // php's own default `memory_limit`, VERIFIED on 8.5.6: `php -n -r 'echo
+    // ini_get("memory_limit");'` answers `128M` with and without an ini file. elephc reserved
+    // 8 MB, sixteen times less, so a program php runs comfortably died here with `Fatal error:
+    // heap memory exhausted` — php-src's `streams/bug72221.phpt` is one, and it passes verbatim
+    // at this size.
+    //
+    // The arena is a `.comm` symbol, so it lives in BSS: MEASURED, the same program built at 8 MB
+    // and at 128 MB produces a byte-identical 71064-byte binary and the same 1523712-byte peak
+    // RSS. Nothing loops over the arena either — every reader of `_heap_max` compares against it.
+    // The larger default therefore costs address space and nothing else.
+    let mut heap_size: usize = 134_217_728;
+    let mut heap_size_from_flag = false;
     let mut gc_stats = false;
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
@@ -367,6 +379,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         let arg = &args[i];
         if let Some(val) = arg.strip_prefix("--heap-size=") {
             heap_size = parse_heap_size(val);
+            heap_size_from_flag = true;
         } else if arg == "--target" {
             i += 1;
             target = parse_required_target(args, i);
@@ -598,6 +611,14 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         }
     }
 
+    // `memory_limit` is what a php programmer reaches for, and elephc already has php's `-d` in
+    // `--ini`. An explicit `--heap-size` still wins: it is the lower-level knob.
+    if !heap_size_from_flag {
+        if let Some(limit) = memory_limit_heap_size(&ini_overrides) {
+            heap_size = limit;
+        }
+    }
+
     CliConfig {
         filename,
         heap_size,
@@ -766,6 +787,38 @@ fn parse_emit(value: &str) -> Emit {
     }
 }
 
+/// The arena `memory_limit = -1` selects.
+///
+/// php's `-1` means "no limit", which a FIXED reservation cannot be. The honest answer is the
+/// largest arena elephc reserves, said out loud here rather than silently handing back the
+/// default: a program whose ini says `-1` is asking for room, and giving it 128 MB without a word
+/// would surface later as `heap memory exhausted` with nothing to point at. It is BSS like every
+/// other size, so it is free until touched.
+const UNLIMITED_MEMORY_LIMIT_HEAP: usize = 1024 * 1024 * 1024;
+
+/// Reads php's `memory_limit` out of the `--ini` overrides as a heap size.
+///
+/// The quantity parser is php-src's own, suffixes and all (`128M`, `1G`, `0x…`), so
+/// `--ini memory_limit=256M` and `php -d memory_limit=256M` agree on the number. A value below
+/// the allocator's floor is refused the same way `--heap-size` refuses it, because it is the same
+/// mistake said a different way.
+fn memory_limit_heap_size(overrides: &[(String, String)]) -> Option<usize> {
+    let raw = overrides
+        .iter()
+        .rev()
+        .find(|(name, _)| name.eq_ignore_ascii_case("memory_limit"))
+        .map(|(_, value)| value.as_str())?;
+    let (bytes, _) = crate::opcache::directives::parse_ini_quantity(raw);
+    if bytes < 0 {
+        return Some(UNLIMITED_MEMORY_LIMIT_HEAP);
+    }
+    let bytes = bytes as usize;
+    if bytes < 65536 {
+        fail("Invalid memory_limit: must be at least 65536 bytes, or -1");
+    }
+    Some(bytes)
+}
+
 /// Parse a heap size value, returning a value >= 65536 or exit with an error.
 fn parse_heap_size(value: &str) -> usize {
     match value.parse::<usize>() {
@@ -890,6 +943,40 @@ fn fail(message: &str) -> ! {
 
 #[cfg(test)]
 mod tests {
+    /// `memory_limit` is read the way php reads it, and `--heap-size` still wins.
+    ///
+    /// php's own default is `128M` — VERIFIED on 8.5.6, `php -n -r 'echo ini_get("memory_limit");'`
+    /// answers that with and without an ini file — and elephc reserved 8 MB, sixteen times less,
+    /// so a program php runs comfortably died with `Fatal error: heap memory exhausted`.
+    /// php-src's `streams/bug72221.phpt` is one such program and it passes at this size.
+    ///
+    /// The quantity parser is php-src's own, so `--ini memory_limit=256M` and
+    /// `php -d memory_limit=256M` agree on the number.
+    #[test]
+    fn memory_limit_is_read_the_way_php_reads_it() {
+        let m256 = vec![("memory_limit".to_string(), "256M".to_string())];
+        assert_eq!(super::memory_limit_heap_size(&m256), Some(256 * 1024 * 1024));
+        let plain = vec![("memory_limit".to_string(), "1048576".to_string())];
+        assert_eq!(super::memory_limit_heap_size(&plain), Some(1_048_576));
+        let gigabyte = vec![("memory_limit".to_string(), "1G".to_string())];
+        assert_eq!(super::memory_limit_heap_size(&gigabyte), Some(1024 * 1024 * 1024));
+        // The directive name is case-insensitive in php, and the LAST setting wins.
+        let twice = vec![
+            ("Memory_Limit".to_string(), "16M".to_string()),
+            ("memory_limit".to_string(), "64M".to_string()),
+        ];
+        assert_eq!(super::memory_limit_heap_size(&twice), Some(64 * 1024 * 1024));
+        // php's "no limit", which a FIXED reservation cannot be: it takes the largest arena
+        // elephc reserves rather than silently handing back the default.
+        let unlimited = vec![("memory_limit".to_string(), "-1".to_string())];
+        assert_eq!(
+            super::memory_limit_heap_size(&unlimited),
+            Some(super::UNLIMITED_MEMORY_LIMIT_HEAP)
+        );
+        // Anything else in the overrides is none of this function's business.
+        let other = vec![("opcache.enable".to_string(), "1".to_string())];
+        assert_eq!(super::memory_limit_heap_size(&other), None);
+    }
     /// `--with-<name>` must not offer the two mechanism names by another door.
     ///
     /// `instrument` and `probe` are ordinary bridges, and the accepted set is

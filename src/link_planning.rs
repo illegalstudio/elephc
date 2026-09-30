@@ -113,7 +113,32 @@ pub(crate) fn build(inputs: LinkPlanningInputs<'_>) -> LinkPlan {
             plan.push(LinkItem::Framework(framework.clone()));
         }
     }
-    plan
+    drop_bridges_the_eval_archive_already_carries(plan, &named)
+}
+
+/// Removes bridges whose objects `libelephc_magician.a` already contains.
+///
+/// The eval bridge depends on `elephc-crypto`, so its staticlib carries that crate's objects.
+/// Naming both on the link line presents each `elephc_crypto_*` symbol twice and the link fails
+/// outright — four duplicate symbols, and no diagnostic that points at the cause. Each library is
+/// pushed once, so the collision is not a repeated NAME: it is one archive nested inside another,
+/// which only appears once a program needs `eval()` and hashing in the same binary.
+fn drop_bridges_the_eval_archive_already_carries(plan: LinkPlan, named: &HashSet<String>) -> LinkPlan {
+    if !named.contains("elephc_magician") {
+        return plan;
+    }
+    let kept = plan
+        .items()
+        .iter()
+        .filter(|item| {
+            !matches!(
+                item,
+                LinkItem::NamedLibrary { name, .. } if name == "elephc_crypto"
+            )
+        })
+        .cloned()
+        .collect();
+    LinkPlan::from_items(kept)
 }
 
 /// Appends one named input at its first semantic occurrence while retaining provenance.

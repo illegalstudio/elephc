@@ -2,7 +2,7 @@
 title: "mb_substitute_character() - internals"
 description: "Compiler internals for mb_substitute_character(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 888
+  order: 916
 ---
 
 ## `mb_substitute_character()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_substitute_character.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_substitute_character.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

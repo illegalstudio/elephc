@@ -5,7 +5,11 @@
 //! - `crate::interpreter::builtins::filesystem`.
 //!
 //! Key details:
-//! - The current eval implementation returns parsed values and ignores output vars.
+//! - The eval implementation returns the parsed values as an array and REFUSES the by-ref
+//!   `$vars` output form, matching the compiled builtin. php assigns each field through the
+//!   reference and returns the field COUNT; ignoring the output vars — as this file used to —
+//!   made the call silently return the array and assign nothing, which also let `eval()` serve
+//!   as a silent-wrong workaround for the compiled path's refusal.
 
 eval_builtin! {
     contract: "fscanf",
@@ -33,7 +37,8 @@ pub(in crate::interpreter) fn eval_fscanf_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if evaluated_args.len() < 2 {
+    // Exactly two: a bound `$vars` tail is the unsupported by-ref output form.
+    if evaluated_args.len() != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
     eval_fscanf_result(evaluated_args[0], evaluated_args[1], context, values)
@@ -46,14 +51,12 @@ pub(in crate::interpreter) fn eval_builtin_fscanf(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if args.len() < 2 {
+    // Exactly two: a trailing `$vars` list is the unsupported by-ref output form.
+    if args.len() != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
     let stream = eval_expr(&args[0], context, scope, values)?;
     let format = eval_expr(&args[1], context, scope, values)?;
-    for arg in &args[2..] {
-        eval_expr(arg, context, scope, values)?;
-    }
     eval_fscanf_result(stream, format, context, values)
 }
 
@@ -72,5 +75,5 @@ pub(in crate::interpreter) fn eval_fscanf_result(
         return values.bool_value(false);
     };
     let input = values.string_bytes_value(&line)?;
-    eval_sscanf_result(input, format, values)
+    eval_sscanf_result(input, format, context, values)
 }

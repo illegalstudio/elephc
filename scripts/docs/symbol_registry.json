@@ -3543,12 +3543,12 @@
         "kind": "interpreter",
         "supported": true
       },
-      "extension": true,
+      "extension": false,
       "internal": false,
       "module": "standard",
       "name": "ARRAY_FILTER_USE_VALUE",
       "route": "predefined",
-      "since": null,
+      "since": "8.6",
       "value": 0
     },
     {
@@ -20841,6 +20841,24 @@
       },
       "extension": false,
       "internal": false,
+      "module": "standard",
+      "name": "PATH_SEPARATOR",
+      "route": "predefined",
+      "since": null,
+      "value": ":"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "core",
       "name": "PHP_EOL",
       "route": "predefined",
@@ -21816,7 +21834,7 @@
       "module": "core",
       "name": "STDERR",
       "route": "predefined",
-      "since": "8.3",
+      "since": null,
       "value": {
         "fd": 2,
         "resource": "stream"
@@ -21837,7 +21855,7 @@
       "module": "core",
       "name": "STDIN",
       "route": "predefined",
-      "since": "8.3",
+      "since": null,
       "value": {
         "fd": 0,
         "resource": "stream"
@@ -21858,7 +21876,7 @@
       "module": "core",
       "name": "STDOUT",
       "route": "predefined",
-      "since": "8.3",
+      "since": null,
       "value": {
         "fd": 1,
         "resource": "stream"

@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Fragments are joined before dispatch, and detached before a reentrant warning.
-//! - Producers explicitly finish a diagnostic; newlines inside data never delimit it.
+//! - Producers explicitly finish a diagnostic; newlines inside data never delimit it. A piece sent
+//!   through the complete entry finishes it only when it ends the line.
 //! - Volatile registers are preserved because legacy producers used a leaf writer.
 //! - An unwind activation releases owned message and argument storage on throws.
 
@@ -125,6 +126,16 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_store_reg_to_symbol(e, a1, "_rt_diag_pending_len", 0);
     abi::emit_load_temporary_stack_slot(e, result, COMPLETE);
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_done");
+    // A "complete" piece that does not end the line is still a fragment. The stream layer builds
+    // one diagnostic from several complete-entry calls (head, path, tail) and relies on the line
+    // terminator to close it; dispatching each piece would hand an error handler three partial
+    // messages. Every complete diagnostic ends in a newline, so this only ever joins.
+    arg(e, 0, BUFFER);
+    arg(e, 1, LENGTH);
+    ins(e, "add x10, x0, x1", "lea r10, [rdi + rsi]");
+    ins(e, "ldrb w10, [x10, #-1]", "movzx r10d, BYTE PTR [r10 - 1]");
+    ins(e, "cmp w10, #10", "cmp r10d, 10");
+    ins(e, "b.ne __rt_warning_done", "jne __rt_warning_done");
     abi::emit_store_zero_to_symbol(e, "_rt_diag_pending_ptr", 0);
     abi::emit_store_zero_to_symbol(e, "_rt_diag_pending_len", 0);
     for offset in [ARGS, RESULT, HANDLED, PREFIX] {

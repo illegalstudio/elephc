@@ -211,11 +211,12 @@ pub(crate) fn await_activation(channel: &ControlChannel, timeout: std::time::Dur
 /// leaks. That is the direction to fail in — and the reason this is a list a
 /// reader can check against `elephc-instr`/`elephc-probe` rather than a rule
 /// that quietly covers whatever it happens to cover.
-const PROFILER_LINE_PREFIXES: [&str; 9] = [
+const PROFILER_LINE_PREFIXES: [&str; 10] = [
     "elephc-instr:",
     "elephc-instr-edge:",
     "elephc-instr-query:",
     "elephc-instr-query-dropped:",
+    "elephc-instr-stream:",
     "elephc-instr-trace:",
     "elephc-probe:",
     "elephc-probe-alloc:",

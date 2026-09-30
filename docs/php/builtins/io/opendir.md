@@ -2,19 +2,20 @@
 title: "opendir()"
 description: "Open directory handle."
 sidebar:
-  order: 354
+  order: 372
 ---
 
 ## opendir()
 
 ```php
-function opendir(string $directory): mixed
+function opendir(string $directory, mixed $context = null): mixed
 ```
 
 Open directory handle.
 
 **Parameters**:
 - `$directory` (`string`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 

@@ -7,6 +7,13 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the delimiter-aware stream line helper.
 
+/// php-src reads `PHP_SOCK_CHUNK_SIZE` bytes when the caller passes `$length` as zero.
+const STREAM_GET_LINE_DEFAULT_CHUNK: usize = 8192;
+
+/// php-src's verbatim `ValueError` wording for a negative `stream_get_line()` `$length`.
+const STREAM_GET_LINE_NEGATIVE_LENGTH_MESSAGE: &str =
+    "stream_get_line(): Argument #2 ($length) must be greater than or equal to 0";
+
 eval_builtin! {
     contract: "stream_get_line",
     area: Filesystem,
@@ -68,7 +75,22 @@ pub(in crate::interpreter) fn eval_stream_get_line_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
-    let length = eval_nonnegative_usize(length, values)?;
+    // php-src rejects a negative budget outright with a catchable ValueError. The compiled
+    // backend has raised it since the guard landed in `lower_stream_get_line`; eval reached
+    // `usize::try_from` instead and died as an UNCATCHABLE runtime fatal.
+    if eval_int_value(length, values)? < 0 {
+        return eval_stream_value_error(
+            STREAM_GET_LINE_NEGATIVE_LENGTH_MESSAGE,
+            context,
+            values,
+        );
+    }
+    // php-src reads its default chunk when the caller passes zero; zero does NOT mean
+    // "read nothing".
+    let length = match eval_nonnegative_usize(length, values)? {
+        0 => STREAM_GET_LINE_DEFAULT_CHUNK,
+        length => length,
+    };
     let ending = match ending {
         Some(ending) if values.type_tag(ending)? != EVAL_TAG_NULL => {
             Some(values.string_bytes(ending)?)
@@ -80,12 +102,13 @@ pub(in crate::interpreter) fn eval_stream_get_line_result(
     {
         return Ok(result);
     }
+    // An empty result is a string whenever the call consumed bytes — a delimiter sitting
+    // at the read position strips the segment to nothing. Only an exhausted stream is false.
     match context
         .stream_resources_mut()
-        .read_line(id, length, ending.as_deref(), false, false)
+        .read_line_consumed(id, length, ending.as_deref(), false, false)
     {
-        Some(bytes) if !bytes.is_empty() => values.string_bytes_value(&bytes),
-        Some(_) => values.bool_value(false),
-        None => values.bool_value(false),
+        Some((bytes, consumed)) if consumed > 0 => values.string_bytes_value(&bytes),
+        _ => values.bool_value(false),
     }
 }

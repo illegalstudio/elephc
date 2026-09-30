@@ -156,7 +156,9 @@ mod tests {
         // The PHP-visible `curl_*` surface is published only with the `curl`
         // feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(contracts().len(), 1135 + curl_surface);
+        // +35 from the streams branch: its `gz*`, `zlib_*`, `dir()` and `readgzfile()` surfaces and
+        // the php-src stream aliases and functions it adds to the data catalog.
+        assert_eq!(contracts().len(), 1170 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

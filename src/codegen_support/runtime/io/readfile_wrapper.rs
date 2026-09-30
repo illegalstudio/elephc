@@ -16,7 +16,8 @@
 //!   synthetic handle (`>= USER_WRAPPER_FD_BASE`), so the close goes through
 //!   `__rt_user_wrapper_fclose`. `__rt_fpassthru` is already wrapper-fd-aware
 //!   (its feof-first drain handles synthetic descriptors).
-//! - The mode is the shared single-byte `_meta_mode_r` ("r") read-only string.
+//! - The mode is `_meta_mode_rb` ("rb"): php opens its OWN streams binary, and a userspace
+//!   wrapper sees that string. `_meta_mode_r` stays what `stream_get_meta_data()` reports.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -35,6 +36,16 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: readfile_wrapper ---");
     emitter.label_global("__rt_readfile_wrapper");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(-2),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_readfile",
+            name_len: 8,
+            directory: false,
+        },
+    );
 
     // Frame: 48 bytes. [sp,#0..16] x29/x30, [sp,#16] fd, [sp,#24] byte count,
     //   [sp,#32] current chunk pointer (across the per-chunk release).
@@ -42,9 +53,9 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
-    // -- fopen(path, "r"): path already in x1/x2, mode in x3/x4 --
-    abi::emit_symbol_address(emitter, "x3", "_meta_mode_r");
-    emitter.instruction("mov x4, #1");                                          // strlen("r")
+    // -- fopen(path, "rb"): path already in x1/x2, mode in x3/x4 --
+    abi::emit_symbol_address(emitter, "x3", "_meta_mode_rb");
+    emitter.instruction("mov x4, #2");                                          // strlen("rb")
     emitter.instruction("bl __rt_fopen");                                       // x0 = synthetic wrapper fd, or -1 on failure
     emitter.instruction("cmp x0, #0");                                          // did fopen() fail (negative fd)?
     emitter.instruction("b.lt __rt_rfw_fail");                                  // → -2 open-failure sentinel
@@ -55,11 +66,14 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
     //    makes the EOF read whose empty result would cross the method boundary --
     emitter.label("__rt_rfw_loop");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper fd
-    emitter.instruction("bl __rt_feof");                                        // check stream_eof first (x0 = 1 at EOF)
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("cbnz x0, __rt_rfw_done");                              // at EOF: stop without reading
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper fd
     emitter.instruction("mov x1, #4096");                                       // request up to 4096 bytes
     emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
+    // A REFUSED read is not a short one. php answers -1 for the whole readfile(), however many
+    // bytes went out before it — MEASURED against a wrapper with no stream_eof.
+    emitter.instruction("cbz x0, __rt_rfw_refused");
     emitter.instruction("cbz x2, __rt_rfw_release_eof");                        // defensive: empty read also stops
     emitter.instruction("str x1, [sp, #32]");                                   // save the chunk ptr for the later release
     emitter.instruction("ldr x9, [sp, #24]");                                   // current byte total
@@ -70,12 +84,21 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // release the owned chunk, then loop
     emitter.instruction("b __rt_rfw_loop");                                     // stream the next chunk
 
+    emitter.label("__rt_rfw_refused");
+    emitter.instruction("mov x9, #-1");                                         // php's readfile failure answer
+    emitter.instruction("str x9, [sp, #24]");                                   // replaces the total
+    emitter.instruction("b __rt_rfw_done");
+
     emitter.label("__rt_rfw_release_eof");
     emitter.instruction("mov x0, x1");                                          // the final (empty/uncopied) owned chunk
     emitter.instruction("bl __rt_decref_any");                                  // release it (heap freed; non-heap skipped)
 
     emitter.label("__rt_rfw_done");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the synthetic fd
+    // a read owes no flush
+    emitter.instruction("mov x9, #0");
+    abi::emit_symbol_address(emitter, "x10", "_uw_pending_flush");
+    emitter.instruction("str x9, [x10]");
     emitter.instruction("bl __rt_user_wrapper_fclose");                         // run the wrapper's stream_close and free the handle slot
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the byte count for return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -94,6 +117,16 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: readfile_wrapper ---");
     emitter.label_global("__rt_readfile_wrapper");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(-2),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_readfile",
+            name_len: 8,
+            directory: false,
+        },
+    );
 
     // Frame: [rbp-8] fd, [rbp-16] byte count, [rbp-24] current chunk pointer.
     // push rbp then sub rsp,48 keeps rsp 16-aligned for the helper calls.
@@ -101,9 +134,9 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 48");                                         // spill slots for fd/total/chunk
 
-    // -- fopen(path, "r"): path already in rax/rdx, mode in rdi/rsi --
-    abi::emit_symbol_address(emitter, "rdi", "_meta_mode_r");                   // mode pointer "r" (secondary string-arg slot)
-    emitter.instruction("mov rsi, 1");                                          // strlen("r")
+    // -- fopen(path, "rb"): path already in rax/rdx, mode in rdi/rsi --
+    abi::emit_symbol_address(emitter, "rdi", "_meta_mode_rb");                  // mode pointer "rb" (secondary string-arg slot)
+    emitter.instruction("mov rsi, 2");                                          // strlen("rb")
     emitter.instruction("call __rt_fopen");                                     // rax = synthetic wrapper fd, or -1 on failure
     emitter.instruction("cmp rax, 0");                                          // did fopen() fail (negative fd)?
     emitter.instruction("jl __rt_rfw_fail_x86");                                // → -2 open-failure sentinel
@@ -113,12 +146,15 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     // -- feof-gated drain: check stream_eof BEFORE each read --
     emitter.label("__rt_rfw_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
-    emitter.instruction("call __rt_feof");                                      // check stream_eof first (rax = 1 at EOF)
+    super::feof::emit_feof_call(emitter, true);                                 // elephc's own probe: never warns, the read does
     emitter.instruction("test rax, rax");                                       // at EOF?
     emitter.instruction("jnz __rt_rfw_done_x86");                               // at EOF: stop without reading
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
     emitter.instruction("mov rsi, 4096");                                       // request up to 4096 bytes
     emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len
+    // See the AArch64 counterpart: a refused read makes the whole readfile() answer -1.
+    emitter.instruction("test rcx, rcx");                                       // the read's verdict travels beside the pair
+    emitter.instruction("jz __rt_rfw_refused_x86");
     emitter.instruction("test rdx, rdx");                                       // zero-length read?
     emitter.instruction("jz __rt_rfw_release_eof_x86");                         // defensive: empty read also stops
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the chunk ptr for the later release
@@ -131,11 +167,18 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_any");                                // release the owned chunk, then loop
     emitter.instruction("jmp __rt_rfw_loop_x86");                               // stream the next chunk
 
+    emitter.label("__rt_rfw_refused_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 16], -1");                        // php's readfile failure answer
+    emitter.instruction("jmp __rt_rfw_done_x86");
+
     emitter.label("__rt_rfw_release_eof_x86");
     emitter.instruction("call __rt_decref_any");                                // release the final (empty/uncopied) chunk (rax=ptr)
 
     emitter.label("__rt_rfw_done_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the synthetic fd
+    // a read owes no flush
+    abi::emit_symbol_address(emitter, "r10", "_uw_pending_flush");
+    emitter.instruction("mov QWORD PTR [r10], 0");
     emitter.instruction("call __rt_user_wrapper_fclose");                       // run the wrapper's stream_close and free the handle slot
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the byte count for return
     emitter.instruction("add rsp, 48");                                         // release the helper frame

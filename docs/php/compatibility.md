@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **982 / 2169** (45%), classes **142 / 329** (43%), constants **1114 / 3180** (35%).
+Overall coverage: functions **1015 / 2169** (47%), classes **142 / 329** (43%), constants **1115 / 3180** (35%).
 
 ## Coverage by PHP module
 
@@ -66,11 +66,11 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `simplexml` | 0 / 3 · 0% | 0 / 2 · 0% | - |
 | `snmp` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 21 · 0% |
 | `soap` | 0 / 2 · 0% | 0 / 8 · 0% | 0 / 81 · 0% |
-| `sockets` | 0 / 37 · 0% | 0 / 2 · 0% | 0 / 243 · 0% |
+| `sockets` | 1 / 37 · 3% | 0 / 2 · 0% | 0 / 243 · 0% |
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 384 / 545 · 70% | 2 / 6 · 33% | 163 / 400 · 41% |
+| `standard` | 397 / 545 · 73% | 2 / 6 · 33% | 164 / 400 · 41% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
@@ -83,7 +83,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `xsl` | - | 0 / 1 · 0% | 0 / 14 · 0% |
 | [`zend opcache`](./opcache.md#functions) | 8 / 8 · 100% | - | - |
 | `zip` | 0 / 10 · 0% | 0 / 1 · 0% | - |
-| `zlib` | 4 / 30 · 13% | 0 / 2 · 0% | 0 / 27 · 0% |
+| `zlib` | 23 / 30 · 77% | 0 / 2 · 0% | 0 / 27 · 0% |
 
 The counts above are what a compiled program has. Code run through `eval()` sees a different set in these modules (compiled / eval()):
 
@@ -96,11 +96,12 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
 - `session` functions: 23 / 0
-- `standard` functions: 384 / 344
-- `standard` constants: 163 / 142
+- `standard` functions: 397 / 353
+- `standard` constants: 164 / 143
 - `zend opcache` functions: 8 / 0
+- `zlib` functions: 23 / 4
 
-Most of that is one gap rather than several. 203 of those functions — every one missing from `exif`, `gd`, `mysqli`, `pdo`, `session`, `zend opcache` — are implemented by a PHP prelude the compiler injects into the program it is compiling. The interpreter dispatches through the shared builtin registry, and a prelude function has no registry binding there, so it is not that these surfaces were skipped one by one: none of them has an entry point `eval()` can reach. Closing it means an `eval_builtin!` binding per surface; see **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
+Most of that is one gap rather than several. 222 of those functions — every one missing from `exif`, `gd`, `mysqli`, `pdo`, `session`, `zend opcache`, `zlib` — are implemented by a PHP prelude the compiler injects into the program it is compiling. The interpreter dispatches through the shared builtin registry, and a prelude function has no registry binding there, so it is not that these surfaces were skipped one by one: none of them has an entry point `eval()` can reach. Closing it means an `eval_builtin!` binding per surface; see **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 
@@ -108,7 +109,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 
 elephc also defines 1 constant(s) at runtime that PHP registers only in specific states and never lists statically: `SID`.
 
-elephc also implements 1 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `SortDirection` (PHP 8.6).
+elephc also implements 2 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `ARRAY_FILTER_USE_VALUE` (PHP 8.6), `SortDirection` (PHP 8.6).
 
 The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
 
@@ -200,7 +201,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 
 Classes: `DateUnknownException` (`date`), `ImageException` (`gd`).
 
-Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli`).
+Constants: `MYSQLI_TYPE_VARCHAR` (`mysqli`).
 
 ## Known limitations
 

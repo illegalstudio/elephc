@@ -62,6 +62,14 @@ pub(in crate::codegen_support::runtime::strings::mbstring) fn adapters(emitter: 
         if !arm { emitter.instruction("mov rdi, rax"); }                        // adapt the private runtime unary input to C
         emitter.instruction(&format!("{} {destination}", if arm { "b" } else { "jmp" })); // delegate ownership accounting to the C fixture
     }
+    // Boxing a resource retains its registry slot; the fixtures box no resource, so reaching this
+    // is a fixture defect rather than a path to model.
+    emitter.label_global("__rt_resource_retain");
+    emitter.instruction(if arm { "brk #0" } else { "ud2" });                  // reject resource boxing outside this fixture's scope
+    // The line a runtime helper's own diagnostic is attributed to; the fixtures raise none.
+    emitter.raw(".data");
+    emitter.raw(".globl _rt_internal_call_line\n_rt_internal_call_line:\n    .quad 0");
+    emitter.raw(".text");
     emitter.label_global("fixture_invoke");
     if arm {
         emitter.instruction("mov x9, x0");                                      // retain the protected operation pointer

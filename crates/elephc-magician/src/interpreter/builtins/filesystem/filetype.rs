@@ -61,7 +61,7 @@ pub(in crate::interpreter) fn eval_filetype_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
-    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
+    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, eval_url_stat_flags("filetype"), context, values)? {
         return match eval_user_wrapper_stat_int_field(stat, "mode", values)? {
             Some(mode) => values.string(eval_filetype_label_from_mode(mode)),
             None => values.bool_value(false),

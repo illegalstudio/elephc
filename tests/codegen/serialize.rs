@@ -1366,7 +1366,8 @@ $cases = [
     'generator' => gen(),
     'fiber' => new Fiber(fn() => 1),
     'splfileinfo' => new SplFileInfo(__FILE__),
-    'splfileobject' => new SplFileObject(__FILE__),
+    // The harness never writes test.php to disk, and php's SplFileObject opens eagerly.
+    'splfileobject' => new SplFileObject('php://memory', 'r+'),
 ];
 foreach ($cases as $label => $value) {
     try { echo $label, ": ", serialize($value), "\n"; }

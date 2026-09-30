@@ -132,6 +132,12 @@ pub(super) fn lower_stream_bucket_insert_aarch64(
     ctx.emitter.instruction("ldr x0, [sp, #16]");                               // reload the bucket Mixed cell for retention
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     abi::emit_pop_reg(ctx.emitter, "x0");
+    // A brigade holds each bucket AT MOST ONCE: php's buckets are a linked list and appending one
+    // that is already linked MOVES it. MEASURED — appending the same bucket three times answers
+    // `'ABC'` in php and answered `'ABCABCABC'` here. The take-out sits after the incref so the
+    // count cannot reach zero on a bucket that is about to go straight back in.
+    ctx.emitter.instruction("ldr x1, [sp, #0]");                                // the bucket Mixed cell
+    abi::emit_call_label(ctx.emitter, "__rt_brigade_remove");
     ctx.emitter.instruction("ldr x1, [sp, #0]");                                // pass the bucket Mixed cell to array_push
     abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
     if prepend {
@@ -223,6 +229,11 @@ pub(super) fn lower_stream_bucket_insert_x86_64(
     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // reload the bucket Mixed cell for retention
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     abi::emit_pop_reg(ctx.emitter, "rax");
+    // See the AArch64 counterpart: a brigade holds each bucket AT MOST ONCE, so an append of one
+    // it already holds MOVES it. The take-out sits after the incref for the same reason.
+    ctx.emitter.instruction("mov rdi, rax");                                    // the `_buckets` array
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                        // the bucket Mixed cell
+    abi::emit_call_label(ctx.emitter, "__rt_brigade_remove");                   // answers the same array in rax
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the `_buckets` array to array_push
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                        // pass the bucket Mixed cell to array_push
     abi::emit_call_label(ctx.emitter, "__rt_array_push_int");

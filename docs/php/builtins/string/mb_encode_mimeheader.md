@@ -2,7 +2,7 @@
 title: "mb_encode_mimeheader()"
 description: "Encodes a MIME header with language defaults, Base64 or Q transfer, and folded lines."
 sidebar:
-  order: 839
+  order: 867
 ---
 
 ## mb_encode_mimeheader()

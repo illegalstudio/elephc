@@ -805,6 +805,111 @@ fn test_cli_x86_64_epilogue_aligns_before_its_teardown_calls() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Emits `main.php` for `target` with or without `--with-monitoring` and returns the
+/// assembly text.
+fn emit_stream_fixture_asm(dir: &Path, target: &str, monitored: bool) -> String {
+    let mut command = elephc_cli_command(dir);
+    if monitored {
+        command.arg("--with-monitoring");
+    }
+    let output = command
+        .args(["--target", target, "--emit-asm", "main.php"])
+        .output()
+        .expect("failed to emit the stream fixture's assembly");
+    assert!(
+        output.status.success(),
+        "{target} --emit-asm (monitored: {monitored}) failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::read_to_string(dir.join("main.s")).expect("expected target assembly output")
+}
+
+/// Every counted stream builtin is preceded by a guarded note through
+/// `elephc_instr_stream_fn` in a monitored build, and a build without
+/// `--with-monitoring` carries no reference to that slot at all.
+///
+/// The second half is the pay-for-use promise: the slot is zero in such a binary,
+/// so the guarded call would be inert, but "inert" still costs a load and a branch
+/// at every read in every loop. Read from the assembly of BOTH architectures,
+/// because each has its own guard shape and this host can execute at most one.
+#[test]
+fn test_cli_stream_operation_notes_are_guarded_and_pay_for_use() {
+    let dir = make_cli_test_dir("elephc_cli_stream_operation_notes");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\n\
+         function load_line(string $path): string {\n\
+         \x20   $h = fopen($path, 'r');\n\
+         \x20   $line = '';\n\
+         \x20   while (!feof($h)) { $line .= fgets($h); }\n\
+         \x20   fclose($h);\n\
+         \x20   return $line;\n\
+         }\n\
+         echo strlen(load_line($argv[0]));\n",
+    )
+    .unwrap();
+
+    for target in ["linux-aarch64", "linux-x86_64"] {
+        let monitored = emit_stream_fixture_asm(&dir, target, true);
+        let lines: Vec<&str> = monitored.lines().map(str::trim).collect();
+        let branch = if target == "linux-aarch64" { "cbz " } else { "jz " };
+        // Each note is: load the slot, branch past the call when it is zero, call.
+        // Found by its skip label, and each one must have been reached by a zero
+        // guard on a value loaded from the slot just before it.
+        let notes: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.contains("instr_stream_skip") && line.ends_with(':'))
+            .map(|(index, _)| index)
+            .collect();
+        // fopen, fgets and fclose. `feof` is a query about the handle and is not
+        // counted, so it must not add a note of its own.
+        assert!(
+            notes.len() >= 3,
+            "{target}: expected a stream note per fopen/fgets/fclose, found {}",
+            notes.len()
+        );
+        for note in notes {
+            let label = lines[note].trim_end_matches(':');
+            let window = &lines[note.saturating_sub(10)..note];
+            let guard = window
+                .iter()
+                .position(|line| line.starts_with(branch) && line.ends_with(label))
+                .unwrap_or_else(|| {
+                    panic!("{target}: note {label} is not guarded:\n{}", window.join("\n"))
+                });
+            assert!(
+                window[..guard]
+                    .iter()
+                    .any(|line| line.contains("elephc_instr_stream_fn")),
+                "{target}: note {label} does not guard on the stream slot:\n{}",
+                window.join("\n")
+            );
+            let call = if target == "linux-aarch64" { "blr " } else { "call " };
+            assert!(
+                window[guard..].iter().any(|line| line.starts_with(call)),
+                "{target}: note {label} never calls through the slot:\n{}",
+                window.join("\n")
+            );
+        }
+        // And the monitored init fills the slot with the counter's address.
+        let filled = lines.iter().any(|line| {
+            line.contains("elephc_instr_stream")
+                && !line.contains("elephc_instr_stream_fn")
+                && !line.contains("instr_stream_skip")
+        });
+        assert!(filled, "{target}: the monitored init never fills the stream slot");
+
+        let plain = emit_stream_fixture_asm(&dir, target, false);
+        assert!(
+            !plain.contains("elephc_instr_stream"),
+            "{target}: a build without --with-monitoring references the stream slot"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies cross-target `--emit-asm` stops before preparing a host-incompatible runtime object.
 #[test]
 fn test_cli_emit_asm_does_not_require_target_assembler() {

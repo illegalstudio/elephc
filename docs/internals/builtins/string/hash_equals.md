@@ -2,7 +2,7 @@
 title: "hash_equals() - internals"
 description: "Compiler internals for hash_equals(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 802
+  order: 830
 ---
 
 ## `hash_equals()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hash_equals.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_equals.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

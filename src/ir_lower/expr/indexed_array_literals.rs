@@ -617,12 +617,15 @@ pub(super) fn array_literal_element_type_for_ir(
         ExprKind::ScopedConstantAccess { receiver, name } => {
             scoped_constant_value_type_for_ir(ctx, receiver, name, item)
         }
-        ExprKind::Variable(name) => ir_array_storage_type(
-            ctx.local_types
-                .get(name)
-                .cloned()
-                .unwrap_or_else(|| infer_expr_type_syntactic(item)),
-        ),
+        // A name the lowering has seen no store for is an UNDEFINED read: php answers null with
+        // a warning, and a null element lives in a Mixed cell — exactly what `[null]` above
+        // produces. The syntactic fallback answers `Int` for any expression it does not
+        // recognise, which stamped `[$undefined]` as `array<int>` and then refused the whole
+        // program with `unsupported EIR backend feature: array_push for PHP type Void`.
+        ExprKind::Variable(name) => match ctx.local_types.get(name).cloned() {
+            Some(ty) => ir_array_storage_type(ty),
+            None => PhpType::Mixed,
+        },
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {

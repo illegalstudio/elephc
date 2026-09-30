@@ -74,6 +74,8 @@ pub(in crate::interpreter) fn eval_builtin_array_search(
         }
         None => false,
     };
+    // `name` is `array_search` or `in_array`; both name argument #2 `$haystack`.
+    super::array_arg_check::eval_check_array_args(name, &[needle, array], context, values)?;
     eval_array_search_result(name, needle, array, strict, values)
 }
 

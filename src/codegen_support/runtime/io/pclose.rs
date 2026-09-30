@@ -6,15 +6,16 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
 //!
 //! Key details:
-//! - The `FILE*` recorded by `__rt_popen` in `_popen_files` is handed back to
-//!   libc `pclose`, which closes the stream and reaps the child.
-//! - A descriptor with no recorded `FILE*` is closed directly as a fallback.
+//! - The owning `FILE*` comes from `StreamState.backend_aux`, never from an
+//!   fd-indexed side table.
+//! - libc returns a wait status; the helper decodes normal child exits to the
+//!   PHP-visible exit code returned by `pclose()`.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// pclose: close a process pipe and return the child termination status.
-/// Input:  AArch64 x0 = pipe descriptor / x86_64 rdi = pipe descriptor
-/// Output: the child process termination status
+/// Input:  AArch64 x0 = owning FILE* / x86_64 rdi = owning FILE*
+/// Output: the PHP child exit status, or -1 when libc pclose fails.
 pub fn emit_pclose(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_pclose_linux_x86_64(emitter);
@@ -29,23 +30,21 @@ pub fn emit_pclose(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
-    // -- look up the FILE* recorded for this descriptor --
-    abi::emit_symbol_address(emitter, "x9", "_popen_files");
-    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // FILE* = _popen_files[fd]
-    emitter.instruction("cbz x10, __rt_pclose_plain");                          // no FILE* recorded: close directly
-    emitter.instruction("str xzr, [x9, x0, lsl #3]");                           // clear the fd->FILE* table entry
-    emitter.instruction("mov x0, x10");                                         // FILE* argument for pclose
+    emitter.instruction("cbz x0, __rt_pclose_fail");                            // a missing FILE* cannot own a child process
     emitter.bl_c("pclose");
+    emitter.instruction("cmp w0, #-1");                                         // did libc fail to close or wait?
+    emitter.instruction("b.eq __rt_pclose_done");                               // preserve the -1 failure sentinel
+    emitter.instruction("and w9, w0, #0x7f");                                   // isolate the POSIX terminating-signal field
+    emitter.instruction("cbnz w9, __rt_pclose_done");                           // preserve signalled-child status as returned by libc
+    emitter.instruction("lsr w0, w0, #8");                                      // extract the normal child exit code
+    emitter.instruction("and w0, w0, #0xff");                                   // constrain the PHP-visible exit code to one byte
+    emitter.instruction("b __rt_pclose_done");                                  // join the helper epilogue
+    emitter.label("__rt_pclose_fail");
+    emitter.instruction("mov x0, #-1");                                         // report an invalid process-pipe owner
+    emitter.label("__rt_pclose_done");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the frame
     emitter.instruction("ret");                                                 // return the termination status
-
-    emitter.label("__rt_pclose_plain");
-    emitter.syscall(6);
-    emitter.instruction("mov x0, #0");                                          // report a zero status for a plain close
-    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the frame
-    emitter.instruction("ret");                                                 // return the zero status
 }
 
 /// Emits the Linux x86_64 stream runtime helper for pclose.
@@ -57,21 +56,20 @@ fn emit_pclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
 
-    // -- look up the FILE* recorded for this descriptor --
-    abi::emit_symbol_address(emitter, "r9", "_popen_files");                    // base of the fd->FILE* table
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // FILE* = _popen_files[fd]
-    emitter.instruction("test r10, r10");                                       // was a FILE* recorded?
-    emitter.instruction("jz __rt_pclose_plain_x86");                            // no FILE* recorded: close directly
-    emitter.instruction("mov QWORD PTR [r9 + rdi * 8], 0");                     // clear the fd->FILE* table entry
-    emitter.instruction("mov rdi, r10");                                        // FILE* argument for pclose
+    emitter.instruction("test rdi, rdi");                                       // is an owning FILE* available?
+    emitter.instruction("jz __rt_pclose_fail_x86");                             // reject missing process-pipe state
     emitter.bl_c("pclose");
+    emitter.instruction("cmp eax, -1");                                         // did libc fail to close or wait?
+    emitter.instruction("je __rt_pclose_done_x86");                             // preserve the -1 failure sentinel
+    emitter.instruction("mov ecx, eax");                                        // preserve the raw wait status for signal inspection
+    emitter.instruction("and ecx, 0x7f");                                       // isolate the POSIX terminating-signal field
+    emitter.instruction("jnz __rt_pclose_done_x86");                            // preserve signalled-child status as returned by libc
+    emitter.instruction("shr eax, 8");                                          // extract the normal child exit code
+    emitter.instruction("and eax, 0xff");                                       // constrain the PHP-visible exit code to one byte
+    emitter.instruction("jmp __rt_pclose_done_x86");                            // join the helper epilogue
+    emitter.label("__rt_pclose_fail_x86");
+    emitter.instruction("mov eax, -1");                                         // report an invalid process-pipe owner
+    emitter.label("__rt_pclose_done_x86");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the termination status
-
-    emitter.label("__rt_pclose_plain_x86");
-    emitter.instruction("mov eax, 3");                                          // Linux x86_64 syscall 3 = close
-    emitter.instruction("syscall");                                             // close the descriptor directly
-    emitter.instruction("xor eax, eax");                                        // report a zero status for a plain close
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the zero status
 }

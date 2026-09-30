@@ -177,6 +177,12 @@ fn emit_iconv_call_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_iconv_call_offset_error_linux_x86_64");
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before throwing
+    // Unwinding first puts rsp back at THIS helper's entry alignment — `rsp % 16 == 8`, the
+    // shape a `call` leaves — which is one boundary away from what the throw body's own
+    // `call __rt_heap_alloc` needs. Every other user of that body reaches it from inside a
+    // live frame, so it preserves alignment rather than flipping it; this path is the one
+    // that has to make up the difference, in its own frame where the reason is visible.
+    emitter.instruction("sub rsp, 8");                                          // realign for the shared throw body
     value_error::emit_throw_value_error_x86_64(
         emitter,
         "_iconv_strpos_offset_msg",

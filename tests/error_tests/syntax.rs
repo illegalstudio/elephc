@@ -809,19 +809,6 @@ fn test_error_include_is_only_an_expression_in_an_assignment_rhs() {
     );
 }
 
-/// Issue #476 review follow-up: PHP allows a comma list in the `for` CONDITION as well, but
-/// elephc has no sequence expression to hold one and the condition re-runs every iteration,
-/// so the leading expressions cannot be hoisted into the init clause.
-///
-/// The diagnostic says so rather than letting the comma fall through to a bare `Expected ';'`
-/// that names neither the construct nor the limitation.
-#[test]
-fn test_error_for_condition_comma_list_is_named() {
-    expect_error(
-        "<?php for ($i = 0; $i++, $i < 3; $i++) {}",
-        "not supported in a for CONDITION",
-    );
-}
 
 /// Verifies a malformed file-scope `const` declarator list is rejected by its own cause
 /// (issue #1142): a trailing comma names the missing constant, and a declarator without a value

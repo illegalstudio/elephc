@@ -1,0 +1,15 @@
+# Cargo settings that apply to every invocation from this repository.
+#
+# The value here is the same one `.github/workflows/ci.yml` sets for the whole workflow, and for
+# the same reason it gives: deep parser/lowering fixtures overflow Rust's small default worker
+# stack. Without it a LOCAL `cargo test -p elephc --test codegen_tests` does not fail a test — the
+# process ABORTS on `codegen::fibers::scenarios::test_suspended_fiber_recursion_budget_does_not_
+# leak_to_main` with `fatal runtime error: stack overflow` and SIGABRT, so the remaining ~8 000
+# tests report nothing at all and the `test result:` line never appears. The fixture compiles PHP
+# with 128 live locals IN PROCESS; it is the compiler's recursion over that expression tree that
+# runs out of stack, not the program it produces.
+#
+# Setting it here rather than only in CI is what stops a contributor's local run from being a
+# different configuration than the one the gate uses.
+[env]
+RUST_MIN_STACK = "33554432"

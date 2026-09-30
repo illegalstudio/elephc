@@ -28,6 +28,7 @@ pub(in crate::interpreter) fn eval_current_declared_call(
         return Err(EvalStatus::RuntimeFatal);
     };
     let array = eval_expr(array, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("current", &[array], context, values)?;
     eval_current_result(array, context, values)
 }
 

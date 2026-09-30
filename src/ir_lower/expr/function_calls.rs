@@ -132,6 +132,10 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     };
     begin_call_argument_evaluation(ctx);
     let mut operands = if is_user_function {
+        // php materializes a null variable before binding it to a by-reference parameter the
+        // callee writes; the caller's storage has to say so BEFORE the arguments are lowered,
+        // or the load hands over a null the callee cannot write a boxed value through.
+        prepare_by_ref_null_out_locals(ctx, sig.as_ref(), args);
         // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
         // runtime keys and bind each boxed cell before entering the direct function ABI, just
         // like the same fixed signature reached through a builtin descriptor surface.
@@ -139,10 +143,13 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             .and_then(|signature| {
                 dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, canonical, false)
             })
-            .unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args))
+            .unwrap_or_else(|| {
+                lower_args_with_signature_for(ctx, sig.as_ref(), args, Some(canonical))
+            })
     } else if is_extern {
-        lower_args_with_signature(ctx, sig.as_ref(), args)
+        lower_args_with_signature_for(ctx, sig.as_ref(), args, Some(canonical))
     } else {
+        promote_key_preserving_sort_receiver(ctx, canonical, args);
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
     let php_type = if is_extern || is_user_function {
@@ -261,9 +268,13 @@ pub(super) fn emit_builtin_call_value(
                 span,
             )
             .unwrap_or_else(|error| {
+                // The enclosing function is named because a synthetic body — a prelude, or a
+                // built-in SPL class method — carries span 0:0, and `at 0:0` on its own gives a
+                // reader nothing to grep for.
                 panic!(
-                    "checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}",
+                    "checked builtin {} failed backend-neutral EIR lowering in {} at {}:{}: {}",
                     def.name,
+                    ctx.builder.function_name(),
                     span.line,
                     span.col,
                     error,

@@ -43,15 +43,31 @@ pub(in crate::interpreter) fn eval_stream_socket_shutdown_declared_values_result
     eval_stream_socket_shutdown_result(*stream, *mode, context, values)
 }
 
+/// php-src's verbatim `ValueError` wording for a `stream_socket_shutdown()` `$mode` outside the
+/// three `STREAM_SHUT_*` constants.
+const STREAM_SOCKET_SHUTDOWN_BAD_MODE_MESSAGE: &str =
+    "stream_socket_shutdown(): Argument #2 ($mode) must be one of STREAM_SHUT_RD, \
+     STREAM_SHUT_WR, or STREAM_SHUT_RDWR";
+
 /// Applies a socket shutdown mode to a stream resource.
 pub(in crate::interpreter) fn eval_stream_socket_shutdown_result(
     stream: RuntimeCellHandle,
     mode: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = super::stream_socket_get_name::eval_socket_resource_id(stream, values)?;
     let mode = eval_int_value(mode, values)?;
+    // php-src accepts only the three `STREAM_SHUT_*` constants (0, 1, 2). Every other mode used
+    // to fall through to a `false` that is indistinguishable from a legal mode the kernel
+    // refused.
+    if !(0..=2).contains(&mode) {
+        return eval_stream_value_error(
+            STREAM_SOCKET_SHUTDOWN_BAD_MODE_MESSAGE,
+            context,
+            values,
+        );
+    }
     values.bool_value(
         context
             .stream_resources()

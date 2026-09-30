@@ -674,3 +674,31 @@ echo constant("APP_X"), "|", \constant("APP_X");
     );
     assert_eq!(out, "11|11");
 }
+
+/// Verifies `count()` over a statically scalar value is php's run-time `TypeError`, not a refusal.
+///
+/// php-src's own PHPT helpers call `count($fields)` in functions no test invokes; refusing the
+/// program at compile time stopped every test that includes them. A boolean is named by its
+/// value, as php does (`true given`).
+#[test]
+fn test_count_of_a_scalar_is_a_runtime_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function unused($fields) { return count($fields); }
+function probe(bool $b) { try { echo count($b); } catch (TypeError $e) { echo $e->getMessage(), "|"; } }
+probe(true); probe(false);
+foreach ([5, 1.5, "s", null] as $v) {
+    try { echo count($v); } catch (TypeError $e) { echo $e->getMessage(), "|"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "count(): Argument #1 ($value) must be of type Countable|array, true given|\
+count(): Argument #1 ($value) must be of type Countable|array, false given|\
+count(): Argument #1 ($value) must be of type Countable|array, int given|\
+count(): Argument #1 ($value) must be of type Countable|array, float given|\
+count(): Argument #1 ($value) must be of type Countable|array, string given|\
+count(): Argument #1 ($value) must be of type Countable|array, null given|"
+    );
+}

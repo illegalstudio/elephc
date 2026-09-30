@@ -9,16 +9,6 @@
 
 use super::*;
 
-/// Lowers a literal `fopen("ftp://...", ...)` through the FTP runtime wrapper.
-pub(super) fn lower_literal_ftp_fopen(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    emit_literal_ftp_fopen_result(ctx, path)?;
-    store_if_result(ctx, inst)
-}
-
 /// Emits the boxed result for a literal `ftp://` stream open.
 pub(super) fn emit_literal_ftp_fopen_result(ctx: &mut FunctionContext<'_>, path: &str) -> Result<()> {
     match parse_ftp_url_for_fopen(path) {
@@ -51,6 +41,7 @@ pub(super) fn emit_literal_ftp_fopen_result(ctx: &mut FunctionContext<'_>, path:
         },
     }
     box_stream_fd_or_false_result(ctx, "fopen_ftp");
+    emit_record_stream_meta_after_boxed_literal(ctx, 3, path);
     Ok(())
 }
 
@@ -80,14 +71,32 @@ pub(super) fn parse_ftp_url_for_fopen(url: &str) -> Option<(String, String)> {
     ))
 }
 
-/// Lowers a literal `fopen("http://...", ...)` through the HTTP runtime wrapper.
-pub(super) fn lower_literal_http_fopen(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    emit_literal_http_fopen_result(ctx, path)?;
-    store_if_result(ctx, inst)
+/// Publishes `$http_response_header` after an HTTP fopen result has been stored.
+pub(super) fn publish_http_response_headers(ctx: &mut FunctionContext<'_>) {
+    // -- populate $http_response_header from the last HTTP response --
+    // After store_if_result, x0/rax is free. Call the helper, box the result
+    // as a Mixed(array), and store it into the global slot.
+    let hdr_symbol = crate::names::ir_global_symbol("http_response_header");
+    abi::emit_call_label(ctx.emitter, "__rt_get_http_response_headers");
+    // Box the raw array pointer as Mixed(tag=4, array_ptr).
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // payload_lo = array pointer
+            ctx.emitter.instruction("mov x2, #0");                              // payload_hi = 0
+            ctx.emitter.instruction("mov x0, #4");                              // tag = 4 (indexed array)
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");        // x0 = Mixed(array)
+            abi::emit_symbol_address(ctx.emitter, "x9", &hdr_symbol);
+            ctx.emitter.instruction("str x0, [x9]");                            // store the boxed Mixed into the global
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // payload_lo = array pointer
+            ctx.emitter.instruction("xor esi, esi");                            // payload_hi = 0
+            ctx.emitter.instruction("mov eax, 4");                              // tag = 4 (indexed array)
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");        // rax = Mixed(array)
+            abi::emit_symbol_address(ctx.emitter, "r9", &hdr_symbol);
+            ctx.emitter.instruction("mov QWORD PTR [r9], rax");                 // store the boxed Mixed into the global
+        }
+    }
 }
 
 /// Emits the boxed result for a literal `http://` stream open.
@@ -136,6 +145,7 @@ pub(super) fn emit_literal_http_fopen_result(ctx: &mut FunctionContext<'_>, path
         },
     }
     box_stream_fd_or_false_result(ctx, "fopen_http");
+    emit_record_stream_meta_after_boxed_literal(ctx, 1, path);
     Ok(())
 }
 

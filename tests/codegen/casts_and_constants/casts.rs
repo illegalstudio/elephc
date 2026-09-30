@@ -386,25 +386,25 @@ foreach ([INF * $n, NAN * $n, 1e20 * $n] as $value) {
     );
     assert_eq!(out.stdout, "int(0)\nint(0)\nint(7766279631452241920)\n");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: The float INF is not representable as an int, cast occurred"),
         "{}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: The float NAN is not representable as an int, cast occurred"),
         "{}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "Warning: The float 1.0E+20 is not representable as an int, cast occurred"
         ),
         "{}",
-        out.stderr
+        out.diagnostics
     );
-    assert!(!out.stderr.contains("Deprecated:"), "{}", out.stderr);
+    assert!(!out.diagnostics.contains("Deprecated:"), "{}", out.diagnostics);
 }
 
 /// Verifies several `(string)` casts of a boxed `mixed` agree with PHP across every payload

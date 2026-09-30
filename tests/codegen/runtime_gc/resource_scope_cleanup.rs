@@ -96,8 +96,8 @@ echo "done\n";
 }
 
 /// Verifies that an explicitly closed stream does not crash and is skipped by
-/// scope cleanup: `fclose()` stamps the -1 release sentinel into the Mixed box,
-/// so the kind-1 destructor does not close the descriptor a second time.
+/// scope cleanup: `fclose()` transitions the registry entry to Closed, so the
+/// final Mixed release cannot close the backend descriptor a second time.
 #[test]
 fn test_stream_explicit_close_then_scope_exit() {
     let out = compile_and_run(
@@ -106,7 +106,7 @@ $f = fopen("php://temp", "w+");
 fwrite($f, "test");
 fclose($f);
 echo "ok\n";
-// $f leaves scope with a sentinel-marked box — scope cleanup skips it.
+// $f leaves scope with a Closed registry handle — scope cleanup skips it.
 "#,
     );
     assert_eq!(out, "ok\n");
@@ -191,7 +191,7 @@ echo "|done\n";
 }
 
 /// Verifies that an explicitly `pclose`d pipe is skipped by scope cleanup (the
-/// release sentinel marks the box) so the child is not reaped / fd closed twice.
+/// Closed registry state remains observable) so the child is not reaped or closed twice.
 #[test]
 fn test_popen_explicit_pclose_then_scope_exit() {
     let out = compile_and_run(
@@ -201,7 +201,7 @@ echo fread($p, 16);
 echo "|";
 echo pclose($p);
 echo "\n";
-// $p leaves scope sentinel-marked — scope cleanup does not pclose again.
+// $p leaves scope with a Closed registry handle — cleanup does not pclose again.
 "#,
     );
     assert_eq!(out, "xyz|0\n");
@@ -225,7 +225,7 @@ echo "done\n";
 }
 
 /// Verifies that an explicitly `closedir`d stream is skipped by scope cleanup
-/// (release sentinel) so `closedir` does not run twice.
+/// (Closed registry state) so `closedir` does not run twice.
 #[test]
 fn test_opendir_explicit_closedir_then_scope_exit() {
     let out = compile_and_run(
@@ -234,27 +234,27 @@ mkdir("d");
 $h = opendir("d");
 closedir($h);
 echo "ok\n";
-// $h leaves scope sentinel-marked — scope cleanup does not closedir again.
+// $h leaves scope with a Closed registry handle — cleanup does not closedir again.
 "#,
     );
     assert_eq!(out, "ok\n");
 }
 
 /// Verifies that closing a stream and opening another (which may reuse the same
-/// fd number) before scope exit is safe: the closed stream's box is sentinel-
-/// marked, so its scope cleanup cannot close the reused descriptor.
+/// fd number) before scope exit is safe: the closed stream's registry
+/// generation cannot resolve to or close the reused descriptor.
 #[test]
 fn test_stream_fd_reuse_after_close_is_safe() {
     let out = compile_and_run(
         r#"<?php
 $a = fopen("php://temp", "w+");
-fclose($a);            // $a's box is sentinel-marked
+fclose($a);            // $a's registry entry becomes Closed
 $b = fopen("php://temp", "w+"); // may reuse $a's old fd number
 fwrite($b, "reused");
 rewind($b);
 echo fread($b, 16);
 echo "\n";
-// Both leave scope: $a is skipped (sentinel), $b is closed exactly once.
+// Both leave scope: stale $a is skipped, while $b is closed exactly once.
 "#,
     );
     assert_eq!(out, "reused\n");

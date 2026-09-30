@@ -28,6 +28,8 @@ mod catalog_curl;
 mod catalog_surfaces;
 mod core_functions;
 mod eval_profile;
+pub mod glob_flags;
+pub mod php_constants;
 mod id;
 mod module;
 mod php_version;

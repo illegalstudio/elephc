@@ -18,12 +18,70 @@ use crate::types::PhpType;
 use super::receiver_place::ReceiverPlace;
 use super::{expect_operand, store_if_result};
 
+/// Tells the monitor that this call is a STREAM operation, naming it.
+///
+/// One place rather than one per builtin: every typed runtime call arrives here, so the
+/// counter cannot fall behind a builtin somebody adds later — the only thing that decides
+/// is `RuntimeFnId::is_stream_operation`, which is the list.
+///
+/// Emitted ONLY under `--with-monitoring`. The slot it would read is zero in every other
+/// binary, so the guarded call would be inert — but "inert" still costs a load, a branch and
+/// the instructions around them at every read in every loop, and a build nobody asked to
+/// profile should not carry that. This is the same pay-for-use rule the profiler's own
+/// enter/exit hooks follow.
+///
+/// The name is passed rather than an id because the reader wants it: a function that did
+/// 1,200 stream operations is a different finding depending on whether that is one `fopen`
+/// and 1,199 `fgets` — a read loop — or 1,200 `fopen` calls.
+///
+/// Nothing of the call's own is live yet. This runs BEFORE the operands are materialized into
+/// argument registers, which is what makes clobbering them safe.
+fn emit_stream_operation_note(ctx: &mut FunctionContext<'_>, target: RuntimeCallTarget) {
+    if !ctx.shared.instrument.is_on() {
+        return;
+    }
+    let (RuntimeCallTarget::Function(id) | RuntimeCallTarget::ProfiledFunction { target: id, .. }) =
+        target
+    else {
+        return;
+    };
+    if !id.is_stream_operation() {
+        return;
+    }
+    let name = id.as_eir();
+    let (label, len) = ctx.data.add_string(name.as_bytes());
+    let arch_target = ctx.emitter.target;
+    let symbol = arch_target.extern_symbol("elephc_instr_stream_fn");
+    let skip = ctx.next_label("instr_stream_skip");
+    // The symbol scratch register: the load below borrows it for the address and
+    // then holds the slot's value, and neither argument register materialized after
+    // it touches it, so it still holds the callee at the indirect call.
+    let slot = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, slot, &symbol, 0);
+    match arch_target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", slot, skip));    // dormant: the stream slot is zero, so skip the note
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", slot, slot));   // is the stream slot filled?
+            ctx.emitter.instruction(&format!("jz {}", skip));               // dormant: the stream slot is zero, so skip the note
+        }
+    }
+    let name_arg = abi::int_arg_reg_name(arch_target, 0);
+    let len_arg = abi::int_arg_reg_name(arch_target, 1);
+    abi::emit_symbol_address(ctx.emitter, name_arg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_arg, len as i64);
+    abi::emit_call_reg(ctx.emitter, slot); // elephc_instr_stream(name, len)
+    ctx.emitter.label(&skip);
+}
+
 /// Lowers one typed runtime operation through its target-specific helper ABI.
 pub(super) fn lower(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     target: RuntimeCallTarget,
 ) -> Result<()> {
+    emit_stream_operation_note(ctx, target);
     match target {
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ArrayFetchForWrite => {

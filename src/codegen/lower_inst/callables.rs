@@ -900,6 +900,20 @@ fn extern_decl_signature(decl: &crate::ir::ExternDecl) -> FunctionSig {
     }
 }
 
+/// Collects every string literal in the module, keyed the way builtin names are keyed.
+///
+/// This is deliberately the WHOLE string pool rather than a flow-sensitive result: it answers
+/// "could a literal in this program spell that name", which is the question that bounds the
+/// ladder. Being an over-approximation is the point — it covers a name travelling through an
+/// array, a ternary or a default, none of which the value-level analysis follows.
+fn mentioned_literal_names(module: &crate::ir::Module) -> std::collections::HashSet<String> {
+    module
+        .data
+        .strings
+        .iter()
+        .map(|literal| php_symbol_key(literal.trim_start_matches('\\')))
+        .collect()
+}
 
 /// Builds descriptor cases with an optional host-proven callback arity.
 fn runtime_builtin_descriptor_cases_at_arity(
@@ -907,14 +921,21 @@ fn runtime_builtin_descriptor_cases_at_arity(
     strict_php: bool, arity: Option<usize>,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let mut cases = Vec::new();
+    // The names this program writes down as string literals. A builtin that appears nowhere as a
+    // literal cannot be reached through one, so it stays out of the ladder — which is what keeps
+    // the widened eligibility from putting every expressible builtin at every call site whose
+    // callee the reachability analysis could not narrow.
+    let mentioned = mentioned_literal_names(ctx.module);
     for name in crate::types::checker::builtins::supported_builtin_function_names_for_profile(
         strict_php,
     ) {
+        let bounded = candidate_names.is_some()
+            || mentioned.contains(&php_symbol_key(name.trim_start_matches('\\')));
         if !runtime_callable_name_is_reachable(name, candidate_names)
             || !if arity.is_some() {
-                callable_dispatch::runtime_builtin_wrapper_supported_at_arity(name, source_arg_ty, ctx.module.required_runtime_features, arity)
+                callable_dispatch::runtime_builtin_wrapper_supported_at_arity(name, source_arg_ty, ctx.module.required_runtime_features, arity, bounded)
             } else {
-                callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty, ctx.module.required_runtime_features)
+                callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty, ctx.module.required_runtime_features, bounded)
             }
             || ctx
                 .module

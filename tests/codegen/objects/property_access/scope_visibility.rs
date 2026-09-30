@@ -1897,7 +1897,7 @@ echo $boxed->boxed, "\n";
         out.stdout,
         "bool(false)\nNULL\nagain\nbool(false)\nNULL\nagain-poly\nbool(false)\nNULL\nagain-boxed\n"
     );
-    assert_eq!(out.stderr.matches("Warning: Undefined property:").count(), 3);
+    assert_eq!(out.diagnostics.matches("Warning: Undefined property:").count(), 3);
 }
 
 /// Verifies a boxed `Mixed` receiver round-trips an undeclared name through the runtime class's

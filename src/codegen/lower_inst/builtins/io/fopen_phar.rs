@@ -11,16 +11,6 @@ use super::*;
 
 
 
-/// Lowers a literal read-mode `fopen("phar://...", ...)` through embedded entry bytes.
-pub(super) fn lower_literal_phar_fopen_read(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    emit_literal_phar_fopen_read_result(ctx, path)?;
-    store_if_result(ctx, inst)
-}
-
 /// Emits the boxed result for a literal read-mode `phar://` stream open.
 pub(super) fn emit_literal_phar_fopen_read_result(ctx: &mut FunctionContext<'_>, path: &str) -> Result<()> {
     match crate::codegen::phar_stream::extract_phar_entry(path) {
@@ -48,17 +38,8 @@ pub(super) fn emit_literal_phar_fopen_read_result(ctx: &mut FunctionContext<'_>,
         },
     }
     box_stream_fd_or_false_result(ctx, "fopen_phar");
+    emit_record_stream_meta_after_boxed_literal(ctx, 5, path);
     Ok(())
-}
-
-/// Lowers a literal write-mode `fopen("phar://...", ...)` through the PHAR writer.
-pub(super) fn lower_literal_phar_fopen_write(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    emit_literal_phar_fopen_write_result(ctx, path)?;
-    store_if_result(ctx, inst)
 }
 
 /// Emits the boxed stream result for a literal write-mode `phar://` stream open.
@@ -74,6 +55,7 @@ pub(super) fn emit_literal_phar_fopen_write_result(ctx: &mut FunctionContext<'_>
         }
     }
     box_stream_fd_or_false_result(ctx, "fopen_phar_write");
+    emit_record_stream_meta_after_boxed_literal(ctx, 5, path);
     Ok(())
 }
 

@@ -18,6 +18,29 @@ use crate::types::{
 
 use super::super::super::Checker;
 
+/// Returns the container's type for an index write, vivifying a null one into an empty array.
+///
+/// php does not refuse a write through a name that holds null: `zend_fetch_dimension_address_W`
+/// turns the null container into an empty array, and an unbound name reads as null. MEASURED on
+/// `php -n` 8.5.6 — `function f(): void { $u['k'] = 5; echo $u['k']; } f()` prints `5`, and
+/// `$u[] = 5; $u[] = 7;` on the same undefined name builds `[5, 7]`.
+///
+/// `Array(Never)` rather than a shape guess: the ordinary merge in the caller then decides it the
+/// way `$a = []; $a['k'] = 5;` is decided — a string key promotes to `AssocArray`, an int key
+/// stays indexed. Refusing instead sent the write to the backend with a `Void` receiver, where it
+/// became `unsupported EIR backend feature: runtime_call array set with receiver PHP type Void`
+/// — a compile failure for a program php runs.
+fn vivify_null_container(array: &str, env: &mut TypeEnv) -> PhpType {
+    match env.get(array) {
+        Some(PhpType::Void) | None => {
+            let vivified = PhpType::Array(Box::new(PhpType::Never));
+            env.insert(array.to_string(), vivified.clone());
+            vivified
+        }
+        Some(existing) => existing.clone(),
+    }
+}
+
 /// Validates and updates the type environment for `$array[$index] = $value` assignments.
 ///
 /// Validates that the target is not a string, merges element types for arrays/assoc-arrays,
@@ -25,7 +48,6 @@ use super::super::super::Checker;
 /// Updates `env` with the merged key/value types; returns an error for invalid targets or type mismatches.
 ///
 /// Errors:
-/// - Undefined variable
 /// - String offset assignment
 /// - Buffer element type mismatch or packed buffer assignment via index
 /// - Object assignment without ArrayAccess
@@ -37,10 +59,7 @@ pub(super) fn check_array_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = env
-        .get(array)
-        .cloned()
-        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
+    let arr_ty = vivify_null_container(array, env);
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
@@ -228,10 +247,7 @@ pub(super) fn check_array_push(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = env
-        .get(array)
-        .cloned()
-        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
+    let arr_ty = vivify_null_container(array, env);
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     if let PhpType::Array(elem_ty) = &arr_ty {

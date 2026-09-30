@@ -81,7 +81,7 @@ pub(crate) fn lower_hash_init(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 pub(crate) fn lower_hash_update(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "hash_update", 2)?;
     let context = expect_operand(inst, 0)?;
-    super::io::load_stream_fd_to_result(ctx, context, "hash_update")?;
+    super::io::load_resource_payload_to_result(ctx, context, "hash_update")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg(ctx.emitter, "x0");
@@ -111,7 +111,7 @@ pub(crate) fn lower_hash_final(ctx: &mut FunctionContext<'_>, inst: &Instruction
         )));
     }
     let context = expect_operand(inst, 0)?;
-    super::io::load_stream_fd_to_result(ctx, context, "hash_final")?;
+    super::io::load_resource_payload_to_result(ctx, context, "hash_final")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg(ctx.emitter, "x0");
@@ -137,7 +137,7 @@ pub(crate) fn lower_hash_final(ctx: &mut FunctionContext<'_>, inst: &Instruction
 pub(crate) fn lower_hash_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "hash_copy", 1)?;
     let context = expect_operand(inst, 0)?;
-    super::io::load_stream_fd_to_result(ctx, context, "hash_copy")?;
+    super::io::load_resource_payload_to_result(ctx, context, "hash_copy")?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the hash context handle to the C ABI helper
     }

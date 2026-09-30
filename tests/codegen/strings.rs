@@ -48,6 +48,8 @@ mod misc;
 mod openssl;
 #[path = "strings/parse_url.rs"]
 mod parse_url;
+#[path = "strings/scanf.rs"]
+mod scanf;
 #[path = "strings/offset_warnings.rs"]
 mod offset_warnings;
 

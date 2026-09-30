@@ -47,6 +47,7 @@ pub(in crate::interpreter) fn eval_builtin_array_merge(
     };
     let left = eval_expr(left, context, scope, values)?;
     let right = eval_expr(right, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("array_merge", &[left, right], context, values)?;
     eval_array_merge_result(left, right, values)
 }
 

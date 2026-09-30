@@ -2,7 +2,7 @@
 title: "session_abort() - internals"
 description: "Compiler internals for session_abort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 980
+  order: 1013
 ---
 
 ## `session_abort()` - internals

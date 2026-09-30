@@ -2,7 +2,7 @@
 title: "stream_is_local()"
 description: "Checks if a stream is a local stream."
 sidebar:
-  order: 376
+  order: 401
 ---
 
 ## stream_is_local()

@@ -46,7 +46,10 @@ pub(in crate::interpreter) fn eval_builtin_opendir(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [directory] = args else {
+    // `$context` is accepted and IGNORED, the way `mkdir()`/`rmdir()` already accept it: eval has
+    // no stream-context plumbing on this route, and refusing the argument outright made
+    // `opendir($d, $ctx)` fail on a signature php documents.
+    let ([directory] | [directory, _]) = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
     let directory = eval_expr(directory, context, scope, values)?;

@@ -26,15 +26,15 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     }
 
     let plat = emitter.platform;
-    let stat_buf = plat.stat_buf_size();
+    let stat_buf = plat.stat_buf_size(emitter.target.arch);
     let frame_size = (stat_buf + 32 + 15) & !15;
     let save_offset = frame_size - 16;
-    let mode_off = plat.stat_mode_offset();
+    let mode_off = plat.stat_mode_offset(emitter.target.arch);
     let atime_off = plat.stat_atime_offset();
     let ctime_off = plat.stat_ctime_offset();
     let ino_off = plat.stat_ino_offset();
-    let uid_off = plat.stat_uid_offset();
-    let gid_off = plat.stat_gid_offset();
+    let uid_off = plat.stat_uid_offset(emitter.target.arch);
+    let gid_off = plat.stat_gid_offset(emitter.target.arch);
 
     // Helper closure that emits the standard prologue for a stat-based scalar
     // helper: setup frame, cstr the path, syscall stat64, then leave the
@@ -43,7 +43,7 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
         emitter.instruction(&format!("sub sp, sp, #{}", frame_size));           // allocate stack for stat buf + frame
         emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));  // save frame pointer and return address
         emitter.instruction(&format!("add x29, sp, #{}", save_offset));         // establish new frame pointer
-        emitter.instruction("bl __rt_cstr");                                    // null-terminate the path; x0 = cstr pointer
+        emitter.instruction("bl __rt_path_cstr");                               // null-terminate the path; x0 = cstr pointer
         emitter.instruction("add x1, sp, #0");                                  // pointer to stat buffer on stack
         emitter.syscall(338);
     };
@@ -147,7 +147,7 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
-    emitter.instruction("bl __rt_cstr");                                        // null-terminate the path; x0 = cstr pointer
+    emitter.instruction("bl __rt_path_cstr");                                   // null-terminate the path; x0 = cstr pointer
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(340);                                                       // lstat64 (Darwin 340 / Linux remap to fstatat)
     emitter.instruction("cmp x0, #0");                                          // lstat success?
@@ -220,7 +220,7 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
-    emitter.instruction("bl __rt_cstr");                                        // null-terminate path
+    emitter.instruction("bl __rt_path_cstr");                                   // null-terminate path
     emitter.instruction("mov x1, #1");                                          // X_OK = 1 (execute permission check)
     emitter.syscall(33);                                                        // access(path, X_OK)
     emitter.instruction("cmp x0, #0");                                          // success?
@@ -241,7 +241,7 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
-    emitter.instruction("bl __rt_cstr");                                        // null-terminate the path; x0 = cstr pointer
+    emitter.instruction("bl __rt_path_cstr");                                   // null-terminate the path; x0 = cstr pointer
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(340);                                                       // lstat
     emitter.instruction("cmp x0, #0");                                          // lstat success?
@@ -275,7 +275,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
         emitter.instruction("push rbp");                                        // preserve caller frame pointer
         emitter.instruction("mov rbp, rsp");                                    // establish a stable frame base for the stat buffer
         emitter.instruction(&format!("sub rsp, {}", frame_size));               // reserve 16-byte aligned stat buffer
-        emitter.instruction("call __rt_cstr");                                  // convert path to null-terminated C string
+        emitter.instruction("call __rt_path_cstr");                             // convert path to null-terminated C string
         emitter.instruction("mov rdi, rax");                                    // first libc stat() argument
         emitter.instruction("lea rsi, [rsp]");                                  // second libc stat() argument: stat buffer
         emitter.instruction("call stat");                                       // libc stat() into the buffer
@@ -284,7 +284,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
         emitter.instruction("push rbp");                                        // preserve caller frame pointer
         emitter.instruction("mov rbp, rsp");                                    // establish a stable frame base for the stat buffer
         emitter.instruction(&format!("sub rsp, {}", frame_size));               // reserve 16-byte aligned stat buffer
-        emitter.instruction("call __rt_cstr");                                  // convert path to null-terminated C string
+        emitter.instruction("call __rt_path_cstr");                             // convert path to null-terminated C string
         emitter.instruction("mov rdi, rax");                                    // first libc lstat() argument
         emitter.instruction("lea rsi, [rsp]");                                  // second libc lstat() argument: stat buffer
         emitter.instruction("call lstat");                                      // libc lstat() into the buffer
@@ -425,7 +425,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_is_executable");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("call __rt_cstr");                                      // null-terminate the path
+    emitter.instruction("call __rt_path_cstr");                                 // null-terminate the path
     emitter.instruction("mov rdi, rax");                                        // first libc access() argument
     emitter.instruction("mov rsi, 1");                                          // X_OK = 1 (execute permission check)
     emitter.instruction("call access");                                         // libc access(path, X_OK)

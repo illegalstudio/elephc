@@ -185,8 +185,29 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             store_if_result(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            // php raises a TypeError for anything but an array or a Countable; answering 0 made
+            // `count($x) === 0` read a non-empty string, a null and an integer as empty
+            // collections. The rejection is probed before the count because __rt_mixed_count
+            // tail-calls the SPL counters, so it cannot report anything beside the count itself.
             emit_count_countable_guard(ctx, value)?;
             ctx.load_value_to_result(value)?;
+            let countable_label = ctx.next_label("count_countable");
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            abi::emit_call_label(ctx.emitter, "__rt_count_reject_index");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #0");
+                    ctx.emitter.instruction(&format!("b.lt {}", countable_label)); // -1: really countable
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 0");
+                    ctx.emitter.instruction(&format!("jl {}", countable_label));   // -1: really countable
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_count_type_message");
+            super::super::exceptions::emit_type_error_from_string_result(ctx);
+            ctx.emitter.label(&countable_label);
+            abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             emit_non_countable_object_type_error(ctx, value)?;
             store_if_result(ctx, inst)
@@ -206,6 +227,39 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             super::exceptions::emit_type_error(
                 ctx,
                 &format!("{COUNT_TYPE_ERROR_PREFIX}{class_name} given"),
+            );
+            store_if_result(ctx, inst)
+        }
+        // A scalar is never countable: php raises when the line runs, and only then — a call
+        // inside a function nobody invokes must not stop the program from compiling.
+        // php names a boolean by its VALUE (`true given`), so a `bool` picks its message at run time.
+        PhpType::Bool => {
+            ctx.load_value_to_result(value)?;
+            let is_false = ctx.next_label("count_bool_false");
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {result_reg}, {is_false}")), // false takes the other message
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("test {result_reg}, {result_reg}")); // is the boolean false?
+                    ctx.emitter.instruction(&format!("jz {is_false}"));                   // false takes the other message
+                }
+            }
+            super::exceptions::emit_type_error(ctx, &format!("{COUNT_TYPE_ERROR_PREFIX}true given"));
+            ctx.emitter.label(&is_false);
+            super::exceptions::emit_type_error(ctx, &format!("{COUNT_TYPE_ERROR_PREFIX}false given"));
+            store_if_result(ctx, inst)
+        }
+        PhpType::Int | PhpType::Float | PhpType::False | PhpType::Str | PhpType::Void => {
+            let given = match ty {
+                PhpType::Int => "int",
+                PhpType::Float => "float",
+                PhpType::False => "false",
+                PhpType::Str => "string",
+                _ => "null",
+            };
+            super::exceptions::emit_type_error(
+                ctx,
+                &format!("{COUNT_TYPE_ERROR_PREFIX}{given} given"),
             );
             store_if_result(ctx, inst)
         }

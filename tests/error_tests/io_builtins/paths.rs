@@ -18,7 +18,7 @@ fn test_error_rewind_wrong_args() {
 
 // Verifies fseek() rejects one argument (needs 2 or 3) — expects "takes 2 or 3 arguments".
 
-// Verifies file() rejects zero arguments — expects "takes exactly 1 argument".
+// Verifies file() rejects zero arguments — expects "takes 1 to 3 arguments".
 
 // Verifies readline() rejects two arguments (accepts 0 or 1) — expects "takes 0 or 1 arguments".
 
@@ -58,14 +58,13 @@ fn test_error_fseek_wrong_args() {
 /// Verifies the error diagnostic for file wrong args.
 ///
 /// PHP's signature is `file(string $filename, int $flags = 0, $context = null)`; elephc declares
-/// the first two parameters, so a no-argument call is short by one and a three-argument call
-/// passes a stream context elephc does not model.
+/// all three, so only a no-argument call and a four-argument call are out of range.
 #[test]
 fn test_error_file_wrong_args() {
-    expect_error("<?php file();", "file() takes 1 or 2 arguments");
+    expect_error("<?php file();", "file() takes 1 to 3 arguments");
     expect_error(
-        r#"<?php file("a.txt", 0, null);"#,
-        "file() takes 1 or 2 arguments",
+        r#"<?php file("a.txt", 0, null, 1);"#,
+        "file() takes 1 to 3 arguments",
     );
 }
 
@@ -81,13 +80,13 @@ fn test_error_readline_wrong_args() {
 /// Verifies the error diagnostic for fgetcsv wrong args.
 #[test]
 fn test_error_fgetcsv_wrong_args() {
-    expect_error("<?php fgetcsv();", "fgetcsv() takes 1 to 3 arguments");
+    expect_error("<?php fgetcsv();", "fgetcsv() takes 1 to 5 arguments");
 }
 
 /// Verifies the error diagnostic for fputcsv wrong args.
 #[test]
 fn test_error_fputcsv_wrong_args() {
-    expect_error("<?php fputcsv(1);", "fputcsv() takes 2 to 4 arguments");
+    expect_error("<?php fputcsv(1);", "fputcsv() takes 2 to 6 arguments");
 }
 
 /// Verifies the error diagnostic for dirname wrong args.

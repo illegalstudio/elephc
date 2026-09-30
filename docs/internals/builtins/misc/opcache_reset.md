@@ -2,7 +2,7 @@
 title: "opcache_reset() - internals"
 description: "Compiler internals for opcache_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 644
+  order: 670
 ---
 
 ## `opcache_reset()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:153](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L153) (`opcache_reset`)
+- **Lowering**: [`src/opcache_prelude/build.rs`:158](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L158) (`opcache_reset`)
 - **Function symbol**: `opcache_reset()`
 
 

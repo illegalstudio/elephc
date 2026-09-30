@@ -62,7 +62,9 @@
 //!   memory access by AAPCS64, and `sub sp, sp, #16` preserves that.
 
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET;
+use crate::codegen_support::sentinels::{
+    THROWABLE_CREATION_LINE_OFFSET, THROWABLE_TRACE_EXACT_OFFSET,
+};
 use crate::codegen_support::{abi, emit::Emitter};
 
 /// Byte length of `"Fatal error: Uncaught "`.
@@ -82,6 +84,12 @@ const UNCAUGHT_NEWLINE_LEN: i64 = 1;
 
 /// Byte length of the constant fallback message, kept in sync with `data::fixed`.
 const UNCAUGHT_FALLBACK_LEN: i64 = 32;
+
+/// Byte length of `"\nNext "`, the introducer php puts before every link after the first.
+const UNCAUGHT_NEXT_LEN: i64 = 6;
+
+/// Offset of a compact Throwable's `previous` slot — see `sentinels`, which lays the payload out.
+const THROWABLE_PREVIOUS_OFFSET: i64 = 40;
 
 /// PHP's process exit status for an uncaught exception.
 ///
@@ -111,11 +119,46 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
     emitter.instruction("cbz x9, __rt_uncaught_fallback");                      // no throwable published: keep the constant message rather than dereferencing null
 
+    // -- php reports the whole CHAIN, oldest first --
+    //
+    // `throw new X($m, 0, $previous)` is how a library says what it was doing when something
+    // underneath it failed, and php prints every link: the deepest one under `Fatal error:
+    // Uncaught`, each later one under `Next`, and the tail line only once at the end. elephc
+    // printed the OUTERMOST link and dropped the rest — the wrapper, without the failure it
+    // wrapped, which is the half that says what actually went wrong.
+    //
+    // The walk starts at the deepest `previous` and climbs back. A link's parent is found by
+    // walking down from the head again rather than by keeping a back-pointer: the chain is a
+    // handful of links, and the report runs once, at exit.
+    emitter.instruction("sub sp, sp, #32");                                     // frame: [0] = the link being printed, [8] = 0 while it is the first
+    emitter.instruction("stp x29, x30, [sp, #16]");
+    emitter.instruction("add x29, sp, #16");
+    emitter.instruction("mov x10, x9");
+    emitter.label("__rt_uncaught_deepest");
+    emitter.instruction(&format!("ldr x11, [x10, #{THROWABLE_PREVIOUS_OFFSET}]"));
+    emitter.instruction("cbz x11, __rt_uncaught_deepest_found");                // no previous: this link is the oldest
+    emitter.instruction("mov x10, x11");
+    emitter.instruction("b __rt_uncaught_deepest");
+    emitter.label("__rt_uncaught_deepest_found");
+    emitter.instruction("str x10, [sp, #0]");                                   // the oldest link is reported first
+    emitter.instruction("str xzr, [sp, #8]");                                   // and carries the `Fatal error: Uncaught` introducer
+
+    emitter.label("__rt_uncaught_block");
+    emitter.instruction("ldr x9, [sp, #8]");
+    emitter.instruction("cbnz x9, __rt_uncaught_next_word");                    // a later link is introduced by `Next`
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_prefix");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_PREFIX_LEN));          // "Fatal error: Uncaught "
     emitter.instruction("mov x0, #1");                                          // fd = stdout: PHP writes this report to stdout, not stderr (measured)
     emitter.syscall(4);
+    emitter.instruction("b __rt_uncaught_introduced");
+    emitter.label("__rt_uncaught_next_word");
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_next");
+    emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_NEXT_LEN));            // "\nNext "
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    emitter.label("__rt_uncaught_introduced");
 
+    emitter.instruction("ldr x9, [sp, #0]");                                    // the link being reported
     emitter.instruction("ldr x10, [x9]");                                       // runtime class id from the object header
     abi::emit_symbol_address(emitter, "x11", "_class_name_count");
     emitter.instruction("ldr x11, [x11]");                                      // number of named class ids
@@ -141,7 +184,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.syscall(4);
 
     emitter.label("__rt_uncaught_location");
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);               // re-read: x9 is AArch64's symbol scratch, so every symbol load below overwrites it
+    emitter.instruction("ldr x9, [sp, #0]");                                    // re-read: x9 is AArch64's symbol scratch, so every symbol load below overwrites it
     emitter.instruction(&format!(
         "ldr x10, [x9, #{}]",
         THROWABLE_CREATION_LINE_OFFSET
@@ -162,7 +205,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_COLON_LEN));           // ":"
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);               // reload: the file-length load above resolved its symbol through x9
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload: the file-length load above resolved its symbol through x9
     emitter.instruction(&format!(
         "ldr x0, [x9, #{}]",
         THROWABLE_CREATION_LINE_OFFSET
@@ -176,6 +219,40 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_NEWLINE_LEN));         // terminating newline
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
+
+    // -- the tail line belongs to the LAST link only --
+    // Every link gets its own `Stack trace:` block; a zero line is what tells the writer to stop
+    // before `  thrown in ...`, which php prints once, for the exception that was actually thrown.
+    emitter.instruction("ldr x9, [sp, #0]");                                    // the link just reported
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_value", 0);
+    emitter.instruction("ldr x9, [sp, #0]");                                    // the symbol load above resolved through x9
+    emitter.instruction("cmp x9, x10");
+    emitter.instruction("b.eq __rt_uncaught_last");                             // the thrown exception itself: print the tail and leave
+    emitter.instruction("mov x0, #0");                                          // an inner link has no tail of its own
+    emitter.instruction("ldr x9, [sp, #0]");                                    // the link just reported
+    emitter.instruction(&format!("ldr x1, [x9, #{THROWABLE_TRACE_EXACT_OFFSET}]")); // the proof its own construction site stamped
+    emitter.instruction("bl __rt_trace_write_block");                           // php's Stack trace: block, when the frame list is complete
+
+    // -- climb one link: the parent is whoever names this one as its previous --
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_value", 0);
+    emitter.instruction("ldr x11, [sp, #0]");                                   // the link just reported
+    emitter.label("__rt_uncaught_parent");
+    emitter.instruction(&format!("ldr x12, [x10, #{THROWABLE_PREVIOUS_OFFSET}]"));
+    emitter.instruction("cmp x12, x11");
+    emitter.instruction("b.eq __rt_uncaught_parent_found");
+    emitter.instruction("mov x10, x12");
+    emitter.instruction("b __rt_uncaught_parent");
+    emitter.label("__rt_uncaught_parent_found");
+    emitter.instruction("str x10, [sp, #0]");                                   // report the wrapper next
+    emitter.instruction("mov x9, #1");
+    emitter.instruction("str x9, [sp, #8]");                                    // under `Next`
+    emitter.instruction("b __rt_uncaught_block");
+
+    emitter.label("__rt_uncaught_last");
+    emitter.instruction("ldr x9, [sp, #0]");
+    emitter.instruction(&format!("ldr x0, [x9, #{}]", THROWABLE_CREATION_LINE_OFFSET));
+    emitter.instruction(&format!("ldr x1, [x9, #{THROWABLE_TRACE_EXACT_OFFSET}]")); // the proof its own construction site stamped
+    emitter.instruction("bl __rt_trace_write_block");                           // php's Stack trace: block, when the frame list is complete
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.syscall(1);
 
@@ -203,12 +280,40 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r8, r8");                                         // no throwable published: keep the constant message rather than dereferencing null
     emitter.instruction("jz __rt_uncaught_fallback");                           // use the constant fallback when no throwable is published
 
+    // See the AArch64 counterpart: php reports the whole CHAIN, oldest first, and elephc printed
+    // only the outermost link. `rsp` is already 16-aligned here, so the two slots keep it aligned.
+    emitter.instruction("sub rsp, 32");                                         // [rsp] = the link being printed, [rsp+8] = 0 while it is the first
+    emitter.instruction("mov r9, r8");
+    emitter.label("__rt_uncaught_deepest");
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [r9 + {THROWABLE_PREVIOUS_OFFSET}]"
+    ));
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_uncaught_deepest_found");                      // no previous: this link is the oldest
+    emitter.instruction("mov r9, r10");
+    emitter.instruction("jmp __rt_uncaught_deepest");
+    emitter.label("__rt_uncaught_deepest_found");
+    emitter.instruction("mov QWORD PTR [rsp], r9");                             // the oldest link is reported first
+    emitter.instruction("mov QWORD PTR [rsp + 8], 0");                          // and carries the `Fatal error: Uncaught` introducer
+
+    emitter.label("__rt_uncaught_block");
+    emitter.instruction("cmp QWORD PTR [rsp + 8], 0");
+    emitter.instruction("jne __rt_uncaught_next_word");                         // a later link is introduced by `Next`
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_prefix");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_PREFIX_LEN));          // "Fatal error: Uncaught "
     emitter.instruction("mov edi, 1");                                          // fd = stdout: PHP writes this report to stdout, not stderr (measured)
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // write the fatal-error prefix to stderr
+    emitter.instruction("jmp __rt_uncaught_introduced");
+    emitter.label("__rt_uncaught_next_word");
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_next");
+    emitter.instruction(&format!("mov edx, {}", UNCAUGHT_NEXT_LEN));            // "\nNext "
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // introduce a later link in the chain
+    emitter.label("__rt_uncaught_introduced");
 
+    emitter.instruction("mov r8, QWORD PTR [rsp]");                             // the link being reported
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // runtime class id from the object header
     abi::emit_symbol_address(emitter, "r10", "_class_name_count");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // number of named class ids
@@ -239,7 +344,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("syscall");                                             // write the throwable message to stderr
 
     emitter.label("__rt_uncaught_location");
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);               // re-read for symmetry with the AArch64 arm, whose x9 scratch makes this mandatory
+    emitter.instruction("mov r8, QWORD PTR [rsp]");                             // re-read for symmetry with the AArch64 arm, whose x9 scratch makes this mandatory
     emitter.instruction(&format!(
         "mov r9, QWORD PTR [r8 + {}]",
         THROWABLE_CREATION_LINE_OFFSET
@@ -265,7 +370,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the filename/line separator to stderr
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);               // reload for symmetry: SysV `syscall` spares r8/r9, but the AArch64 arm cannot
+    emitter.instruction("mov r8, QWORD PTR [rsp]");                             // reload for symmetry: SysV `syscall` spares r8/r9, but the AArch64 arm cannot
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r8 + {}]",
         THROWABLE_CREATION_LINE_OFFSET
@@ -282,6 +387,42 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // terminate the uncaught-exception diagnostic with a newline
+
+    // See the AArch64 counterpart: every link gets its own trace block, and a zero line is what
+    // stops the writer before `  thrown in ...`, which php prints once for the thrown exception.
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0);
+    emitter.instruction("cmp QWORD PTR [rsp], r10");
+    emitter.instruction("je __rt_uncaught_last");                               // the thrown exception itself: print the tail and leave
+    emitter.instruction("xor edi, edi");                                        // an inner link has no tail of its own
+    emitter.instruction("mov r8, QWORD PTR [rsp]");                             // the link just reported
+    emitter.instruction(&format!(
+        "mov rsi, QWORD PTR [r8 + {THROWABLE_TRACE_EXACT_OFFSET}]"
+    ));                                                                         // the proof its own construction site stamped
+    emitter.instruction("call __rt_trace_write_block");                         // php's Stack trace: block, when the frame list is complete
+
+    // -- climb one link: the parent is whoever names this one as its previous --
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0);
+    emitter.instruction("mov r8, QWORD PTR [rsp]");                             // the link just reported
+    emitter.label("__rt_uncaught_parent");
+    emitter.instruction(&format!(
+        "mov r9, QWORD PTR [r10 + {THROWABLE_PREVIOUS_OFFSET}]"
+    ));
+    emitter.instruction("cmp r9, r8");
+    emitter.instruction("je __rt_uncaught_parent_found");
+    emitter.instruction("mov r10, r9");
+    emitter.instruction("jmp __rt_uncaught_parent");
+    emitter.label("__rt_uncaught_parent_found");
+    emitter.instruction("mov QWORD PTR [rsp], r10");                            // report the wrapper next
+    emitter.instruction("mov QWORD PTR [rsp + 8], 1");                          // under `Next`
+    emitter.instruction("jmp __rt_uncaught_block");
+
+    emitter.label("__rt_uncaught_last");
+    emitter.instruction("mov r10, QWORD PTR [rsp]");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r10 + {}]", THROWABLE_CREATION_LINE_OFFSET));
+    emitter.instruction(&format!(
+        "mov rsi, QWORD PTR [r10 + {THROWABLE_TRACE_EXACT_OFFSET}]"
+    ));                                                                         // the proof its own construction site stamped
+    emitter.instruction("call __rt_trace_write_block");                         // php's Stack trace: block, when the frame list is complete
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // exit the process after reporting the throwable

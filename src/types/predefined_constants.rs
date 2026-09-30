@@ -29,13 +29,24 @@ use crate::types::PhpType;
 pub(crate) fn registered_constants() -> impl Iterator<Item = &'static ConstantContract> {
     constants()
         .iter()
-        .filter(|constant| is_registered_route(constant.route))
+        .filter(|constant| is_registered_route(constant.route) && exists_in_profile(constant))
 }
 
 /// Returns whether `name` (case-sensitive, optional leading `\`) is a constant the compiler
 /// registers for every program.
 pub(crate) fn is_registered_constant(name: &str) -> bool {
-    lookup_constant(name).is_some_and(|constant| is_registered_route(constant.route))
+    lookup_constant(name)
+        .is_some_and(|constant| is_registered_route(constant.route) && exists_in_profile(constant))
+}
+
+/// Whether the selected php profile has `constant` at all.
+///
+/// php adds constants in minor releases: `ARRAY_FILTER_USE_VALUE` arrives with 8.6, and under
+/// 8.5 `defined("ARRAY_FILTER_USE_VALUE")` is false.
+fn exists_in_profile(constant: &ConstantContract) -> bool {
+    constant.since.map_or(true, |since| {
+        crate::codegen::compile_php_version() >= since
+    })
 }
 
 /// Returns the fixed integer value of a predefined constant, if `name` is one.

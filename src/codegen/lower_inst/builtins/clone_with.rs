@@ -106,6 +106,7 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
         inst.operands.get(2).copied(),
         &eval_handled,
     )?;
+    emit_builtin_uncloneable_guard(ctx, object)?;
     emit_boxed_shallow_clone(ctx, object)?;
     emit_uncloneable_guard(ctx);
 
@@ -618,6 +619,85 @@ fn emit_enum_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
         );
     }
     ctx.emitter.label(&cloneable);
+}
+
+/// Refuses an instance of a builtin class php declares uncloneable, before anything is copied.
+///
+/// `NOT_CLONEABLE_BUILTIN_CLASSES` names them: every `Throwable`, the Reflection family, the SPL
+/// iterator wrappers, `Directory`, the PDO/mysqli/GD/XML handles, and any subclass of one. The
+/// decision reads the SOURCE object's class id, so the message names the class the program holds,
+/// as php does. It must precede the copy: a shallow copy shares the original's native handles,
+/// and releasing it on the way out would run the destructor that closes them — the XML classes'
+/// own `__clone` detaches those handles first for exactly this reason.
+fn emit_builtin_uncloneable_guard(ctx: &mut FunctionContext<'_>, object: ValueId) -> Result<()> {
+    let mut refused = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(name, _)| !ctx.module.enum_infos.contains_key(*name))
+        .filter(|(name, _)| class_refuses_clone(name, &ctx.module.class_infos))
+        .map(|(name, info)| (info.class_id as i64, name.clone()))
+        .collect::<Vec<_>>();
+    if refused.is_empty() {
+        return Ok(());
+    }
+    refused.sort_by(|left, right| left.0.cmp(&right.0));
+    let object_ty = ctx.value_php_type(object)?.codegen_repr();
+    ctx.load_value_to_result(object)?;
+    let payload_reg = match object_ty {
+        PhpType::Object(_) => abi::int_result_reg(ctx.emitter),
+        _ => {
+            // The argument guard has already thrown for anything that is not an object.
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target)
+        }
+    };
+    let class_id_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
+    abi::emit_load_from_address(ctx.emitter, &class_id_reg, payload_reg, 0);
+    let cloneable = ctx.next_label("clone_builtin_cloneable");
+    let labels = refused
+        .iter()
+        .map(|(class_id, _)| ctx.next_label(&format!("clone_refused_{class_id}")))
+        .collect::<Vec<_>>();
+    for ((class_id, _), label) in refused.iter().zip(labels.iter()) {
+        emit_branch_if_reg_equals_immediate(ctx, &class_id_reg, *class_id, label);
+    }
+    abi::emit_jump(ctx.emitter, &cloneable);
+    for ((_, name), label) in refused.iter().zip(labels.iter()) {
+        ctx.emitter.label(label);
+        super::super::exceptions::emit_error(
+            ctx,
+            &format!("Trying to clone an uncloneable object of class {name}"),
+        );
+    }
+    ctx.emitter.label(&cloneable);
+    Ok(())
+}
+
+/// Whether `class_name`, or an ancestor of it, is a builtin class php refuses to clone.
+///
+/// A listed name counts only when elephc itself declares the class (`is_internal`), so a user
+/// class that happens to be called `Directory` in a program without the dir prelude clones.
+fn class_refuses_clone(
+    class_name: &str,
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> bool {
+    let mut current = class_name.trim_start_matches('\\');
+    for _ in 0..=classes.len() {
+        let Some(info) = classes.get(current) else {
+            return false;
+        };
+        if info.is_internal
+            && crate::codegen_support::runtime::data::NOT_CLONEABLE_BUILTIN_CLASSES.contains(&current)
+        {
+            return true;
+        }
+        let Some(parent) = info.parent.as_deref() else {
+            return false;
+        };
+        current = parent.trim_start_matches('\\');
+    }
+    false
 }
 
 /// Dispatches `__clone()` by runtime class id, or does nothing when the class has no hook.

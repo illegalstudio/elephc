@@ -59,7 +59,7 @@ mod metadata_control;
 mod nested_append;
 mod return_coercions;
 mod repr_fixpoint;
-mod static_property_helpers;
+pub(crate) mod static_property_helpers;
 
 use statement_basics::*;
 use local_assignments::*;
@@ -81,7 +81,10 @@ use metadata_control::*;
 use return_coercions::*;
 use static_property_helpers::*;
 
-pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr};
+pub(crate) use control_exit::{
+    lower_throw_access_error, lower_throw_access_error_expr, lower_throw_builtin_with_message,
+};
+pub(crate) use statement_basics::output_value_can_warn;
 // Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel
 // for `__unset` that the write path needs for `__set`.
 pub(crate) use instance_property_writes::{

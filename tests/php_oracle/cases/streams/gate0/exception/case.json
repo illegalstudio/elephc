@@ -1,0 +1,12 @@
+{
+  "argv": [],
+  "dependencies": [],
+  "description": "Captures an uncaught exception in raw mode and structured exception telemetry.",
+  "environment": {},
+  "id": "exception",
+  "ini": {},
+  "normalization": [],
+  "schema_version": 1,
+  "stdin": null,
+  "timeout_seconds": 10
+}

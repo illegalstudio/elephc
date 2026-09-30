@@ -336,7 +336,7 @@ Supported methods:
 | `RegexIterator` | `__construct(Iterator $iterator, string $pattern, int $mode = RegexIterator::MATCH, int $flags = 0, int $pregFlags = 0)`, `accept()`, `current()`, `key()`, `getMode()`, `setMode()`, `getFlags()`, `setFlags()`, `getRegex()`, `getPregFlags()`, `setPregFlags()` |
 | `CachingIterator` | `__construct(Iterator $iterator, int $flags = CachingIterator::CALL_TOSTRING)`, `rewind()`, `valid()`, `next()`, `current()`, `key()`, `hasNext()`, `__toString()`, `getFlags()`, `setFlags(int $flags): void`, `getCache()`, `count()`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()` |
 | `SplFileInfo` | `__construct(string $filename)`, `__toString()`, `getPath()`, `getFilename()`, `getExtension()`, `getBasename(string $suffix = "")`, `getPathname()`, stat/predicate helpers, `getFileInfo()`, `getPathInfo()`, `openFile()`, `setFileClass()`, `setInfoClass()` |
-| `SplFileObject` | `__construct(string $filename, string $mode = "r", bool $useIncludePath = false, mixed $context = null)`, line iterator methods, `eof()`, `fgets()`, `fgetc()`, `fread()`, `fwrite()`, `fseek()`, `ftell()`, `fstat()`, CSV-control helpers, `hasChildren()`, `getChildren()` |
+| `SplFileObject` | `__construct(string $filename, string $mode = "r", bool $useIncludePath = false, mixed $context = null)`, line iterator methods, `eof()`, `fgets()`, `getCurrentLine()` (its alias), `fscanf(string $format)`, `fgetc()`, `fread()`, `fwrite()`, `fseek()`, `ftell()`, `fstat()`, CSV-control helpers, `hasChildren()`, `getChildren()` |
 | `SplTempFileObject` | `__construct(int $maxMemory = 2097152)`, plus inherited `SplFileObject` methods |
 | `DirectoryIterator` | `__construct(string $directory)`, `current()`, `key()`, `next()`, `rewind()`, `seek(int $offset): void`, `valid()`, `isDot()`, plus inherited `SplFileInfo` methods |
 | `FilesystemIterator` | `__construct(string $directory, int $flags = FilesystemIterator::SKIP_DOTS)`, `current()`, `key()`, `getFlags()`, `setFlags(int $flags): void`, plus inherited directory iteration |
@@ -532,8 +532,25 @@ class extends `SplFileInfo` or `SplFileObject` as required.
 `SplFileObject` snapshots file contents into line storage with `file()` for
 iteration, uses a live stream for byte-position methods such as `fread()`,
 `fwrite()`, `fseek()`, `ftell()`, and `ftruncate()`, reloads line storage after
-stream writes, supports basic CSV splitting, and exposes
+stream writes, and exposes
 `SplFileObject::DROP_NEW_LINE`, `READ_AHEAD`, `SKIP_EMPTY`, and `READ_CSV`.
+Under `READ_CSV` the iteration yields CSV *records*, not lines: enclosures,
+delimiters inside them, and newlines inside a quoted field are honored, so one
+record may span several lines and still count as a single key. A line holding
+nothing but its terminator reads back as `[null]`, and — as in reference PHP —
+one final record comes after the last terminated line. `SKIP_EMPTY` turns that
+last record into `false` and, together with `DROP_NEW_LINE`, steps over blank
+records without renumbering the ones that follow. `fgetcsv()`, `fputcsv()`, and
+an omitted control argument all resolve against `setCsvControl()` state.
+`fscanf(string $format)` reads one line and scans it through the same engine as
+the free `fscanf()`, so a `%d` field comes back as an `int`; its line number
+advances on every read but the FIRST of a fresh object, which is what PHP does.
+Reading past the last line answers the empty string once — `key()` still
+advancing, `eof()` then true — and the call after that raises
+`RuntimeException: Cannot read from file <path>`, from `fgets()`,
+`getCurrentLine()` (its alias, which consumes the line rather than repeating it)
+and `fscanf()` alike. The by-reference `$vars` output form is refused at compile
+time, as it is for the free functions.
 `SplTempFileObject` exposes PHP-compatible logical stream names: negative
 `maxMemory` values report `php://memory`, while non-negative values report
 `php://temp/maxmemory:N`. Contents stay in memory until the configured

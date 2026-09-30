@@ -50,7 +50,7 @@ pub fn emit_grapheme_strrev(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_grapheme_prev_utf8");                          // decode the previous UTF-8 scalar before scan_end
     emitter.instruction("cbz x6, __rt_grapheme_strrev_fail");                   // malformed UTF-8 makes grapheme_strrev() return false
     emitter.instruction("mov x12, x4");                                         // cluster_start begins at the last decoded scalar
-    emitter.instruction("mov x16, x5");                                         // current first scalar drives backward cluster extension rules
+    emitter.instruction("mov x15, x5");                                         // current first scalar (x15, not x16: IP0 can be clobbered by a linker veneer on the bl below)
 
     // -- extend over combining marks, emoji modifiers, and ZWJ sequences --
     emitter.label("__rt_grapheme_cluster_extend");
@@ -59,22 +59,22 @@ pub fn emit_grapheme_strrev(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_grapheme_prev_utf8");                          // decode the scalar immediately before the tentative cluster
     emitter.instruction("cbz x6, __rt_grapheme_strrev_fail");                   // malformed UTF-8 makes grapheme_strrev() return false
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x17", 8205);
-    emitter.instruction("cmp x16, x17");                                        // is the current first scalar a zero-width joiner?
+    emitter.instruction("cmp x15, x17");                                        // is the current first scalar a zero-width joiner?
     emitter.instruction("b.eq __rt_grapheme_include_prev");                     // include the scalar before a ZWJ in the same grapheme cluster
     emitter.instruction("cmp x5, x17");                                         // is the previous scalar a zero-width joiner?
     emitter.instruction("b.eq __rt_grapheme_include_prev");                     // include the ZWJ so the following emoji/text unit stays joined
-    emit_extend_range_check(emitter, "x16", 0x0300, 0x036f);
-    emit_extend_range_check(emitter, "x16", 0x1ab0, 0x1aff);
-    emit_extend_range_check(emitter, "x16", 0x1dc0, 0x1dff);
-    emit_extend_range_check(emitter, "x16", 0x20d0, 0x20ff);
-    emit_extend_range_check(emitter, "x16", 0xfe00, 0xfe0f);
-    emit_extend_range_check(emitter, "x16", 0xfe20, 0xfe2f);
-    emit_extend_range_check(emitter, "x16", 0x1f3fb, 0x1f3ff);
+    emit_extend_range_check(emitter, "x15", 0x0300, 0x036f);
+    emit_extend_range_check(emitter, "x15", 0x1ab0, 0x1aff);
+    emit_extend_range_check(emitter, "x15", 0x1dc0, 0x1dff);
+    emit_extend_range_check(emitter, "x15", 0x20d0, 0x20ff);
+    emit_extend_range_check(emitter, "x15", 0xfe00, 0xfe0f);
+    emit_extend_range_check(emitter, "x15", 0xfe20, 0xfe2f);
+    emit_extend_range_check(emitter, "x15", 0x1f3fb, 0x1f3ff);
     emitter.instruction("b __rt_grapheme_cluster_copy");                        // no left extension rule matched, so copy the current cluster
 
     emitter.label("__rt_grapheme_include_prev");
     emitter.instruction("mov x12, x4");                                         // extend the cluster start to include the previous scalar
-    emitter.instruction("mov x16, x5");                                         // make the included scalar the new first scalar for continued checks
+    emitter.instruction("mov x15, x5");                                         // make the included scalar the new first scalar for continued checks
     emitter.instruction("b __rt_grapheme_cluster_extend");                      // keep extending while additional left-side rules apply
 
     // -- copy the chosen cluster byte range forward into the destination --

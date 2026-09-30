@@ -160,7 +160,13 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     if let Some(value) = eval_target_dependent_constant(name) {
         return Some(value);
     }
-    let constant = elephc_builtin_contract::lookup_constant(name)?;
+    let Some(constant) = elephc_builtin_contract::lookup_constant(name) else {
+        // Names the compiler declares from its own tables but the shared catalog does not carry
+        // yet (`SEEK_*`, `SCANDIR_SORT_*`, `ZLIB_ENCODING_*`, `PHP_OUTPUT_HANDLER_*`). Without this
+        // `eval('fseek($h, 0, SEEK_SET);')` was a runtime fatal where php prints nothing.
+        return elephc_builtin_contract::php_constants::int_constant(name)
+            .map(EvalPredefinedConstant::Int);
+    };
     if !matches!(
         elephc_builtin_contract::eval_constant_support(constant),
         elephc_builtin_contract::BackendSupport::Implemented(_)
@@ -253,6 +259,56 @@ pub(super) fn eval_magic_const(
         EvalMagicConst::Class => values.string(context.current_magic_class().unwrap_or("")),
         EvalMagicConst::Namespace => values.string(""),
         EvalMagicConst::Trait => values.string(context.current_magic_trait().unwrap_or("")),
+    }
+}
+
+#[cfg(test)]
+mod predefined_constant_tests {
+    use super::*;
+
+    #[test]
+    /// Every predefined int constant the compiler declares resolves inside `eval()`.
+    ///
+    /// This is the property that was false: the interpreter answered a runtime fatal for 149 of
+    /// them, so `eval('fopen($p, "r"); fseek($h, 0, SEEK_SET);')` died where php did not.
+    fn every_declared_constant_resolves() {
+        let mut missing = Vec::new();
+        for table in elephc_builtin_contract::php_constants::ALL_INT_CONSTANT_TABLES {
+            for (name, _) in table.iter() {
+                if eval_predefined_constant_value(name).is_none() {
+                    missing.push(*name);
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "eval() cannot resolve {} declared constants: {missing:?}",
+            missing.len()
+        );
+    }
+
+    #[test]
+    /// Where the hand-written arms and the shared tables both answer, they answer the same.
+    ///
+    /// The table lookup runs after the arms, so an arm that disagreed would simply win and the
+    /// two engines would quietly hold different numbers for one php constant.
+    fn the_hand_written_arms_agree_with_the_tables() {
+        let mut disagreements = Vec::new();
+        for table in elephc_builtin_contract::php_constants::ALL_INT_CONSTANT_TABLES {
+            for (name, declared) in table.iter() {
+                if let Some(EvalPredefinedConstant::Int(resolved)) =
+                    eval_predefined_constant_value(name)
+                {
+                    if resolved != *declared {
+                        disagreements.push((*name, *declared, resolved));
+                    }
+                }
+            }
+        }
+        assert!(
+            disagreements.is_empty(),
+            "compiler and eval disagree on {disagreements:?}"
+        );
     }
 }
 

@@ -20,11 +20,18 @@
 //!      `1E-07`.
 //! - `NAN` is normalized to the unsigned spelling PHP prints; glibc renders a negative
 //!   quiet NaN as `-NAN`, which PHP never does.
+//! - Since PHP 8.5 the conversion is also a diagnostic: coercing a NAN to a string raises an
+//!   E_WARNING. Every PHP form that does so — `echo`, `(string)`, `strval()`, `implode()`,
+//!   concatenation, interpolation, `sprintf('%s')`, `print_r()`, the string builtins that take
+//!   a float — arrives here, so one probe at this entry covers the whole surface. The forms
+//!   php leaves SILENT (`var_dump`, `json_encode`, `number_format`, `sprintf('%f')`) each own
+//!   a different formatter and never reach this helper.
 //! - `__rt_ftoa_repr` answers `var_dump`'s `%.*H` at `serialize_precision = -1`: the
 //!   shortest decimal string that round-trips. The finite case is exactly
 //!   `__rt_json_ftoa` with an uppercase `E` marker, so this helper only owns the
 //!   `INF`/`-INF`/`NAN` spellings that `__rt_json_ftoa`'s caller normally handles.
 
+use super::nan_string_coercion_warning::emit_nan_string_coercion_probe;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Converts a double-precision float to a PHP-compatible byte string at `precision = 14`.
@@ -61,6 +68,12 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #80");                                     // allocate the variadic slot, snprintf scratch, and saved-register area
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
+
+    // -- PHP 8.5 reports a NAN coerced to string, once per conversion --
+    // The probe sits here rather than on the `NAN` text branch below: that branch keys off the
+    // byte snprintf produced, while the helper's sentinel guards need the raw bit pattern, and
+    // the float is still untouched at this point. The helper restores `d0`.
+    emit_nan_string_coercion_probe(emitter, "__rt_ftoa_no_nan");
 
     // -- call snprintf(scratch, 48, "%.14G", double) --
     emitter.instruction("add x0, sp, #8");                                      // snprintf destination = stack scratch buffer
@@ -174,6 +187,10 @@ fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // save the caller frame pointer before using stack locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the formatting helper
     emitter.instruction("sub rsp, 64");                                         // reserve aligned scratch space for the snprintf result
+
+    // -- PHP 8.5 reports a NAN coerced to string, once per conversion --
+    // See the AArch64 counterpart. The helper restores `xmm0`.
+    emit_nan_string_coercion_probe(emitter, "__rt_ftoa_no_nan_x");
 
     emitter.instruction("lea rdi, [rbp - 56]");                                 // snprintf destination = stack scratch buffer
     emitter.instruction("mov esi, 48");                                         // scratch buffer size limit

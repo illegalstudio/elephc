@@ -29,6 +29,14 @@ pub(crate) fn ensure_stream_resource(
     env: &TypeEnv,
 ) -> Result<(), CompileError> {
     let actual = checker.infer_type(arg, env)?;
+    // php does not refuse a null here: it raises a CATCHABLE `TypeError` when the call runs,
+    // which `try { … } catch (TypeError $e)` observes and which leaves the rest of the program
+    // compiled. Refusing it made an undefined `$h` — `while (fgetc($h) !== false)` — fail the
+    // whole file, and made the `try` php programmers write around it impossible to compile.
+    // The throw is emitted where the handle is loaded, so it carries php's own wording.
+    if matches!(actual, PhpType::Void) {
+        return Ok(());
+    }
     let expected = PhpType::stream_resource();
     if stream_arg_accepts(checker, &expected, &actual) {
         Ok(())
@@ -38,6 +46,24 @@ pub(crate) fn ensure_stream_resource(
             &format!("{}() expects resource, got {}", name, actual),
         ))
     }
+}
+
+/// Validates a stream-resource argument whose parameter is declared `?resource ... = null`.
+///
+/// `readdir()`, `rewinddir()` and `closedir()` accept an explicit `null` and read php's last
+/// opened directory stream instead, so a written `null` is legal where `ensure_stream_resource`
+/// would refuse it. Everything else is judged exactly as the required form.
+pub(crate) fn ensure_optional_stream_resource(
+    checker: &mut Checker,
+    name: &str,
+    arg: &Expr,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    // `PhpType::Void` IS elephc's `null`, so this is the written-`null` case and nothing else.
+    if matches!(checker.infer_type(arg, env)?, PhpType::Void) {
+        return Ok(());
+    }
+    ensure_stream_resource(checker, name, arg, env)
 }
 
 /// Checks whether `actual` can satisfy a stream resource expectation.

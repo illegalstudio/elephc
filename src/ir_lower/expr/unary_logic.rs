@@ -124,7 +124,15 @@ pub(super) fn lower_error_suppress(ctx: &mut LoweringContext<'_, '_>, inner: &Ex
 /// Lowers `print`.
 pub(super) fn lower_print(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    ctx.emit_void(Op::PrintValue, vec![value.value], None, Op::PrintValue.default_effects(), Some(expr.span));
+    // `print` renders through the same output path as `echo`, so it raises the same warnings —
+    // an array converted to `Array`, a NaN coerced to string — and, like `echo`, only publishes
+    // the ` in FILE on line N` tail when the instruction admits it may warn. Without the
+    // admission `print $a;` reported whatever line the PREVIOUS diagnostic had published.
+    let mut effects = Op::PrintValue.default_effects();
+    if crate::ir_lower::stmt::output_value_can_warn(value.ir_type) {
+        effects |= crate::ir::Effects::MAY_WARN;
+    }
+    ctx.emit_void(Op::PrintValue, vec![value.value], None, effects, Some(expr.span));
     lower_int_literal(ctx, 1, expr)
 }
 

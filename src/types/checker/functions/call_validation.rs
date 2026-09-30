@@ -159,15 +159,49 @@ impl Checker {
     }
 
     /// Returns true when an argument expression is an l-value supported by by-reference calls.
+    ///
+    /// `places_rewritable` says whether THIS call site's lowering can carry a non-local place.
+    /// `ir_lower::expr::ref_place_args` rewrites a FREE FUNCTION call — it reads the place into a
+    /// hidden temporary, calls with that, and writes the temporary back — and there is no such
+    /// rewrite for a method, a closure, or a `callable`. Accepting a property for those compiled
+    /// a call that RAN and dropped the write in silence: `$this->twiddle($box->data)` left the
+    /// property unchanged where php mutates it. The flag is what keeps the checker from
+    /// promising what one of its lowerings cannot deliver.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
         arg: &Expr,
         env: &TypeEnv,
+        places_rewritable: bool,
     ) -> Result<bool, CompileError> {
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
             ExprKind::ArrayAccess { array, .. } => {
                 self.is_addressable_ref_array_receiver(array, env)
+            }
+            // A PROPERTY is a writable place in php — `sort($obj->items)` and
+            // `bump($this->rows)` are ordinary code — and `ir_lower::expr::ref_place_args`
+            // lowers one by reading it into a hidden temporary, calling with that, and writing
+            // the temporary back. It can only do that for the storage it can read and write
+            // whole, so a property of any other type keeps the existing diagnostic rather than
+            // compiling into a write-back that never happens.
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => {
+                if !places_rewritable {
+                    return Ok(false);
+                }
+                let property_ty = self.infer_type(arg, env)?;
+                // A declared `array` property is php's packed-or-hash contract, a two-member union.
+                if property_ty.is_php_array() {
+                    return Ok(true);
+                }
+                Ok(matches!(
+                    property_ty.codegen_repr(),
+                    PhpType::Array(_)
+                        | PhpType::AssocArray { .. }
+                        | PhpType::Int
+                        | PhpType::Float
+                        | PhpType::Bool
+                        | PhpType::Str
+                ))
             }
             _ => Ok(false),
         }
@@ -210,7 +244,7 @@ impl Checker {
                 ),
             ));
         }
-        if !self.is_by_ref_argument_lvalue(storage_arg, caller_env)? {
+        if !self.is_by_ref_argument_lvalue(storage_arg, caller_env, false)? {
             return Err(CompileError::new(
                 storage_arg.span,
                 &format!(
@@ -502,6 +536,12 @@ impl Checker {
                 PhpType::AssocArray { key, value },
                 PhpType::Array(_) | PhpType::AssocArray { .. },
             ) if **key == PhpType::Mixed && **value == PhpType::Mixed => true,
+            // An EMPTY array literal is `array<never>` and is every array shape at once: php has
+            // one `[]`. `$h = []; fill_keyed($h);` with `function fill_keyed(array &$a)` whose
+            // body writes string keys re-types the parameter to a hash, and the call site would
+            // otherwise reject the very literal that started it. The lowering converts it with
+            // `Op::ArrayToHash`, which for an empty array moves nothing.
+            (PhpType::AssocArray { .. }, PhpType::Array(elem)) if **elem == PhpType::Never => true,
             (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Int, PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
@@ -789,7 +829,7 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
-                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !self.is_by_ref_argument_lvalue(arg, caller_env, false)? {
                         let param_name = sig
                             .params
                             .get(param_idx)

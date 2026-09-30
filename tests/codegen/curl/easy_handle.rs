@@ -457,11 +457,11 @@ fn unsupported_options_are_rejected_before_libcurl() {
     );
     for option in ["20200", "40291", "20312"] {
         assert!(
-            output.stderr.contains(&format!(
+            output.diagnostics.contains(&format!(
                 "Warning: curl_setopt(): Option {option} is not supported by this build"
             )),
-            "each rejected option must warn; stderr was: {}",
-            output.stderr
+            "each rejected option must warn; diagnostics were: {}",
+            output.diagnostics
         );
     }
 }

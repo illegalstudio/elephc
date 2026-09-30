@@ -142,10 +142,10 @@ echo ':', $after['user']['USER_ONE'], ':', count($after['user']);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "1:1:clean:2:8:stream:locked:1:2");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: define(): Constant already defined"),
         "expected duplicate seeded-constant warning, got stderr={}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -210,7 +210,7 @@ echo count($after['user']), ':', HEAP_LIST[1], ':', count($again['user']);
         out.stdout,
         "0:3:2:2:seeded;1:3:2:2:seeded;2:3:2:2:seeded;3:3:2:2:seeded;4:3:2:2:seeded;2:2:2",
         "stderr: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),

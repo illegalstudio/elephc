@@ -76,9 +76,9 @@ echo count($r), ":", $r[0], "\n";
     assert!(out.success, "program must exit successfully, stderr: {}", out.stderr);
     assert_eq!(out.stdout, "1:z\n");
     assert!(
-        out.stderr.contains("Undefined array key 5"),
+        out.diagnostics.contains("Undefined array key 5"),
         "the missed read must still warn like PHP, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -148,9 +148,9 @@ echo $r[0], $r[1], $r[2], ":", count($r), "\n";
     assert!(out.success, "program must exit successfully, stderr: {}", out.stderr);
     assert_eq!(out.stdout, "abz:3\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "a real-array append must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),

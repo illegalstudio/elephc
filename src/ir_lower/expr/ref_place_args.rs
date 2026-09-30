@@ -72,13 +72,12 @@ pub(super) fn lower_builtin_ref_place_call(
 ) -> Option<LoweredValue> {
     let canonical = name.as_str();
     let prefer_extension = source_prefers_extension_builtin(canonical);
-    if !prefer_extension
-        && (ctx.functions.contains_key(canonical) || ctx.extern_functions.contains_key(canonical))
-    {
-        // User-defined and extern callees own a separate by-reference machine that already
-        // rejects non-local arguments with a named diagnostic.
+    if !prefer_extension && ctx.extern_functions.contains_key(canonical) {
+        // An EXTERN (C ABI) callee takes a raw pointer, not a php reference cell, so the
+        // read/call/write-back rewrite has nothing to write back through.
         return None;
     }
+    let user_callee = !prefer_extension && ctx.functions.contains_key(canonical);
     let sig = call_signature(ctx, canonical, prefer_extension)?;
     let mb_variables = canonical.eq_ignore_ascii_case("mb_convert_variables");
     if !sig.ref_params.iter().any(|is_ref| *is_ref) {
@@ -118,7 +117,7 @@ pub(super) fn lower_builtin_ref_place_call(
                 is_candidate_place_shape(place)
             } else {
                 ref_param_binding(&sig, *index, arg).is_some_and(|(param_index, place)| {
-                    is_array_place(ctx, place, &sig.params[param_index].1)
+                    is_rewritable_place(ctx, place, &sig.params[param_index].1, user_callee)
                 })
             }
         })
@@ -289,12 +288,22 @@ fn ref_param_place<'a>(sig: &FunctionSig, index: usize, arg: &'a Expr) -> Option
     ref_param_binding(sig, index, arg).map(|(_, place)| place)
 }
 
-/// Returns whether a by-reference argument is a non-local place holding array storage.
+/// Returns whether a by-reference argument is a non-local place this rewrite can carry.
 ///
 /// Plain locals are excluded because the existing lowering already writes the separated array
-/// back to their frame slot. Scalar places are excluded so builtins that re-type their
-/// by-reference argument keep their current lowering and diagnostics.
-fn is_array_place(ctx: &LoweringContext<'_, '_>, arg: &Expr, param_type: &PhpType) -> bool {
+/// back to their frame slot.
+///
+/// A SCALAR place is carried only for a USER callee. A builtin may RE-TYPE its by-reference
+/// argument — `settype($obj->prop, "string")` is the whole point of that builtin — and a hidden
+/// temporary declared with the place's current scalar type cannot represent that. A user
+/// function's parameter carries a declared type instead, so the temporary and the write-back
+/// agree by construction: `function bump(int &$n)` writes an int back into an int property.
+fn is_rewritable_place(
+    ctx: &LoweringContext<'_, '_>,
+    arg: &Expr,
+    param_type: &PhpType,
+    user_callee: bool,
+) -> bool {
     if !is_candidate_place_shape(arg) {
         return false;
     }
@@ -302,7 +311,11 @@ fn is_array_place(ctx: &LoweringContext<'_, '_>, arg: &Expr, param_type: &PhpTyp
         php_type.is_php_array() || matches!(
             php_type.codegen_repr(),
             PhpType::Array(_) | PhpType::AssocArray { .. }
-        )
+        ) || (user_callee
+            && matches!(
+                php_type.codegen_repr(),
+                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+            ))
     }) {
         return true;
     }

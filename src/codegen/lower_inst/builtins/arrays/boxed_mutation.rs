@@ -54,7 +54,7 @@ pub(super) fn prepare_boxed_array_receiver(
     receiver.prepare_consuming_storeback(ctx, array)?;
     ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_array_cell_ensure_unique");
-    require_valid_array_result(ctx, name);
+    require_valid_array_result(ctx, array, name)?;
     ctx.store_result_value(array)?;
     receiver.store_back_after_consuming_split(ctx, array)
 }
@@ -130,7 +130,7 @@ pub(super) fn lower_boxed_array_key_sort(
     let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, arg)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
-    require_valid_array_result(ctx, name);
+    require_valid_array_result(ctx, array, name)?;
     // Promotion installs a unique hash in the cell. The sorter only relinks
     // entries, so the borrowed payload must not be split or released again.
     abi::emit_reg_move(ctx.emitter, arg, abi::int_result_reg(ctx.emitter));
@@ -156,8 +156,40 @@ pub(super) fn lower_boxed_array_key_sort(
     store_if_result(ctx, inst)
 }
 
+/// Sorts a boxed receiver by value, keeping every key with its value like php.
+///
+/// The same route as the key sorts: promotion installs a unique hash in the cell, and the
+/// value sorters (`__rt_hash_asort`, `__rt_hash_arsort`, `__rt_hash_natsort`,
+/// `__rt_hash_natcasesort`) only relink its entries, their stubs choosing mode and comparator.
+pub(super) fn lower_boxed_array_value_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    name: &str,
+    helper: &str,
+) -> Result<()> {
+    prepare_boxed_array_receiver(ctx, array, name)?;
+    let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
+    require_valid_array_result(ctx, array, name)?;
+    abi::emit_reg_move(ctx.emitter, arg, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, helper);
+    let result = if inst.result_php_type.codegen_repr() == crate::types::PhpType::Bool {
+        1
+    } else {
+        0x7fff_ffff_ffff_fffe
+    };
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), result);
+    store_if_result(ctx, inst)
+}
+
 /// Throws before consuming an invalid cell or payload returned by an array runtime helper.
-fn require_valid_array_result(ctx: &mut FunctionContext<'_>, name: &str) {
+/// Throws php's `TypeError` unless the cell helper answered a valid array cell.
+///
+/// The helper answers null for a receiver that holds no array; the receiver is reloaded then so
+/// the message can name the value php names (`..., false given`).
+fn require_valid_array_result(ctx: &mut FunctionContext<'_>, array: ValueId, name: &str) -> Result<()> {
     let valid = ctx.next_label("array_mutation_valid");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -168,8 +200,12 @@ fn require_valid_array_result(ctx: &mut FunctionContext<'_>, name: &str) {
             ctx.emitter.instruction(&format!("jnz {valid}"));                   // publish only a validated array cell
         }
     }
-    crate::codegen::lower_inst::exceptions::emit_type_error(
-        ctx, &format!("{name}(): Argument #1 ($array) must be of type array"),
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::values::emit_not_an_array_type_error(
+        ctx,
+        &format!("{name}(): Argument #1 ($array) must be of type array"),
     );
     ctx.emitter.label(&valid);
+    Ok(())
 }

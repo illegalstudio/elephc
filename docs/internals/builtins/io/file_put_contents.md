@@ -2,7 +2,7 @@
 title: "file_put_contents() - internals"
 description: "Compiler internals for file_put_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 319
+  order: 321
 ---
 
 ## `file_put_contents()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/file_put_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file_put_contents.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function file_put_contents(string $filename, string $data, int $flags = 0): int
+function file_put_contents(string $filename, mixed $data, int $flags = 0, mixed $context = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes 2–4 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

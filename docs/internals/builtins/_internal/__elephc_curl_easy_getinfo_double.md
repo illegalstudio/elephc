@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_getinfo_double() - internals"
 description: "Compiler internals for __elephc_curl_easy_getinfo_double(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1077
+  order: 1110
 ---
 
 ## `__elephc_curl_easy_getinfo_double()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_getinfo_double.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_getinfo_double.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

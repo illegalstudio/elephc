@@ -50,6 +50,8 @@ pub(crate) fn build_call_graph(display: &[(Vec<(String, Kind)>, u64)]) -> crate:
                 alloc_inclusive: 0,
                 alloc_exclusive: 0,
                 io_inclusive: 0,
+                stream_inclusive: 0,
+                stream_exclusive: 0,
                 io_exclusive: 0,
                 retained_inclusive: 0,
                 retained_exclusive: 0,
@@ -92,6 +94,9 @@ pub(crate) fn build_call_graph(display: &[(Vec<(String, Kind)>, u64)]) -> crate:
         edges,
         total: stats.grand,
         queries: Vec::new(),
+        // The probe never sees stream operations: their count note is emitted
+        // only by the exact instrumentation, so a sampled graph has none.
+        stream_ops: Vec::new(),
         lines: None,
         trace: None,
     }

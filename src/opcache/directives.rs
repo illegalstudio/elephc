@@ -638,8 +638,7 @@ fn ini_digit_value(byte: u8, radix: u32) -> Option<u32> {
 ///
 /// The returned diagnostic is the BODY only (`Invalid quantity …`); [`ini_override_warnings`]
 /// wraps it in the `Invalid "<directive>" setting.` envelope php-src prints around it.
-#[allow(dead_code)]
-fn parse_ini_quantity(raw: &str) -> (i64, Option<String>) {
+pub(crate) fn parse_ini_quantity(raw: &str) -> (i64, Option<String>) {
     let bytes = raw.as_bytes();
     // php-src returns 0 for an empty value before it looks at anything else.
     if bytes.is_empty() {

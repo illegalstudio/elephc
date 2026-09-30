@@ -56,15 +56,20 @@ pub(in crate::interpreter) fn eval_builtin_array_slice(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match args {
+        // php evaluates EVERY argument before the type check throws (measured: a side
+        // effect in `$offset` still runs when `$array` is `false`), so each arm checks
+        // only once its whole operand list is in hand.
         [array, offset] => {
             let array = eval_expr(array, context, scope, values)?;
             let offset = eval_expr(offset, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args("array_slice", &[array], context, values)?;
             eval_array_slice_result(array, offset, None, false, values)
         }
         [array, offset, length] => {
             let array = eval_expr(array, context, scope, values)?;
             let offset = eval_expr(offset, context, scope, values)?;
             let length = eval_expr(length, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args("array_slice", &[array], context, values)?;
             eval_array_slice_result(array, offset, Some(length), false, values)
         }
         [array, offset, length, preserve_keys] => {
@@ -72,6 +77,7 @@ pub(in crate::interpreter) fn eval_builtin_array_slice(
             let offset = eval_expr(offset, context, scope, values)?;
             let length = eval_expr(length, context, scope, values)?;
             let preserve_keys = eval_expr(preserve_keys, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args("array_slice", &[array], context, values)?;
             let preserve_keys = values.truthy(preserve_keys)?;
             eval_array_slice_result(array, offset, Some(length), preserve_keys, values)
         }

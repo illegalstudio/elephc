@@ -147,8 +147,15 @@ pub(super) fn lower_method_call(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
+    // php names `Class::method()` in an argument TypeError, and falls back to the bare method
+    // name when the receiver's class is not singular here.
+    let callee = singular_object_class(&ctx.builder.value_php_type(object.value))
+        .map(|(class_name, _)| {
+            format!("{}::{dispatch_method}", class_name.trim_start_matches('\\'))
+        })
+        .unwrap_or_else(|| dispatch_method.to_string());
     begin_call_argument_evaluation(ctx);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let arg_values = lower_args_with_signature_for(ctx, sig.as_ref(), args, Some(&callee));
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(

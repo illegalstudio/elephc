@@ -44,7 +44,7 @@ var_dump(mb_check_encoding(null));
     let out = compile_and_run_capture(source);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
-    assert_eq!(out.stderr.matches("Calling mb_check_encoding() without argument is deprecated").count(), 3);
+    assert_eq!(out.diagnostics.matches("Calling mb_check_encoding() without argument is deprecated").count(), 3);
 }
 
 /// Retains discarded substitution setters and reads their effects at each subsequent text call.

@@ -203,6 +203,27 @@ fn test_exit_code() {
     assert_eq!(out, "before");
 }
 
+/// `exit`/`die` given a STRING prints it and exits 0 — php's other form of the same construct.
+///
+/// MEASURED on `php -n` 8.5.6: `echo "before\n"; exit("bye\n");` writes both lines and answers
+/// status 0, while the INT form prints nothing and answers the status. elephc refused the string
+/// outright with `exit() argument must be integer`, which rejected fifteen tests of php-src's own
+/// streams corpus — every one of them the `fopen(...) or die("Cannot open ...")` idiom.
+#[test]
+fn test_exit_with_a_string_prints_it() {
+    let out = compile_and_run("<?php echo \"before|\"; die(\"bye\"); echo \"after\";");
+    assert_eq!(out, "before|bye");
+}
+
+/// The `or die("...")` idiom itself, which is how the corpus spells it.
+#[test]
+fn test_or_die_prints_its_message() {
+    let out = compile_and_run(
+        "<?php $h = @fopen(\"/nonexistent/dir/x.txt\", \"r\") or die(\"cannot open\"); echo \"unreached\";",
+    );
+    assert_eq!(out, "cannot open");
+}
+
 // --- $argc ---
 
 /// Compiles `<?php echo $argc;` and asserts stdout is `1` (test binary is run with no extra args).

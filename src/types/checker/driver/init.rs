@@ -44,12 +44,23 @@ impl Checker {
         for (name, _) in pcntl_int_constants(target) {
             constants.insert(name.to_string(), PhpType::Int);
         }
+        // The stream layer's own tables fill in what the shared catalog does not carry yet:
+        // `SEEK_*`, `SCANDIR_SORT_*`, ext-zlib's encodings and the output-handler flags.
+        for (name, _value) in elephc_builtin_contract::php_constants::ALL_INT_CONSTANT_TABLES
+            .iter()
+            .flat_map(|table| table.iter())
+        {
+            constants.entry((*name).to_string()).or_insert(PhpType::Int);
+        }
 
         Self {
             target,
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
+            unset_without_kill: HashSet::new(),
+            by_ref_widened_params: HashSet::new(),
+            resolving_by_ref_widening: HashSet::new(),
             resolving_functions: HashSet::new(),
             functions_called_directly: HashSet::new(),
             constants,
@@ -58,6 +69,7 @@ impl Checker {
             callable_param_names: HashSet::new(),
             callable_param_sigs: HashMap::new(),
             strict_types: false,
+            tolerated_null_receiver: false,
             internal_callback_binding: false,
             param_specialization_seen: HashSet::new(),
             interface_method_boxed_params: HashSet::new(),
@@ -110,6 +122,7 @@ impl Checker {
             current_loop_storage_scope: "main".to_string(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
+            fallthrough_return_types: HashMap::new(),
             clone_override_destinations: Default::default(),
             property_unset_destinations: Default::default(),
             scope_dynamic_mutation_targets: Default::default(),
@@ -120,6 +133,9 @@ impl Checker {
             first_class_builtin_call_types: HashMap::new(),
             loop_storage_types: HashMap::new(),
             string_incdec_locals: HashSet::new(),
+            widened_scalar_locals: HashSet::new(),
+            tentative_return_deprecations: Vec::new(),
+            link_time_fatal: None,
             strict_locals: false,
             local_conditional_depth: 0,
             local_binding_depth: HashMap::new(),

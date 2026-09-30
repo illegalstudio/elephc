@@ -84,11 +84,15 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             array,
             index,
             value,
-        } => StmtKind::ArrayAssign {
-            array,
-            index: fold_expr(index),
-            value: fold_expr(value),
-        },
+        } => {
+            let index = fold_expr(index);
+            let value = fold_expr(value);
+            // `$GLOBALS["name"] = …` writes the global that name stands for.
+            match crate::globals_superglobal::write_target(&array, &index) {
+                Some(name) => StmtKind::Assign { name, value },
+                None => StmtKind::ArrayAssign { array, index, value },
+            }
+        }
         StmtKind::NestedArrayAssign { target, value } => StmtKind::NestedArrayAssign {
             target: fold_expr(target),
             value: fold_expr(value),
@@ -182,10 +186,24 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             return_type,
             body,
         } => {
-            let body = super::super::target_guards::fold_callable_body(
+            // `$GLOBALS["name"]` in a function body needs its `global` beside it, because a bare
+            // `$name` there is a LOCAL; see `globals_superglobal`.
+            let param_names: Vec<String> =
+                params.iter().map(|(name, ..)| name.clone()).collect();
+            let by_ref_names: Vec<String> = params
+                .iter()
+                .filter(|(_, _, _, by_ref)| *by_ref)
+                .map(|(name, _, _, _)| name.clone())
+                .collect();
+            let body = crate::globals_superglobal::fold_function_body(
+                &param_names,
                 body,
-                params.iter().filter(|(_, _, _, by_ref)| *by_ref)
-                    .map(|(name, _, _, _)| name.as_str()),
+                |body| {
+                    super::super::target_guards::fold_callable_body(
+                        body,
+                        by_ref_names.iter().map(String::as_str),
+                    )
+                },
             );
             StmtKind::FunctionDecl {
                 by_ref_return,

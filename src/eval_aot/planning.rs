@@ -21,6 +21,54 @@ pub(crate) fn parse_literal_fragment(fragment: &str, strict_php: bool) -> Option
     crate::parser::parse_with_mode(&tokens, source_mode).ok()
 }
 
+/// Returns the line INSIDE a literal eval fragment where the parser gave up, or `None`.
+///
+/// php closes an `eval()` parse error with `: eval()'d code on line N`, and the bridge cannot
+/// supply that N: `__elephc_eval_execute` answers a status code and nothing else, so a line
+/// would have to widen the versioned result struct. For a fragment that is a compile-time
+/// literal the compiler can ask a parser itself — its OWN parser, not php's, so the two agree
+/// on WHERE a fragment stops making sense far more often than on WHY.
+///
+/// The `<?php ` prefix carries no newline, so a line in the prefixed source is the same line in
+/// the fragment.
+///
+/// One correction is applied to what the parser answers. It reports the line of the failing
+/// TOKEN; php reports an unterminated fragment against the END OF INPUT, which is a different
+/// line whenever the fragment ends with a newline. Measured on `php -n` 8.5.6,
+/// `eval("$a = 1;\n$b = 2;\n1 +\n")` is `on line 4` — the empty fourth line — while the last
+/// token sits on line 3. So an error at the last token, which is the shape php words as
+/// `unexpected end of file`, is moved to the end of input; an error anywhere earlier is a real
+/// token position and stays where the parser put it.
+pub(crate) fn literal_fragment_parse_error_line(fragment: &str, strict_php: bool) -> Option<u32> {
+    let source = format!("<?php {}", fragment);
+    let tokens = match crate::lexer::tokenize(&source) {
+        Ok(tokens) => tokens,
+        Err(error) => return Some(error.span.line),
+    };
+    let source_mode = if strict_php {
+        crate::source::SourceMode::Php
+    } else {
+        crate::source::SourceMode::Lfc
+    };
+    let line = crate::parser::parse_with_mode(&tokens, source_mode)
+        .err()?
+        .span
+        .line;
+    let last_code_line = tokens
+        .iter()
+        .rev()
+        .find(|(token, _)| !matches!(token, crate::lexer::Token::Eof))
+        .map(|(_, metadata)| metadata.span.line);
+    if last_code_line == Some(line) {
+        // The lexer's own `Eof` token already sits at end of input, trailing newline included.
+        return tokens
+            .last()
+            .map(|(_, metadata)| metadata.span.line)
+            .or(Some(line));
+    }
+    Some(line)
+}
+
 /// Parses a literal eval fragment and applies call-site magic-constant metadata when available.
 pub(crate) fn parse_literal_fragment_with_source_path(
     fragment: &str,

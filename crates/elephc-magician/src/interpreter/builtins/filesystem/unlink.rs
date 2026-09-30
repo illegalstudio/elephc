@@ -35,21 +35,29 @@ pub(in crate::interpreter) fn eval_unlink_declared_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [filename] => eval_unlink_result(*filename, context, values),
+        [filename] | [filename, _] => eval_unlink_result(*filename, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 
-/// Evaluates PHP `unlink($filename)` over one eval expression.
+/// Evaluates PHP `unlink($filename, $context)` over eval expressions.
+///
+/// php's signature is `unlink($filename, $context = null)`; the trailing context is accepted and
+/// ignored, matching the compiled backend.
 pub(in crate::interpreter) fn eval_builtin_unlink(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [filename] = args else {
-        return Err(EvalStatus::RuntimeFatal);
+    let (filename, rest) = match args {
+        [filename] => (filename, &args[1..1]),
+        [filename, rest @ ..] if rest.len() == 1 => (filename, rest),
+        _ => return Err(EvalStatus::RuntimeFatal),
     };
+    for arg in rest {
+        eval_expr(arg, context, scope, values)?;
+    }
     let filename = eval_expr(filename, context, scope, values)?;
     eval_unlink_result(filename, context, values)
 }

@@ -2,7 +2,7 @@
 title: "cairo_close_path() - internals"
 description: "Compiler internals for cairo_close_path(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 401
+  order: 427
 ---
 
 ## `cairo_close_path()` - internals

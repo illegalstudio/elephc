@@ -5,7 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates that the class argument names a declared class and returns `Bool`.
+//! - `check` returns `Bool` and validates nothing: php THROWS on a class it cannot find, and a
+//!   throw is catchable, so the refusal belongs to run time. The lowering emits it.
 //! - Arguments are pre-inferred by the registry before the hook runs; the hook does NOT
 //!   re-infer them.
 
@@ -21,16 +22,13 @@ builtin! {
     ),
 }
 
-/// Validates the class argument names a declared class and returns `Bool`.
+/// Returns `Bool`, without asking whether the class exists.
 ///
-/// Arguments are pre-inferred by the registry; this hook validates the class
-/// registration using the shared `validate_registered_stream_class` helper.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    crate::builtins::io::stream_support::validate_registered_stream_class(
-        cx.checker,
-        cx.name,
-        &cx.args[1],
-        cx.span,
-    )?;
+/// A class nobody declared is a run-time `TypeError` in php, not a compile error: MEASURED on
+/// `php -n` 8.5.6, `stream_wrapper_register("gw", "NoSuchClass")` throws
+/// `Argument #2 ($class) must be a valid class name, NoSuchClass given`. A throw is CATCHABLE,
+/// so a program that wraps the call in `try`/`catch` is valid php — and refusing it here made
+/// that program uncompilable. `lower_stream_wrapper_register` raises it instead.
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Bool)
 }

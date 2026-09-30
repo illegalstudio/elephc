@@ -361,24 +361,13 @@ pub fn parse_for(
     let init = parse_for_clause(tokens, pos, &Token::Semicolon, "Expected ';' after for clauses", span)?;
     expect_semicolon(tokens, pos)?;
 
-    let condition = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
-        Some(parse_expr(tokens, pos)?)
-    } else {
-        None
-    };
-    // PHP allows a comma list in the CONDITION too, evaluating every expression and taking
-    // the last one's value as the loop test. elephc's AST has no sequence expression, and
-    // the condition re-runs every iteration so the leading expressions cannot be hoisted
-    // into the init clause — supporting it needs a new expression node rather than a
-    // re-spelling. Say that, instead of letting the comma fall through to a bare
-    // "Expected ';'" that names neither the construct nor the limitation.
-    if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Comma)) {
-        return Err(CompileError::new(
-            tokens[*pos].1.span,
-            "A comma-separated list is not supported in a for CONDITION (the init and \
-             update clauses do support one); rewrite the leading expressions into the loop \
-             body or the update clause",
-        ));
+    let mut conditions: Vec<Expr> = Vec::new();
+    if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
+        conditions.push(parse_expr(tokens, pos)?);
+        while *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+            *pos += 1;
+            conditions.push(parse_expr(tokens, pos)?);
+        }
     }
     expect_semicolon(tokens, pos)?;
 
@@ -387,15 +376,58 @@ pub fn parse_for(
 
     let body = parse_control_body(tokens, pos, &Token::EndFor, "endfor")?;
 
-    Ok(Stmt::new(
+    // A condition list evaluates EVERY expression on every test and the LAST one decides. The
+    // `For` node holds a single condition, so the leading expressions are hoisted to the two
+    // places the test is reached from: before the loop, and at the end of the update clause,
+    // which is also where `continue` lands. The initializer moves out with them — the first test
+    // happens AFTER it, so `for ($p = 0; $p++, $p < 4; )` must not increment an unset `$p`.
+    let condition = conditions.pop();
+    let leading: Vec<Stmt> = conditions
+        .into_iter()
+        .map(|expr| {
+            let expr_span = expr.span;
+            Stmt::new(StmtKind::ExprStmt(expr), expr_span)
+        })
+        .collect();
+    let update = if leading.is_empty() {
+        update
+    } else {
+        let mut update_list: Vec<Stmt> = update.into_iter().map(|update| *update).collect();
+        update_list.extend(leading.iter().cloned());
+        Some(Box::new(one_stmt(update_list, span)))
+    };
+    if leading.is_empty() {
+        return Ok(Stmt::new(
+            StmtKind::For {
+                init,
+                condition,
+                update,
+                body,
+            },
+            span,
+        ));
+    }
+    let mut hoisted: Vec<Stmt> = init.into_iter().map(|init| *init).collect();
+    hoisted.extend(leading);
+    hoisted.push(Stmt::new(
         StmtKind::For {
-            init,
+            init: None,
             condition,
             update,
             body,
         },
         span,
-    ))
+    ));
+    Ok(Stmt::new(StmtKind::Synthetic(hoisted), span))
+}
+
+/// Collapses a `for` clause's statement list: one statement stays itself, several become a
+/// synthetic block so the existing single-statement `For` shape is preserved for the common case.
+fn one_stmt(mut stmts: Vec<Stmt>, span: Span) -> Stmt {
+    if stmts.len() == 1 {
+        return stmts.pop().expect("length checked");
+    }
+    Stmt::new(StmtKind::Synthetic(stmts), span)
 }
 
 /// Parse: try { stmts } (catch (TypeA|TypeB $e) { stmts })+ (finally { stmts })?

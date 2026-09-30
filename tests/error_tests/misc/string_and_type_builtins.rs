@@ -209,7 +209,7 @@ expect_builtin_arity_error!(
 expect_builtin_arity_error!(
     test_error_str_ireplace_wrong_args,
     "<?php str_ireplace(\"a\", \"b\");",
-    "str_ireplace() takes exactly 3 arguments"
+    "str_ireplace() takes 3 or 4 arguments"
 );
 
 // Tests str_split() arity error when called with too many arguments (accepts 1 or 2).

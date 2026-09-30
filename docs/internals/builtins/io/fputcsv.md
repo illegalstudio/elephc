@@ -2,7 +2,7 @@
 title: "fputcsv() - internals"
 description: "Compiler internals for fputcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 324
+  order: 326
 ---
 
 ## `fputcsv()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fputcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fputcsv.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): int
+function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = "\n"): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–4 arguments (2 optional).
+- **Arity**: takes 2–6 arguments (4 optional).
 
 ## Eval interpreter (magician)
 

@@ -28,7 +28,8 @@ builtin! {
 /// pre-validated by the registry. Returns `Ok(PhpType::Void)` on success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    // A parameter declared `array` is php's packed-or-hash contract, a two-member union.
+    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) && !ty.is_php_array() {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
     }
     Ok(PhpType::Void)

@@ -60,6 +60,7 @@ pub(in crate::interpreter) fn eval_builtin_array_pad(
     let array = eval_expr(array, context, scope, values)?;
     let length = eval_expr(length, context, scope, values)?;
     let value = eval_expr(value, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("array_pad", &[array], context, values)?;
     eval_array_pad_result(array, length, value, values)
 }
 

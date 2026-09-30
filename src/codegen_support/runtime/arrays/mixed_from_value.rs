@@ -51,6 +51,12 @@
 //!   - KIND 7 is a `CurlMultiHandle`, kind 8 a `CurlShareHandle`/`CurlSharePersistentHandle`
 //!     — the identical OBJECT-not-resource reasoning kind 6 documents, for the identical
 //!     `fopen()`-id-shift reason.
+//! - SINCE THE REGISTRY LANDED: for registry-owned stream kinds 1, 3, 4 and 9 the tag-9
+//!   arm also retains the opaque handle through `__rt_resource_retain`, making boxing the
+//!   ownership boundary shared by `fopen`, `opendir`, `popen`, stream contexts and every
+//!   later re-boxing. Legacy kind-0 resources keep only the display-id bind. Only a NEW
+//!   cell retains: an alias of an already-boxed incarnation shares the canonical cell the
+//!   resource inventory recorded, and that cell already holds its registry reference.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -124,11 +130,30 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload resource subtype for introspection filtering
     emitter.instruction("bl __rt_resource_inventory_register");                 // record this PHP id exactly once for get_resources
     emitter.instruction("str x0, [sp, #24]");                                   // keep the weak cell slot across allocation
-    emitter.instruction("cbz x0, __rt_mixed_from_value_alloc");                 // synthesized resources need no shared node
+    emitter.instruction("cbz x0, __rt_mixed_from_value_resource_owner");        // synthesized resources need no shared node
     emitter.instruction("ldr x0, [x0, #40]");                                   // resolve any already-boxed owner of this incarnation
-    emitter.instruction("cbz x0, __rt_mixed_from_value_alloc");                 // the first owner creates the canonical cell
+    emitter.instruction("cbz x0, __rt_mixed_from_value_resource_owner");        // the first owner creates the canonical cell
     emitter.instruction("bl __rt_incref");                                      // each alias owns one reference to the same cell
     emitter.instruction("b __rt_mixed_from_value_done");                        // never allocate an independently destructible alias
+
+    // A NEW cell is a new owner of a registry handle: the alias path above shares the canonical
+    // cell, which already holds its registry reference, so only this path retains.
+    emitter.label("__rt_mixed_from_value_resource_owner");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the resource kind after display-id binding
+    emitter.instruction("cmp x9, #1");                                          // kind 1 = registry-owned native stream
+    emitter.instruction("b.eq __rt_mixed_from_value_resource_retain");          // the Mixed box becomes another owner of the stream handle
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = registry-owned process pipe
+    emitter.instruction("b.eq __rt_mixed_from_value_resource_retain");          // retain the popen stream handle for the Mixed owner
+    emitter.instruction("cmp x9, #4");                                          // kind 4 = registry-owned directory stream
+    emitter.instruction("b.eq __rt_mixed_from_value_resource_retain");          // retain the directory stream handle for the Mixed owner
+    emitter.instruction("cmp x9, #9");                                          // kind 9 = registry-owned stream context
+    emitter.instruction("b.eq __rt_mixed_from_value_resource_retain");          // retain the context handle for the Mixed owner
+    emitter.instruction("b __rt_mixed_from_value_alloc");                       // legacy resource kinds remain outside the stream registry for now
+
+    emitter.label("__rt_mixed_from_value_resource_retain");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // pass the opaque resource handle saved before display-id binding
+    emitter.instruction("bl __rt_resource_retain");                             // retain the registry entry for ownership by the new Mixed cell
+    emitter.instruction("b __rt_mixed_from_value_alloc");                       // allocate the box after the registry retain succeeds
 
     emitter.label("__rt_mixed_from_value_null_container");
     emitter.instruction("mov x9, #8");                                          // runtime tag 8 is the canonical boxed PHP null
@@ -204,8 +229,8 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain nested mixed cells before storing them inside the parent mixed cell
     emitter.instruction("cmp rax, 10");                                         // detect callable descriptors that participate in callable ownership
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain callable descriptors before storing them inside the mixed cell
-    emitter.instruction("cmp rax, 9");                                          // detect PHP resources, which carry a displayed id rather than ownership
-    emitter.instruction("je __rt_mixed_from_value_resource");                   // resources need a display id bound before they can be shown
+    emitter.instruction("cmp rax, 9");                                          // detect PHP resources, which carry registry or legacy native handles
+    emitter.instruction("je __rt_mixed_from_value_resource");                   // resources bind display identity and registry ownership as applicable
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // scalars can be boxed directly without additional ownership work
 
     emitter.label("__rt_mixed_from_value_resource");
@@ -227,12 +252,30 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_resource_inventory_register");               // record this PHP id exactly once for get_resources
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // keep the weak cell slot across allocation
     emitter.instruction("test rax, rax");                                       // synthesized resources have no inventory node
-    emitter.instruction("jz __rt_mixed_from_value_alloc");                      // box synthesized resources normally
+    emitter.instruction("jz __rt_mixed_from_value_resource_owner_x86");         // box synthesized resources normally
     emitter.instruction("mov rax, QWORD PTR [rax + 40]");                       // resolve any already-boxed owner of this incarnation
     emitter.instruction("test rax, rax");                                       // the first owner creates the canonical cell
-    emitter.instruction("jz __rt_mixed_from_value_alloc");                      // allocate only when no owner exists yet
+    emitter.instruction("jz __rt_mixed_from_value_resource_owner_x86");         // allocate only when no owner exists yet
     emitter.instruction("call __rt_incref");                                    // each alias owns one reference to the same cell
     emitter.instruction("jmp __rt_mixed_from_value_done");                      // never allocate an independently destructible alias
+
+    // See the AArch64 arm: only a NEW cell retains its registry handle.
+    emitter.label("__rt_mixed_from_value_resource_owner_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the resource kind after display-id binding
+    emitter.instruction("cmp r10, 1");                                          // kind 1 = registry-owned native stream
+    emitter.instruction("je __rt_mixed_from_value_resource_retain_x86");        // the Mixed box becomes another owner of the stream handle
+    emitter.instruction("cmp r10, 3");                                          // kind 3 = registry-owned process pipe
+    emitter.instruction("je __rt_mixed_from_value_resource_retain_x86");        // retain the popen stream handle for the Mixed owner
+    emitter.instruction("cmp r10, 4");                                          // kind 4 = registry-owned directory stream
+    emitter.instruction("je __rt_mixed_from_value_resource_retain_x86");        // retain the directory stream handle for the Mixed owner
+    emitter.instruction("cmp r10, 9");                                          // kind 9 = registry-owned stream context
+    emitter.instruction("je __rt_mixed_from_value_resource_retain_x86");        // retain the context handle for the Mixed owner
+    emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // legacy resource kinds remain outside the stream registry for now
+
+    emitter.label("__rt_mixed_from_value_resource_retain_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the opaque resource handle saved before display-id binding
+    emitter.instruction("call __rt_resource_retain");                           // retain the registry entry for ownership by the new Mixed cell
+    emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // allocate the box after the registry retain succeeds
 
     emitter.label("__rt_mixed_from_value_null_container");
     emitter.instruction("mov QWORD PTR [rbp - 8], 8");                          // replace the container-shaped tag with canonical Mixed null

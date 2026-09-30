@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/mkdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/mkdir.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function mkdir(string $directory, int $permissions = 511, bool $recursive = false): bool
+function mkdir(string $directory, int $permissions = 511, bool $recursive = false, mixed $context = null): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–3 arguments (2 optional).
+- **Arity**: takes 1–4 arguments (3 optional).
 
 ## Eval interpreter (magician)
 

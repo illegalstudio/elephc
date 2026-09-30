@@ -168,7 +168,57 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_https_open_fail");                           // negative handle means TLS connect failed
     emitter.instruction("str x0, [sp, #0]");                                    // save the TLS session handle
 
+    // -- ssl.peer_fingerprint: pin the peer's leaf certificate.
+    //    php checks this AFTER the handshake, from the certificate the peer
+    //    actually presented, so it runs here rather than in the connect ladder —
+    //    which also keeps it composable with every connect variant above.
+    //    A missing bridge slot fails CLOSED: a pin that cannot be checked must
+    //    never look like a pin that matched. --
+    emitter.instruction("sub sp, sp, #16");                                     // string-lookup out slots: [sp+0]=ptr, [sp+8]=len
+    emitter.instruction("str xzr, [sp, #0]");                                   // out ptr default
+    emitter.instruction("str xzr, [sp, #8]");                                   // out len default
+    abi::emit_symbol_address(emitter, "x0", "_ssl_key_str");
+    emitter.instruction("mov x1, #3");                                          // strlen("ssl")
+    abi::emit_symbol_address(emitter, "x2", "_ssl_peer_fingerprint_key_str");
+    emitter.instruction("mov x3, #16");                                         // strlen("peer_fingerprint")
+    emitter.instruction("mov x4, sp");                                          // out ptr slot
+    emitter.instruction("add x5, sp, #8");                                      // out len slot
+    emitter.instruction("bl __rt_get_string_context_option");                   // 1 = the option was set
+    emitter.instruction("cbz x0, __rt_https_open_no_pin_aarch64");              // no pin configured
+    abi::emit_symbol_address(emitter, "x9", "_elephc_tls_peer_fingerprint_matches_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // the fingerprint checker address
+    emitter.instruction("cbz x9, __rt_https_open_pin_failed_aarch64");          // no bridge: fail closed
+    emitter.instruction("ldr x0, [sp, #16]");                                   // TLS handle (the frame shifted by 16)
+    emitter.instruction("ldr x1, [sp, #0]");                                    // expected fingerprint pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // expected fingerprint length
+    emitter.instruction("blr x9");                                              // 1 = the peer's leaf certificate matches
+    // The checker returns an `i32`, so only w0 is architecturally defined; a
+    // 64-bit compare would be reading whatever the callee left in the top half.
+    emitter.instruction("cmp w0, #0");                                          // did the pin match?
+    emitter.instruction("b.ne __rt_https_open_no_pin_aarch64");                 // matched: carry on with the request
+    emitter.label("__rt_https_open_pin_failed_aarch64");
+    abi::emit_symbol_address(emitter, "x1", "_diag_peer_fingerprint_mismatch");
+    emitter.instruction(&format!(
+        "mov x2, #{}",
+        super::PEER_FINGERPRINT_MISMATCH_LINE.len()
+    ));                                                                         // the mismatch line's byte count
+    emitter.instruction("bl __rt_diag_warning");                                // stderr, and `@` suppresses it
+    emitter.instruction("ldr x0, [sp, #16]");                                   // TLS handle for the close
+    abi::emit_symbol_address(emitter, "x9", "_elephc_tls_close_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the elephc_tls_close entry pointer
+    emitter.instruction("cbz x9, __rt_https_open_pin_closed_aarch64");          // nothing to close without the bridge
+    emitter.instruction("blr x9");                                              // drop the unpinned session
+    emitter.label("__rt_https_open_pin_closed_aarch64");
+    emitter.instruction("add sp, sp, #16");                                     // discard the string-lookup out slots
+    emitter.instruction("b __rt_https_open_fail");                              // report the failed open
+    emitter.label("__rt_https_open_no_pin_aarch64");
+    emitter.instruction("add sp, sp, #16");                                     // discard the string-lookup out slots
+
     // -- elephc_tls_write(handle, req_ptr, req_len) --
+    // The handle is reloaded rather than carried in x0: the pin check above is a
+    // pair of calls, and the write used to rely on the connect's return value
+    // still being live in x0.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // TLS handle for the write
     emitter.instruction("ldr x1, [sp, #8]");                                    // request pointer for the TLS write
     emitter.instruction("ldr x2, [sp, #16]");                                   // request length for the TLS write
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_write_fn");
@@ -403,7 +453,50 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_https_open_fail_x86");                         // negative handle means TLS connect failed
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the TLS session handle
 
+    // -- ssl.peer_fingerprint: see the AArch64 counterpart. php checks the pin
+    //    AFTER the handshake, against the certificate the peer actually
+    //    presented, so it runs here and composes with every connect variant.
+    //    A missing bridge slot fails CLOSED. --
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // reset out ptr
+    emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // reset out len
+    abi::emit_symbol_address(emitter, "rdi", "_ssl_key_str");                   // load runtime data address
+    emitter.instruction("mov rsi, 3");                                          // strlen("ssl")
+    abi::emit_symbol_address(emitter, "rdx", "_ssl_peer_fingerprint_key_str");  // load runtime data address
+    emitter.instruction("mov rcx, 16");                                         // strlen("peer_fingerprint")
+    emitter.instruction("lea r8, [rbp - 80]");                                  // out_ptr_addr
+    emitter.instruction("lea r9, [rbp - 88]");                                  // out_len_addr
+    emitter.instruction("call __rt_get_string_context_option");                 // rax = 1 on hit
+    emitter.instruction("test rax, rax");                                       // was a pin configured?
+    emitter.instruction("jz __rt_https_open_no_pin_x");                         // no pin configured
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_peer_fingerprint_matches_fn", 0);
+    emitter.instruction("test r9, r9");                                         // is the bridge present?
+    emitter.instruction("jz __rt_https_open_pin_failed_x");                     // no bridge: fail closed
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg 0 = TLS handle
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // arg 1 = expected fingerprint pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 88]");                       // arg 2 = expected fingerprint length
+    emitter.instruction("call r9");                                             // 1 = the peer's leaf certificate matches
+    emitter.instruction("test eax, eax");                                       // did the pin match?
+    emitter.instruction("jnz __rt_https_open_no_pin_x");                        // matched: carry on with the request
+    emitter.label("__rt_https_open_pin_failed_x");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_peer_fingerprint_mismatch"); // load runtime data address
+    emitter.instruction(&format!(
+        "mov rsi, {}",
+        super::PEER_FINGERPRINT_MISMATCH_LINE.len()
+    ));                                                                         // the mismatch line's byte count
+    emitter.instruction("call __rt_diag_warning");                              // stderr, and `@` suppresses it
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_close_fn", 0);     // load the elephc_tls_close entry pointer
+    emitter.instruction("test r9, r9");                                         // is the bridge present?
+    emitter.instruction("jz __rt_https_open_fail_x86");                         // nothing to close without the bridge
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg 0 = TLS handle for the close
+    emitter.instruction("call r9");                                             // drop the unpinned session
+    emitter.instruction("jmp __rt_https_open_fail_x86");                        // report the failed open
+    emitter.label("__rt_https_open_no_pin_x");
+
     // -- elephc_tls_write(handle, req_ptr, req_len) --
+    // The handle is reloaded rather than carried in rax: the pin check above is a
+    // pair of calls, and the write used to rely on the connect's return value
+    // still being live.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // TLS handle for the write
     emitter.instruction("mov rdi, rax");                                        // arg 0 = TLS handle for the write
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // arg 1 = request pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // arg 2 = request length

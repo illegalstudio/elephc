@@ -294,6 +294,7 @@ read(null);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// A mixed chain (nullsafe `?->` then regular `->`) that hits a real null at a non-nullsafe hop
@@ -324,8 +325,12 @@ echo $root?->branch->leaf->name ?? "fallback";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
+    // The two sides of the merge asserted OPPOSITE things here: upstream that the warning IS
+    // raised, this branch that `??` suppresses it. The suppression is what `php -n` 8.5.6 does
+    // for this exact program — it prints `fallback` and raises nothing — and it is what the test
+    // is named for.
     assert_eq!(
-        out.stderr, "",
+        out.diagnostics, "",
         "`??` must suppress the mid-chain property-on-null warning"
     );
 }
@@ -358,6 +363,7 @@ read(null);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies mixed chain with non-null base but null mid-hop (Branch->leaf is
@@ -417,6 +423,7 @@ echo $root->branch?->leaf->name ?? "fallback";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies nullsafe (?->) skips array index expression evaluation when
@@ -443,6 +450,7 @@ read(null);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies nullsafe (?->) skips callable invocation argument evaluation when
@@ -473,6 +481,7 @@ read(null);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies nullsafe (?->) calls the loaded callable and evaluates arguments
@@ -503,6 +512,7 @@ read(new Root());
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "noisy|21");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// A `?C`-typed receiver represents as a boxed `Mixed`, which `Op::PropInitialized` used to be

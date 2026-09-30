@@ -2,7 +2,7 @@
 title: "imagecolorclosestalpha() - internals"
 description: "Compiler internals for imagecolorclosestalpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 468
+  order: 494
 ---
 
 ## `imagecolorclosestalpha()` - internals

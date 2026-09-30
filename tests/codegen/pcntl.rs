@@ -1693,11 +1693,11 @@ fn test_pcntl_eval_scalar_status_and_exec_failure() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "exited|29|false|2|nullable");
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "Warning: pcntl_exec(): Error has occurred: (errno 2) No such file or directory"
         ),
         "unexpected stderr: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 

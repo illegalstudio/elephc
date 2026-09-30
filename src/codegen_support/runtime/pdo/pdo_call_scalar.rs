@@ -61,7 +61,10 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 // at runtime.
 const _: () = assert!(TRY_HANDLER_DIAG_DEPTH_OFFSET == 16);
 const _: () = assert!(TRY_HANDLER_JMP_BUF_OFFSET == 24);
-const _: () = assert!(TRY_HANDLER_SLOT_SIZE == 224);
+// 256, not the 224 this record used to need: the handler parks FOUR suppression depths
+// (`TRY_HANDLER_SAVED_DEPTHS`) rather than the diagnostic one alone. The offsets asserted
+// above are the layout contract; the total is a consequence of that list's length.
+const _: () = assert!(TRY_HANDLER_SLOT_SIZE == 256);
 
 /// Emits `__rt_pdo_call_scalar(descriptor, argv, argc, out)`.
 ///

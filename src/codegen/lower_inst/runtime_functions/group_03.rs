@@ -106,9 +106,6 @@ pub(super) fn lower(
         RuntimeFnId::Fread => Some({
             crate::codegen::lower_inst::builtins::io::lower_fread(ctx, inst)
         }),
-        RuntimeFnId::Fscanf => Some({
-            crate::codegen::lower_inst::builtins::io::lower_fscanf(ctx, inst)
-        }),
         RuntimeFnId::Fseek => Some({
             crate::codegen::lower_inst::builtins::io::lower_fseek(ctx, inst)
         }),

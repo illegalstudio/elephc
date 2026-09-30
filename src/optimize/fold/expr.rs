@@ -59,10 +59,22 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
 
 /// Folds default expressions and block body in a class method declaration.
 pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
-    let body = super::super::target_guards::fold_callable_body(
+    let param_names: Vec<String> = method.params.iter().map(|(name, ..)| name.clone()).collect();
+    let by_ref_names: Vec<String> = method
+        .params
+        .iter()
+        .filter(|(_, _, _, by_ref)| *by_ref)
+        .map(|(name, _, _, _)| name.clone())
+        .collect();
+    let body = crate::globals_superglobal::fold_function_body(
+        &param_names,
         method.body,
-        method.params.iter().filter(|(_, _, _, by_ref)| *by_ref)
-            .map(|(name, _, _, _)| name.as_str()),
+        |body| {
+            super::super::target_guards::fold_callable_body(
+                body,
+                by_ref_names.iter().map(String::as_str),
+            )
+        },
     );
     ClassMethod {
         name: method.name,
@@ -268,10 +280,15 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::ArrayAccess { array, index } => {
             let array = fold_expr(*array);
             let index = fold_expr(*index);
-            try_fold_array_access(&array, &index).unwrap_or_else(|| ExprKind::ArrayAccess {
-                array: Box::new(array),
-                index: Box::new(index),
-            })
+            // `$GLOBALS["name"]` IS the global variable it names; see `globals_superglobal`.
+            if let Some(name) = crate::globals_superglobal::read_target(&array, &index) {
+                ExprKind::Variable(name)
+            } else {
+                try_fold_array_access(&array, &index).unwrap_or_else(|| ExprKind::ArrayAccess {
+                    array: Box::new(array),
+                    index: Box::new(index),
+                })
+            }
         }
         ExprKind::Ternary {
             condition,
@@ -317,12 +334,18 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             capture_refs,
             by_ref_return,
         } => {
-            let body = super::super::target_guards::fold_callable_body(
-                body,
-                params.iter().filter(|(_, _, _, by_ref)| *by_ref)
-                    .map(|(name, _, _, _)| name.as_str())
-                    .chain(capture_refs.iter().map(String::as_str)),
-            );
+            let by_ref_names: Vec<String> = params
+                .iter()
+                .filter(|(_, _, _, by_ref)| *by_ref)
+                .map(|(name, _, _, _)| name.clone())
+                .chain(capture_refs.iter().cloned())
+                .collect();
+            let body = crate::globals_superglobal::fold_closure_body(body, |body| {
+                super::super::target_guards::fold_callable_body(
+                    body,
+                    by_ref_names.iter().map(String::as_str),
+                )
+            });
             ExprKind::Closure {
                 params: fold_params(params),
                 variadic,

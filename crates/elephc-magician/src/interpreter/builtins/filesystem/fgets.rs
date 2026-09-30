@@ -34,28 +34,58 @@ pub(in crate::interpreter) fn eval_fgets_declared_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [stream] => eval_fgets_result(*stream, context, values),
+        [stream] => eval_fgets_result(*stream, None, context, values),
+        [stream, length] => {
+            let bound = eval_fgets_length_bound(*length, values)?;
+            eval_fgets_result(*stream, bound, context, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 
-/// Evaluates PHP `fgets($stream)` over one eval expression.
+/// Evaluates PHP `fgets($stream, $length?)` over its eval expressions.
 pub(in crate::interpreter) fn eval_builtin_fgets(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [stream] = args else {
-        return Err(EvalStatus::RuntimeFatal);
+    let (stream, length) = match args {
+        [stream] => (stream, None),
+        [stream, length] => (stream, Some(length)),
+        _ => return Err(EvalStatus::RuntimeFatal),
     };
     let stream = eval_expr(stream, context, scope, values)?;
-    eval_fgets_result(stream, context, values)
+    let bound = match length {
+        None => None,
+        Some(length) => {
+            let length = eval_expr(length, context, scope, values)?;
+            eval_fgets_length_bound(length, values)?
+        }
+    };
+    eval_fgets_result(stream, bound, context, values)
+}
+
+/// Converts PHP's `$length` into the byte bound `read_line` takes.
+///
+/// PHP reads at most `$length - 1` bytes. A non-positive `$length` is a `ValueError` there;
+/// the eval interpreter reports it as a runtime fatal, which is how it surfaces other
+/// argument-value rejections.
+fn eval_fgets_length_bound(
+    length: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<usize>, EvalStatus> {
+    let length = eval_int_value(length, values)?;
+    if length < 1 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(Some((length - 1) as usize))
 }
 
 /// Reads one newline-terminated string from a materialized stream resource.
 pub(in crate::interpreter) fn eval_fgets_result(
     stream: RuntimeCellHandle,
+    bound: Option<usize>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -65,7 +95,7 @@ pub(in crate::interpreter) fn eval_fgets_result(
     }
     match context
         .stream_resources_mut()
-        .read_line(id, usize::MAX, None, true, true)
+        .read_line(id, bound.unwrap_or(usize::MAX), None, true, true)
     {
         Some(bytes) if !bytes.is_empty() => values.string_bytes_value(&bytes),
         Some(_) => values.bool_value(false),

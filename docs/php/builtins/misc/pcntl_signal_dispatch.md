@@ -2,7 +2,7 @@
 title: "pcntl_signal_dispatch()"
 description: "Invokes callbacks for every signal currently pending in PCNTL's queue."
 sidebar:
-  order: 661
+  order: 687
 ---
 
 ## pcntl_signal_dispatch()

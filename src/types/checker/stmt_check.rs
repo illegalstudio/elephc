@@ -9,7 +9,7 @@
 //! Key details:
 //! - Statement environments must merge conservatively across branches, loops, throws, returns, and unreachable paths.
 
-mod assignments;
+pub(crate) mod assignments;
 mod control_flow;
 mod narrowing;
 

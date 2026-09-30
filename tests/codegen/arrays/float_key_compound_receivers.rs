@@ -32,7 +32,7 @@ echo $box->items[1], ':', $box->items[2], ':', $box->items[3];
 "#);
     assert_eq!(out.stdout, "60:15:20x:60");
     for value in ["1.9", "2.5", "3.7"] {
-        assert_eq!(float_key_deprecations(&out.stderr, value), 1, "{value}: {}", out.stderr);
+        assert_eq!(float_key_deprecations(&out.diagnostics, value), 1, "{value}: {}", out.diagnostics);
     }
 }
 
@@ -49,7 +49,7 @@ echo $box->items[1], ':', $box->items[2], ':', $box->items[3], ':', $box->items[
 "#);
     assert_eq!(out.stdout, "30:41:11:19:31:41");
     for value in ["1.9", "2.5", "3.7", "4.2"] {
-        assert_eq!(float_key_deprecations(&out.stderr, value), 1, "{value}: {}", out.stderr);
+        assert_eq!(float_key_deprecations(&out.diagnostics, value), 1, "{value}: {}", out.diagnostics);
     }
 }
 
@@ -65,7 +65,7 @@ echo $box->map[1], ':', $box->list[1];
 "#);
     assert_eq!(out.stdout, "11:21");
     for value in ["1.9", "1.5"] {
-        assert_eq!(float_key_deprecations(&out.stderr, value), 1, "{value}: {}", out.stderr);
+        assert_eq!(float_key_deprecations(&out.diagnostics, value), 1, "{value}: {}", out.diagnostics);
     }
 }
 
@@ -80,8 +80,8 @@ $box->items[3.5] ??= 8;
 echo $box->items[1], ':', $box->items[3];
 "#);
     assert_eq!(out.stdout, "10:8");
-    assert_eq!(float_key_deprecations(&out.stderr, "1.9"), 1, "{}", out.stderr);
-    assert_eq!(float_key_deprecations(&out.stderr, "3.5"), 2, "{}", out.stderr);
+    assert_eq!(float_key_deprecations(&out.diagnostics, "1.9"), 1, "{}", out.diagnostics);
+    assert_eq!(float_key_deprecations(&out.diagnostics, "3.5"), 2, "{}", out.diagnostics);
 }
 
 /// Static-property compound updates, including `++`/`--` statements, report each key once.
@@ -100,7 +100,7 @@ echo Box::$items[1], ':', Box::$items[2], ':', Box::$items[3], ':', Box::$items[
 "#);
     assert_eq!(out.stdout, "40:21:15:21:29:41:21");
     for value in ["1.9", "2.5", "3.7", "4.2", "1.5"] {
-        assert_eq!(float_key_deprecations(&out.stderr, value), 1, "{value}: {}", out.stderr);
+        assert_eq!(float_key_deprecations(&out.diagnostics, value), 1, "{value}: {}", out.diagnostics);
     }
 }
 
@@ -114,8 +114,8 @@ Box::$items[3.5] ??= 8;
 echo Box::$items[1], ':', Box::$items[3];
 "#);
     assert_eq!(out.stdout, "10:8");
-    assert_eq!(float_key_deprecations(&out.stderr, "1.9"), 1, "{}", out.stderr);
-    assert_eq!(float_key_deprecations(&out.stderr, "3.5"), 2, "{}", out.stderr);
+    assert_eq!(float_key_deprecations(&out.diagnostics, "1.9"), 1, "{}", out.diagnostics);
+    assert_eq!(float_key_deprecations(&out.diagnostics, "3.5"), 2, "{}", out.diagnostics);
 }
 
 /// Compound updates on a boxed `mixed` local array report each float key once.
@@ -131,7 +131,7 @@ echo $rows[1], ':', $rows[2], ':', $rows[3], ':', $rows[4];
 "#);
     assert_eq!(out.stdout, "30:40x:15:21:29:40x");
     for value in ["1.9", "2.5", "3.7", "4.2"] {
-        assert_eq!(float_key_deprecations(&out.stderr, value), 1, "{value}: {}", out.stderr);
+        assert_eq!(float_key_deprecations(&out.diagnostics, value), 1, "{value}: {}", out.diagnostics);
     }
 }
 
@@ -146,8 +146,8 @@ $rows[3.5] ??= 8;
 echo $rows[1], ':', $rows[3];
 "#);
     assert_eq!(out.stdout, "10:8");
-    assert_eq!(float_key_deprecations(&out.stderr, "1.9"), 1, "{}", out.stderr);
-    assert_eq!(float_key_deprecations(&out.stderr, "3.5"), 2, "{}", out.stderr);
+    assert_eq!(float_key_deprecations(&out.diagnostics, "1.9"), 1, "{}", out.diagnostics);
+    assert_eq!(float_key_deprecations(&out.diagnostics, "3.5"), 2, "{}", out.diagnostics);
 }
 
 /// A handler that changes the index variable cannot redirect a property or static update.

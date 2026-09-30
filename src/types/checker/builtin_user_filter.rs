@@ -51,7 +51,11 @@ pub(crate) fn inject_builtin_user_filter(
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,
-            properties: vec![params_property()],
+            properties: vec![
+                params_property(),
+                mixed_property("filtername"),
+                mixed_property("stream"),
+            ],
             methods: Vec::new(),
             attributes: Vec::new(),
             constants: Vec::new(),
@@ -61,6 +65,17 @@ pub(crate) fn inject_builtin_user_filter(
     );
 
     Ok(())
+}
+
+/// Builds one synthetic public `mixed $name = null` property.
+///
+/// PHP declares `$filtername` and `$stream` alongside `$params` on this class, and the
+/// manual's own filter example reads `$this->stream`. Without them a canonical filter
+/// did not compile at all: "Undefined property".
+fn mixed_property(name: &str) -> ClassProperty {
+    let mut property = params_property();
+    property.name = name.to_string();
+    property
 }
 
 /// Builds the synthetic public `mixed $params = null` property inherited by

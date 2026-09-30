@@ -12,6 +12,9 @@ use super::*;
 /// Dynamic eval expressions evaluated by the interpreter against runtime cells.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalExpr {
+    /// `@expr` — php's error-suppression operator: diagnostics raised while the inner
+    /// expression evaluates are silenced; its VALUE and any exception pass through.
+    ErrorSuppress(Box<EvalExpr>),
     Array(Vec<EvalArrayElement>),
     ArrayGet {
         array: Box<EvalExpr>,

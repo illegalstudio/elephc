@@ -78,7 +78,7 @@ fn emit_amr_box_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_amr_box_value_new");                           // scalar values need no retain
     emitter.instruction("cmp rdi, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_amr_box_value_new");                           // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // load the heap-backed value low word
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the heap-backed value low word where __rt_incref reads it on x86_64
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the wrapper hash
     emitter.instruction("jmp __rt_amr_box_value_new");                          // continue to wrapper allocation
     emitter.label("__rt_amr_box_value_persist");
@@ -402,7 +402,7 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_amr_str_new_set");                             // scalar values need no retain
     emitter.instruction("cmp rax, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_amr_str_new_set");                             // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // load the heap-backed value low word
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // load the heap-backed value low word where __rt_incref reads it on x86_64
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the result
     emitter.instruction("jmp __rt_amr_str_new_set");                            // continue to the insertion
     emitter.label("__rt_amr_str_new_persist");
@@ -429,7 +429,7 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_amr_int_set");                                 // scalar values need no retain
     emitter.instruction("cmp rax, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_amr_int_set");                                 // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // load the heap-backed value low word
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // load the heap-backed value low word where __rt_incref reads it on x86_64
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the result
     emitter.instruction("jmp __rt_amr_int_set");                                // continue to the insertion
     emitter.label("__rt_amr_int_persist");

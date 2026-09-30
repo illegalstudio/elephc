@@ -46,6 +46,7 @@ pub(in crate::interpreter) fn eval_builtin_array_unique(
         return Err(EvalStatus::RuntimeFatal);
     };
     let array = eval_expr(array, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("array_unique", &[array], context, values)?;
     eval_array_unique_result(array, values)
 }
 

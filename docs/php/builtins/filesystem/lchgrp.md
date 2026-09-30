@@ -8,14 +8,14 @@ sidebar:
 ## lchgrp()
 
 ```php
-function lchgrp(string $filename, string $group): bool
+function lchgrp(string $filename, string|int $group): bool
 ```
 
 Changes group ownership of a symlink.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$group` (`string`)
+- `$group` (`string|int`)
 
 **Returns**: `bool`
 

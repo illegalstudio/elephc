@@ -86,14 +86,22 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // never created answers it without an `Undefined property` warning. A receiver whose
         // class is only known at run time needs the runtime-name form to carry that mode.
         let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
-        let object = lower_expr(ctx, object);
-        if property_can_be_uninitialized(ctx, object.value, property) {
-            return lower_initialized_property_value(ctx, object, property, value);
-        }
-        if needs_probe {
-            return lower_property_probe_from_value(ctx, object, property, value);
-        }
-        return lower_property_get_from_value(ctx, object, property, Op::PropGet, value);
+        // The RECEIVER continues the chain `??` probes, so a name that was never assigned
+        // raises nothing there. The READ is inside the probe too: a null receiver answers
+        // null in silence, where the same read outside one raises
+        // `Attempt to read property "p" on null`. `$x->p ?? "d"` answers `"d"` and says
+        // nothing at all — MEASURED on `php -n` 8.5.6.
+        let object = lower_null_probe_chain(ctx, object);
+        ctx.enter_probe_spine();
+        let read = if property_can_be_uninitialized(ctx, object.value, property) {
+            lower_initialized_property_value(ctx, object, property, value)
+        } else if needs_probe {
+            lower_property_probe_from_value(ctx, object, property, value)
+        } else {
+            lower_property_get_from_value(ctx, object, property, Op::PropGet, value)
+        };
+        ctx.leave_probe_spine();
+        return read;
     }
     if let ExprKind::DynamicPropertyAccess { object, property } = &value.kind {
         return lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, value);
@@ -106,7 +114,9 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
             return lower_initialized_static_property_value(ctx, receiver, property, value);
         }
     }
-    lower_expr(ctx, value)
+    // The LEFT side of `??` is a probe, so a name that was never assigned raises nothing there.
+    // The right side is not, and keeps the ordinary read: `$x ?? $y` warns about `$y` alone.
+    lower_null_probe_chain(ctx, value)
 }
 
 /// Returns the materialized result type for a null-coalesce merge.

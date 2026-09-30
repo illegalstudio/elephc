@@ -1,0 +1,12 @@
+{
+  "argv": [],
+  "dependencies": [],
+  "description": "Captures a non-zero exit without assuming telemetry survives exit().",
+  "environment": {},
+  "id": "nonzero-exit",
+  "ini": {},
+  "normalization": [],
+  "schema_version": 1,
+  "stdin": null,
+  "timeout_seconds": 10
+}

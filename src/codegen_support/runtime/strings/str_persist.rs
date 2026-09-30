@@ -127,6 +127,9 @@ pub fn emit_str_persist(emitter: &mut Emitter, mbstring: bool) {
 /// Input:  rax=ptr, rdx=len — the x86_64 string result pair, not the SysV
 ///         argument registers; the body reads `rax` and every call site loads it.
 /// Output: rax=heap_ptr (owned), rdx=len (unchanged)
+///
+/// NOTE: the source pointer is consumed from `rax`, not `rdi` — this mirrors the
+/// x86_64 string result-pair convention used by the helpers that feed it.
 fn emit_str_persist_linux_x86_64(emitter: &mut Emitter, mbstring: bool) {
     emitter.blank();
     emitter.comment("--- runtime: str_persist ---");

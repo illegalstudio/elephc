@@ -423,7 +423,7 @@ echo $call_wrappers[10] . ":";
 $call_transports = call_user_func_array("stream_get_transports", []);
 echo $call_transports[11] . ":";
 $call_filters = call_user_func_array("stream_get_filters", []);
-echo $call_filters[13] . ":";
+echo $call_filters[8] . ":";
 echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_transports");
 return function_exists("stream_get_filters");"#,
     )
@@ -433,9 +433,12 @@ return function_exists("stream_get_filters");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
+    // Mirrors the native lists: php 8.5.6 puts `https`/`file`/`phar` at wrapper
+    // indices 0/5/10 and `convert.iconv.*`/`dechunk` at filter indices 2/8 over
+    // nine families. Previously `11:file:https:...:14:string.rot13:...`.
     assert_eq!(
         values.output,
-        "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:11"
+        "11:https:file:12:tcp:tlsv1.0:9:convert.iconv.*:phar:tlsv1.3:dechunk:11"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

@@ -31,6 +31,9 @@ pub(super) fn lower(
         RuntimeFnId::ElephcCloneOverrideReferenceGuard => Some({
             crate::codegen::lower_inst::builtins::clone_with::overrides::lower_reference_override_guard(ctx, inst)
         }),
+        RuntimeFnId::ElephcDeprecated => Some({
+            crate::codegen::lower_inst::builtins::diagnostics::lower_elephc_deprecated(ctx, inst)
+        }),
         RuntimeFnId::ElephcObjectIsEnum => Some({
             crate::codegen::lower_inst::builtins::object_props::lower_object_is_enum(ctx, inst)
         }),

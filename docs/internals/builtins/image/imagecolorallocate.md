@@ -2,7 +2,7 @@
 title: "imagecolorallocate() - internals"
 description: "Compiler internals for imagecolorallocate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 464
+  order: 490
 ---
 
 ## `imagecolorallocate()` - internals

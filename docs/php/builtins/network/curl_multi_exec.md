@@ -2,7 +2,7 @@
 title: "curl_multi_exec()"
 description: "Runs the sub-connections of the current cURL handle."
 sidebar:
-  order: 706
+  order: 732
 ---
 
 ## curl_multi_exec()

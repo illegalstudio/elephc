@@ -28,6 +28,7 @@ pub(in crate::interpreter) fn eval_key_declared_call(
         return Err(EvalStatus::RuntimeFatal);
     };
     let array = eval_expr(array, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("key", &[array], context, values)?;
     eval_key_result(array, context, values)
 }
 

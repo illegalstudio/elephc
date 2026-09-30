@@ -114,8 +114,10 @@ fn eval_file_get_contents_windowed_result(
                 values.bool_value(false)
             }
         },
-        Err(_) => {
-            values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
+        Err(reason) => {
+            values.warning(&format!(
+                "Warning: file_get_contents({path}): Failed to open stream: {reason}\n"
+            ))?;
             values.bool_value(false)
         }
     }
@@ -227,18 +229,23 @@ fn eval_file_get_contents_negative_length_error<T>(
 /// Reads bytes from supported direct path or stream-wrapper URLs.
 pub(in crate::interpreter) fn eval_read_path_or_wrapper_bytes(
     path: &str,
-) -> Result<Vec<u8>, ()> {
+) -> Result<Vec<u8>, String> {
+    // The error carries PHP's REASON rather than `()`. Discarding it forced every caller to
+    // print "Failed to open stream" with nothing after it, which is wrong for a file that
+    // exists and cannot be read; the wrapper paths have no errno behind them and keep the
+    // wording PHP uses when nothing described the failure.
+    let no_reason = || crate::stream_resources::EVAL_OPEN_DEFAULT_REASON.to_string();
     if stream_wrappers::is_data_stream(path) {
-        return stream_wrappers::decode_data_uri(path).ok_or(());
+        return stream_wrappers::decode_data_uri(path).ok_or_else(no_reason);
     }
     if stream_wrappers::is_phar_stream(path) {
-        return elephc_phar::extract_url_bytes(path.as_bytes()).ok_or(());
+        return elephc_phar::extract_url_bytes(path.as_bytes()).ok_or_else(no_reason);
     }
     if stream_wrappers::is_http_stream(path) {
-        return stream_wrappers::read_http_url(path).ok_or(());
+        return stream_wrappers::read_http_url(path).ok_or_else(no_reason);
     }
     let Some(path) = stream_wrappers::local_filesystem_path(path) else {
-        return Err(());
+        return Err(no_reason());
     };
-    std::fs::read(path).map_err(|_| ())
+    std::fs::read(path).map_err(|error| crate::stream_resources::eval_open_failure_reason(&error))
 }

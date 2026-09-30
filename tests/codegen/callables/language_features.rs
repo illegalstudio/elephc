@@ -482,3 +482,88 @@ fn test_heredoc_label_substring_midline_not_closer() {
     assert_eq!(out, "a EOT b");
 }
 
+
+/// Verifies php's out-parameter idiom — a variable holding NULL passed by reference.
+///
+/// `$x = null; f($x);` with `function f(&$a) { $a = 5; }` is how PHP declares an out parameter,
+/// and the whole point is that `$x` is `int(5)` afterwards. elephc left `$x` NULL, silently: the
+/// write always happened, since the callee stores through the pointer, but the CALLER kept
+/// reading its slot as null-typed, so every later read constant-folded to `NULL`. Nothing warned,
+/// and the call site's EIR was byte-identical to the case that already worked, which is why the
+/// suite passed over it for so long.
+///
+/// The last three rows are the ones that make it a correctness bug rather than a display one:
+/// `$c === null` answered `true` where php answers `false`, so the branch went the wrong way, and
+/// `$c + 1` folded to `1`.
+///
+/// A callee that only reads, and one that writes on some paths and not others, are here because
+/// they must stay `null` — the widening has to follow what the body actually leaves behind, not
+/// merely the fact that a parameter is by-reference.
+#[test]
+fn test_by_ref_out_parameter_writes_reach_a_null_caller() {
+    let out = compile_and_run(
+        r#"<?php
+function writesInt(&$a): void { $a = 5; }
+function writesStr(&$a): void { $a = "s"; }
+function writesArr(&$a): void { $a = [1, 2]; }
+function writesBool(&$a): void { $a = true; }
+function writesFloat(&$a): void { $a = 1.5; }
+function maybe(&$a, bool $do): void { if ($do) { $a = 7; } }
+function readsOnly(&$a): int { return 1; }
+
+$i = null; writesInt($i); var_dump($i);
+$s = null; writesStr($s); var_dump($s);
+$r = null; writesArr($r); var_dump($r);
+$b = null; writesBool($b); var_dump($b);
+$f = null; writesFloat($f); var_dump($f);
+$m = null; maybe($m, false); var_dump($m);
+$n = null; maybe($n, true); var_dump($n);
+$o = null; readsOnly($o); var_dump($o);
+$c = null; writesInt($c); var_dump($c === null, $c + 1, is_int($c));
+$t = null; writesInt($t); writesStr($t); var_dump($t);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(5)\n",
+            "string(1) \"s\"\n",
+            "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n",
+            "bool(true)\n",
+            "float(1.5)\n",
+            "NULL\n",
+            "int(7)\n",
+            "NULL\n",
+            "bool(false)\n",
+            "int(6)\n",
+            "bool(true)\n",
+            "string(1) \"s\"\n",
+        )
+    );
+}
+
+/// Verifies a by-reference parameter the caller passed a REAL value to keeps its narrow type.
+///
+/// The widening above is deliberately restricted to a `null` entry, which is what php's
+/// out-parameter idiom passes. Widening a parameter the caller handed an int would change what
+/// the backend compiles for every existing by-reference call — `sort($a)` and friends rely on
+/// their callee being compiled for raw slots — so those still specialize as before, and a body
+/// that writes an incompatible type is still the reassignment error it has always been.
+#[test]
+fn test_by_ref_parameter_with_a_typed_caller_keeps_its_narrow_type() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$a): void { $a = $a + 1; }
+function typed(int &$a): void { $a = 5; }
+$i = 1; bump($i); var_dump($i);
+$j = 1; typed($j); var_dump($j);
+$s = "x"; $t = $s; var_dump($t);
+function twice(&$a, &$b): void { $a = 1; $b = 2; }
+$p = null; $q = null; twice($p, $q); var_dump($p, $q);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(2)\nint(5)\nstring(1) \"x\"\nint(1)\nint(2)\n"
+    );
+}

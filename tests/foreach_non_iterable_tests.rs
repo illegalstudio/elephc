@@ -1,6 +1,6 @@
 //! Purpose:
 //! End-to-end tests that `foreach` over a NON-ITERABLE value behaves like reference PHP:
-//! it raises `foreach() argument must be of type array|object, <type> given` on stderr,
+//! it raises `foreach() argument must be of type array|object, <type> given` on stdout,
 //! SKIPS the loop body, runs the statement after the loop, and exits 0.
 //!
 //! Called from:
@@ -146,15 +146,56 @@ fn union_probe(pick_len: usize) -> String {
     )
 }
 
+/// Splits php's diagnostics back out of a program's stdout, as `(program_output, messages)`.
+///
+/// php writes a diagnostic to STDOUT, so the separation these tests need is textual rather than a
+/// file descriptor: a line whose kind prefix names a php diagnostic is one, and the blank line php
+/// opens it with belongs to it. The trailing ` in <file> on line <n>` is dropped, because elephc
+/// publishes it at some warning sites and not others — `resource given` carries it, `null given`
+/// does not — and which stream a line belongs to must not depend on that.
+fn split_diagnostics(stdout: &str) -> (String, String) {
+    const KINDS: &[&str] = &[
+        "Warning: ",
+        "Notice: ",
+        "Deprecated: ",
+        "Fatal error: ",
+        "Parse error: ",
+    ];
+    let mut program = String::with_capacity(stdout.len());
+    let mut messages = String::new();
+    for line in stdout.split_inclusive('\n') {
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        if !KINDS.iter().any(|kind| body.starts_with(kind)) {
+            program.push_str(line);
+            continue;
+        }
+        // Exactly one newline, and without asking what precedes it: the program's own output and
+        // php's opening blank line share a line whenever the program did not end its last write
+        // with a newline.
+        if program.ends_with('\n') {
+            program.truncate(program.len() - 1);
+        }
+        let message = match body.find(" in ") {
+            Some(cut) if body[cut..].contains(" on line ") => &body[..cut],
+            _ => body,
+        };
+        messages.push_str(message);
+        messages.push('\n');
+    }
+    (program, messages)
+}
+
 /// Asserts the loop body was skipped, the following statement ran, and the warning names `type`.
 fn assert_skipped_with_warning(bin: &Path, type_name: &str) {
     let (stdout, stderr) = run_binary(bin);
-    assert_eq!(stdout, "before\nafter\n", "loop body must not run");
+    let (program, messages) = split_diagnostics(&stdout);
+    assert_eq!(program, "before\nafter\n", "loop body must not run");
     assert_eq!(
-        stderr,
+        messages,
         format!("{WARNING_PREFIX}{type_name} given\n"),
         "runtime warning must match reference PHP's message body"
     );
+    assert_eq!(stderr, "", "php writes this warning to stdout, not stderr");
 }
 
 /// Reference (`php -d xdebug.mode=off`, PHP 8.5.6):
@@ -257,8 +298,10 @@ fn union_holding_array_still_iterates() {
     let dir = make_test_dir("foreach_non_iterable_union_array");
     let (bin, _) = compile(&dir, &union_probe(1), "union_array_probe");
     let (stdout, stderr) = run_binary(&bin);
-    assert_eq!(stdout, "before\nbody=10\nbody=20\nafter\n");
-    assert_eq!(stderr, "", "a real array must not warn");
+    let (program, messages) = split_diagnostics(&stdout);
+    assert_eq!(program, "before\nbody=10\nbody=20\nafter\n");
+    assert_eq!(messages, "", "a real array must not warn");
+    assert_eq!(stderr, "");
 }
 
 /// The field repro's shape: a `array|false` value holding `false`, where the kind is known
@@ -299,11 +342,13 @@ fn statements_after_the_loop_still_run() {
                   echo \"four\\n\";\n";
     let (bin, _) = compile(&dir, source, "sequence_probe");
     let (stdout, stderr) = run_binary(&bin);
-    assert_eq!(stdout, "one\ntwo\nthree=7\nfour\n");
+    let (program, messages) = split_diagnostics(&stdout);
+    assert_eq!(program, "one\ntwo\nthree=7\nfour\n");
     assert_eq!(
-        stderr,
+        messages,
         format!("{WARNING_PREFIX}false given\n{WARNING_PREFIX}int given\n")
     );
+    assert_eq!(stderr, "", "php writes these warnings to stdout, not stderr");
 }
 
 /// The original field repro, reduced: `opcache_get_configuration()` returns `false` under
@@ -336,9 +381,11 @@ fn opcache_restricted_configuration_repro_exits_zero() {
     );
 
     let (stdout, stderr) = run_binary(&dir.join("opcache_probe"));
-    assert_eq!(stdout, "2 ok\n", "the statement after the loop must run");
+    let (program, messages) = split_diagnostics(&stdout);
+    assert_eq!(program, "2 ok\n", "the statement after the loop must run");
     assert!(
-        stderr.contains(&format!("{WARNING_PREFIX}null given")),
-        "expected the foreach warning, got: {stderr}"
+        messages.contains(&format!("{WARNING_PREFIX}null given")),
+        "expected the foreach warning, got: {messages}"
     );
+    assert_eq!(stderr, "", "php writes this warning to stdout, not stderr");
 }

@@ -9,7 +9,7 @@
 //! - Branch and loop handling must preserve PHP execution order and conservative type environments.
 
 mod arrays;
-mod locals;
+pub(crate) mod locals;
 mod properties;
 mod properties_null_coalesce;
 mod static_properties;

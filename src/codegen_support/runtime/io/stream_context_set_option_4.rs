@@ -12,11 +12,11 @@
 //!   four args.
 //!
 //! Key details:
-//! - The value is always treated as a string (runtime tag 1). PHP allows
-//!   any scalar value, but the dominant use case is string options
-//!   (`method`, `header`, `content`, `peer_name`, …). Non-string values
-//!   should round-trip through `(string)$value` at the call site by the
-//!   caller until full Mixed-tag handling lands.
+//! - The caller passes one owned boxed Mixed cell, so every PHP value shape
+//!   round-trips without string coercion and the option hash takes ownership.
+//! - The top hash is made unique before lookup, and an existing wrapper map is
+//!   shallow-cloned before mutation, so previously returned snapshots remain
+//!   isolated at both nesting levels.
 //! - The sub-hash is re-inserted into the top-level hash after every
 //!   mutation so a `__rt_hash_set` growth doesn't leave a stale pointer.
 //! - On a top-level hash relocation, `_stream_context_options` is
@@ -26,9 +26,9 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// `__rt_stream_context_set_option_4`:
 /// Input:  AArch64 x0=wrapper_ptr x1=wrapper_len x2=opt_ptr x3=opt_len
-///                 x4=val_ptr x5=val_len.
+///                 x4=owned boxed Mixed value, x5=0.
 ///         x86_64  rdi=wrapper_ptr rsi=wrapper_len rdx=opt_ptr rcx=opt_len
-///                 r8=val_ptr r9=val_len.
+///                 r8=owned boxed Mixed value, r9=0.
 /// Output: 1 always (the helper never fails — all allocation failures
 ///         abort through `__rt_heap_alloc`'s exhaustion path).
 pub fn emit_stream_context_set_option_4(emitter: &mut Emitter) {
@@ -46,11 +46,10 @@ pub fn emit_stream_context_set_option_4(emitter: &mut Emitter) {
     //   [sp,  8] wrapper_len
     //   [sp, 16] opt_ptr
     //   [sp, 24] opt_len
-    //   [sp, 32] val_ptr
-    //   [sp, 40] val_len
+    //   [sp, 32] owned boxed Mixed value
+    //   [sp, 40] reserved
     //   [sp, 48] top hash pointer (after any grow)
     //   [sp, 56] sub hash pointer (after any grow)
-    //   [sp, 64..72] padding
     //   [sp, 72] saved x29
     //   [sp, 80] saved x30
     emitter.instruction("sub sp, sp, #96");                                     // helper frame
@@ -60,8 +59,8 @@ pub fn emit_stream_context_set_option_4(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save wrapper_len
     emitter.instruction("str x2, [sp, #16]");                                   // save opt_ptr
     emitter.instruction("str x3, [sp, #24]");                                   // save opt_len
-    emitter.instruction("str x4, [sp, #32]");                                   // save val_ptr
-    emitter.instruction("str x5, [sp, #40]");                                   // save val_len
+    emitter.instruction("str x4, [sp, #32]");                                   // save the owned boxed Mixed option value
+    emitter.instruction("str x5, [sp, #40]");                                   // save the reserved high payload word
 
     // -- ensure _stream_context_options has a top-level hash --
     abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
@@ -72,9 +71,13 @@ pub fn emit_stream_context_set_option_4(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_new");                                    // call runtime helper
     abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
     emitter.instruction("str x0, [x9]");                                        // publish the fresh top hash
-    emitter.instruction("bl __rt_incref");                                      // retain — the global slot owns it
     emitter.instruction("mov x10, x0");                                         // move runtime value between registers
     emitter.label("__rt_scso4_top_ok");
+    emitter.instruction("mov x0, x10");                                         // pass the current scratch owner to the COW helper
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // isolate the wrapper map before nested mutation
+    abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
+    emitter.instruction("str x0, [x9]");                                        // publish the unique top hash returned by the helper
+    emitter.instruction("mov x10, x0");                                         // keep the unique top hash ready for lookup
     emitter.instruction("str x10, [sp, #48]");                                  // save the top hash pointer
 
     // -- look up the sub-hash by wrapper key --
@@ -91,25 +94,24 @@ pub fn emit_stream_context_set_option_4(emitter: &mut Emitter) {
     emitter.instruction("b __rt_scso4_have_sub");                               // continue at target label
 
     emitter.label("__rt_scso4_sub_found");
-    emitter.instruction("str x1, [sp, #56]");                                   // existing sub-hash pointer
+    emitter.instruction("mov x0, x1");                                          // pass the borrowed wrapper map to the clone helper
+    emitter.instruction("bl __rt_hash_clone_shallow");                          // create one owned sub-hash for isolated mutation
+    emitter.instruction("str x0, [sp, #56]");                                   // save the owned wrapper-map clone
 
     emitter.label("__rt_scso4_have_sub");
-    // -- insert option → value (as string) into the sub-hash --
+    // -- transfer the boxed Mixed option value into the sub-hash --
     emitter.instruction("ldr x0, [sp, #56]");                                   // sub-hash
     emitter.instruction("ldr x1, [sp, #16]");                                   // opt_ptr
     emitter.instruction("ldr x2, [sp, #24]");                                   // opt_len
-    emitter.instruction("ldr x3, [sp, #32]");                                   // val_ptr → value_lo
-    emitter.instruction("ldr x4, [sp, #40]");                                   // val_len → value_hi
-    emitter.instruction("mov x5, #1");                                          // value tag = string
+    emitter.instruction("ldr x3, [sp, #32]");                                   // owned boxed Mixed cell becomes value_lo
+    emitter.instruction("mov x4, xzr");                                         // boxed Mixed values use no high payload word
+    emitter.instruction("mov x5, #7");                                          // runtime tag 7 identifies a boxed Mixed cell
     emitter.instruction("bl __rt_hash_set");                                    // x0 = possibly-grown sub-hash
     emitter.instruction("str x0, [sp, #56]");                                   // record the updated sub-hash
 
-    // -- re-insert the sub-hash into the top-level hash so any growth is
-    //    visible to the next set_option call. Increment the sub-hash's
-    //    refcount first so __rt_hash_set's overwrite-decref of the
-    //    existing entry doesn't drop the only live reference. --
-    emitter.instruction("ldr x0, [sp, #56]");                                   // sub-hash ptr for incref
-    emitter.instruction("bl __rt_incref");                                      // sub-hash now has +1 refcount to survive the upcoming overwrite-decref
+    // -- re-insert the owned sub-hash into the unique top-level hash so any
+    //    growth is visible to the next set_option call. The insertion consumes
+    //    the owned clone/new hash while releasing the previous child. --
     emitter.instruction("ldr x0, [sp, #48]");                                   // top hash
     emitter.instruction("ldr x1, [sp, #0]");                                    // wrapper_ptr
     emitter.instruction("ldr x2, [sp, #8]");                                    // wrapper_len
@@ -137,8 +139,8 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 16] wrapper_len
     //   [rbp - 24] opt_ptr
     //   [rbp - 32] opt_len
-    //   [rbp - 40] val_ptr
-    //   [rbp - 48] val_len
+    //   [rbp - 40] owned boxed Mixed value
+    //   [rbp - 48] reserved
     //   [rbp - 56] top hash pointer
     //   [rbp - 64] sub hash pointer
     emitter.instruction("push rbp");                                            // save caller frame pointer
@@ -148,8 +150,8 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save wrapper_len
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save opt_ptr
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save opt_len
-    emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save val_ptr
-    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save val_len
+    emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the owned boxed Mixed option value
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the reserved high payload word
 
     // -- ensure top-level hash exists --
     abi::emit_load_symbol_to_reg(emitter, "rax", "_stream_context_options", 0); // current top hash (may be null)
@@ -159,9 +161,10 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 7");                                          // value tag = Mixed
     emitter.instruction("call __rt_hash_new");                                  // call runtime helper
     abi::emit_store_reg_to_symbol(emitter, "rax", "_stream_context_options", 0); // store runtime value
-    emitter.instruction("mov rdi, rax");                                        // prepare SysV call argument
-    emitter.instruction("call __rt_incref");                                    // call runtime helper
     emitter.label("__rt_scso4_top_ok_x86");
+    emitter.instruction("mov rdi, rax");                                        // pass the current scratch owner to the COW helper
+    emitter.instruction("call __rt_hash_ensure_unique");                        // isolate the wrapper map before nested mutation
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_stream_context_options", 0); // publish the unique top hash returned by the helper
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save top hash ptr
 
     // -- look up the sub-hash --
@@ -177,23 +180,21 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // new sub-hash
     emitter.instruction("jmp __rt_scso4_have_sub_x86");                         // continue at target label
     emitter.label("__rt_scso4_sub_found_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 64], rdi");                       // existing sub-hash from hash_get's value_lo (rdi on x86_64)
+    emitter.instruction("call __rt_hash_clone_shallow");                        // clone the borrowed sub-hash still carried in rdi
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the owned wrapper-map clone
     emitter.label("__rt_scso4_have_sub_x86");
 
     // -- insert option → value into the sub-hash --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // sub-hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // opt_ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // opt_len
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // val_ptr → value_lo
-    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // val_len → value_hi
-    emitter.instruction("mov r9, 1");                                           // value tag = string
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // owned boxed Mixed cell becomes value_lo
+    emitter.instruction("xor r8, r8");                                          // boxed Mixed values use no high payload word
+    emitter.instruction("mov r9, 7");                                           // runtime tag 7 identifies a boxed Mixed cell
     emitter.instruction("call __rt_hash_set");                                  // rax = possibly-grown sub-hash
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // store runtime value
 
-    // -- re-insert sub-hash into top. Incref first to survive the
-    //    overwrite-decref inside __rt_hash_set. --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // sub-hash ptr → __rt_incref's first arg
-    emitter.instruction("call __rt_incref");                                    // call runtime helper
+    // -- re-insert the owned clone/new sub-hash into the unique top hash. --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // top hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // prepare SysV call argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // prepare SysV call argument

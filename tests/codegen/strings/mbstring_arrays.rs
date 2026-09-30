@@ -166,7 +166,7 @@ try { mb_check_encoding(null, "bad"); } catch (ValueError) { echo "invalid\n"; }
     let out = compile_and_run_capture(source);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\ninvalid\n");
-    assert_eq!(out.stderr.matches("Calling mb_check_encoding() without argument is deprecated").count(), 4);
+    assert_eq!(out.diagnostics.matches("Calling mb_check_encoding() without argument is deprecated").count(), 4);
 }
 
 /// Verifies native and eval share the same conversion-error count for deprecated null checks.
@@ -177,5 +177,5 @@ fn test_mbstring_check_request_state_shared_with_eval() {
     let out = compile_and_run_capture(&source);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(false)\n");
-    assert_eq!(out.stderr.matches("Calling mb_check_encoding() without argument is deprecated").count(), 3);
+    assert_eq!(out.diagnostics.matches("Calling mb_check_encoding() without argument is deprecated").count(), 3);
 }

@@ -2,7 +2,7 @@
 title: "fclose() - internals"
 description: "Compiler internals for fclose(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 310
+  order: 312
 ---
 
 ## `fclose()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fclose.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fclose.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -26,6 +26,63 @@ use crate::codegen_support::{abi, platform::Arch};
 /// # Output
 /// - ARM64: integer result returned in x0
 /// - x86_64: integer result returned in rax
+/// Emits `__rt_mixed_cast_int_nullable`, which answers `NULL_SENTINEL` for a boxed null and
+/// otherwise defers to `__rt_mixed_cast_int`.
+///
+/// php's `?int` parameters treat null as "no bound", which is never the same answer as the `0`
+/// that `__rt_mixed_cast_int` produces for a null payload: `fgets($h, null)` reads the whole
+/// line where a `0` bound raised `Argument #2 ($length) must be greater than 0`, and
+/// `fwrite($h, $data, null)` writes every byte where a `0` cap writes none. A caller that binds
+/// its `?int` argument from a `mixed` value — an untyped function parameter forwarding to the
+/// builtin is the usual way — needs the two apart, so this helper keeps null distinguishable
+/// instead of flattening it into a legitimate zero.
+///
+/// # Input / Output
+/// Same registers as `__rt_mixed_cast_int`: the boxed pointer in x0/rax, the integer out in x0/rax.
+pub fn emit_mixed_cast_int_nullable(emitter: &mut Emitter) {
+    let sentinel = crate::codegen_support::sentinels::NULL_SENTINEL;
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_cast_int_nullable ---");
+    emitter.label_global("__rt_mixed_cast_int_nullable");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #32");                             // frame for the tag peek
+            emitter.instruction("stp x29, x30, [sp, #16]");                     // save frame pointer and return address
+            emitter.instruction("add x29, sp, #16");                            // establish the helper stack frame
+            emitter.instruction("str x0, [sp, #0]");                            // keep the boxed pointer across the peek
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");                  // x0 = runtime tag
+            emitter.instruction("cmp x0, #8");                                  // runtime tag 8 = null
+            emitter.instruction("b.eq __rt_mcin_null");                         // null is php's "no bound"
+            emitter.instruction("ldr x0, [sp, #0]");                            // restore the boxed pointer
+            abi::emit_call_label(emitter, "__rt_mixed_cast_int");               // every other payload casts as usual
+            emitter.instruction("b __rt_mcin_done");
+            emitter.label("__rt_mcin_null");
+            abi::emit_load_int_immediate(emitter, "x0", sentinel);              // the caller's "unbounded" marker
+            emitter.label("__rt_mcin_done");
+            emitter.instruction("ldp x29, x30, [sp, #16]");                     // restore frame pointer and return address
+            emitter.instruction("add sp, sp, #32");                             // release the helper frame
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // save the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish a stable frame pointer
+            emitter.instruction("sub rsp, 16");                                 // one aligned slot, keeping SysV alignment
+            emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // keep the boxed pointer across the peek
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");                  // rax = runtime tag
+            emitter.instruction("cmp rax, 8");                                  // runtime tag 8 = null
+            emitter.instruction("je __rt_mcin_null_x86");                       // null is php's "no bound"
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // restore the boxed pointer
+            abi::emit_call_label(emitter, "__rt_mixed_cast_int");               // every other payload casts as usual
+            emitter.instruction("jmp __rt_mcin_done_x86");
+            emitter.label("__rt_mcin_null_x86");
+            abi::emit_load_int_immediate(emitter, "rax", sentinel);             // the caller's "unbounded" marker
+            emitter.label("__rt_mcin_done_x86");
+            emitter.instruction("leave");                                       // restore rbp + rsp
+            emitter.instruction("ret");
+        }
+    }
+}
+
 pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_cast_int_linux_x86_64(emitter);

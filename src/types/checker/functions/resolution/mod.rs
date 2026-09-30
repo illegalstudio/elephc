@@ -10,4 +10,5 @@
 mod call;
 mod resolved;
 mod signature;
+pub(in crate::types) use signature::array_element_representation_widens;
 mod specialization;

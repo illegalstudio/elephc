@@ -2,7 +2,7 @@
 title: "fgetc() - internals"
 description: "Compiler internals for fgetc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 314
+  order: 316
 ---
 
 ## `fgetc()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fgetc.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fgetc.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -8,7 +8,11 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::runtime::data::{
+    SCANDIR_ERRNO_WARNING_HEAD, SCANDIR_ERRNO_WARNING_MIDDLE, SCANDIR_OPEN_WARNING_HEAD,
+    SCANDIR_OPEN_WARNING_MIDDLE,
+};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_scandir` runtime helper for listing directory entries.
 ///
@@ -26,10 +30,29 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     }
 
     let name_off = emitter.platform.dirent_name_offset();
+    // libc `opendir` reports failure through errno, and the thread-local accessor is spelled
+    // differently per platform — the same split `mb_strlen` and the flock helpers already carry.
+    let errno_function = match emitter.platform {
+        crate::codegen_support::platform::Platform::MacOS => "__error",
+        crate::codegen_support::platform::Platform::Linux => "__errno_location",
+        crate::codegen_support::platform::Platform::Windows => {
+            panic!("Windows target is not yet supported (see issue #379)")
+        }
+    };
 
     emitter.blank();
     emitter.comment("--- runtime: scandir ---");
     emitter.label_global("__rt_scandir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_scandir",
+            name_len: 7,
+            directory: true,
+        },
+    );
 
     // The array is allocated BEFORE `opendir`, and a null `DIR*` returns it empty
     // rather than entering the loop: `readdir(NULL)` is undefined and segfaulted on
@@ -38,25 +61,130 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     // field helpers had. (PHP answers `false` here; that needs the declared return
     // type to become a union and is tracked with the rest of that family.)
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
+    emitter.instruction("sub sp, sp, #80");                                     // frame: diagnostic slots plus the sorting order
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
+    emitter.instruction("str x0, [sp, #48]");                                   // hold $sorting_order across the listing
+
+    // -- a registered wrapper lists its own directory --
+    //
+    // `opendir()` has dispatched here since it was written; `scandir()` went straight to the
+    // filesystem and reported the directory missing. MEASURED on `php -n` 8.5.6: php calls
+    // `dir_opendir`, walks `dir_readdir` to false, and calls `dir_closedir` — the same three the
+    // opendir/readdir pair makes, so the class cannot tell which builtin asked.
+    //
+    // The frame slots below are the native path's, and this arm returns before that path runs.
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // the path outlives the probe
+    emitter.instruction("bl __rt_user_wrapper_opendir");                        // fd, -1 (its own failure), or -2 (no scheme)
+    emitter.instruction("cmn x0, #2");                                          // -2: no registered scheme owns this path
+    emitter.instruction("b.eq __rt_scandir_try_glob");
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_scandir_wrapper_failed");                    // a scheme matched and refused
+    emitter.instruction("str x0, [sp, #16]");                                   // the synthetic directory handle
+    emitter.instruction("mov x0, #128");                                        // initial capacity, as the native path asks for
+    emitter.instruction("mov x1, #16");                                         // element size = 16 bytes (ptr + len)
+    emitter.instruction("bl __rt_array_new");                                   // the listing this arm answers with
+    emitter.instruction("str x0, [sp, #24]");
+    emitter.label("__rt_scandir_wrapper_loop");
+    emitter.instruction("ldr x0, [sp, #16]");
+    emitter.instruction("bl __rt_user_wrapper_dir_readdir");                    // x1/x2 = the name, x1 = 0 at the end
+    emitter.instruction("cbz x1, __rt_scandir_wrapper_done");
+    emitter.instruction("ldr x0, [sp, #24]");
+    emitter.instruction("bl __rt_array_push_str");                              // it persists the pair itself
+    emitter.instruction("str x0, [sp, #24]");                                   // growth may have moved the array
+    emitter.instruction("b __rt_scandir_wrapper_loop");
+    emitter.label("__rt_scandir_wrapper_done");
+    emitter.instruction("ldr x0, [sp, #16]");
+    emitter.instruction("bl __rt_user_wrapper_dir_closedir");
+    emitter.label("__rt_scandir_sort");                                         // the glob arm joins the listing here
+    emitter.instruction("ldr x0, [sp, #24]");
+    emitter.instruction("ldr x9, [sp, #48]");                                   // $sorting_order, held above
+    emitter.instruction("cmp x9, #1");                                          // SCANDIR_SORT_DESCENDING
+    emitter.instruction("b.eq __rt_scandir_wrapper_rsort");
+    emitter.instruction("cmp x9, #2");                                          // SCANDIR_SORT_NONE
+    emitter.instruction("b.eq __rt_scandir_wrapper_ret");
+    emitter.instruction("bl __rt_sort_str");                                    // ascending, php's default
+    emitter.instruction("b __rt_scandir_wrapper_ret");
+    emitter.label("__rt_scandir_wrapper_rsort");
+    emitter.instruction("bl __rt_rsort_str");
+    emitter.instruction("b __rt_scandir_wrapper_ret");
+    emitter.label("__rt_scandir_wrapper_failed");
+    emitter.instruction("str xzr, [sp, #24]");                                  // its own refusal, already warned about
+    emitter.label("__rt_scandir_wrapper_ret");
+    // From the SLOT, not from x0: sorting answers in place and clobbers the register, which is
+    // why the native path below reloads too.
+    emitter.instruction("ldr x0, [sp, #24]");
+    emitter.instruction("ldp x29, x30, [sp, #64]");
+    emitter.instruction("add sp, sp, #80");
+    emitter.instruction("ret");
+
+    // -- the builtin `glob://` wrapper lists its own directory too --
+    //
+    // php's `scandir()` is an `opendir` + `readdir` loop, so this is that loop over the same
+    // iterator `opendir()`/`readdir()` walk, ending in the sort tail above.
+    emitter.label("__rt_scandir_try_glob");
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // the path the probe walked
+    emitter.instruction("bl __rt_path_is_glob_url");
+    emitter.instruction("cbz x0, __rt_scandir_native");                         // no scheme: the filesystem lists it
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // the probe consumed the pair
+    emitter.instruction("bl __rt_opendir_glob");                                // x0 = fd, x1 = iterator state, x2 = kind
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_scandir_wrapper_failed");                    // a failed glob answers php false
+    emitter.instruction("str x0, [sp, #32]");                                   // the synthetic descriptor it minted
+    emitter.instruction("str x1, [sp, #40]");                                   // the glob iterator state
+    emitter.instruction("mov x0, #128");                                        // initial capacity, as the native path asks for
+    emitter.instruction("mov x1, #16");                                         // element size = 16 bytes (ptr + len)
+    emitter.instruction("bl __rt_array_new");
+    emitter.instruction("str x0, [sp, #24]");
+    emitter.label("__rt_scandir_glob_loop");
+    emitter.instruction("ldr x0, [sp, #40]");
+    emitter.instruction("bl __rt_glob_dir_next");                               // x1/x2 = the name, x1 = 0 at the end
+    emitter.instruction("cbz x1, __rt_scandir_glob_done");
+    emitter.instruction("ldr x0, [sp, #24]");
+    emitter.instruction("bl __rt_array_push_str");                              // it persists the pair, so globfree may follow
+    emitter.instruction("str x0, [sp, #24]");                                   // growth may have moved the array
+    emitter.instruction("b __rt_scandir_glob_loop");
+    emitter.label("__rt_scandir_glob_done");
+    // The same three pieces the resource rollback releases: the libc-owned matches, the
+    // descriptor `dup(2)` minted, and the state allocation itself.
+    emitter.instruction("ldr x10, [sp, #40]");
+    emitter.instruction("cbz x10, __rt_scandir_sort");                          // no state: nothing to release
+    emitter.instruction("add x0, x10, #24");                                    // the embedded glob_t
+    emitter.bl_c("globfree");
+    emitter.instruction("ldr x0, [sp, #32]");
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_scandir_glob_free");                         // no descriptor to close
+    emitter.syscall(6);                                                         // close the synthetic glob descriptor
+    emitter.label("__rt_scandir_glob_free");
+    emitter.instruction("ldr x0, [sp, #40]");
+    emitter.instruction("bl __rt_heap_free");
+    emitter.instruction("b __rt_scandir_sort");
+
+    emitter.label("__rt_scandir_native");
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // the path the probe walked
 
     // -- null-terminate path --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
-    emitter.instruction("str x0, [sp, #16]");                                   // save the C path across the array allocation
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
+    emitter.instruction("str x0, [sp, #24]");                                   // hold the C path across the result-array allocation
+    // php names what the PROGRAM wrote: `scandir(file:///no/such)`, not the path that URL was
+    // reduced to. The strip published it; the opener below still gets the path itself.
+    emitter.instruction("bl __rt_path_diag_name");
+    emitter.instruction("str x0, [sp, #56]");                                   // the name the two warnings print
 
-    // -- create a new string array (capacity = 128 entries) --
+    // -- create the result array FIRST so an unopenable directory still has one to return --
     emitter.instruction("mov x0, #128");                                        // initial capacity of 128 elements
     emitter.instruction("mov x1, #16");                                         // element size = 16 bytes (ptr + len)
     emitter.instruction("bl __rt_array_new");                                   // create array, x0=array pointer
     emitter.instruction("str x0, [sp, #8]");                                    // save array pointer on stack
 
     // -- open directory --
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the C path for the directory open
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the C path for opendir()
     emitter.bl_c("opendir");                                         // opendir(cstr), x0=DIR* or NULL
+    // A directory that cannot be opened returns NULL, and the loop below fed that straight to
+    // readdir(): scandir() on a missing path took the process down with it. x86_64 already
+    // guarded this, so the crash only ever happened on AArch64.
+    emitter.instruction("cbz x0, __rt_scandir_open_failed");                    // opendir() failed: say so the way php does
     emitter.instruction("str x0, [sp, #0]");                                    // save DIR pointer on stack
-    emitter.instruction("cbz x0, __rt_scandir_ret");                            // a missing directory must not reach readdir(NULL), which segfaults
 
     // -- read directory entries in a loop --
     emitter.label("__rt_scandir_loop");
@@ -74,13 +202,13 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("b __rt_scandir_strlen");                               // continue scanning the filename
     emitter.label("__rt_scandir_name_ready");
 
-    // -- copy name to concat_buf so it persists after next readdir call --
-    emitter.instruction("str x0, [sp, #16]");                                   // save dirent pointer (will be clobbered)
-    emitter.instruction("bl __rt_str_persist");                                 // copy string to heap, x1=new ptr, x2=len
-
     // -- push name string to array --
+    // `__rt_array_push_str` persists the (pointer, length) pair itself, so persisting the
+    // entry name here first allocated a SECOND owned block that nothing ever stored or
+    // freed: one orphan per directory entry, every call. The x86_64 path below always
+    // pushed the raw `d_name` pair directly, which is why this leaked on AArch64 alone.
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload array pointer
-    emitter.instruction("bl __rt_array_push_str");                              // push name to array
+    emitter.instruction("bl __rt_array_push_str");                              // persist and push the name (x1 = d_name, x2 = its length)
     emitter.instruction("str x0, [sp, #8]");                                    // update array pointer after possible realloc
     emitter.instruction("b __rt_scandir_loop");                                 // continue reading entries
 
@@ -88,14 +216,84 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.label("__rt_scandir_close");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload DIR pointer
     emitter.bl_c("closedir");                                        // closedir(DIR*)
+    // php sorts the listing — ascending by default, descending for SCANDIR_SORT_DESCENDING,
+    // and readdir order only when SCANDIR_SORT_NONE asks for it. elephc answered readdir
+    // order for every call, which is filesystem-dependent: the same program printed a
+    // different listing on a different machine.
+    emitter.instruction("ldr x9, [sp, #48]");                                   // the requested sorting order
+    emitter.instruction("cmp x9, #2");                                          // SCANDIR_SORT_NONE keeps readdir order
+    emitter.instruction("b.eq __rt_scandir_ret");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the listing to sort
+    emitter.instruction("cmp x9, #1");                                          // SCANDIR_SORT_DESCENDING?
+    emitter.instruction("b.eq __rt_scandir_sort_desc");
+    emitter.instruction("bl __rt_sort_str");                                    // ascending, php's default
+    emitter.instruction("b __rt_scandir_ret");
+    emitter.label("__rt_scandir_sort_desc");
+    emitter.instruction("bl __rt_rsort_str");
+    emitter.instruction("b __rt_scandir_ret");                                  // a directory that opened has nothing to warn about
 
-    // -- return array pointer --
-    emitter.label("__rt_scandir_ret");
-    emitter.instruction("ldr x0, [sp, #8]");                                    // return array pointer
+    // -- the two lines php prints for a directory it cannot open --
+    // Neither needs a composer of its own. `__rt_errno_warning` already appends `strerror` and
+    // the newline, so it serves as the TAIL of both and only the beginning differs. The
+    // pre-allocated result array is released and the return slot zeroed: php answers FALSE for
+    // a directory it cannot open, and a null pointer is what the caller's boxing reads as
+    // false — an empty listing here made failure indistinguishable from an empty directory.
+    emitter.label("__rt_scandir_open_failed");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the listing that will never be filled
+    emitter.instruction("bl __rt_heap_free");
+    emitter.instruction("str xzr, [sp, #8]");                                   // the caller boxes the null as PHP false
+    emitter.bl_c(errno_function);                                               // x0 = &errno for this thread
+    emitter.instruction("ldrsw x9, [x0]");                                      // the errno libc opendir() set
+    emitter.instruction("str x9, [sp, #32]");                                   // hold it across every fragment
+
+    // -- "Warning: scandir(" --
+    abi::emit_symbol_address(emitter, "x1", "_scandir_open_warn_head");
+    emitter.instruction(&format!("mov x2, #{}", SCANDIR_OPEN_WARNING_HEAD.len()));
+    emitter.instruction("bl __rt_diag_warning");                                // warnings honour the @ suppression depth
+    // -- the path, measured to its terminator --
+    emitter.instruction("ldr x1, [sp, #56]");                                   // the name php prints, URL and all
+    emitter.instruction("mov x9, #0");                                          // measured length
+    emitter.label("__rt_scandir_path_scan");
+    emitter.instruction("ldrb w10, [x1, x9]");                                  // load the next path byte
+    emitter.instruction("cbz w10, __rt_scandir_path_scanned");                  // reached the terminator
+    emitter.instruction("add x9, x9, #1");                                      // keep measuring
+    emitter.instruction("b __rt_scandir_path_scan");
+    emitter.label("__rt_scandir_path_scanned");
+    emitter.instruction("mov x2, x9");                                          // the measured byte length
+    emitter.instruction("bl __rt_diag_warning");
+    // -- "): Failed to open directory: " + strerror + newline --
+    abi::emit_symbol_address(emitter, "x0", "_scandir_open_warn_mid");
+    emitter.instruction(&format!("mov x1, #{}", SCANDIR_OPEN_WARNING_MIDDLE.len()));
+    emitter.instruction("ldr x2, [sp, #32]");                                   // the errno to describe
+    emitter.instruction("bl __rt_errno_warning");
+
+    // -- "Warning: scandir(): (errno " --
+    abi::emit_symbol_address(emitter, "x1", "_scandir_errno_warn_head");
+    emitter.instruction(&format!("mov x2, #{}", SCANDIR_ERRNO_WARNING_HEAD.len()));
+    emitter.instruction("bl __rt_diag_warning");
+    // -- the number itself. `__rt_itoa` formats into the shared concat arena and ADVANCES its
+    //    cursor, so the entry value is restored afterwards: a loop over unreadable directories
+    //    would otherwise eat the 64 KiB buffer a few bytes at a time.
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // the caller's concat write offset
+    emitter.instruction("str x10, [sp, #40]");                                  // hold it across the conversion
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the errno to render
+    emitter.instruction("bl __rt_itoa");                                        // x1/x2 = its decimal text
+    emitter.instruction("bl __rt_diag_warning");
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [sp, #40]");
+    emitter.instruction("str x10, [x9]");                                       // reclaim the diagnostic's scratch
+    // -- "): " + strerror + newline --
+    abi::emit_symbol_address(emitter, "x0", "_scandir_errno_warn_mid");
+    emitter.instruction(&format!("mov x1, #{}", SCANDIR_ERRNO_WARNING_MIDDLE.len()));
+    emitter.instruction("ldr x2, [sp, #32]");
+    emitter.instruction("bl __rt_errno_warning");
 
     // -- restore frame and return --
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
+    emitter.label("__rt_scandir_ret");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // return array pointer
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -107,16 +305,131 @@ pub fn emit_scandir(emitter: &mut Emitter) {
  /// before the next `readdir` call clobbers the `dirent` buffer.
 fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     let name_off = emitter.platform.dirent_name_offset();
+    // See the AArch64 counterpart: the thread-local errno accessor is spelled per platform.
+    let errno_function = match emitter.platform {
+        crate::codegen_support::platform::Platform::MacOS => "__error",
+        crate::codegen_support::platform::Platform::Linux => "__errno_location",
+        crate::codegen_support::platform::Platform::Windows => {
+            panic!("Windows target is not yet supported (see issue #379)")
+        }
+    };
 
     emitter.blank();
     emitter.comment("--- runtime: scandir ---");
     emitter.label_global("__rt_scandir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_scandir",
+            name_len: 7,
+            directory: true,
+        },
+    );
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while scandir() uses directory and result-array spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the C path, result array, and DIR* locals
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the C path pointer, result array pointer, DIR* handle, and loop scratch
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc directory string in rax/rdx into a null-terminated C path in rax
+    emitter.instruction("sub rsp, 80");                                         // the same slots, plus the glob arm's descriptor and iterator state
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // hold $sorting_order across the listing
+
+    // -- a registered wrapper lists its own directory; see the AArch64 counterpart --
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // the path outlives the probe
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");
+    emitter.instruction("call __rt_user_wrapper_opendir");                      // fd, -1 (its own failure), or -2 (no scheme)
+    emitter.instruction("cmp rax, -2");                                         // no registered scheme owns this path
+    emitter.instruction("je __rt_scandir_try_glob_x86");
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jl __rt_scandir_wrapper_failed_x86");                  // a scheme matched and refused
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // the synthetic directory handle
+    emitter.instruction("mov rdi, 128");                                        // initial capacity, as the native path asks for
+    emitter.instruction("mov rsi, 16");                                         // element size = 16 bytes (ptr + len)
+    emitter.instruction("call __rt_array_new");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");
+    emitter.label("__rt_scandir_wrapper_loop_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");
+    emitter.instruction("call __rt_user_wrapper_dir_readdir");                  // rax/rdx = the name, rax = 0 at the end
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_scandir_wrapper_done_x86");
+    emitter.instruction("mov rsi, rax");                                        // push takes the pair beside the array
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");
+    emitter.instruction("call __rt_array_push_str");                            // it persists the pair itself
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // growth may have moved the array
+    emitter.instruction("jmp __rt_scandir_wrapper_loop_x86");
+    emitter.label("__rt_scandir_wrapper_done_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");
+    emitter.instruction("call __rt_user_wrapper_dir_closedir");
+    emitter.label("__rt_scandir_sort_x86");                                     // the glob arm joins the listing here
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // $sorting_order, held above
+    emitter.instruction("cmp r9, 2");                                           // SCANDIR_SORT_NONE keeps readdir order
+    emitter.instruction("je __rt_scandir_wrapper_ret_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");
+    emitter.instruction("cmp r9, 1");                                           // SCANDIR_SORT_DESCENDING
+    emitter.instruction("je __rt_scandir_wrapper_rsort_x86");
+    emitter.instruction("call __rt_sort_str");                                  // ascending, php's default
+    emitter.instruction("jmp __rt_scandir_wrapper_ret_x86");
+    emitter.label("__rt_scandir_wrapper_rsort_x86");
+    emitter.instruction("call __rt_rsort_str");
+    emitter.instruction("jmp __rt_scandir_wrapper_ret_x86");
+    emitter.label("__rt_scandir_wrapper_failed_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // its own refusal, already warned about
+    emitter.label("__rt_scandir_wrapper_ret_x86");
+    // From the SLOT, not from rax: sorting answers in place and clobbers the register.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");
+    emitter.instruction("mov rsp, rbp");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");
+
+    // -- the builtin `glob://` wrapper lists its own directory too; see the AArch64 arm --
+    emitter.label("__rt_scandir_try_glob_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the path the probe walked
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");
+    emitter.instruction("call __rt_path_is_glob_url");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_scandir_native_x86");                          // no scheme: the filesystem lists it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the probe consumed the pair
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");
+    emitter.instruction("call __rt_opendir_glob");                              // rax = fd, rdx = iterator state, rcx = kind
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jl __rt_scandir_wrapper_failed_x86");                  // a failed glob answers php false
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // the synthetic descriptor it minted
+    emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // the glob iterator state
+    emitter.instruction("mov rdi, 128");                                        // initial capacity, as the native path asks for
+    emitter.instruction("mov rsi, 16");                                         // element size = 16 bytes (ptr + len)
+    emitter.instruction("call __rt_array_new");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");
+    emitter.label("__rt_scandir_glob_loop_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 72]");
+    emitter.instruction("call __rt_glob_dir_next");                             // rsi/rdx = the name, rsi = 0 at the end
+    emitter.instruction("test rsi, rsi");
+    emitter.instruction("jz __rt_scandir_glob_done_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");
+    emitter.instruction("call __rt_array_push_str");                            // it persists the pair, so globfree may follow
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // growth may have moved the array
+    emitter.instruction("jmp __rt_scandir_glob_loop_x86");
+    emitter.label("__rt_scandir_glob_done_x86");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 72]");
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_scandir_sort_x86");                            // no state: nothing to release
+    emitter.instruction("lea rdi, [r11 + 24]");                                 // the embedded glob_t
+    emitter.instruction("call globfree");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("js __rt_scandir_glob_free_x86");                       // no descriptor to close
+    emitter.instruction("call close");                                          // close the synthetic glob descriptor
+    emitter.label("__rt_scandir_glob_free_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // the free helper reads RAX on this target
+    emitter.instruction("call __rt_heap_free");
+    emitter.instruction("jmp __rt_scandir_sort_x86");
+
+    emitter.label("__rt_scandir_native_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the path the probe walked
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");
+    emitter.instruction("call __rt_path_cstr");                                 // convert the elephc directory string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the C directory path pointer across the result-array allocation and opendir() call
+    // See the AArch64 counterpart: php names the URL the program wrote, not the path it reduced to.
+    emitter.instruction("call __rt_path_diag_name");
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // the name the two warnings print
     emitter.instruction("mov rdi, 128");                                        // request an initial result-array capacity of 128 directory entry names
     emitter.instruction("mov rsi, 16");                                         // request 16-byte payload slots because scandir() returns string ptr/len pairs
     emitter.instruction("call __rt_array_new");                                 // allocate the destination string array that will collect the directory entry names
@@ -125,7 +438,7 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call opendir");                                        // open the directory stream through libc opendir()
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the DIR* handle across the readdir() loop and the final closedir() call
     emitter.instruction("test rax, rax");                                       // detect opendir() failure before entering the directory iteration loop
-    emitter.instruction("jz __rt_scandir_ret");                                 // return the empty result array when the directory stream cannot be opened
+    emitter.instruction("jz __rt_scandir_open_failed_x");                       // say why the directory stream could not be opened, the way php does
 
     emitter.label("__rt_scandir_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the DIR* handle before asking libc for the next directory entry
@@ -150,10 +463,87 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_scandir_close");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the DIR* handle before closing the directory stream
     emitter.instruction("call closedir");                                       // close the directory stream through libc closedir()
+    // See the AArch64 counterpart: php sorts the listing unless SCANDIR_SORT_NONE asks not to.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // the requested sorting order
+    emitter.instruction("cmp r9, 2");                                           // SCANDIR_SORT_NONE keeps readdir order
+    emitter.instruction("je __rt_scandir_ret");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // the listing to sort
+    emitter.instruction("cmp r9, 1");                                           // SCANDIR_SORT_DESCENDING?
+    emitter.instruction("je __rt_scandir_sort_desc_x");
+    emitter.instruction("call __rt_sort_str");                                  // ascending, php's default
+    emitter.instruction("jmp __rt_scandir_ret");
+    emitter.label("__rt_scandir_sort_desc_x");
+    emitter.instruction("call __rt_rsort_str");
+    emitter.instruction("jmp __rt_scandir_ret");                                // a directory that opened has nothing to warn about
+
+    // -- the two lines php prints for a directory it cannot open; see the AArch64 counterpart --
+    emitter.label("__rt_scandir_open_failed_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the listing that will never be filled
+    emitter.instruction("call __rt_heap_free");                                 // reads rax: the rax-first family
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // the caller boxes the null as PHP false
+    emitter.instruction(&format!("call {errno_function}"));                     // rax = &errno for this thread
+    emitter.instruction("movsxd rax, DWORD PTR [rax]");                         // the errno libc opendir() set
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // hold it across every fragment
+
+    // -- "Warning: scandir(" --
+    abi::emit_symbol_address(emitter, "rdi", "_scandir_open_warn_head");
+    emitter.instruction(&format!("mov rsi, {}", SCANDIR_OPEN_WARNING_HEAD.len()));
+    emitter.instruction("call __rt_diag_warning");                              // warnings honour the @ suppression depth
+    // -- the path, measured to its terminator --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // the name php prints, URL and all
+    emitter.instruction("xor ecx, ecx");                                        // measured length
+    emitter.label("__rt_scandir_path_scan_x");
+    emitter.instruction("movzx eax, BYTE PTR [rdi + rcx]");                     // load the next path byte
+    emitter.instruction("test al, al");
+    emitter.instruction("jz __rt_scandir_path_scanned_x");                      // reached the terminator
+    emitter.instruction("add rcx, 1");                                          // keep measuring
+    emitter.instruction("jmp __rt_scandir_path_scan_x");
+    emitter.label("__rt_scandir_path_scanned_x");
+    emitter.instruction("mov rsi, rcx");                                        // the measured byte length
+    emitter.instruction("call __rt_diag_warning");
+    // -- "): Failed to open directory: " + strerror + newline --
+    abi::emit_symbol_address(emitter, "rdi", "_scandir_open_warn_mid");
+    emitter.instruction(&format!("mov rsi, {}", SCANDIR_OPEN_WARNING_MIDDLE.len()));
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // the errno to describe
+    emitter.instruction("call __rt_errno_warning");
+
+    // -- "Warning: scandir(): (errno " --
+    abi::emit_symbol_address(emitter, "rdi", "_scandir_errno_warn_head");
+    emitter.instruction(&format!("mov rsi, {}", SCANDIR_ERRNO_WARNING_HEAD.len()));
+    emitter.instruction("call __rt_diag_warning");
+    // -- the number itself, with the concat cursor reclaimed afterwards --
+    abi::emit_symbol_address(emitter, "r10", "_concat_off");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // the caller's concat write offset
+    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // hold it across the conversion
+    // `__rt_itoa` reads `rax`, not the SysV first-argument register: the runtime's formatting
+    // helpers are the rax-first family, as `__rt_mixed_cast_string` and `__rt_heap_free` are.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the errno to render
+    emitter.instruction("call __rt_itoa");                                      // rax/rdx = its decimal text
+    emitter.instruction("mov rdi, rax");                                        // the diagnostic helper takes rdi/rsi
+    emitter.instruction("mov rsi, rdx");
+    emitter.instruction("call __rt_diag_warning");
+    abi::emit_symbol_address(emitter, "r10", "_concat_off");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // reclaim the diagnostic's scratch
+    // -- "): " + strerror + newline --
+    abi::emit_symbol_address(emitter, "rdi", "_scandir_errno_warn_mid");
+    emitter.instruction(&format!("mov rsi, {}", SCANDIR_ERRNO_WARNING_MIDDLE.len()));
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");
+    emitter.instruction("call __rt_errno_warning");
 
     emitter.label("__rt_scandir_ret");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the destination string array pointer in the canonical x86_64 integer result register
-    emitter.instruction("add rsp, 32");                                         // release the temporary scandir() spill slots before returning
+    // The release MUST match the prologue's `sub rsp, 80`. It said 32 — so `pop rbp` read
+    // the saved-errno spill slot (rbp = 2, ENOENT) and `ret` jumped to the DIR* slot (NULL
+    // on a failed open, a heap address on a successful one): every x86 scandir call
+    // segfaulted, success and failure alike, which is exactly what CI's twelve red
+    // linux-x86_64 shards had in common. AArch64 tears its frame down by absolute offsets
+    // and never had the mismatch.
+    //
+    // It then said 64 while the glob arm grew the prologue to 80, and the SAME `ret` was
+    // sixteen bytes off again — caught here by `every_runtime_helper_returns_on_a_balanced_stack`
+    // rather than by another round of red shards, which is what that test is for.
+    emitter.instruction("add rsp, 80");                                         // release the temporary scandir() spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the directory entry array
     emitter.instruction("ret");                                                 // return the array of directory entry names to the caller
 }
@@ -186,8 +576,16 @@ mod tests {
                 .find("__rt_scandir_loop:")
                 .expect("scandir iterates the directory");
             let guard = &asm[open_at..loop_at];
-            let branches_away = guard.contains("cbz x0, __rt_scandir_ret")
-                || guard.contains("jz __rt_scandir_ret");
+            // The guard now branches to the arm that WARNS before returning, rather than
+            // straight to the epilogue, and x86_64 suffixes its local labels with `_x`. What
+            // the test is about is that a null handle leaves before the loop, so the target
+            // decides the label and the property stays the same.
+            let open_failed = match arch {
+                Arch::AArch64 => "__rt_scandir_open_failed",
+                Arch::X86_64 => "__rt_scandir_open_failed_x",
+            };
+            let branches_away = guard.contains(&format!("cbz x0, {open_failed}"))
+                || guard.contains(&format!("jz {open_failed}"));
             assert!(
                 branches_away,
                 "{arch:?}: a null DIR* must skip the loop, or readdir(NULL) segfaults:\n{guard}"

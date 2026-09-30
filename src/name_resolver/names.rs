@@ -378,4 +378,7 @@ pub(super) fn resolve_constant_name(
 fn is_builtin_global_constant(name: &str) -> bool {
     crate::types::predefined_constants::is_registered_constant(name)
         || crate::types::pcntl_constants::is_pcntl_int_constant(name)
+        // The stream layer's tables carry names the shared catalog does not (`SEEK_*`,
+        // `SCANDIR_SORT_*`, ext-zlib's encodings, the output-handler flags).
+        || elephc_builtin_contract::php_constants::int_constant(name).is_some()
 }

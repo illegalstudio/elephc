@@ -285,52 +285,14 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(test_eval_rejects_invalid_property_and_parameter_type_atoms)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# Eval declarations compile, link and run several complete programs. This anchored filter
+# deliberately excludes the ordinary-speed `eval_callables` and `eval_constructors` families.
 [[profile.default.overrides]]
-filter = 'test(test_eval_declared_inherited_property_redeclaration_contracts)'
+filter = 'test(/^codegen::eval::test_eval_declared_/)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'test(test_eval_declared_inherited_property_redeclaration_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-filter = 'test(test_eval_declared_readonly_property_rules)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'test(test_eval_declared_readonly_property_rules)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-filter = 'test(test_eval_declared_interface_parameter_type_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'test(test_eval_declared_interface_parameter_type_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-filter = 'test(test_eval_declared_abstract_interface_method_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'test(test_eval_declared_abstract_interface_method_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-filter = 'test(test_eval_declared_interface_return_type_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'test(test_eval_declared_interface_return_type_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-filter = 'test(test_eval_declared_interface_property_hook_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'test(test_eval_declared_interface_property_hook_contracts)'
+filter = 'test(/^codegen::eval::test_eval_declared_/)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.default.overrides]]

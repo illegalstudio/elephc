@@ -32,6 +32,9 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let arr_ty = arr_ty.array_or_false_member().cloned().unwrap_or(arr_ty);
     if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(
             cx.span,

@@ -82,6 +82,12 @@ pub struct CheckResult {
     pub warnings: Vec<CompileWarning>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
+    /// Functions and methods whose body can fall off its end under a DECLARED return type,
+    /// mapped to the message php raises when that happens: `f(): Return value must be of type
+    /// int, none returned`. php accepts the declaration and only throws at the call, so this
+    /// replaces what used to be a compile error — see `require_declared_return_coverage`.
+    /// Keyed by the qualified name (`f`, `C::m`), which is what the lowering knows itself.
+    pub fallthrough_return_types: HashMap<String, String>,
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
@@ -97,6 +103,17 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// `(function-like scope, local name)` pairs for locals a reassignment widened across scalar
+    /// types, so EIR lowering can give them boxed storage from their first store.
+    pub widened_scalar_locals: HashSet<(String, String)>,
+    /// `(line, message)` for every built-in method with a TENTATIVE return type that a user
+    /// class overrides without one. php raises these while LINKING the class, so they are
+    /// emitted from the main prologue rather than at any call site.
+    pub tentative_return_deprecations: Vec<(u32, String)>,
+    /// `(line, message)` for the ONE incompatible declaration php stops the script on. php
+    /// links every class in the file before it runs a statement, so this aborts before any
+    /// output — including output written above the offending class.
+    pub link_time_fatal: Option<(u32, String)>,
     /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed at that position, so EIR lowering abandons the old frame slot (after releasing
     /// its value) instead of null-storing into it.

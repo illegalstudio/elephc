@@ -499,31 +499,20 @@ fn object_class_has_tostring(ctx: &FunctionContext<'_>, class_name: &str) -> boo
         .is_some_and(|class_info| class_info.methods.contains_key("__tostring"))
 }
 
-/// Emits PHP's fatal diagnostic for object-to-string casts without `__toString()`.
+/// Emits php's `Error` for an object-to-string cast on a class without `__toString()`.
+///
+/// php raises a CATCHABLE `Error`, not a fatal: `try { echo $o; } catch (Error $e)` runs the
+/// catch and the program continues with exit 0. This used to write `Fatal error: …` straight to
+/// stderr and `exit(1)`, so the catch never ran, the message went to the wrong stream, and the
+/// exit status was 1 where php's uncaught path uses 255.
 fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) {
-    let message = format!(
-        "Fatal error: Object of class {} could not be converted to string\n",
-        class_name
+    super::exceptions::emit_error(
+        ctx,
+        &format!(
+            "Object of class {} could not be converted to string",
+            class_name
+        ),
     );
-    let (label, len) = ctx.data.add_string(message.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the object string-cast fatal to Linux stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the object string-cast fatal before exiting
-            abi::emit_exit(ctx.emitter, 1);
-        }
-    }
 }
 
 /// Lowers array-like PHP values to the literal string used by PHP casts.
@@ -533,6 +522,11 @@ fn lower_array_like_to_string(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Materializes PHP's array-to-string placeholder in the active string result registers.
+///
+/// The placeholder never travels alone: php raises `Array to string conversion` at EVERY site
+/// that produces it — `echo`, `print`, `.`, `.=`, interpolation, a heredoc, `(string)`,
+/// `strval()` — and answers `Array` regardless. The only array-meets-string case php leaves
+/// silent is a loose COMPARISON, which never converts and never reaches here.
 pub(super) fn emit_array_like_string_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => abi::emit_call_label(ctx.emitter, "__rt_sprintf_warn_array_to_string"),

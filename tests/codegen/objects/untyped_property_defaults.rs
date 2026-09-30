@@ -27,6 +27,42 @@ var_dump($c->never);
     assert_eq!(out, "NULL\n");
 }
 
+/// Every route to that null must survive it, not just the direct read.
+///
+/// `var_dump($o)` and `isset(get_object_vars($o)["a"])` both SEGFAULTED on `class One { public $a; }`
+/// — as ordinary as php gets. The slot of a property declared without a default carries the in-band
+/// NULL SENTINEL, and `__rt_mixed_unbox`, which peels nested Mixed cells, tested the chain only for
+/// a ZERO pointer: it followed `0x7ffffffffffffffe` and dereferenced it. The helper's own doc
+/// already promised to normalize a "zero/sentinel payload", and it did — for the container tags at
+/// the end, never for the pointer it was about to follow.
+///
+/// The direct read `$o->a` was always right, which is what kept this hidden: the one path a test
+/// would reach for is the one path that did not go through the peeler.
+#[test]
+fn test_a_defaultless_property_survives_every_route_to_its_null() {
+    let out = compile_and_run(
+        r#"<?php
+class One {
+    public $a;
+    public $b = 1;
+}
+$o = new One();
+var_dump($o);
+$vars = get_object_vars($o);
+echo var_export(isset($vars["a"]), true), "|";
+echo var_export(array_key_exists("a", $vars), true), "|";
+echo gettype($vars["a"]), "|";
+var_dump($vars);
+"#,
+    );
+    assert_eq!(
+        out,
+        "object(One)#1 (2) {\n  [\"a\"]=>\n  NULL\n  [\"b\"]=>\n  int(1)\n}\n\
+         false|true|NULL|\
+         array(2) {\n  [\"a\"]=>\n  NULL\n  [\"b\"]=>\n  int(1)\n}\n"
+    );
+}
+
 /// Verifies that an untyped no-default property later assigned an int still defaults to null.
 #[test]
 fn test_untyped_property_without_default_assigned_int_later() {

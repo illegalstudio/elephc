@@ -204,12 +204,14 @@ impl Checker {
         let mut param_types = stored_sig.params.clone();
         let mut changed = false;
         let mut seen_idx = 0usize;
+        let mut actual_arg_types: Vec<PhpType> = Vec::new();
 
         for arg in args {
             let actual_ty = self.infer_type(arg, caller_env)?;
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }
+            actual_arg_types.push(actual_ty.clone());
             if seen_idx < regular_param_count && actual_ty == PhpType::Callable {
                 if let Some((param_name, _)) = param_types.get(seen_idx) {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
@@ -274,7 +276,27 @@ impl Checker {
             {
                 let key = (name.to_string(), seen_idx);
                 let seen = self.param_specialization_seen.contains(&key);
-                if Self::is_generic_array_hint(&param_types[seen_idx].1)
+                // A BY-REFERENCE parameter that `resolve_function_signature` already widened
+                // keeps its widened element type. The narrowing below is safe for a by-VALUE
+                // parameter because the callee owns its copy; a by-reference one writes into
+                // the CALLER's storage, so re-narrowing it here would hand a body compiled for
+                // raw slots an array of boxes on the very next call —
+                // `function f(array &$a) { foreach ($a as $k => $v) { $a[$k] = $v * 2; } }`
+                // over `[1, 2, 3]` printed three ADDRESSES for the mirror of this mistake.
+                // A by-reference parameter the body does NOT widen still specializes normally,
+                // which is what keeps a `sort($a)` callee on raw slots the backend can sort.
+                let by_ref_param = stored_sig
+                    .ref_params
+                    .get(seen_idx)
+                    .copied()
+                    .unwrap_or(false);
+                let by_ref_widened = by_ref_param
+                    && self
+                        .by_ref_widened_params
+                        .contains(&(name.to_string(), seen_idx));
+                if by_ref_widened {
+                    self.param_specialization_seen.insert(key);
+                } else if Self::is_generic_array_hint(&param_types[seen_idx].1)
                     && !seen
                     && is_specializable_array_argument(&actual_ty)
                 {
@@ -336,6 +358,48 @@ impl Checker {
                         param_types[variadic_index].1 = PhpType::Iterable;
                         changed = true;
                     }
+                }
+            }
+        } else if stored_sig.variadic.is_some()
+            && seen_idx > regular_param_count
+            && !variadic_param_is_by_ref(stored_sig)
+        {
+            // The variadic tail is NOT reached by the loop above: every branch there is gated on
+            // `seen_idx < regular_param_count`, and `regular_param_count()` subtracts the variadic
+            // slot, so the tail is excluded from specialization by construction. Without the join
+            // below, the element type inferred at the FIRST call site that resolved this function
+            // decides the tail array's memory layout for the WHOLE program, and a later call whose
+            // tail holds a different scalar pushes its raw machine word into that layout — read
+            // back reinterpreted, with no diagnostic.
+            //
+            // The join uses `union_param_type`, not `wider_type`: a variadic tail is a PHP array
+            // whose elements keep their own type tags, so an int seen next to a float must become
+            // `Mixed` (boxed) rather than being coerced to `Float` and stored as raw bits.
+            let regular_names: Vec<String> = stored_sig.params[..regular_param_count]
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect();
+            let joined = if Self::has_unknown_named_variadic_arg(args, &regular_names) {
+                PhpType::Iterable
+            } else {
+                let mut elem_ty = actual_arg_types[regular_param_count].clone();
+                for actual_ty in actual_arg_types.iter().skip(regular_param_count + 1) {
+                    elem_ty = Self::union_param_type(&elem_ty, actual_ty);
+                }
+                PhpType::Array(Box::new(Self::variadic_container_elem_ty(elem_ty)))
+            };
+            if let Some((_, variadic_ty)) = param_types.last_mut() {
+                let widened = match (&*variadic_ty, &joined) {
+                    (PhpType::Array(existing_elem), PhpType::Array(new_elem)) => {
+                        PhpType::Array(Box::new(Self::union_param_type(existing_elem, new_elem)))
+                    }
+                    // An earlier call site that needed runtime keys keeps the tail iterable.
+                    (PhpType::Iterable, _) => PhpType::Iterable,
+                    _ => joined,
+                };
+                if *variadic_ty != widened {
+                    *variadic_ty = widened;
+                    changed = true;
                 }
             }
         }

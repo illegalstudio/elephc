@@ -83,6 +83,10 @@ pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         // `TypeError`, and the class is known statically here so the message needs no run-time
         // lookup.
         PhpType::Object(_) => Ok(PhpType::Int),
+        // The same holds for a scalar: `count($fields)` in a helper whose parameter the checker
+        // could not type, or in a function never called, is php's run-time TypeError.
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        | PhpType::Void => Ok(PhpType::Int),
         _ => Err(CompileError::new(
             cx.span,
             "count() argument must be array or Countable object",

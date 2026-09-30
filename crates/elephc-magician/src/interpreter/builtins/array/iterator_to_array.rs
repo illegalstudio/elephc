@@ -51,11 +51,23 @@ pub(in crate::interpreter) fn eval_builtin_iterator_to_array(
     match args {
         [iterator] => {
             let iterator = eval_expr(iterator, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args(
+                "iterator_to_array",
+                &[iterator],
+                context,
+                values,
+            )?;
             eval_iterator_to_array_result(iterator, true, values)
         }
         [iterator, preserve_keys] => {
             let iterator = eval_expr(iterator, context, scope, values)?;
             let preserve_keys = eval_expr(preserve_keys, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args(
+                "iterator_to_array",
+                &[iterator],
+                context,
+                values,
+            )?;
             let preserve_keys = values.truthy(preserve_keys)?;
             eval_iterator_to_array_result(iterator, preserve_keys, values)
         }

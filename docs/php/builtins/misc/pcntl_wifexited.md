@@ -2,7 +2,7 @@
 title: "pcntl_wifexited()"
 description: "Reports whether a child wait status represents normal termination."
 sidebar:
-  order: 673
+  order: 699
 ---
 
 ## pcntl_wifexited()

@@ -32,6 +32,7 @@ macro_rules! param {
             ty: TypeSpec::$ty,
             default: None,
             by_ref: false,
+            writes: None,
         }
     };
     ($name:literal, $ty:ident = $default:expr) => {
@@ -40,6 +41,7 @@ macro_rules! param {
             ty: TypeSpec::$ty,
             default: Some($default),
             by_ref: false,
+            writes: None,
         }
     };
     ($name:literal, ?$ty:ident = $default:expr) => {
@@ -48,6 +50,7 @@ macro_rules! param {
             ty: TypeSpec::Nullable(&TypeSpec::$ty),
             default: Some($default),
             by_ref: false,
+            writes: None,
         }
     };
     ($name:literal, ?$ty:ident) => {
@@ -56,6 +59,7 @@ macro_rules! param {
             ty: TypeSpec::Nullable(&TypeSpec::$ty),
             default: None,
             by_ref: false,
+            writes: None,
         }
     };
 }
@@ -68,6 +72,7 @@ macro_rules! by_ref_param {
             ty: TypeSpec::$ty,
             default: None,
             by_ref: true,
+            writes: None,
         }
     };
     ($name:literal, $ty:ident = $default:expr) => {
@@ -76,6 +81,7 @@ macro_rules! by_ref_param {
             ty: TypeSpec::$ty,
             default: Some($default),
             by_ref: true,
+            writes: None,
         }
     };
 }
@@ -97,6 +103,7 @@ macro_rules! xml_contract {
             params: &[$($param),*],
             variadic: None,
             variadic_by_ref: false,
+            variadic_writes: None,
             min_args: None,
             max_args: None,
             arity_error: None,

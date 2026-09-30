@@ -43,15 +43,20 @@
 //!   which is precisely the `new`; `separates_construction_from_throw_site` is the test that would
 //!   fail if the line were taken from the `throw` instead, and it is the only one of these tests
 //!   where the two differ.
-//! - THE STACK TRACE IS STILL ABSENT, so the tests assert a PREFIX up to the location rather than
-//!   full equality. `getTrace()`/`getTraceAsString()` remain synthetic in `lower_inst.rs` — an
-//!   empty array and an empty string — because elephc keeps no call stack. Asserting equality
-//!   would freeze that gap as intended behaviour.
-//! - A Throwable with NO user `new` behind it — a `DivisionByZeroError` raised by `intdiv($n, 0)`
-//!   — carries line `0`, and the suffix is omitted entirely rather than printed as `:0`.
-//!   `synthesized_error_omits_the_location_and_still_exits_255` pins both halves of that: the
-//!   omission, and the exit status, which travels a SEPARATE code path
-//!   (`codegen::lower_inst::exceptions`) that never reaches `__rt_report_uncaught_exception`.
+//! - THE STACK TRACE IS PART OF THE REPORT. Most tests here assert a PREFIX up to the location,
+//!   because the frames below it are the trace subsystem's business and are pinned where that
+//!   subsystem is tested. The two that assert FULL equality do so against `php -n` 8.5.6 output
+//!   measured on the same program, so they say what php says rather than what elephc happened
+//!   to print when they were written.
+//! - AN EXCEPTION CHAIN IS REPORTED WHOLE, oldest first: the deepest `previous` under
+//!   `Fatal error: Uncaught`, every later link under `Next`, and the `  thrown in ...` tail once,
+//!   for the exception that was actually thrown. Reporting only the outermost link prints the
+//!   wrapper without the failure it wrapped, which is the half that says what went wrong.
+//! - A Throwable with no user `new` behind it — a `DivisionByZeroError` raised by `intdiv($n, 0)`
+//!   — is reported at its CALL SITE, which is what php names, and its frame carries the call.
+//!   `synthesized_error_reports_the_call_site_and_exits_255` pins that together with the exit
+//!   status, which travels a SEPARATE code path (`codegen::lower_inst::exceptions`) that never
+//!   reaches `__rt_report_uncaught_exception`.
 //! - The EXIT STATUS is asserted separately from the text. It moved from `1` to `255`; a script
 //!   that branched on `$?` saw the wrong value before, and that is invisible in stdout/stderr.
 //! - The empty-message case is the one that would silently pass with a naive implementation:
@@ -194,9 +199,14 @@ fn uncaught_user_subclass_reports_its_own_name() {
 fn uncaught_empty_message_omits_the_separator() {
     let prefix = "elephc_uncaught_empty";
     let (reported, code, dir) = run_uncaught(prefix, "<?php\nthrow new Exception(\"\");\n");
+    let script = dir
+        .canonicalize()
+        .expect("failed to canonicalize the test directory")
+        .join(format!("{prefix}.php"));
     let expected = format!(
-        "\nFatal error: Uncaught Exception{}\n",
-        location_suffix(&dir, &format!("{prefix}.php"), 2)
+        "\nFatal error: Uncaught Exception{suffix}\nStack trace:\n#0 {{main}}\n  thrown in {script} on line 2\n",
+        suffix = location_suffix(&dir, &format!("{prefix}.php"), 2),
+        script = script.display()
     );
 
     assert_eq!(
@@ -241,22 +251,70 @@ fn uncaught_reports_the_construction_site_not_the_throw_site() {
 /// path exited `1` while `throw new ...` exited `255`, so a script branching on the status saw a
 /// different answer depending on which kind of exception escaped.
 #[test]
-fn synthesized_error_omits_the_location_and_still_exits_255() {
+fn synthesized_error_reports_the_call_site_and_exits_255() {
     let prefix = "elephc_uncaught_synthesized";
     let (reported, code, dir) = run_uncaught(
         prefix,
         "<?php\n$n = 1;\n$d = 0;\necho intdiv($n, $d);\n",
     );
 
+    let script = dir
+        .canonicalize()
+        .expect("failed to canonicalize the test directory")
+        .join(format!("{prefix}.php"));
+    let expected = format!(
+        "\nFatal error: Uncaught DivisionByZeroError: Division by zero in {script}:4\nStack trace:\n#0 {script}(4): intdiv(1, 0)\n#1 {{main}}\n  thrown in {script} on line 4\n",
+        script = script.display()
+    );
+
     assert_eq!(
-        reported, "\nFatal error: Uncaught DivisionByZeroError: Division by zero\n",
-        "an error with no construction site must omit the location, never print `:0`"
+        reported, expected,
+        "a builtin's error names the CALL SITE, and its frame is the call php prints"
     );
     assert_eq!(
         code,
         Some(255),
         "both uncaught paths must leave the same exit status"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The whole `previous` CHAIN is reported, oldest first, exactly as php prints it.
+///
+/// `throw new X($m, 0, $previous)` is how a library says what it was doing when something
+/// underneath it failed. elephc reported the OUTERMOST link only — the wrapper, without the
+/// failure it wrapped — so the report named a `TypeError` and said nothing about the
+/// `RuntimeException` that had actually gone wrong.
+///
+/// Three links on purpose: two would not distinguish "walks the chain" from "prints the previous".
+/// The tail line is asserted with them, because it belongs to the LAST link alone — printing it
+/// after every block, or after the first, is the mistake this shape catches.
+///
+/// Measured on `php -n` 8.5.6.
+#[test]
+fn the_whole_previous_chain_is_reported_oldest_first() {
+    let prefix = "elephc_uncaught_chain";
+    let (reported, code, dir) = run_uncaught(
+        prefix,
+        "<?php\n\
+         $a = new RuntimeException(\"first\");\n\
+         $b = new LogicException(\"second\", 0, $a);\n\
+         throw new TypeError(\"third\", 0, $b);\n",
+    );
+    let script = dir
+        .canonicalize()
+        .expect("failed to canonicalize the test directory")
+        .join(format!("{prefix}.php"));
+    let expected = format!(
+        "\nFatal error: Uncaught RuntimeException: first in {script}:2\nStack trace:\n#0 {{main}}\n\nNext LogicException: second in {script}:3\nStack trace:\n#0 {{main}}\n\nNext TypeError: third in {script}:4\nStack trace:\n#0 {{main}}\n  thrown in {script} on line 4\n",
+        script = script.display()
+    );
+
+    assert_eq!(
+        reported, expected,
+        "every link must be reported, oldest first, with the tail line only after the last"
+    );
+    assert_eq!(code, Some(255));
     let _ = fs::remove_dir_all(&dir);
 }
 

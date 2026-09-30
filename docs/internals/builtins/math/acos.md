@@ -2,7 +2,7 @@
 title: "acos() - internals"
 description: "Compiler internals for acos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 547
+  order: 573
 ---
 
 ## `acos()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/acos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/acos.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

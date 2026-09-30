@@ -23,6 +23,9 @@ builtin! {
 /// Accepts concrete or dynamic arrays and returns boxed numeric storage for scalar coercion boundaries.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty = ty.array_or_false_member().cloned().unwrap_or(ty);
     if ty.is_php_array() || matches!(ty.codegen_repr(),
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
     ) {

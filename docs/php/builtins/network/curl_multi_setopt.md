@@ -2,7 +2,7 @@
 title: "curl_multi_setopt()"
 description: "Sets an option on a cURL multi handle."
 sidebar:
-  order: 713
+  order: 739
 ---
 
 ## curl_multi_setopt()

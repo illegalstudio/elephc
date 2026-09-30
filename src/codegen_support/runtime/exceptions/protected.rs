@@ -10,7 +10,7 @@
 //! - A pending throwable returns status two; recursive deep-free completion needs separate GC handling.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use crate::codegen_support::try_handlers::{TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE};
+use crate::codegen_support::try_handlers::{TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_NATIVE_RECORD_SIZE};
 
 /// Emits an exception-contained callback around a body using the retained C input slots.
 pub(crate) fn emit(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter)) {
@@ -24,7 +24,7 @@ pub(crate) fn emit_status(emitter: &mut Emitter, name: &str, body: fn(&mut Emitt
 
 /// Selects the target boundary and whether its body already supplies the success/failure status.
 fn emit_inner(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status: bool) {
-    assert_eq!(TRY_HANDLER_SLOT_SIZE, 224, "protected callback spills follow the complete native handler");
+    assert_eq!(TRY_HANDLER_NATIVE_RECORD_SIZE, 224, "protected callback spills follow the native handler record");
     emitter.label_global(name);
     if emitter.target.arch == Arch::AArch64 { aarch64(emitter, name, body, body_status); }
     else { x86_64(emitter, name, body, body_status); }

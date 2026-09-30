@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration or regression tests for diagnostic coverage of I/O builtin ownership and globals, including file ownership builtins reject invalid principals, umask wrong args, and global missing var.
+//! Integration or regression tests for diagnostic coverage of I/O builtin ownership and globals, including chmod mode rejection, umask wrong args, and global missing var.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -9,31 +9,31 @@
 
 use super::*;
 
-/// Verifies ownership builtins reject invalid principal types.
-/// `chmod()` requires an integer mode; owner/group builtins require int or string principals.
-/// Uses `expect_error()` to assert the correct diagnostic message for each case.
+/// Verifies `chmod()` rejects a mode php itself rejects.
+///
+/// The four ownership builtins used to be asserted here too, for a `null` principal — and that
+/// was a refusal of a program php RUNS. MEASURED on `php -n` 8.5.6, `chown($f, null)` deprecates
+/// and then answers for uid 0; `chgrp($f, null)` answers `bool(true)`. Their behaviour is pinned
+/// by `codegen::io::modify` now, where an answer can be compared instead of a diagnostic.
+///
+/// `"abc"` is the case that survives, because php refuses it as well —
+/// `chmod(): Argument #2 ($permissions) must be of type int, string given` — so elephc's compile
+/// refusal is the same verdict, earlier. So is `"12abc"`: MEASURED, a LEADING-numeric string
+/// throws too. A NUMERIC string is a different matter — php coerces `chmod($f, "0644")` to mode
+/// 644 — and elephc now coerces it as well, pinned by
+/// `test_chmod_coerces_its_mode_the_way_php_does`.
 #[test]
-fn test_error_file_ownership_builtins_reject_invalid_principals() {
+fn test_error_chmod_rejects_a_mode_php_rejects_too() {
     expect_error(
-        r#"<?php chmod("file.txt", "0644");"#,
+        r#"<?php chmod("file.txt", "abc");"#,
         "chmod() mode must be int",
     );
     expect_error(
-        r#"<?php chown("file.txt", null);"#,
-        "chown() owner/group must be int or string",
+        r#"<?php chmod("file.txt", "12abc");"#,
+        "chmod() mode must be int",
     );
-    expect_error(
-        r#"<?php chgrp("file.txt", null);"#,
-        "chgrp() owner/group must be int or string",
-    );
-    expect_error(
-        r#"<?php lchown("file.txt", null);"#,
-        "lchown() owner/group must be int or string",
-    );
-    expect_error(
-        r#"<?php lchgrp("file.txt", null);"#,
-        "lchgrp() owner/group must be int or string",
-    );
+    expect_no_error(r#"<?php chmod("file.txt", "0644");"#);
+    expect_no_error(r#"<?php chmod("file.txt", " 644");"#);
 }
 
 /// Verifies lchown()/lchgrp() reject the wrong number of arguments.

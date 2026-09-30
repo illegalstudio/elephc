@@ -71,6 +71,11 @@ pub fn emit_str_replace(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the replaced string
     emitter.instruction("mov x12, x0");                                         // compute destination pointer
     emitter.instruction("str x12, [sp, #48]");                                  // save result start pointer
+    // php's fourth argument is a by-reference COUNT of the replacements that fired, and it is the
+    // loop that knows. The tally lives in the one free frame slot rather than a register, because
+    // every register in this loop is reloaded from the frame on each pass. It leaves in `x0`,
+    // which the string result (`x1`/`x2`) does not use.
+    emitter.instruction("str xzr, [sp, #56]");                                  // no replacement has fired yet
 
     // -- initialize subject scan index --
     emitter.instruction("mov x13, #0");                                         // subject index = 0
@@ -113,6 +118,9 @@ pub fn emit_str_replace(emitter: &mut Emitter) {
     emitter.instruction("add x15, x15, #1");                                    // advance replacement index
     emitter.instruction("b __rt_str_replace_rep_copy");                         // continue copying replacement
     emitter.label("__rt_str_replace_rep_done");
+    emitter.instruction("ldr x9, [sp, #56]");                                   // php counts this replacement
+    emitter.instruction("add x9, x9, #1");
+    emitter.instruction("str x9, [sp, #56]");
     emitter.instruction("ldp x1, x2, [sp]");                                    // reload search ptr and length
     emitter.instruction("add x13, x13, x2");                                    // skip past matched search in subject
     emitter.instruction("b __rt_str_replace_loop");                             // continue scanning subject
@@ -129,7 +137,8 @@ pub fn emit_str_replace(emitter: &mut Emitter) {
     emitter.label("__rt_str_replace_done");
     emitter.instruction("ldr x1, [sp, #48]");                                   // load result start pointer
     emitter.instruction("sub x2, x12, x1");                                     // result length = dest_end - dest_start
-    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("bl __rt_concat_publish");
+    emitter.instruction("ldr x0, [sp, #56]");                                   // the replacement count php's fourth argument asks for                              // advance the concat scratch offset only for scratch-backed results
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
@@ -187,6 +196,9 @@ fn emit_str_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the replaced string
     emitter.instruction("mov r11, rax");                                        // compute the destination pointer where the replaced string begins
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // preserve the replaced-string start pointer for the final string return pair
+    // See the AArch64 counterpart: php's fourth argument is a by-reference COUNT, tallied in the
+    // one free frame slot and returned in `rcx`, which the string result (`rax`/`rdx`) leaves free.
+    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // no replacement has fired yet
     emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // start scanning the subject string from byte offset zero
 
     emitter.label("__rt_str_replace_loop_linux_x86_64");
@@ -232,6 +244,7 @@ fn emit_str_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_str_replace_rep_linux_x86_64");               // continue copying replacement bytes until the full replacement string is emitted
 
     emitter.label("__rt_str_replace_rep_done_linux_x86_64");
+    emitter.instruction("inc QWORD PTR [rbp - 64]");                            // php counts this replacement
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the current subject offset before skipping the matched search string
     emitter.instruction("add r9, QWORD PTR [rbp - 16]");                        // skip past the fully matched search string inside the subject string
     emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // preserve the updated subject offset for the next replacement-loop iteration
@@ -251,7 +264,8 @@ fn emit_str_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // return the reserved start pointer of the replaced string in the primary x86_64 string result register
     emitter.instruction("mov rdx, r11");                                        // copy the destination end pointer so the final replaced-string length can be derived
     emitter.instruction("sub rdx, rax");                                        // derive the replaced-string length from the destination start/end pointers
-    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("call __rt_concat_publish");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // the replacement count php's fourth argument asks for                            // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("add rsp, 80");                                         // release the str_replace() spill slots before returning the replaced string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
     emitter.instruction("ret");                                                 // return the replaced string in the standard x86_64 string result registers

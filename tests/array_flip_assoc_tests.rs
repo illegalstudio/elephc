@@ -78,6 +78,25 @@ fn elephc_diagnostics(stderr: &str) -> String {
         .join("\n")
 }
 
+/// Separates php's `"\nWarning: … on line N\n"` blocks from what the program printed.
+///
+/// Like the php CLI, a compiled program writes its warnings to STDOUT, between the lines the
+/// program itself echoes; this returns the program's own output and the diagnostics apart.
+fn split_php_warnings(stdout: &str) -> (String, String) {
+    let mut output = String::new();
+    let mut diagnostics = String::new();
+    let mut rest = stdout;
+    while let Some(start) = rest.find("\nWarning: ") {
+        output.push_str(&rest[..start]);
+        let body = &rest[start + 1..];
+        let end = body.find('\n').map_or(body.len(), |newline| newline + 1);
+        diagnostics.push_str(&body[..end]);
+        rest = &body[end..];
+    }
+    output.push_str(rest);
+    (output, diagnostics)
+}
+
 /// Compiles `source` to a plain executable, asserting elephc reported no diagnostic.
 fn compile(dir: &Path, source: &str, stem: &str, extra_args: &[&str]) -> PathBuf {
     let output = compile_raw(dir, source, stem, extra_args);
@@ -133,7 +152,7 @@ fn assert_program_output_warnings_and_clean_heap(
     let output = Command::new(&bin)
         .output()
         .expect("failed to run compiled binary");
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let (stdout, diagnostics) = split_php_warnings(&String::from_utf8_lossy(&output.stdout));
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(
         output.status.success(),
@@ -141,7 +160,11 @@ fn assert_program_output_warnings_and_clean_heap(
         output.status.code()
     );
     assert_eq!(stdout, expected_stdout, "program stdout diverged:\n{stderr}");
-    assert_eq!(stderr.matches("Can only flip string and integer values, entry skipped").count(), warnings, "{stderr}");
+    assert_eq!(
+        diagnostics.matches("Can only flip string and integer values, entry skipped").count(),
+        warnings,
+        "{diagnostics}"
+    );
     assert!(
         stderr.contains("live_blocks=0"),
         "array_flip leaked heap blocks:\n{stderr}"

@@ -2,7 +2,7 @@
 title: "mb_strtolower() - internals"
 description: "Compiler internals for mb_strtolower(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 885
+  order: 913
 ---
 
 ## `mb_strtolower()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_strtolower.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_strtolower.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

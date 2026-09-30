@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_rgba()"
 description: "Creates a solid color pattern with alpha."
 sidebar:
-  order: 428
+  order: 454
 ---
 
 ## cairo_pattern_create_rgba()

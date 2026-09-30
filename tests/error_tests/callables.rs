@@ -30,17 +30,20 @@ fn test_error_first_class_builtin_non_literal_arguments() {
     );
 }
 
-/// An unsupported fourth replacement argument stays rejected through callable syntax.
+/// A literal fourth replacement argument is refused as php refuses it, through callable syntax too.
+///
+/// `$count` is by reference, so a literal cannot bind to it: the refusal names that parameter
+/// rather than the arity — php's own wording for the direct call, the callable's for the other.
 #[test]
 fn test_error_capped_string_replace_callable_rejects_fourth_argument() {
     for name in ["str_replace", "str_ireplace"] {
         expect_error(
             &format!("<?php {name}('a', 'b', 'aAa', 0);"),
-            "3 arguments",
+            "Argument #4 ($count) could not be passed by reference",
         );
         expect_error(
             &format!("<?php $callback = {name}(...); $callback('a', 'b', 'aAa', 0);"),
-            "3 arguments",
+            "parameter $count must be passed a variable",
         );
     }
 }
@@ -736,6 +739,36 @@ fn test_error_callable_parameter_rejects_runtime_string() {
     expect_error(
         "<?php function apply(callable $f, string $s) { return $f($s); } $n = $argc > 0 ? \"strtoupper\" : \"strtolower\"; echo apply($n, \"a\");",
         "a callable string must be a compile-time constant here",
+    );
+}
+
+/// Verifies an ELEMENT of an `array` property cannot bind a TYPED by-reference parameter.
+///
+/// php allows `set($obj->items[1])`, and elephc does too for an untyped `&$n`, writing the
+/// element back. A property declared `array` holds php's array union, though, whose element has
+/// no scalar slot an `int &$n` could alias, so that binding is refused and the refusal names
+/// the parameter and the way out rather than compiling a write that would be dropped.
+#[test]
+fn test_error_property_element_by_ref_argument_requires_a_variable() {
+    expect_error(
+        "<?php class Box { public array $items = [1, 2, 3]; } function set9(int &$n): void { $n = 9; } $c = new Box(); set9($c->items[1]);",
+        "parameter $n cannot bind typed by-reference storage from a mixed or hash-backed value",
+    );
+}
+
+/// Verifies a PROPERTY passed by reference to a METHOD keeps its diagnostic.
+///
+/// A free function accepts one — `ir_lower::expr::ref_place_args` reads the place into a hidden
+/// temporary, calls with that, and writes the temporary back — but that rewrite exists only for a
+/// free-function call. A method, a closure and a `callable` have no such lowering, so accepting
+/// the shape for them compiled a call that RAN and dropped the write in SILENCE:
+/// `$this->twiddle($box->data)` left `$box->data` unchanged where php answers the mutated value.
+/// The refusal is the honest answer until the rewrite covers those call shapes too.
+#[test]
+fn test_error_property_by_ref_to_a_method_requires_a_variable() {
+    expect_error(
+        "<?php class Box { public string $data = \"abc\"; } class T { function twiddle(string &$d): void { $d = strtoupper($d); } function go(): void { $b = new Box(); $this->twiddle($b->data); } } (new T())->go();",
+        "parameter $d must be passed a variable",
     );
 }
 

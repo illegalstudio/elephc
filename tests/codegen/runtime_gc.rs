@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, the containers an array literal allocates when it defaults a property, boxed or nested, and read-modify-write stores into a typed static property or a property array element.
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, stream-registry lifecycle, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, the containers an array literal allocates when it defaults a property, boxed or nested, and read-modify-write stores into a typed static property or a property array element.
 //! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, and the ownership of an array literal whose element is an array-returning builtin call.
 //! - The `assoc_chunk` submodule checks heap balance when `array_chunk()` copies an associative receiver.
 //! - The `mixed_receiver_property_writes` submodule checks the ownership of a property write whose receiver is statically `mixed`.
@@ -151,6 +151,18 @@ mod heap;
 mod heap_codegen;
 #[path = "runtime_gc/resource_scope_cleanup.rs"]
 mod resource_scope_cleanup;
+#[path = "runtime_gc/stream_registry.rs"]
+mod stream_registry;
+#[path = "runtime_gc/stream_backend_registry.rs"]
+mod stream_backend_registry;
+#[path = "runtime_gc/stream_context_registry.rs"]
+mod stream_context_registry;
+#[path = "runtime_gc/stream_filter_registry.rs"]
+mod stream_filter_registry;
+#[path = "runtime_gc/stream_tls_registry.rs"]
+mod stream_tls_registry;
+#[path = "runtime_gc/user_wrapper_registry.rs"]
+mod user_wrapper_registry;
 #[path = "runtime_gc/resource_inventory.rs"]
 mod resource_inventory;
 #[path = "runtime_gc/class_param_return.rs"]

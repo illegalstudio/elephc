@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_strerror() - internals"
 description: "Compiler internals for __elephc_curl_multi_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1105
+  order: 1138
 ---
 
 ## `__elephc_curl_multi_strerror()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_multi_strerror.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_multi_strerror.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

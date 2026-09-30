@@ -30,7 +30,8 @@ program or connects to one already running.
 A target this command **launches** — a source or a binary — is measured for its
 whole run and reports the full table: per-function calls, inclusive and self
 wall time, allocations, retained objects, DB queries, DB-driver wait, outgoing
-network operations and network wait. File I/O is not yet counted or timed.
+network operations and network wait, and stream operations. File I/O is counted
+(as stream operations) but not timed.
 Every export follows:
 [Speedscope](https://www.speedscope.app), [pprof](https://github.com/google/pprof),
 Graphviz, the HTML call graph.
@@ -56,9 +57,9 @@ The capability matrix is explicit about each dimension:
 
 | Capture | CPU | Wall time | Calls | Allocations / retained | DB queries | Network | File I/O | Wait | Routes |
 |---|---|---|---|---|---|---|---|---|---|
-| local `monitor` | not measured as an OS CPU clock; the UI can show wall minus recorded waits | exact enter/exit time, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | untagged local run |
+| local `monitor` | not measured as an OS CPU clock; the UI can show wall minus recorded waits | exact enter/exit time, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | exact stream operation counts, not timed | exact DB-driver and network wait | untagged local run |
 | service default | sampled CPU-time ring | unavailable; blocked time is invisible | unavailable | exact deltas only between samples, with sampled attribution; no retained count | unavailable in combined `--with-monitoring` | unavailable in combined `--with-monitoring` | unavailable | unavailable in combined `--with-monitoring` | sampled stacks carry the exact route tag |
-| service `--exact` or signed request | not measured separately; wall minus recorded waits is only a derived remainder | exact for one completed request, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | exact request route/trace context |
+| service `--exact` or signed request | not measured separately; wall minus recorded waits is only a derived remainder | exact for one completed request, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | exact stream operation counts, not timed | exact DB-driver and network wait | exact request route/trace context |
 | `--live` | sampled CPU, asked over the channel | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | request route tags for `--web`; otherwise untagged |
 | `--attach` | sampled from the outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
 
@@ -337,12 +338,15 @@ per-line samples:
 |---|---|---|
 | 🕸 **Graph** | who calls whom | one box per function |
 | 🔥 **Flame** | the same tree as nested bars | width is time; click to zoom, <kbd>Esc</kbd> out |
-| 🗄 **Queries** | every distinct DB statement | with its exact run count |
+| 🗄 **I/O** | every distinct DB statement and stream operation | with its exact run count |
 | 📄 **Source** | your PHP file, annotated | per function (exact) or per line (sampled) |
 | ✅ **Checks** | the performance budget | and what this run measured |
 
 **Dimensions** recolour the graph and re-sort the list: ⏱ time, 🧠 memory,
-💧 retained, ⏳ wait, 🗄 SQL, \# calls. Not every capture has all six.
+💧 retained, ⏳ wait, 🗄 SQL, ↗ network, 🌐 net wait, 🌊 streams, \# calls. Not every
+capture has all nine.
+A function whose stream work is not what is colouring the view still carries it
+as a badge beside its name, so it is visible from any dimension.
 
 **The sidebar** ranks functions by the current dimension, searchable, resizable,
 and groupable under classes and namespaces (⊞). Selecting one opens a bottom-up
@@ -357,7 +361,7 @@ filtered), *Fit in view*, *Critical path*, the pruning threshold, the theme
 
 | | | | |
 |---|---|---|---|
-| <kbd>m</kbd> cycle dimension | <kbd>f</kbd> flame | <kbd>q</kbd> queries | <kbd>s</kbd> source |
+| <kbd>m</kbd> cycle dimension | <kbd>f</kbd> flame | <kbd>q</kbd> I/O | <kbd>s</kbd> source |
 | <kbd>c</kbd> checks | <kbd>p</kbd> critical path | <kbd>0</kbd> fit in view | <kbd>r</kbd> start over |
 | <kbd>d</kbd> diff vs previous | <kbd>l</kbd> follow live | <kbd>←</kbd> <kbd>→</kbd> scrub captures | <kbd>?</kbd> this sheet |
 
@@ -541,7 +545,7 @@ that samples itself from boot whether or not anyone ever looks.
 The **exact** answer is the same measurement a local run gives:
 per-function calls, self and inclusive time, allocations, retained objects,
 DB queries, DB-driver wait, outgoing network operations and network wait, for
-one request, rooted at `{main}`. It does not count or time file I/O. It exists
+one request, rooted at `{main}`, and stream operations — counted, not timed. It exists
 only once a request completes, so `--exact` waits up to thirty seconds for the
 next one.
 
@@ -849,7 +853,41 @@ wait but not a transfer operation, and PHP callback execution nested inside
 the PDO dimensions, so an HTTP-heavy request cannot inflate query budgets or
 trigger a false N+1 diagnosis. The stdout table, interactive graph, distributed
 trace waterfall, OTLP and Prometheus exports, and performance assertions all
-carry the network dimensions. Filesystem I/O is still not counted.
+carry the network dimensions.
+
+**And streams.** `incl_stream` / `excl_stream` count **stream operations** per
+function — `fopen`, `fread`, `fwrite`, `fgets`, `fclose`, `file_get_contents`,
+`file_put_contents` — attributed the same exact way, and reported in a `streams`
+column and as an `--assert streams:…` metric.
+
+They are counted *apart* from queries and network transfers rather than folded
+into one "I/O" number, because they are different problems with the same shape
+and different fixes: a thousand statements are batched into one, while a thousand
+reads are a handle you should have kept open. The N+1 recommendation says which it
+is — "*N+1: `report` calls `load_line` 200 times and `load_line` performs 600
+stream operations — open once and reuse the handle, or read the file once*".
+
+Under the table, the run's operations are broken down by call:
+
+```text
+stream operations
+  fclose               20
+  fgets                20
+  fopen                20
+  file_get_contents    1
+```
+
+That breakdown is the part a count alone cannot give. Sixty operations is a read
+loop if it is one `fopen` and fifty-nine `fgets`, and a *reopen* loop if it is
+twenty of each — the same total, a different bug.
+
+Pure queries about a handle — `feof`, `ftell` — are deliberately not counted.
+They touch no descriptor, and counting them would report
+`while (!feof($h)) { fgets($h); }` as doing twice the work it does.
+
+Stream operations are counted, not timed: there is no stream wait dimension, so
+time spent blocked in a read stays in the function's own wall time. They are
+exact-capture only — the sampled probe does not see them.
 
 **And what stays behind.** `incl_ret` / `excl_ret` are **retained** objects —
 allocated minus freed — attributed per function the same exact way, by reading
@@ -875,7 +913,7 @@ times the database work — statement execution and `PDO::exec`, across every
 driver — and reports the elapsed time through the same pay-for-use slot
 mechanism, so the profiler can split every function's self time into recorded DB
 wait and a non-DB remainder. Network wait is reported in its own curl-backed
-dimension, while file I/O remains unmeasured. Neither remainder is an OS
+dimension, while file I/O is counted as stream operations but not timed. Neither remainder is an OS
 measurement of actual on-CPU time.
 
 ```
@@ -928,11 +966,11 @@ absent from a `--live` or `--attach` capture):
   dimension, edge thickness tracks each callee's inclusive share, and the
   threshold selector (All / ≥1% / ≥5% / ≥10%) prunes the long tail.
 
-### SQL queries (the N+1 view)
+### I/O: queries and streams (the N+1 view)
 
 ![The queries panel, with the N+1 flagged](../images/profiling/queries.png)
 
-When the run touched a database, a **🗄 Queries** panel (`q`) lists every distinct
+When the run touched a database, the **🗄 I/O** panel (`q`) lists every distinct
 statement and how many times it ran. Query text is normalized — string and
 numeric literals collapse to `?` — so 200 executions of the same prepared
 `SELECT`, or 200 `INSERT`s with different values, each fold into a single row
@@ -949,6 +987,26 @@ Runs                     Statement
 The counts are exact: the PDO bridge reports each executed statement to the
 profiler (pay-for-use — a binary built without the capability records nothing), so the
 panel and the N+1 recommendation below agree by construction.
+
+Below it, the same panel breaks the run's **stream operations** down by call —
+`fopen`, `fread`, `fwrite`, `fgets`, `fclose`, `file_get_contents`,
+`file_put_contents` — and flags a handle that was opened many times:
+
+```
+Runs                     Operation
+×20    ████████████████  fopen                                 reopened?
+×20    ████████████████  fgets
+×20    ████████████████  fclose
+×1     ▏                 file_get_contents
+```
+
+It is the `fopen` count that is flagged rather than the total, because the total
+alone cannot tell the two shapes apart: sixty operations is an ordinary read loop
+if it is one `fopen` and fifty-nine `fgets`, and a *reopen* loop — the stream
+N+1 — if it is twenty of each.
+
+Each half of the panel is written only when its subsystem was used, so a program
+that never opened a database is not told it ran no queries.
 
 ### Distributed profiling (W3C Trace Context)
 

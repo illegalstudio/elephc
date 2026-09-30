@@ -340,8 +340,28 @@ fn array_offset_get_body() -> Vec<Stmt> {
             increment_stmt("i"),
         ],
     ));
-    body.push(return_stmt(null_expr()));
+    body.extend(array_missing_offset_stmts());
     body
+}
+
+/// Builds the miss path of an offset read: php's `Undefined array key` warning, then null.
+///
+/// MEASURED on `php -n` 8.5.6: `(new ArrayObject([1,2,3]))->offsetGet(99)` warns
+/// `Undefined array key 99` and answers NULL, and so does the `$a[99]` spelling, on `ArrayObject`
+/// and on `ArrayIterator` alike — six warnings elephc raised none of. The VALUE was already
+/// right; only the diagnostic was missing.
+///
+/// Reading a key out of an EMPTY array is php's own way of raising it, so the message comes from
+/// the same runtime path a plain array uses: an int key bare, a string key quoted, and the
+/// CALLER's line, which a synthesized body inherits because it publishes no span of its own.
+///
+/// An assoc literal rather than `[]`, because an `array<never>` index folds to null at compile
+/// time — warning and all.
+fn array_missing_offset_stmts() -> Vec<Stmt> {
+    vec![
+        assign_stmt("__splMissing", empty_assoc_array_expr()),
+        return_stmt(array_access(var_expr("__splMissing"), var_expr("offset"))),
+    ]
 }
 
 /// Builds the synthetic method body for array offset set.

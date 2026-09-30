@@ -619,6 +619,21 @@ fn switch_terminal_effect(
     default: &Option<Vec<Stmt>>,
     additional_expr_diverges: &dyn Fn(&Expr) -> bool,
 ) -> TerminalEffect {
+    // A break that only SOME paths take is invisible below: `block_terminal_effect_with_divergence`
+    // keeps the first effect that is not `FallsThrough`, and an `if` with no `else` reports
+    // `FallsThrough` however its branches end — so `[ if (…) { break; }, return 1; ]` reads as
+    // "always exits" and everything after the switch is deleted as dead code. MEASURED: a function
+    // whose `return 99` sat after such a switch lost it, and answered a sentinel where php answers
+    // 99. `switch_guarantees_function_exit` already asks this question; its sibling never did.
+    if cases.iter().any(|(_, body)| {
+        block_may_leave_current_switch_before_function_exit(body, additional_expr_diverges)
+    }) || default.as_ref().is_some_and(|body| {
+        block_may_leave_current_switch_before_function_exit(body, additional_expr_diverges)
+    }) {
+        // A break inside the switch resumes right AFTER it, so the switch itself falls through.
+        return TerminalEffect::FallsThrough;
+    }
+
     let Some(default_body) = default.as_ref() else {
         return TerminalEffect::FallsThrough;
     };

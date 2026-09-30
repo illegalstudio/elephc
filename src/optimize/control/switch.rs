@@ -63,7 +63,14 @@ pub(crate) fn prune_switch_stmt(
         return expr_to_effect_stmt(subject);
     }
 
-    if switch_has_level_sensitive_loop_exit(&cases, &default) {
+    // A STRAY `break` still targeting the SWITCH forbids every rewrite below: the single-case `if`
+    // drops the switch, and the break would then target nothing — measured, it compiled to
+    // `unreachable` and the program died with an illegal instruction where php answers a value.
+    // A break ENDING a case body is not stray: it is that body's ordinary terminator and every
+    // rewrite consumes it. Counting those refused nearly every switch there is.
+    if switch_has_level_sensitive_loop_exit(&cases, &default)
+        || switch_has_body_targeting_break(&cases, &default)
+    {
         return vec![Stmt {
             kind: StmtKind::Switch {
                 subject,

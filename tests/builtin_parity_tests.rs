@@ -68,9 +68,9 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
         );
     }
     // Five language constructs, one dedicated-syntax surface, three compiler transforms,
-    // the 346 prelude-provided functions outside `ext/curl` (including XML), and the
+    // the 366 prelude-provided functions outside `ext/curl` (including XML), and the
     // 54 date/calendar functions the name resolver rewrites.
-    assert_eq!(exceptional.len(), 409);
+    assert_eq!(exceptional.len(), 429);
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
@@ -112,7 +112,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
         BTreeSet::from(["func_get_arg", "func_get_args", "func_num_args"])
     );
     assert_eq!(rewrites, 54);
-    assert_eq!(preludes.len(), 346);
+    assert_eq!(preludes.len(), 366);
     for name in [
         "hash_copy",
         "hash_final",

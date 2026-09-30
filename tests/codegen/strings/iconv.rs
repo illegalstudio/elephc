@@ -57,11 +57,11 @@ fn test_iconv_reports_an_unknown_charset() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\n");
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "Warning: iconv(): Wrong encoding, conversion from \"NOPEENC\" to \"UTF-8\" is not allowed"
         ),
         "missing charset warning: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -74,10 +74,10 @@ fn test_iconv_reports_malformed_input() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\n");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Notice: iconv(): Detected an illegal character in input string"),
         "missing malformed-input notice: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -204,10 +204,10 @@ fn test_iconv_mime_decode_reports_malformed_words() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\n");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: iconv_mime_decode(): Malformed string"),
         "missing malformed-string warning: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -234,18 +234,18 @@ echo iconv_mime_decode(\"=?UTF-8?Q?=\\n41?=\"), '|',
         "bool(false)\n=?UTF-8?Q?ab=  X?=\nbool(false)\n41|41|41|ab"
     );
     assert_eq!(
-        out.stderr.matches("Warning: iconv_mime_decode(): Malformed string").count(),
+        out.diagnostics.matches("Warning: iconv_mime_decode(): Malformed string").count(),
         1,
         "unexpected decode diagnostics: {}",
-        out.stderr
+        out.diagnostics
     );
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches("Warning: iconv_mime_decode_headers(): Malformed string")
             .count(),
         1,
         "unexpected header diagnostics: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 

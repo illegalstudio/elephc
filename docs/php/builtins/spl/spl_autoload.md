@@ -2,7 +2,7 @@
 title: "spl_autoload()"
 description: "Default implementation for __autoload()."
 sidebar:
-  order: 769
+  order: 795
 ---
 
 ## spl_autoload()

@@ -99,7 +99,7 @@ pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
 pub fn fold_constants(program: Program) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
         let program = crate::superglobals::seed_cli_populated_superglobals(program);
-        fold_block(program)
+        crate::globals_superglobal::fold_program(program, fold_block)
     })
 }
 

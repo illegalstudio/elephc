@@ -69,10 +69,94 @@ pub fn emit_phar_read(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the entry stream descriptor
 
 
+    // ===== __rt_zip_open_entry(x0=url, x1=url len, x2=prefix, x3=prefix len, x4=may_read) =====
+    // php's zip wrapper reports EVERY failed open the same way, whatever went wrong:
+    //   Warning: file_get_contents(zip://a.zip#nope.txt): Failed to open stream: operation failed
+    // Measured on `php -n` 8.5.6 for a missing entry, a missing archive, a `#`-less URL, an
+    // empty entry name, a directory name, and an encrypted entry with no password — one wording
+    // for all six, because `ext/zip` stashes no sentence and the generic caller has only its
+    // own fallback to print. The caller passes the prefix so `fopen()` and `file_get_contents()`
+    // each name themselves without a branch in here, and `may_read` = 0 refuses outright — which
+    // is how a WRITE mode gets the identical line without first reading the entry.
+    emitter.blank();
+    emitter.comment("--- runtime: zip_open_entry ---");
+    emitter.label_global("__rt_zip_open_entry");
+    // Frame: [0]=url ptr [8]=url len [16]=prefix ptr [24]=prefix len [32]=x29 [40]=x30.
+    emitter.instruction("sub sp, sp, #48");                                     // allocate the zip-open frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
+    emitter.instruction("stp x0, x1, [sp, #0]");                                // hold the URL across the read
+    emitter.instruction("stp x2, x3, [sp, #16]");                               // hold the caller's prefix across the read
+    emitter.instruction("cbz x4, __rt_zoe_refuse");                             // a non-read mode never reads the entry
+    emitter.instruction("bl __rt_phar_read_entry");                             // x0 = entry stream fd, or -1
+    emitter.instruction("cmp x0, #0");                                          // did the zip entry open?
+    emitter.instruction("b.ge __rt_zoe_done");                                  // yes → hand the descriptor back
+    emitter.label("__rt_zoe_refuse");
+    // The composer wants a NUL-terminated path and the URL arrived as a pointer/length pair, so
+    // it goes through the same `__rt_cstr` scratch the other refusal sites use.
+    emitter.instruction("ldr x1, [sp, #0]");                                    // the URL, still whole
+    emitter.instruction("ldr x2, [sp, #8]");                                    // and its byte length
+    emitter.instruction("bl __rt_cstr");                                        // x0 = a NUL-terminated copy
+    emitter.instruction("mov x2, x0");                                          // the path php names in the parentheses
+    abi::emit_symbol_address(emitter, "x3", "_diag_open_operation_failed");     // the only reason zip ever gives
+    emitter.instruction(&format!(
+        "mov x4, #{}",
+        crate::codegen_support::runtime::io::OPEN_OPERATION_FAILED.len()
+    ));                                                                         // that reason's byte length
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the calling builtin's warning prefix
+    emitter.instruction("ldr x1, [sp, #24]");                                   // and its byte length
+    emitter.instruction("bl __rt_open_failed_reason_warning");                  // print the composed failed-open line
+    emitter.instruction("mov x0, #-1");                                         // a failed zip open produces no descriptor
+    emitter.label("__rt_zoe_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the zip-open frame
+    emitter.instruction("ret");                                                 // return the descriptor or the failure
+
     // ===== __rt_fopen_maybe_phar(x1=fname ptr, x2=fname len, x3=mode ptr, x4=mode len) =====
     emitter.blank();
     emitter.comment("--- runtime: fopen_maybe_phar ---");
     emitter.label_global("__rt_fopen_maybe_phar");
+    // `zip://archive.zip#entry` is checked first: it is the SHORTER prefix, and its
+    // entry lookup goes through the very same bridge call, so a match only has to
+    // reach the mode dispatch below. php's zip wrapper is read-only, so a write
+    // mode must NOT fall through to the plain filesystem open — that would create
+    // a file named `zip://...` instead of failing the way php's wrapper does.
+    emitter.instruction("cmp x2, #6");                                          // filename at least "zip://" long?
+    emitter.instruction("b.lt __rt_fopen_maybe_phar_check");                    // too short for zip:// → try phar://
+    emitter.instruction("ldrb w9, [x1, #0]");                                   // 'z'
+    emitter.instruction("cmp w9, #0x7a");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fopen_maybe_phar_check");                    // branch when the checked value is nonzero or different
+    emitter.instruction("ldrb w9, [x1, #1]");                                   // 'i'
+    emitter.instruction("cmp w9, #0x69");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fopen_maybe_phar_check");                    // branch when the checked value is nonzero or different
+    emitter.instruction("ldrb w9, [x1, #2]");                                   // 'p'
+    emitter.instruction("cmp w9, #0x70");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fopen_maybe_phar_check");                    // branch when the checked value is nonzero or different
+    emitter.instruction("ldrb w9, [x1, #3]");                                   // ':'
+    emitter.instruction("cmp w9, #0x3a");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fopen_maybe_phar_check");                    // branch when the checked value is nonzero or different
+    emitter.instruction("ldrb w9, [x1, #4]");                                   // '/'
+    emitter.instruction("cmp w9, #0x2f");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fopen_maybe_phar_check");                    // branch when the checked value is nonzero or different
+    emitter.instruction("ldrb w9, [x1, #5]");                                   // '/'
+    emitter.instruction("cmp w9, #0x2f");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fopen_maybe_phar_check");                    // branch when the checked value is nonzero or different
+    // php's zip wrapper is READ-ONLY, and a write mode is refused with the very same line a
+    // missing entry produces. The refusal must not fall through to the plain filesystem open,
+    // which would create a file literally named `zip://archive.zip#entry`.
+    emitter.instruction("mov x5, #1");                                          // assume a read mode, which really opens the entry
+    emitter.instruction("cbz x4, __rt_fopen_zip_go");                           // empty mode → refuse without reading
+    emitter.instruction("ldrb w9, [x3, #0]");                                   // mode[0]
+    emitter.instruction("cmp w9, #0x72");                                       // 'r' (read)?
+    emitter.instruction("cset x5, eq");                                         // only a read mode may reach the entry reader
+    emitter.label("__rt_fopen_zip_go");
+    emitter.instruction("mov x0, x1");                                          // url ptr → __rt_zip_open_entry arg0
+    emitter.instruction("mov x1, x2");                                          // url len → __rt_zip_open_entry arg1
+    abi::emit_symbol_address(emitter, "x2", "_diag_open_failed_fopen_prefix");  // php names fopen() in this line
+    emitter.instruction(&format!("mov x3, #{}", "Warning: fopen(".len()));      // that prefix's byte length
+    emitter.instruction("mov x4, x5");                                          // pass whether the entry may be read at all
+    emitter.instruction("b __rt_zip_open_entry");                               // tail-call the warn-on-failure zip opener
+    emitter.label("__rt_fopen_maybe_phar_check");
     emitter.instruction("cmp x2, #7");                                          // filename at least "phar://" long?
     emitter.instruction("b.lt __rt_fopen_maybe_phar_plain");                    // branch when comparison is below target
     emitter.instruction("ldrb w9, [x1, #0]");                                   // 'p'
@@ -124,6 +208,55 @@ pub fn emit_phar_read(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_get_contents_maybe_phar ---");
     emitter.label_global("__rt_file_get_contents_maybe_phar");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::StringPair,
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_fgc",
+            name_len: 17,
+            directory: false,
+        },
+    );
+    // `zip://archive.zip#entry` reaches the very same entry reader: the bridge is
+    // handed the whole URL and picks the shape apart by its scheme, so the only
+    // thing this gate owes the zip wrapper is recognising its (shorter) prefix.
+    emitter.instruction("cmp x2, #6");                                          // at least "zip://" long?
+    emitter.instruction("b.lt __rt_fgc_phar_check");                            // too short for zip:// → try phar://
+    emitter.instruction("ldrb w9, [x1, #0]");                                   // 'z'
+    emitter.instruction("cmp w9, #0x7a");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fgc_phar_check");                            // branch when the checked value is nonzero or different
+    emitter.instruction("ldrb w9, [x1, #1]");                                   // 'i'
+    emitter.instruction("cmp w9, #0x69");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fgc_phar_check");                            // branch when the checked value is nonzero or different
+    emitter.instruction("ldrb w9, [x1, #2]");                                   // 'p'
+    emitter.instruction("cmp w9, #0x70");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fgc_phar_check");                            // branch when the checked value is nonzero or different
+    emitter.instruction("ldrb w9, [x1, #3]");                                   // ':'
+    emitter.instruction("cmp w9, #0x3a");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fgc_phar_check");                            // branch when the checked value is nonzero or different
+    emitter.instruction("ldrb w9, [x1, #4]");                                   // '/'
+    emitter.instruction("cmp w9, #0x2f");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fgc_phar_check");                            // branch when the checked value is nonzero or different
+    emitter.instruction("ldrb w9, [x1, #5]");                                   // '/'
+    emitter.instruction("cmp w9, #0x2f");                                       // compare runtime values for the next branch
+    emitter.instruction("b.ne __rt_fgc_phar_check");                            // branch when the checked value is nonzero or different
+    // zip:// read at run time: the SAME frame and slurp the phar route uses, entered through the
+    // warn-on-failure opener so a missing entry prints php's line instead of failing silently.
+    emitter.instruction("sub sp, sp, #48");                                     // frame: [0]=fd [8]=str ptr [16]=str len [32]=x29 [40]=x30
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
+    emitter.instruction("mov x0, x1");                                          // url ptr → __rt_zip_open_entry arg0
+    emitter.instruction("mov x1, x2");                                          // url len → __rt_zip_open_entry arg1
+    abi::emit_symbol_address(emitter, "x2", "_diag_open_failed_fgc_prefix");    // php names file_get_contents() in this line
+    emitter.instruction(&format!(
+        "mov x3, #{}",
+        "Warning: file_get_contents(".len()
+    ));                                                                         // that prefix's byte length
+    emitter.instruction("mov x4, #1");                                          // file_get_contents always reads
+    emitter.instruction("bl __rt_zip_open_entry");                              // x0 = entry stream fd (-1 after warning)
+    emitter.instruction("b __rt_fgc_archive_have_fd");                          // join the shared slurp with the descriptor
+    emitter.label("__rt_fgc_phar_check");
     emitter.instruction("cmp x2, #7");                                          // at least "phar://" long?
     emitter.instruction("b.lt __rt_fgc_phar_plain");                            // branch when comparison is below target
     emitter.instruction("ldrb w9, [x1, #0]");                                   // 'p'
@@ -154,9 +287,11 @@ pub fn emit_phar_read(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x1");                                          // url ptr → __rt_phar_read_entry arg0
     emitter.instruction("mov x1, x2");                                          // url len → __rt_phar_read_entry arg1
     emitter.instruction("bl __rt_phar_read_entry");                             // x0 = entry stream fd (-1 on missing archive/entry)
-    emitter.instruction("cmp x0, #0");                                          // did the phar read fail?
+    emitter.label("__rt_fgc_archive_have_fd");
+    emitter.instruction("cmp x0, #0");                                          // did the archive read fail?
     emitter.instruction("b.lt __rt_fgc_phar_fail");                             // → boxed false
     emitter.instruction("str x0, [sp, #0]");                                    // save the fd for the close below
+    emitter.instruction("mov x1, #0");                                          // no state-owned chunk size: let the reader use its default
     emitter.instruction("bl __rt_stream_get_contents");                         // (x0=fd) → x1 = string ptr, x2 = length
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the slurped string ptr/len
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the fd
@@ -218,10 +353,81 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the entry stream descriptor
 
 
+    // ===== __rt_zip_open_entry(rdi=url, rsi=url len, rdx=prefix, rcx=prefix len, r8=may_read) =====
+    // See the AArch64 counterpart for the measured wording. x86_64 keeps the URL and the prefix
+    // in the frame rather than in callee-saved registers so nothing has to be restored twice.
+    emitter.blank();
+    emitter.comment("--- runtime: zip_open_entry ---");
+    emitter.label_global("__rt_zip_open_entry");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("sub rsp, 48");                                         // frame: [rbp-8]=url [rbp-16]=len [rbp-24]=prefix [rbp-32]=prefix len
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // hold the URL across the read
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // and its byte length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // hold the caller's prefix across the read
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // and its byte length
+    emitter.instruction("test r8, r8");                                         // may this mode read the entry at all?
+    emitter.instruction("jz __rt_zoe_refuse_x86");                              // a non-read mode never reads the entry
+    emitter.instruction("call __rt_phar_read_entry");                           // rax = entry stream fd, or -1
+    emitter.instruction("cmp rax, 0");                                          // did the zip entry open?
+    emitter.instruction("jge __rt_zoe_done_x86");                               // yes → hand the descriptor back
+    emitter.label("__rt_zoe_refuse_x86");
+    // See the AArch64 counterpart on the `__rt_cstr` round trip.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the URL, still whole
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // and its byte length
+    emitter.instruction("call __rt_cstr");                                      // rax = a NUL-terminated copy
+    emitter.instruction("mov rdx, rax");                                        // the path php names in the parentheses
+    abi::emit_symbol_address(emitter, "rcx", "_diag_open_operation_failed");    // the only reason zip ever gives
+    emitter.instruction(&format!(
+        "mov r8, {}",
+        crate::codegen_support::runtime::io::OPEN_OPERATION_FAILED.len()
+    ));                                                                         // that reason's byte length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the calling builtin's warning prefix
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // and its byte length
+    emitter.instruction("call __rt_open_failed_reason_warning");                // print the composed failed-open line
+    emitter.instruction("mov rax, -1");                                         // a failed zip open produces no descriptor
+    emitter.label("__rt_zoe_done_x86");
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the descriptor or the failure
+
     // ===== __rt_fopen_maybe_phar(rax=fname ptr, rdx=fname len, rdi=mode ptr, rsi=mode len) =====
     emitter.blank();
     emitter.comment("--- runtime: fopen_maybe_phar ---");
     emitter.label_global("__rt_fopen_maybe_phar");
+    // See the AArch64 counterpart: `zip://` is the shorter prefix and is checked
+    // first, and a non-read mode must fail here rather than fall through to the
+    // plain open, which would create a file literally named `zip://...`.
+    emitter.instruction("cmp rdx, 6");                                          // filename at least "zip://" long?
+    emitter.instruction("jl __rt_fopen_maybe_phar_check_x86");                  // too short for zip:// → try phar://
+    emitter.instruction("cmp BYTE PTR [rax + 0], 0x7a");                        // 'z'
+    emitter.instruction("jne __rt_fopen_maybe_phar_check_x86");                 // branch when the checked value is nonzero or different
+    emitter.instruction("cmp BYTE PTR [rax + 1], 0x69");                        // 'i'
+    emitter.instruction("jne __rt_fopen_maybe_phar_check_x86");                 // branch when the checked value is nonzero or different
+    emitter.instruction("cmp BYTE PTR [rax + 2], 0x70");                        // 'p'
+    emitter.instruction("jne __rt_fopen_maybe_phar_check_x86");                 // branch when the checked value is nonzero or different
+    emitter.instruction("cmp BYTE PTR [rax + 3], 0x3a");                        // ':'
+    emitter.instruction("jne __rt_fopen_maybe_phar_check_x86");                 // branch when the checked value is nonzero or different
+    emitter.instruction("cmp BYTE PTR [rax + 4], 0x2f");                        // '/'
+    emitter.instruction("jne __rt_fopen_maybe_phar_check_x86");                 // branch when the checked value is nonzero or different
+    emitter.instruction("cmp BYTE PTR [rax + 5], 0x2f");                        // '/'
+    emitter.instruction("jne __rt_fopen_maybe_phar_check_x86");                 // branch when the checked value is nonzero or different
+    // php's zip wrapper is READ-ONLY, and a write mode is refused with the very same line a
+    // missing entry produces. The refusal must not fall through to the plain filesystem open,
+    // which would create a file literally named `zip://archive.zip#entry`.
+    emitter.instruction("xor r8d, r8d");                                        // assume the mode may not read
+    emitter.instruction("test rsi, rsi");                                       // empty mode → refuse without reading
+    emitter.instruction("jz __rt_fopen_zip_go_x86");                            // branch when the checked value is zero or equal
+    emitter.instruction("cmp BYTE PTR [rdi + 0], 0x72");                        // mode[0] == 'r'?
+    emitter.instruction("jne __rt_fopen_zip_go_x86");                           // only a read mode may reach the entry reader
+    emitter.instruction("mov r8d, 1");                                          // a read mode really opens the entry
+    emitter.label("__rt_fopen_zip_go_x86");
+    emitter.instruction("mov rdi, rax");                                        // url ptr → __rt_zip_open_entry arg0
+    emitter.instruction("mov rsi, rdx");                                        // url len → __rt_zip_open_entry arg1
+    abi::emit_symbol_address(emitter, "rdx", "_diag_open_failed_fopen_prefix"); // php names fopen() in this line
+    emitter.instruction(&format!("mov rcx, {}", "Warning: fopen(".len()));      // that prefix's byte length
+    emitter.instruction("jmp __rt_zip_open_entry");                             // tail-call the warn-on-failure zip opener
+    emitter.label("__rt_fopen_maybe_phar_check_x86");
     emitter.instruction("cmp rdx, 7");                                          // filename at least "phar://" long?
     emitter.instruction("jl __rt_fopen_maybe_phar_plain_x86");                  // branch when comparison is below target
     emitter.instruction("cmp BYTE PTR [rax + 0], 0x70");                        // 'p'
@@ -266,6 +472,48 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_get_contents_maybe_phar ---");
     emitter.label_global("__rt_file_get_contents_maybe_phar");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::StringPair,
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_fgc",
+            name_len: 17,
+            directory: false,
+        },
+    );
+    // See the AArch64 counterpart: the bridge takes the whole URL and picks the
+    // shape apart by scheme, so this gate only owes zip:// its (shorter) prefix.
+    emitter.instruction("cmp rdx, 6");                                          // at least "zip://" long?
+    emitter.instruction("jl __rt_fgc_phar_check_x86");                          // too short for zip:// → try phar://
+    emitter.instruction("cmp BYTE PTR [rax + 0], 0x7a");                        // 'z'
+    emitter.instruction("jne __rt_fgc_phar_check_x86");                         // branch when the checked value is nonzero or different
+    emitter.instruction("cmp BYTE PTR [rax + 1], 0x69");                        // 'i'
+    emitter.instruction("jne __rt_fgc_phar_check_x86");                         // branch when the checked value is nonzero or different
+    emitter.instruction("cmp BYTE PTR [rax + 2], 0x70");                        // 'p'
+    emitter.instruction("jne __rt_fgc_phar_check_x86");                         // branch when the checked value is nonzero or different
+    emitter.instruction("cmp BYTE PTR [rax + 3], 0x3a");                        // ':'
+    emitter.instruction("jne __rt_fgc_phar_check_x86");                         // branch when the checked value is nonzero or different
+    emitter.instruction("cmp BYTE PTR [rax + 4], 0x2f");                        // '/'
+    emitter.instruction("jne __rt_fgc_phar_check_x86");                         // branch when the checked value is nonzero or different
+    emitter.instruction("cmp BYTE PTR [rax + 5], 0x2f");                        // '/'
+    emitter.instruction("jne __rt_fgc_phar_check_x86");                         // branch when the checked value is nonzero or different
+    // zip:// read at run time: the SAME frame and slurp the phar route uses, entered through the
+    // warn-on-failure opener so a missing entry prints php's line instead of failing silently.
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // frame: [rbp-8]=fd [rbp-16]=str ptr [rbp-24]=len
+    emitter.instruction("mov rdi, rax");                                        // url ptr → __rt_zip_open_entry arg0
+    emitter.instruction("mov rsi, rdx");                                        // url len → __rt_zip_open_entry arg1
+    abi::emit_symbol_address(emitter, "rdx", "_diag_open_failed_fgc_prefix");   // php names file_get_contents() in this line
+    emitter.instruction(&format!(
+        "mov rcx, {}",
+        "Warning: file_get_contents(".len()
+    ));                                                                         // that prefix's byte length
+    emitter.instruction("mov r8d, 1");                                          // file_get_contents always reads
+    emitter.instruction("call __rt_zip_open_entry");                            // rax = entry stream fd (-1 after warning)
+    emitter.instruction("jmp __rt_fgc_archive_have_fd_x86");                    // join the shared slurp with the descriptor
+    emitter.label("__rt_fgc_phar_check_x86");
     emitter.instruction("cmp rdx, 7");                                          // at least "phar://" long?
     emitter.instruction("jl __rt_fgc_phar_plain_x86");                          // branch when comparison is below target
     emitter.instruction("cmp BYTE PTR [rax + 0], 0x70");                        // 'p'
@@ -289,10 +537,12 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // url ptr → __rt_phar_read_entry arg0
     emitter.instruction("mov rsi, rdx");                                        // url len → __rt_phar_read_entry arg1
     emitter.instruction("call __rt_phar_read_entry");                           // rax = entry stream fd (-1 on missing archive/entry)
-    emitter.instruction("cmp rax, 0");                                          // did the phar read fail?
+    emitter.label("__rt_fgc_archive_have_fd_x86");
+    emitter.instruction("cmp rax, 0");                                          // did the archive read fail?
     emitter.instruction("jl __rt_fgc_phar_fail_x86");                           // → boxed false
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the fd for the close below
     emitter.instruction("mov rdi, rax");                                        // fd → __rt_stream_get_contents arg
+    emitter.instruction("xor esi, esi");                                        // no state-owned chunk size: let the reader use its default
     emitter.instruction("call __rt_stream_get_contents");                       // rax = string ptr, rdx = length
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the slurped string ptr
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the slurped string length

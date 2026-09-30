@@ -13,4 +13,5 @@ mod call_validation;
 mod param_binding;
 mod reference_outputs;
 mod resolution;
+pub(in crate::types) use resolution::array_element_representation_widens;
 mod returns;

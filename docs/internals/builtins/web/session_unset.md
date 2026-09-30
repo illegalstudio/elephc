@@ -2,7 +2,7 @@
 title: "session_unset() - internals"
 description: "Compiler internals for session_unset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1001
+  order: 1034
 ---
 
 ## `session_unset()` - internals

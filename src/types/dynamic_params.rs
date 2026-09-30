@@ -222,6 +222,13 @@ pub fn signature_has_dynamic_untyped_param(signature: &FunctionSig) -> bool {
 /// union, because the container may be built from boxed dynamic parameters. Non-container types
 /// are returned unchanged (in their codegen representation).
 pub fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
+    // A resource can only leave such a function BOXED. `codegen_repr()` collapses
+    // Resource to Int, so the body ended up casting its now-Mixed parameter down to a
+    // plain integer: `function f($c) { return $c; }` handed back the resource's display
+    // id, and `is_resource()` on the result answered false.
+    if matches!(return_type, PhpType::Resource(_)) {
+        return PhpType::Mixed;
+    }
     match return_type.codegen_repr() {
         PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
         PhpType::AssocArray { key, .. } => PhpType::AssocArray {

@@ -179,6 +179,33 @@ fn test_mixed_count_scalar_throws_php_type_error() {
     );
 }
 
+/// `count()` names every type PHP names, with PHP's own spelling.
+///
+/// All eight wordings were read off `php -n` 8.5.6 rather than derived from the tag names, which
+/// is what catches the boolean pair: PHP spells the VALUE, so `true` and `false` are different
+/// words where a type-driven table would have produced `bool` twice. The two containers at the
+/// end are the control — a fix that raised for everything would look just as green without them.
+#[test]
+fn test_count_names_every_rejected_type_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("/dev/null", "r");
+$vals = [1, "s", 1.5, true, false, null, $h, [1, 2], ["k" => 1]];
+foreach ([0, 1, 2, 3, 4, 5, 6, 7, 8] as $i) {
+    try {
+        echo count($vals[$i]), "|";
+    } catch (\TypeError $e) {
+        echo substr($e->getMessage(), 63), "|";
+    }
+}
+fclose($h);"#,
+    );
+    assert_eq!(
+        out,
+        "int given|string given|float given|true given|false given|null given|resource given|2|1|"
+    );
+}
+
 /// Nested access with int key first, then string key: `arr[0]["x"]` on an
 /// array of assoc objects returned by json_decode.
 #[test]

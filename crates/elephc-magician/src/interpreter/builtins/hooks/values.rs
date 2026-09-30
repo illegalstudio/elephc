@@ -272,6 +272,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
+    /// Dispatches `str_getcsv(...)`.
+    StrGetcsv,
     /// Dispatches string search predicate builtins.
     StringSearch,
     /// Dispatches `explode(...)` and `implode(...)`.
@@ -358,6 +360,14 @@ impl EvalValuesHook {
                     lexical_scope,
                     context,
                     values,
+                )
+            }
+            Self::StrGetcsv => {
+                let [subject, controls @ ..] = evaluated_args else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                crate::interpreter::builtins::string::str_getcsv::eval_str_getcsv_result(
+                    *subject, controls, context, values,
                 )
             }
             Self::Asin => one_arg(evaluated_args, values, eval_asin_result),
@@ -598,7 +608,7 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             }),
             Self::Sprintf => eval_sprintf_result(evaluated_args, context, values),
-            Self::Sscanf => eval_sscanf_values_result(evaluated_args, values),
+            Self::Sscanf => eval_sscanf_values_result(evaluated_args, context, values),
             Self::StringCase => one_arg(evaluated_args, values, |value, values| match name {
                 "lcfirst" => eval_lcfirst_result(value, values),
                 "strtolower" => eval_strtolower_result(value, values),
@@ -647,7 +657,7 @@ impl EvalValuesHook {
             }),
             Self::StringSplitJoin => match name {
                 "explode" => eval_explode_declared_values_result(evaluated_args, values),
-                "implode" => eval_implode_declared_values_result(evaluated_args, values),
+                "implode" => eval_implode_declared_values_result(evaluated_args, context, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {

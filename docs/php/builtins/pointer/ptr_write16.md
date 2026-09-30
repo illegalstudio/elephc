@@ -2,7 +2,7 @@
 title: "ptr_write16()"
 description: "Writes one 16-bit word through a raw pointer."
 sidebar:
-  order: 741
+  order: 767
 ---
 
 ## ptr_write16()

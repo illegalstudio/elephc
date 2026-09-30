@@ -1,0 +1,12 @@
+{
+  "argv": [],
+  "dependencies": [],
+  "description": "Captures process-group termination after a deterministic timeout.",
+  "environment": {},
+  "id": "timeout",
+  "ini": {},
+  "normalization": [],
+  "schema_version": 1,
+  "stdin": null,
+  "timeout_seconds": 2
+}

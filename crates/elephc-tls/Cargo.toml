@@ -18,6 +18,13 @@ webpki-roots = "0.26"
 # Pure-Rust PEM parser for the ssl.cafile stream-context option (a custom CA
 # bundle). musl-friendly (no C deps), so the Docker test images stay happy.
 rustls-pemfile = "2"
+# `ssl.peer_fingerprint` compares a digest of the peer's leaf certificate DER.
+# php-src infers the digest from the bare string's LENGTH, and the only two
+# lengths it recognizes are MD5 (32 hex) and SHA-1 (40 hex), so those are the two
+# digests this crate needs. Both are pure Rust (RustCrypto), so the musl Docker
+# test images stay happy.
+md-5 = "0.10"
+sha1 = "0.10"
 # `libc::dup` is needed by `elephc_tls_attach_fd` to take a duplicated
 # copy of the caller-owned TCP file descriptor without invalidating the
 # original. Keeps the crate musl-friendly (default features only).

@@ -121,7 +121,7 @@ echo "[";
 $bytes = readfile(filename: "{empty}");
 echo "]" . $bytes . ":";
 echo readfile("{missing}") === false ? "missing-readfile" : "bad"; echo ":";
-echo count(file("{missing}")) === 0 ? "missing-file" : "bad"; echo ":";
+echo file("{missing}") === false ? "missing-file" : "bad"; echo ":";
 mkdir("{dir}");
 file_put_contents("{dir}/a.txt", "a");
 file_put_contents("{dir}/b.txt", "b");

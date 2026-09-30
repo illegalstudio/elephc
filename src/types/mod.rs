@@ -44,6 +44,8 @@ mod schema;
 /// question by the checker, by EIR lowering, and by the runtime callable invoker. A contract
 /// three layers must agree on cannot be re-spelled behind a narrow re-export in each of them.
 pub(crate) mod signatures;
+/// The wrappers, transports and filters the stream layer advertises, and the `STREAM_*` table.
+pub(crate) mod stream_constants;
 /// Target-dependent values of `ICONV_IMPL` / `ICONV_VERSION`.
 pub(crate) mod iconv_constants;
 /// The compiler's view over the shared builtin class catalog.
@@ -60,7 +62,9 @@ pub(crate) use array_keys::{
     normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };
-pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
+pub(crate) use array_storage::{
+    array_storage_conversion, join_array_storage_conversion, key_preserving_sort_promotes,
+};
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{

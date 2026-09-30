@@ -14,7 +14,7 @@ use crate::support::*;
 fn test_packed_float_array_key_read_and_write_warn_once_each() {
     let out = compile_and_run_capture("<?php $a = ['a', 'b']; echo $a[1.9]; $a[1.9] = 'x'; echo $a[1];");
     assert_eq!(out.stdout, "bx");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.diagnostics);
 }
 
 /// A compound packed write diagnoses its shared read and write key once.
@@ -22,7 +22,7 @@ fn test_packed_float_array_key_read_and_write_warn_once_each() {
 fn test_packed_float_array_key_compound_add_warns_once() {
     let out = compile_and_run_capture("<?php $a = [10, 20]; $a[1.9] += 1; echo $a[1];");
     assert_eq!(out.stdout, "21");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Packed post-increment diagnoses a fractional key once.
@@ -30,7 +30,7 @@ fn test_packed_float_array_key_compound_add_warns_once() {
 fn test_packed_float_array_key_post_increment_warns_once() {
     let out = compile_and_run_capture("<?php $a = [10, 20]; $a[1.9]++; echo $a[1];");
     assert_eq!(out.stdout, "21");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Packed existence and coalescing probes still diagnose a fractional key.
@@ -38,7 +38,7 @@ fn test_packed_float_array_key_post_increment_warns_once() {
 fn test_packed_float_array_key_probes_warn_once_each() {
     let out = compile_and_run_capture("<?php $a = [10, 20]; echo (int)isset($a[1.9]), ':', (int)empty($a[1.9]), ':', ($a[1.9] ?? 0);");
     assert_eq!(out.stdout, "1:0:20");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 3, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 3, "{}", out.diagnostics);
 }
 
 /// Null-coalesce assignment on packed storage diagnoses its float key once.
@@ -46,7 +46,7 @@ fn test_packed_float_array_key_probes_warn_once_each() {
 fn test_packed_float_array_key_null_coalesce_assignment_warns_once() {
     let out = compile_and_run_capture("<?php $a = [10, 20]; echo ($a[1.9] ??= 7), ':', $a[1];");
     assert_eq!(out.stdout, "20:20");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Packed array writes through object and static properties diagnose float keys.
@@ -63,7 +63,7 @@ Box::$staticItems[1.9] = 22;
 echo $box->items[1], ':', Box::$staticItems[1];
 "#);
     assert_eq!(out.stdout, "21:22");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.diagnostics);
 }
 
 /// An integral float key remains silent on indexed storage.
@@ -78,8 +78,8 @@ fn test_packed_integral_float_array_key_is_silent() {
 #[test]
 fn test_packed_float_array_key_missing_read_warns_once() {
     let out = compile_and_run_capture("<?php $a = ['a', 'b']; var_dump($a[9.9]);");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 9.9 to int loses precision").count(), 1, "{}", out.stderr);
-    assert_eq!(out.stderr.matches("Undefined array key 9").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 9.9 to int loses precision").count(), 1, "{}", out.diagnostics);
+    assert_eq!(out.diagnostics.matches("Undefined array key 9").count(), 1, "{}", out.diagnostics);
 }
 
 /// A packed compound update keeps the diagnosed key even if its handler changes the variable.
@@ -140,8 +140,8 @@ echo $a[1], ':', $a[2], ':', $a['tag'];
 fn test_float_array_key_fractional_read_and_write_warn() {
     let out = compile_and_run_capture("<?php $a = [1 => 'x']; echo $a[1.9]; $a[-0.9] = 'y'; echo $a[0];");
     assert_eq!(out.stdout, "xy");
-    assert!(out.stderr.contains("Implicit conversion from float 1.9 to int loses precision"), "{}", out.stderr);
-    assert!(out.stderr.contains("Implicit conversion from float -0.9 to int loses precision"), "{}", out.stderr);
+    assert!(out.diagnostics.contains("Implicit conversion from float 1.9 to int loses precision"), "{}", out.diagnostics);
+    assert!(out.diagnostics.contains("Implicit conversion from float -0.9 to int loses precision"), "{}", out.diagnostics);
 }
 
 /// A compound hash assignment diagnoses its float key once across the read and write.
@@ -149,7 +149,7 @@ fn test_float_array_key_fractional_read_and_write_warn() {
 fn test_float_array_key_compound_add_warns_once() {
     let out = compile_and_run_capture("<?php $a = [1 => 10]; $a[1.9] += 1; echo $a[1];");
     assert_eq!(out.stdout, "11");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Post-increment diagnoses a float hash key once across its read and write.
@@ -157,7 +157,7 @@ fn test_float_array_key_compound_add_warns_once() {
 fn test_float_array_key_post_increment_warns_once() {
     let out = compile_and_run_capture("<?php $a = [1 => 10]; $a[1.9]++; echo $a[1];");
     assert_eq!(out.stdout, "11");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Compound assignment used as an expression diagnoses the shared key once.
@@ -165,7 +165,7 @@ fn test_float_array_key_post_increment_warns_once() {
 fn test_float_array_key_compound_expression_warns_once() {
     let out = compile_and_run_capture("<?php $a = [1 => 10]; echo ($a[1.9] += 1), ':', $a[1];");
     assert_eq!(out.stdout, "11:11");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Post-increment used as an expression returns the old value with one key diagnostic.
@@ -173,7 +173,7 @@ fn test_float_array_key_compound_expression_warns_once() {
 fn test_float_array_key_post_increment_expression_warns_once() {
     let out = compile_and_run_capture("<?php $a = [1 => 10]; echo $a[1.9]++, ':', $a[1];");
     assert_eq!(out.stdout, "10:11");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Prefix decrement returns the new value and diagnoses its shared key once.
@@ -181,7 +181,7 @@ fn test_float_array_key_post_increment_expression_warns_once() {
 fn test_float_array_key_pre_decrement_expression_warns_once() {
     let out = compile_and_run_capture("<?php $a = [1 => 10]; echo --$a[1.9], ':', $a[1];");
     assert_eq!(out.stdout, "9:9");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Null-coalesce assignment that inserts converts its float key in the probe and the insert.
@@ -192,7 +192,7 @@ fn test_float_array_key_pre_decrement_expression_warns_once() {
 fn test_float_array_key_null_coalesce_assignment_insert_warns_twice() {
     let out = compile_and_run_capture("<?php $a = ['other' => 1]; echo ($a[1.9] ??= 5), ':', $a[1];");
     assert_eq!(out.stdout, "5:5");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.diagnostics);
 }
 
 /// A statement `??=` on a packed local probes a present element once and never writes it back,
@@ -201,8 +201,8 @@ fn test_float_array_key_null_coalesce_assignment_insert_warns_twice() {
 fn test_packed_float_array_key_null_coalesce_statement_matches_php() {
     let out = compile_and_run_capture("<?php $a = [10, 20]; $a[1.9] ??= 7; $a[3.5] ??= 8; echo $a[1], ':', $a[3];");
     assert_eq!(out.stdout, "20:8");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
-    assert_eq!(out.stderr.matches("Implicit conversion from float 3.5 to int loses precision").count(), 2, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 3.5 to int loses precision").count(), 2, "{}", out.diagnostics);
 }
 
 /// An error handler may change the source variable, but increment keeps its original key.
@@ -276,23 +276,23 @@ echo $a[$k]++, '|', $a[1], ':', $a[2];
 fn test_float_array_key_separate_accesses_warn_twice() {
     let out = compile_and_run_capture("<?php $a = [1 => 10]; echo $a[1.9]; $a[1.9] = 12; echo $a[1];");
     assert_eq!(out.stdout, "1012");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.diagnostics);
 }
 
 /// A missing hash read reports one float-key deprecation before the undefined-key warning.
 #[test]
 fn test_float_array_key_missing_hash_read_warns_once() {
     let out = compile_and_run_capture("<?php $a = ['name' => 'x']; var_dump($a[1.9]);");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
-    assert_eq!(out.stderr.matches("Undefined array key 1").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
+    assert_eq!(out.diagnostics.matches("Undefined array key 1").count(), 1, "{}", out.diagnostics);
 }
 
 /// A boxed float key on a missing hash read emits one deprecation and one warning.
 #[test]
 fn test_float_array_key_mixed_missing_hash_read_warns_once() {
     let out = compile_and_run_capture("<?php $key = $argc > 0 ? 1.9 : 'one'; $a = ['name' => 'x']; var_dump($a[$key]);");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
-    assert_eq!(out.stderr.matches("Undefined array key 1").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
+    assert_eq!(out.diagnostics.matches("Undefined array key 1").count(), 1, "{}", out.diagnostics);
 }
 
 /// A missing hash entry inserted through a reference normalizes its float key once.
@@ -300,7 +300,7 @@ fn test_float_array_key_mixed_missing_hash_read_warns_once() {
 fn test_float_array_key_missing_reference_warns_once() {
     let out = compile_and_run_capture("<?php $a = ['name' => 'x']; $r =& $a[1.9]; $r = 'y'; echo $a[1];");
     assert_eq!(out.stdout, "y");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// A nested write does not rediagnose the key while promoting its hash entry.
@@ -308,7 +308,7 @@ fn test_float_array_key_missing_reference_warns_once() {
 fn test_float_array_key_nested_write_warns_once() {
     let out = compile_and_run_capture("<?php $a = [1 => ['name' => 1], 'other' => 's']; $a[1.9]['x'] = 2; echo $a[1]['x'];");
     assert_eq!(out.stdout, "2");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Checks array-literal insertion reports the float key before later reads.
@@ -316,7 +316,7 @@ fn test_float_array_key_nested_write_warns_once() {
 fn test_float_array_literal_key_warns() {
     let out = compile_and_run_capture("<?php $a = [1.9 => 'x']; echo $a[1];");
     assert_eq!(out.stdout, "x");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Checks integral float keys and suppressed reads remain silent.
@@ -350,7 +350,7 @@ $a[$key] = 'x';
 echo $a[1];
 "#);
     assert_eq!(out.stdout, "x");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Checks both list and hash existence probes apply PHP's float-key conversion.
@@ -363,7 +363,7 @@ echo array_key_exists(1.9, $list) ? 'L' : '?';
 echo array_key_exists(1.9, $hash) ? 'H' : '?';
 "#);
     assert_eq!(out.stdout, "LH");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.diagnostics);
 }
 
 /// Checks a boxed float key follows the same existence-probe diagnostics.
@@ -375,7 +375,7 @@ $a = [1 => 'x'];
 echo array_key_exists($key, $a) ? 'yes' : 'no';
 "#);
     assert_eq!(out.stdout, "yes");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Checks NaN and infinity receive PHP's range warning and NaN's extra deprecation.
@@ -383,9 +383,9 @@ echo array_key_exists($key, $a) ? 'yes' : 'no';
 fn test_float_array_key_nan_and_infinity_diagnostics() {
     let out = compile_and_run_capture("<?php $a = [0 => 'z']; echo $a[NAN], $a[INF];");
     assert_eq!(out.stdout, "zz");
-    assert_eq!(out.stderr.matches("The float NAN is not representable as an int, cast occurred").count(), 1, "{}", out.stderr);
-    assert_eq!(out.stderr.matches("Implicit conversion from float NAN to int loses precision").count(), 1, "{}", out.stderr);
-    assert_eq!(out.stderr.matches("The float INF is not representable as an int, cast occurred").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("The float NAN is not representable as an int, cast occurred").count(), 1, "{}", out.diagnostics);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float NAN to int loses precision").count(), 1, "{}", out.diagnostics);
+    assert_eq!(out.diagnostics.matches("The float INF is not representable as an int, cast occurred").count(), 1, "{}", out.diagnostics);
 }
 
 /// Checks range diagnostics retain PHP's full float representation on the active profile.
@@ -395,9 +395,9 @@ fn test_float_array_key_range_warning_text() {
         "<?php $a = [0 => 'z']; echo $a[1e20] ?? '?'; echo $a[-INF]; echo $a[9223372036854775808.0] ?? '?';",
     );
     assert_eq!(out.stdout, "?z?");
-    assert_eq!(out.stderr.matches("The float 1.0E+20 is not representable as an int, cast occurred").count(), 1, "{}", out.stderr);
-    assert_eq!(out.stderr.matches("The float -INF is not representable as an int, cast occurred").count(), 1, "{}", out.stderr);
-    assert_eq!(out.stderr.matches("The float 9.223372036854776E+18 is not representable as an int, cast occurred").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("The float 1.0E+20 is not representable as an int, cast occurred").count(), 1, "{}", out.diagnostics);
+    assert_eq!(out.diagnostics.matches("The float -INF is not representable as an int, cast occurred").count(), 1, "{}", out.diagnostics);
+    assert_eq!(out.diagnostics.matches("The float 9.223372036854776E+18 is not representable as an int, cast occurred").count(), 1, "{}", out.diagnostics);
 }
 
 /// Checks an existence probe diagnoses a float key even without a value read.
@@ -405,7 +405,7 @@ fn test_float_array_key_range_warning_text() {
 fn test_float_array_key_isset_warns_once() {
     let out = compile_and_run_capture("<?php $a = [1 => 'x']; echo isset($a[1.9]) ? 'yes' : 'no';");
     assert_eq!(out.stdout, "yes");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Checks reference insertion converts its source float key only once.
@@ -413,7 +413,7 @@ fn test_float_array_key_isset_warns_once() {
 fn test_float_array_key_reference_write_warns_once() {
     let out = compile_and_run_capture("<?php $a = [1 => 'x']; $r =& $a[1.9]; $r = 'y'; echo $a[1];");
     assert_eq!(out.stdout, "y");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }
 
 /// Checks iterator-to-array key normalization reports fractional generator keys.
@@ -421,5 +421,5 @@ fn test_float_array_key_reference_write_warns_once() {
 fn test_float_array_key_from_iterator_warns() {
     let out = compile_and_run_capture("<?php function g() { yield 1.9 => 'x'; } $a = iterator_to_array(g()); echo $a[1];");
     assert_eq!(out.stdout, "x");
-    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.diagnostics.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.diagnostics);
 }

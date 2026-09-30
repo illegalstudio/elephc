@@ -318,12 +318,46 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "decbin",
     "dechex",
     "decoct",
+    // The compiler serves `dir()` through the `Directory` class prelude, which eval does not
+    // parse: the interpreter would need a Directory cell kind with property reads and method
+    // dispatch of its own, the way `hash_init()` needed one for `HashContext`.
+    "dir",
+    // The `gz*` stream surface is a compiler-injected prelude, so `eval()` has no binding for
+    // it: MEASURED, `eval('gzopen(...)')` in a program that never calls one itself reports
+    // "eval() fragment uses an unsupported construct". `dir` above is the same case.
+    "gzclose",
+    "gzdecode",
+    "gzencode",
+    "gzeof",
+    "gzfile",
+    "gzgetc",
+    "gzgets",
+    "gzopen",
+    "gzpassthru",
+    "gzputs",
+    "gzread",
+    "gzrewind",
+    "gzseek",
+    "gztell",
+    "gzwrite",
     "hexdec",
+    // php 8.4's response-header pair reads engine state the interpreter does not own: the
+    // compiler answers both from `_http_resp_header_end` / `_http_resp_buf`, which are
+    // host-runtime symbols the eval value model has no cell kind for.
+    "http_clear_last_response_headers",
+    "http_get_last_response_headers",
     "join",
     "octdec",
+    "readgzfile",
     "serialize",
+    // The AOT engine is an injected elephc-PHP prelude, not a runtime helper, so there is nothing
+    // for a Magician binding to route to until it grows its own copy of php's recursion.
+    "similar_text",
     "substr_count",
     "unserialize",
+    "zlib_decode",
+    "zlib_encode",
+    "zlib_get_coding_type",
     "zval_free",
     "zval_pack",
     "zval_type",
@@ -372,19 +406,22 @@ mod tests {
         // The shared INI helper is internal but participates in both runtime registries.
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 682 + curl_surface);
-        // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
-        // image prelude declares for its own use.
-        assert_eq!(eval_internal, 100);
-        // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
-        // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 353);
+        assert_eq!(eval_registry, 692 + curl_surface);
+        // 85 compiler-internal registry helpers (the streams branch adds `__elephc_deprecated` and
+        // `__elephc_zip_stat_entries`) plus the 17 `_`-prefixed helper functions the image
+        // prelude declares for its own use.
+        assert_eq!(eval_internal, 102);
+        // Registry builtins awaiting eval homes, plus the PHP-visible prelude-provided and
+        // name-resolver-rewritten functions eval does not reach (see `eval_support`); the streams
+        // branch adds its `gz*`, `zlib_*`, `dir()` and `similar_text()` preludes to the second set.
+        assert_eq!(eval_pending, 376);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface.
-        assert_eq!(aot_registry, 726);
+        assert_eq!(aot_registry, 741);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
-        // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 409 + curl_surface);
+        // name-resolver rewrites remain outside the ordinary AOT registry; twenty of them are the
+        // streams branch's `gz*`, `zlib_*`, `readgzfile()` and `dir()` preludes.
+        assert_eq!(aot_external, 429 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -431,8 +468,8 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 85);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 595 + curl_surface);
-        assert_eq!(unsupported, 453);
+        assert_eq!(interpreter_adapter, 605 + curl_surface);
+        assert_eq!(unsupported, 478);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

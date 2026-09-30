@@ -8,7 +8,7 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
-6. Backend availability and all 443 non-registry contract routes remain coherent.
+6. Backend availability and all 463 non-registry contract routes remain coherent.
 7. User-facing pages contain no runs of multiple blank lines.
 8. No override table in ``registry.py`` declares the same builtin twice.
 
@@ -139,10 +139,11 @@ def _check_backend_contracts(
         "dedicated-syntax": 1,
         # Four hash_*, the 34 PHP-visible curl_* (published only by the canonical
         # `--features curl` documentation configuration, see elephc_builtins/extract.py),
-        # the 54 xml_* / xmlwriter_* functions the xml prelude declares, and the 288
+        # the 54 xml_* / xmlwriter_* functions the xml prelude declares, the 288
         # functions the mysqli, PDO, web, image, OPcache, tz, var_export and version
-        # preludes declare, all injected-prelude routes.
-        "prelude": 380,
+        # preludes declare, and the 20 stream surfaces the zlib and directory preludes
+        # declare (19 gz*/zlib_* functions plus `dir()`), all injected-prelude routes.
+        "prelude": 400,
         # Calls rewritten from their enclosing lexical function frame.
         "compiler-transform": 3,
         # The date/calendar procedural families the name resolver rewrites onto the

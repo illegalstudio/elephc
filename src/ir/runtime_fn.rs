@@ -175,6 +175,7 @@ pub enum RuntimeFnId {
     PregReplaceCallback,
     PropertyExists,
     TraitExists,
+    ElephcDeprecated,
     ElephcPharBzip2Archive,
     ElephcPharDecompressArchive,
     ElephcPharGetFileMetadata,
@@ -191,6 +192,7 @@ pub enum RuntimeFnId {
     ElephcPharSetZipPassword,
     ElephcPharSignHash,
     ElephcPharSignOpenssl,
+    ElephcZipStatEntries,
     Basename,
     Chdir,
     Chgrp,
@@ -229,7 +231,6 @@ pub enum RuntimeFnId {
     Fprintf,
     Fputcsv,
     Fread,
-    Fscanf,
     Fseek,
     Fsockopen,
     Fstat,
@@ -302,6 +303,7 @@ pub enum RuntimeFnId {
     StreamContextGetParams,
     StreamContextSetDefault,
     StreamContextSetOption,
+    StreamContextSetOptions,
     StreamContextSetParams,
     StreamCopyToStream,
     StreamFilterAppend,
@@ -450,6 +452,14 @@ pub enum RuntimeFnId {
     CtypeAlpha,
     CtypeDigit,
     CtypeSpace,
+    /// Unboxes an `array|false` builtin ARGUMENT, throwing php's TypeError for the false.
+    ///
+    /// Inserted by the argument lowering when an `array|false` union (scandir, glob, file…)
+    /// flows into an array-taking builtin: the consumer's own lowering then sees a raw array
+    /// pointer and stays untouched. Operands: the boxed value, then the message string —
+    /// composed at compile time, `{fn}(): Argument #{n} (${param}) must be of type array,
+    /// false given` — the throw uses verbatim.
+    ExpectArrayArg,
     /// Allocates a libcurl easy handle and boxes it as a resource-kind-6 Mixed cell.
     CurlEasyInit,
     /// Applies an integer-valued `curl_setopt()` option to an easy handle.
@@ -685,8 +695,8 @@ pub enum RuntimeFnId {
     Rtrim,
     Sha1,
     Sprintf,
-    Sscanf,
     StrContains,
+    StrGetcsv,
     StrEndsWith,
     StrIreplace,
     StrPad,
@@ -735,6 +745,8 @@ pub enum RuntimeFnId {
     Gmmktime,
     Header,
     Hrtime,
+    HttpClearLastResponseHeaders,
+    HttpGetLastResponseHeaders,
     HttpResponseCode,
     JsonDecode,
     JsonEncode,
@@ -815,6 +827,9 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
+            // Compiler-internal: no PHP builtin declares it, so the registry cannot. The two
+            // operands are the boxed `array|false` value and the TypeError message.
+            RuntimeFnId::ExpectArrayArg => Some((2, Some(2))),
             _ => None,
         }
     }
@@ -889,28 +904,30 @@ impl RuntimeFnId {
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
             },
-            // `fgetcsv()` answers `false` at end of file and `file()` answers `false` when the
-            // read fails, so their fallback type must carry that arm too: the checker declares
-            // the union, and a builtin whose EIR and checker types disagree miscompiles rather
-            // than failing to build. This is the authority that is easy to forget, because a
-            // SYNTHESIZED call has no call-site type to fall back on — leaving `fgetcsv()` here
-            // made `SplFileObject::fgetcsv()` read the boxed cell as a raw pointer.
-            RuntimeFnId::Fgetcsv | RuntimeFnId::File => PhpType::Union(vec![
-                PhpType::Array(Box::new(PhpType::Str)),
-                PhpType::False,
-            ]),
+            // `Fgetcsv` is deliberately absent: it boxes `array|false`, so its declared `Mixed`
+            // IS the representation the lowering builds. Refining it to `array<string>` here
+            // made a synthesized call — `SplFileObject::fgetcsv()`, whose prelude body has no
+            // checked call-site type — read the boxed Mixed cell as a raw array pointer and
+            // hand back its header words as integers.
+            // `Scandir`, `File` and `Glob` left this list when their results became boxed
+            // `array|false`, the same exit `Fgetcsv` made: the boxed cell IS the representation
+            // the lowering builds.
             RuntimeFnId::ClassAttributeNames
             | RuntimeFnId::BcDivmod
             | RuntimeFnId::Explode
-            | RuntimeFnId::Glob
-            | RuntimeFnId::Scandir
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
                 "ReflectionAttribute".to_string(),
             ))),
             RuntimeFnId::ElephcPharListEntries => PhpType::Array(Box::new(PhpType::Str)),
+            RuntimeFnId::ElephcZipStatEntries => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::OpensslGetCipherMethods => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::PregSplit => PhpType::Array(Box::new(PhpType::Mixed)),
+            // A CSV row is `?string[]`: php answers `[null]` for a wholly empty subject, so the
+            // runtime widens every row to boxed Mixed cells. A callable-dispatched
+            // `$f = 'str_getcsv'; $f("")` has no checked call-site type and would otherwise read
+            // those cells as raw string pointer/length pairs.
+            RuntimeFnId::StrGetcsv => PhpType::Array(Box::new(PhpType::Mixed)),
             RuntimeFnId::Range => PhpType::Array(Box::new(PhpType::Int)),
             _ => declared.clone(),
         }
@@ -1214,15 +1231,10 @@ impl RuntimeFnId {
             ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
-            RuntimeFnId::ArrayColumn |
             RuntimeFnId::ArrayCombine |
-            RuntimeFnId::ArrayDiff |
             RuntimeFnId::ArrayDiffAssoc |
-            RuntimeFnId::ArrayDiffKey |
             RuntimeFnId::ArrayFillKeys |
-            RuntimeFnId::ArrayIntersect |
             RuntimeFnId::ArrayIntersectAssoc |
-            RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
             RuntimeFnId::ArrayKeyExists |
             RuntimeFnId::ArrayKeyFirst |
@@ -1231,9 +1243,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMergeRecursive |
             RuntimeFnId::ArrayReplace |
             RuntimeFnId::ArrayReplaceRecursive |
-            RuntimeFnId::ArraySearch |
-            RuntimeFnId::ArraySlice |
-            RuntimeFnId::ArrayUnique |
             RuntimeFnId::Asin |
             RuntimeFnId::Atan |
             // `base64_decode()` only reads the subject's bytes and writes its answer into a
@@ -1326,7 +1335,24 @@ impl RuntimeFnId {
             // be treated
             // as removable pure calls: dead-code elimination would drop the diagnostic, and
             // the try-prefix hoist would move the call out of the `try` that must catch it.
-            RuntimeFnId::ArrayChunk
+            // These accept an `array|false` union argument (scandir, glob, file) through the
+            // lowering's unbox-or-throw wrap (`ARRAY_OR_FALSE_ARG_SITES`): a runtime `false`
+            // raises php's catchable TypeError at the argument. Claiming purity let DCE drop
+            // an unused call — and its throw — and let the try-prefix hoist move the call out
+            // of the `try` that must catch it, so the TypeError escaped as uncaught.
+            // `array_flip`, `array_merge`, `array_product`, `array_reverse`, `array_sum` and
+            // `array_values` are in this family too, but already carry MAY_THROW in their own
+            // arms above.
+            RuntimeFnId::ArrayColumn
+            | RuntimeFnId::ArrayDiff
+            | RuntimeFnId::ArrayDiffKey
+            | RuntimeFnId::ArrayIntersect
+            | RuntimeFnId::ArrayIntersectKey
+            | RuntimeFnId::ArraySearch
+            | RuntimeFnId::ArraySlice
+            | RuntimeFnId::ArrayUnique
+            // These raise reference PHP's catchable `ValueError` for out-of-range arguments.
+            | RuntimeFnId::ArrayChunk
             | RuntimeFnId::ArrayFill
             | RuntimeFnId::CountChars
             | RuntimeFnId::ArrayPad
@@ -1613,6 +1639,7 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcPharSetZipPassword
             | RuntimeFnId::ElephcPharSignHash
             | RuntimeFnId::ElephcPharSignOpenssl
+            | RuntimeFnId::ElephcZipStatEntries
             | RuntimeFnId::CurlEasyBody
             | RuntimeFnId::CurlEasyErrno
             | RuntimeFnId::CurlEasyError
@@ -1738,6 +1765,17 @@ impl RuntimeFnId {
             | RuntimeFnId::Md5
             | RuntimeFnId::Sha1
             | RuntimeFnId::StreamSocketEnableCrypto => MonitoringPolicy::GenericTiming,
+            // Every counted stream operation is an evented stream boundary, and only
+            // those: `runtime_calls::lower` emits the count note for exactly
+            // `is_stream_operation()`, so deriving the policy from the same list keeps
+            // the declared contract and the emitted hook from drifting apart. The
+            // count is exact but the time is not measured separately, and a local
+            // file has no outgoing trace-context boundary.
+            target if target.is_stream_operation() => MonitoringPolicy::Io {
+                kind: IoKind::Stream,
+                wait: WaitPolicy::GenericTiming,
+                trace_context: TraceContextPolicy::NotApplicable,
+            },
             _ => MonitoringPolicy::Unspecified,
         }
     }
@@ -1783,6 +1821,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharSetStub => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSetZipPassword => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignHash => &[BuiltinRequirement::Bridge("elephc_phar")],
+            RuntimeFnId::ElephcZipStatEntries => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignOpenssl => &[BuiltinRequirement::Bridge("elephc_phar")],
             // Every curl operation needs the `elephc_curl` bridge, which in turn makes
             // `crate::pipeline::backend` require the managed native `curl` package (and
@@ -2112,6 +2151,7 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::ElephcPharListEntries
+                | RuntimeFnId::ElephcZipStatEntries
                 | RuntimeFnId::ElephcPharGetMetadata
                 | RuntimeFnId::ElephcPharGetStub
                 | RuntimeFnId::ElephcPharSetMetadata
@@ -2129,6 +2169,36 @@ impl RuntimeFnId {
                 | RuntimeFnId::FileGetContents
                 | RuntimeFnId::FilePutContents
                 | RuntimeFnId::Fopen
+        )
+    }
+
+    /// Whether this builtin performs a STREAM operation the monitor counts.
+    ///
+    /// The file-I/O counterpart of the query counter, and separate from it on
+    /// purpose: a function that reads a file a thousand times and one that runs a
+    /// thousand statements are different problems with the same shape, and one
+    /// combined "I/O" dimension cannot tell them apart.
+    ///
+    /// Whole-file calls belong here as much as handle calls do. `file_get_contents()`
+    /// is one stream operation the program never names a handle for, and leaving it
+    /// out would report a loop over it as doing no stream work at all — the exact
+    /// shape the counter exists to expose.
+    ///
+    /// Deliberately NOT here: `feof`, `ftell` and the other pure QUERIES about a
+    /// handle. They touch no descriptor, php-src answers them from the stream's own
+    /// state, and counting them would drown the read/write ratio the count is for
+    /// in loop bookkeeping — `while (!feof($h)) { fgets($h); }` would report twice
+    /// the operations it performs.
+    pub const fn is_stream_operation(self) -> bool {
+        matches!(
+            self,
+            RuntimeFnId::Fopen
+                | RuntimeFnId::Fclose
+                | RuntimeFnId::Fread
+                | RuntimeFnId::Fwrite
+                | RuntimeFnId::Fgets
+                | RuntimeFnId::FileGetContents
+                | RuntimeFnId::FilePutContents
         )
     }
 
@@ -2221,6 +2291,17 @@ impl RuntimeFnId {
                 | RuntimeFnId::IconvStrpos
                 | RuntimeFnId::IconvStrrpos
                 | RuntimeFnId::IconvSubstr
+                // `file()` answers a freshly built array of lines, or `false`; it never hands
+                // back a filename argument.
+                | RuntimeFnId::File
+                // The stat family boxes a newly built stat array — from the filesystem or from a
+                // wrapper's `url_stat()`/`stream_stat()` — or `false`; neither is an argument.
+                | RuntimeFnId::Stat
+                | RuntimeFnId::Lstat
+                | RuntimeFnId::Fstat
+                // `readdir()` persists the entry name it read (`__rt_str_persist`) or answers
+                // `false`; it never hands back the handle it was given.
+                | RuntimeFnId::Readdir
         ) {
             return BuiltinResultOwnership::Fresh;
         }
@@ -2427,6 +2508,12 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
+                // `sys_get_temp_dir()` is `getcwd()`'s sibling and leaked the same way, one
+                // 80-byte block per call: `--heap-debug` over a five-iteration loop reported
+                // `live_blocks=5 live_bytes=400` where the same loop around `getcwd()` reported
+                // `clean`. It was the one the list above was missing, which is the shape
+                // `array_flip` had too.
+                | RuntimeFnId::SysGetTempDir
                 | RuntimeFnId::GraphemeStrrev
                 // `getenv($name)` boxes `false` or an owned copy made by `__rt_str_persist`
                 // in a fresh Mixed cell. `getenv()` boxes a newly built environment hash.
@@ -2556,6 +2643,7 @@ impl RuntimeFnId {
     /// Returns the stable textual EIR spelling for diagnostics and snapshots.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeFnId::ExpectArrayArg => "expect_array_arg",
             RuntimeFnId::ArrayAll => "array_all",
             RuntimeFnId::ArrayAny => "array_any",
             RuntimeFnId::ArrayChunk => "array_chunk",
@@ -2654,6 +2742,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharGetStub => "__elephc_phar_get_stub",
             RuntimeFnId::ElephcPharGzipArchive => "__elephc_phar_gzip_archive",
             RuntimeFnId::ElephcPharListEntries => "__elephc_phar_list_entries",
+            RuntimeFnId::ElephcZipStatEntries => "__elephc_zip_stat_entries",
             RuntimeFnId::ElephcPharSetCompression => "__elephc_phar_set_compression",
             RuntimeFnId::ElephcPharSetFileMetadata => "__elephc_phar_set_file_metadata",
             RuntimeFnId::ElephcPharSetMetadata => "__elephc_phar_set_metadata",
@@ -2699,7 +2788,6 @@ impl RuntimeFnId {
             RuntimeFnId::Fprintf => "fprintf",
             RuntimeFnId::Fputcsv => "fputcsv",
             RuntimeFnId::Fread => "fread",
-            RuntimeFnId::Fscanf => "fscanf",
             RuntimeFnId::Fseek => "fseek",
             RuntimeFnId::Fsockopen => "fsockopen",
             RuntimeFnId::Fstat => "fstat",
@@ -2772,6 +2860,7 @@ impl RuntimeFnId {
             RuntimeFnId::StreamContextGetParams => "stream_context_get_params",
             RuntimeFnId::StreamContextSetDefault => "stream_context_set_default",
             RuntimeFnId::StreamContextSetOption => "stream_context_set_option",
+            RuntimeFnId::StreamContextSetOptions => "stream_context_set_options",
             RuntimeFnId::StreamContextSetParams => "stream_context_set_params",
             RuntimeFnId::StreamCopyToStream => "stream_copy_to_stream",
             RuntimeFnId::StreamFilterAppend => "stream_filter_append",
@@ -2868,6 +2957,7 @@ impl RuntimeFnId {
             RuntimeFnId::Sqrt => "sqrt",
             RuntimeFnId::Tan => "tan",
             RuntimeFnId::Tanh => "tanh",
+            RuntimeFnId::ElephcDeprecated => "__elephc_deprecated",
             RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
                 "__elephc_clone_override_reference_guard"
             }
@@ -3080,8 +3170,8 @@ impl RuntimeFnId {
             RuntimeFnId::Rtrim => "rtrim",
             RuntimeFnId::Sha1 => "sha1",
             RuntimeFnId::Sprintf => "sprintf",
-            RuntimeFnId::Sscanf => "sscanf",
             RuntimeFnId::StrContains => "str_contains",
+            RuntimeFnId::StrGetcsv => "str_getcsv",
             RuntimeFnId::StrEndsWith => "str_ends_with",
             RuntimeFnId::StrIreplace => "str_ireplace",
             RuntimeFnId::StrPad => "str_pad",
@@ -3130,6 +3220,8 @@ impl RuntimeFnId {
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",
             RuntimeFnId::Hrtime => "hrtime",
+            RuntimeFnId::HttpClearLastResponseHeaders => "http_clear_last_response_headers",
+            RuntimeFnId::HttpGetLastResponseHeaders => "http_get_last_response_headers",
             RuntimeFnId::HttpResponseCode => "http_response_code",
             RuntimeFnId::JsonDecode => "json_decode",
             RuntimeFnId::JsonEncode => "json_encode",

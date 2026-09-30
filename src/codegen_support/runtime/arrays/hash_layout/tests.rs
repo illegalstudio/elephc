@@ -81,6 +81,9 @@ fn native_hash_owned_growth_preserves_identity_and_entries() {
         emitter.instruction("ldp x29, x30, [sp], #16");                         // restore caller linkage
     }
     emitter.instruction("ret");                                                 // return the borrowed matching entry
+    // The line a runtime helper's own diagnostic is attributed to; the fixture raises none.
+    emitter.raw(".data");
+    emitter.raw(".globl _rt_internal_call_line\n_rt_internal_call_line:\n    .quad 0");
     if target.platform == Platform::Linux { emitter.raw(".section .note.GNU-stack,\"\",@progbits"); }
     std::fs::write(directory.join("hash.s"), emitter.output()).unwrap();
     std::fs::write(directory.join("fixture.c"), include_str!("native_growth.c")).unwrap();

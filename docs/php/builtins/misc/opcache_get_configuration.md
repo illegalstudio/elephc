@@ -2,7 +2,7 @@
 title: "opcache_get_configuration()"
 description: "Returns the OPcache directives, blacklist, and version."
 sidebar:
-  order: 638
+  order: 664
 ---
 
 ## opcache_get_configuration()

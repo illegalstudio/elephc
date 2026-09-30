@@ -146,7 +146,7 @@ return gettype($evalArgsCopy) . ":" . $evalArgsCopy;');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(
         out.stdout,
@@ -156,11 +156,11 @@ return gettype($evalArgsCopy) . ":" . $evalArgsCopy;');
         "EvalReflectAotCtorRefBridge::__construct(): Argument #1 ($value) must be passed by reference, value given",
         "EvalReflectDeclaredCtorRefBridge::__construct(): Argument #1 ($value) must be passed by reference, value given",
     ] {
-        let count = out.stderr.matches(warning).count();
+        let count = out.diagnostics.matches(warning).count();
         assert!(
             count >= 2,
             "expected at least two by-ref warnings {warning:?}, saw {count}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }

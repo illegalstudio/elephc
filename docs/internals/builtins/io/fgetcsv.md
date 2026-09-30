@@ -2,7 +2,7 @@
 title: "fgetcsv() - internals"
 description: "Compiler internals for fgetcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 315
+  order: 317
 ---
 
 ## `fgetcsv()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fgetcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fgetcsv.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function fgetcsv(resource $stream, ?int $length = null, string $separator = ','): mixed
+function fgetcsv(resource $stream, ?int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–3 arguments (2 optional).
+- **Arity**: takes 1–5 arguments (4 optional).
 
 ## Eval interpreter (magician)
 

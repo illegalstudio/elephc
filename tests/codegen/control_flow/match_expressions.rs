@@ -14,10 +14,138 @@
 //!   temp to array-of-boxed-Mixed elements instead of letting the last arm's
 //!   element type relabel every other arm's runtime array.
 //! - `gettype` probes assert PHP's per-arm type preservation across arms.
-//! - Explicit `UnhandledMatchError` construction is distinct from the current
-//!   fatal terminator used when no match arm and no default arm succeeds.
+//! - A match that no arm and no default answers THROWS `UnhandledMatchError`, catchably, the way
+//!   php does; it used to end the process with a fatal terminator, so the `catch` never ran.
 
 use super::*;
+
+/// An unanswered `match` throws php's `UnhandledMatchError`, and spells the subject as php does.
+///
+/// MEASURED on `php -n` 8.5.6 — one row per value kind, because the wording differs per kind and
+/// only the four scalars follow one rule:
+///
+/// ```text
+///  99          Unhandled match case 99
+/// -7           Unhandled match case -7
+/// "x"          Unhandled match case 'x'
+/// "it's"       Unhandled match case 'it's'          NOT escaped
+/// 40 z's       Unhandled match case 'zzzzzzzzzzzzzzz...'   cut at 15, ellipsis inside the quotes
+/// true/false   Unhandled match case true / false
+/// null         Unhandled match case NULL
+/// 1.5          Unhandled match case 1.5
+/// 1.0          Unhandled match case 1.0             the `.0` a string cast drops
+/// [1, 2]       Unhandled match case of type array
+/// stdClass     Unhandled match case of type stdClass
+/// STDIN        Unhandled match case of type resource
+/// ```
+///
+/// It was a `Terminator::Fatal` before: the program died at the match, so the `catch` below never
+/// ran and everything after it was lost. The class is `Error`-descended and code 0, both asserted,
+/// because a `catch (Error)` has to see it.
+#[test]
+fn test_an_unanswered_match_throws_phps_unhandled_match_error() {
+    let out = compile_and_run(
+        r#"<?php
+function say(callable $f): void {
+    try { $f(); }
+    catch (Throwable $e) {
+        echo get_class($e), "|", $e->getMessage(), "|", $e->getCode(), "|", get_parent_class($e), "\n";
+    }
+}
+say(fn() => match (99) { 1 => "a" });
+say(fn() => match (-7) { 1 => "a" });
+say(fn() => match ("x") { 1 => "a" });
+say(fn() => match ("it's") { 1 => "a" });
+say(fn() => match (str_repeat("z", 40)) { 1 => "a" });
+say(fn() => match (true) { 1 => "a" });
+say(fn() => match (false) { 1 => "a" });
+say(fn() => match (null) { 1 => "a" });
+say(fn() => match (1.5) { 1 => "a" });
+say(fn() => match (1.0) { 1 => "a" });
+say(fn() => match ([1, 2]) { 1 => "a" });
+say(fn() => match (new stdClass()) { 1 => "a" });
+say(fn() => match (STDIN) { 1 => "a" });
+echo "after\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "UnhandledMatchError|Unhandled match case 99|0|Error\n",
+            "UnhandledMatchError|Unhandled match case -7|0|Error\n",
+            "UnhandledMatchError|Unhandled match case 'x'|0|Error\n",
+            "UnhandledMatchError|Unhandled match case 'it's'|0|Error\n",
+            "UnhandledMatchError|Unhandled match case 'zzzzzzzzzzzzzzz...'|0|Error\n",
+            "UnhandledMatchError|Unhandled match case true|0|Error\n",
+            "UnhandledMatchError|Unhandled match case false|0|Error\n",
+            "UnhandledMatchError|Unhandled match case NULL|0|Error\n",
+            "UnhandledMatchError|Unhandled match case 1.5|0|Error\n",
+            "UnhandledMatchError|Unhandled match case 1.0|0|Error\n",
+            "UnhandledMatchError|Unhandled match case of type array|0|Error\n",
+            "UnhandledMatchError|Unhandled match case of type stdClass|0|Error\n",
+            "UnhandledMatchError|Unhandled match case of type resource|0|Error\n",
+            "after\n",
+        )
+    );
+}
+
+/// The throw survives STATEMENT position, where the match's value is discarded.
+///
+/// A match with no default was classified `Effect::PURE` for its missing default arm — the very
+/// arm whose absence is what throws — so a pure expression statement was pruned whole and
+/// `match (99) { 1 => "a" };` did nothing at all. php throws there, and so does a discarded
+/// dynamic subject.
+#[test]
+fn test_an_unanswered_match_throws_from_statement_position_too() {
+    let out = compile_and_run(
+        r#"<?php
+try { match (99) { 1 => "a" }; echo "no throw\n"; }
+catch (Throwable $e) { echo $e->getMessage(), "\n"; }
+function pick(): mixed { return 99; }
+try { match (pick()) { "never" => 1 }; echo "no throw (dynamic)\n"; }
+catch (Throwable $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Unhandled match case 99
+Unhandled match case 99
+"
+    );
+}
+
+/// The same throw from a match whose subject is only known at RUN time.
+///
+/// The label is chosen by the subject's static type wherever there is one, because a ternary
+/// ladder is lowered whole and `strlen($v)` on an `int` subject is refused outright. A `mixed`
+/// subject has no static answer, so it takes the run-time ladder — a different path through the
+/// same wording, and the one a real program with a computed subject uses.
+#[test]
+fn test_an_unanswered_match_spells_a_dynamic_subject_the_same_way() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $which): mixed {
+    return match ($which) { 0 => 99, 1 => "it's", 2 => true, 3 => null, 4 => 1.0, 5 => [1], default => new stdClass() };
+}
+for ($i = 0; $i <= 6; $i++) {
+    try { echo match (pick($i)) { "never" => 1 }; }
+    catch (Throwable $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Unhandled match case 99\n",
+            "Unhandled match case 'it's'\n",
+            "Unhandled match case true\n",
+            "Unhandled match case NULL\n",
+            "Unhandled match case 1.0\n",
+            "Unhandled match case of type array\n",
+            "Unhandled match case of type stdClass\n",
+        )
+    );
+}
 
 /// Verifies the builtin `UnhandledMatchError` class can be constructed in a
 /// match default arm, thrown, caught by its fully-qualified name, and queried

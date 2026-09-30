@@ -23,7 +23,18 @@ pub(in crate::interpreter) fn eval_rmdir_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::chdir::eval_builtin_unary_path_bool("rmdir", args, context, scope, values)
+    // php's signature is `rmdir($directory, $context = null)`; the trailing context is accepted and
+    // ignored, matching the compiled backend.
+    let (path, rest) = match args {
+        [path] => (path, &args[1..1]),
+        [path, rest @ ..] if rest.len() == 1 => (path, rest),
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    for arg in rest {
+        eval_expr(arg, context, scope, values)?;
+    }
+    let path = eval_expr(path, context, scope, values)?;
+    super::chdir::eval_unary_path_bool_result("rmdir", path, context, values)
 }
 
 /// Dispatches evaluated-argument calls for the `rmdir` filesystem builtin through the area dispatcher.
@@ -33,7 +44,9 @@ pub(in crate::interpreter) fn eval_rmdir_declared_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [path] => super::chdir::eval_unary_path_bool_result("rmdir", *path, context, values),
+        [path] | [path, _] => {
+            super::chdir::eval_unary_path_bool_result("rmdir", *path, context, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

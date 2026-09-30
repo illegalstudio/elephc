@@ -73,8 +73,8 @@ echo mb_get_info("http_input") === null ? "unset\n" : "wrong\n";
         let output = compile_and_run_capture(&program(&body, eval));
         assert!(output.success, "eval={eval}: {}", output.stderr);
         assert_eq!(output.stdout, "2\n2\nmb_get_info() expects at most 1 argument, 2 given\nmb_get_info(): Argument #1 ($type) must be of type string, array given\ninvalid\nnull argument\nsuppressed\nunset\n", "eval={eval}");
-        assert_eq!(output.stderr.matches("mb_get_info(): argument #1 ($type) must be a valid type").count(), if eval { 3 } else { 2 }, "eval={eval}: {}", output.stderr);
-        assert_eq!(output.stderr.matches("Passing null to parameter #1 ($type) of type string is deprecated").count(), 1, "eval={eval}: {}", output.stderr);
+        assert_eq!(output.diagnostics.matches("mb_get_info(): argument #1 ($type) must be a valid type").count(), if eval { 3 } else { 2 }, "eval={eval}: {}", output.diagnostics);
+        assert_eq!(output.diagnostics.matches("Passing null to parameter #1 ($type) of type string is deprecated").count(), 1, "eval={eval}: {}", output.diagnostics);
     }
 }
 

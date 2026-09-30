@@ -85,11 +85,7 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
         let mut ref_params: Vec<bool> = Vec::with_capacity(total);
 
         for p in spec.params {
-            let ty = if matches!(spec.semantics.argument_lowering,
-                crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues)
-            {
-                crate::builtins::convert::type_spec_to_php_preserving_null(&p.ty)
-            } else { type_spec_to_php(&p.ty) };
+            let ty = crate::builtins::convert::builtin_param_php_type(spec, &p.ty);
             params.push((p.name.to_string(), ty));
             defaults.push(p.default.as_ref().map(default_spec_to_expr));
             ref_params.push(p.by_ref);
@@ -878,22 +874,27 @@ mod tests {
         assert!(function_sig("__nonexistent_builtin_xyz").is_none());
     }
 
-    /// Callable wrappers expose only the accepted prefix of a capped builtin declaration.
+    /// Callable wrappers expose a builtin's whole accepted declaration, metadata aligned.
+    ///
+    /// `str_replace()` used to be capped at three arguments because `&$count` had no lowering;
+    /// the by-reference output is implemented now, so the wrapper carries all four parameters
+    /// and only the last is optional.
     #[test]
     fn first_class_callable_sig_stops_at_the_enforced_arity_cap() {
         for name in ["str_replace", "str_ireplace"] {
             assert_eq!(function_sig(name).unwrap().params.len(), 4, "{name} declaration");
-            assert_eq!(enforced_arity_bounds(name), Some((3, Some(3))), "{name} cap");
+            assert_eq!(enforced_arity_bounds(name), Some((3, Some(4))), "{name} cap");
             let sig = first_class_callable_sig(name).expect("callable signature");
-            assert_eq!(sig.params.len(), 3, "{name} callable arity");
+            assert_eq!(sig.params.len(), 4, "{name} callable arity");
             assert!(sig.variadic.is_none());
             for field in [
                 sig.defaults.len(), sig.ref_params.len(), sig.declared_params.len(),
                 sig.param_type_exprs.len(), sig.param_attributes.len(),
             ] {
-                assert_eq!(field, 3, "{name} parameter metadata stays aligned");
+                assert_eq!(field, 4, "{name} parameter metadata stays aligned");
             }
-            assert!(sig.defaults.iter().all(Option::is_none), "{name} prefix is required");
+            assert!(sig.defaults[..3].iter().all(Option::is_none), "{name} prefix is required");
+            assert!(sig.ref_params[3], "{name} writes $count by reference");
         }
     }
 
@@ -976,6 +977,21 @@ mod tests {
                 assert_eq!(descriptor.result_ownership, runtime_fn.result_ownership());
                 assert_eq!(descriptor.requirements, runtime_fn.requirements());
                 assert_eq!(descriptor.monitoring, runtime_fn.monitoring_policy());
+                // The stream-count note is emitted for exactly these operations, so
+                // the declared policy must say so, in both directions.
+                assert_eq!(
+                    runtime_fn.is_stream_operation(),
+                    matches!(
+                        descriptor.monitoring,
+                        elephc_monitoring_contract::MonitoringPolicy::Io {
+                            kind: elephc_monitoring_contract::IoKind::Stream,
+                            ..
+                        }
+                    ),
+                    "{} runtime target {} disagrees with its stream monitoring policy",
+                    name,
+                    descriptor.eir_name,
+                );
                 assert_eq!(
                     descriptor.backend_mapping,
                     crate::ir::RuntimeFnBackendMapping::TargetAwareEmitter,
@@ -1193,17 +1209,15 @@ mod tests {
 
     /// Verifies synthetic array-returning runtime calls retain concrete array metadata.
     ///
-    /// The element type is what matters: a fallback that widened to `Mixed` would make the
-    /// backend read 8-byte slots as boxed cells. A builtin that can also FAIL carries its
-    /// false arm here as well, because the EIR fallback and the checker's declared type must
-    /// agree — where they disagree the program miscompiles instead of failing to build.
+    /// `Scandir`, `File` and `Glob` left this list when their results became boxed
+    /// `array|false`, the same exit `Fgetcsv` made: the boxed cell IS the representation the
+    /// lowering builds, and refining it to a raw array here made a synthesized call read the
+    /// box as an array header.
     #[test]
     fn array_runtime_fallbacks_preserve_backend_container_layout() {
         let string_array = PhpType::Array(Box::new(PhpType::Str));
         for target in [
             crate::ir::RuntimeFnId::Explode,
-            crate::ir::RuntimeFnId::Glob,
-            crate::ir::RuntimeFnId::Scandir,
             crate::ir::RuntimeFnId::SplClasses,
         ] {
             assert_eq!(
@@ -1213,13 +1227,15 @@ mod tests {
                 target.as_eir(),
             );
         }
-        // `file()` answers `false` for a read it could not perform, which is the only way a
-        // caller can tell a missing file from an empty one.
-        for target in [crate::ir::RuntimeFnId::File, crate::ir::RuntimeFnId::Fgetcsv] {
+        for target in [
+            crate::ir::RuntimeFnId::Scandir,
+            crate::ir::RuntimeFnId::File,
+            crate::ir::RuntimeFnId::Glob,
+        ] {
             assert_eq!(
                 target.fallback_result_type(&[], &PhpType::Mixed),
-                PhpType::Union(vec![string_array.clone(), PhpType::False]),
-                "{} must keep its string-array element type AND its false arm",
+                PhpType::Mixed,
+                "{}'s boxed array|false must NOT be refined to a raw array",
                 target.as_eir(),
             );
         }

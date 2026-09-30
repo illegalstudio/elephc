@@ -352,6 +352,43 @@ impl Checker {
         }
     }
 
+    /// Spells a declared return type the way php prints it in the fall-through TypeError.
+    ///
+    /// `None` for a type php would spell in a way this cannot reproduce — a UNION, whose members
+    /// php reorders into its own canonical order (`int|string` prints as `string|int`), and the
+    /// codegen-internal shapes the checker never declares. A caller that gets `None` keeps the
+    /// compile error, which is a narrowing rather than a wrong message.
+    pub(crate) fn render_declared_return_type(declared: &PhpType) -> Option<String> {
+        Some(match declared {
+            PhpType::Int => "int".to_string(),
+            PhpType::Float => "float".to_string(),
+            PhpType::Str => "string".to_string(),
+            PhpType::Bool => "bool".to_string(),
+            PhpType::False => "false".to_string(),
+            PhpType::Iterable => "iterable".to_string(),
+            PhpType::Mixed => "mixed".to_string(),
+            PhpType::Callable => "callable".to_string(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
+            PhpType::Object(name) => name.trim_start_matches('\\').to_string(),
+            _ => return None,
+        })
+    }
+
+    /// The message php raises when a declared-return body falls off its end.
+    ///
+    /// MEASURED on `php -n` 8.5.6 across seven declared types and three callable shapes; the
+    /// wording is one sentence with no variation but the name and the type.
+    pub(crate) fn fallthrough_return_type_message(
+        qualified_name: &str,
+        declared: &PhpType,
+    ) -> Option<String> {
+        let rendered = Self::render_declared_return_type(declared)?;
+        Some(format!(
+            "{}(): Return value must be of type {}, none returned",
+            qualified_name, rendered
+        ))
+    }
+
     /// Checks that an actual return type is compatible with the declared return type.
     /// Handles three cases: void-returning functions (no value allowed), value-returning
     /// functions (value required and must be assignable to `expected`), and nullability

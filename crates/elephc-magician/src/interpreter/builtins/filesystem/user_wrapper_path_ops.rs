@@ -10,6 +10,7 @@
 //!   runtime's path-op helpers instead of reusing open stream resources.
 
 use super::super::super::*;
+use super::chdir::MkdirOptions;
 use super::user_wrapper_streams::eval_user_wrapper_method;
 
 /// Dispatches `unlink($path)` to a wrapper object's `unlink()` method.
@@ -21,24 +22,29 @@ pub(in crate::interpreter) fn eval_user_wrapper_unlink_result(
     eval_user_wrapper_path_method_result(path, "unlink", context, values, |_| Ok(Vec::new()))
 }
 
-/// Dispatches `mkdir($path)` or `rmdir($path)` to the registered wrapper.
+/// Dispatches `mkdir($path, ...)` or `rmdir($path)` to the registered wrapper.
 pub(in crate::interpreter) fn eval_user_wrapper_single_path_op_result(
     name: &str,
     path: &str,
+    options: MkdirOptions,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     match name {
-        "mkdir" => eval_user_wrapper_mkdir_result(path, DEFAULT_MKDIR_PERMISSIONS, false, context, values),
+        "mkdir" => eval_user_wrapper_mkdir_result(
+            path,
+            i64::from(options.permissions),
+            options.recursive,
+            context,
+            values,
+        ),
+        // php passes ($path, STREAM_REPORT_ERRORS).
         "rmdir" => eval_user_wrapper_path_method_result(path, name, context, values, |values| {
-            Ok(vec![values.int(0)?])
+            Ok(vec![values.int(STREAM_REPORT_ERRORS)?])
         }),
         _ => Ok(None),
     }
 }
-
-/// PHP's default `mkdir()` `$permissions`, which the wrapper receives verbatim.
-pub(in crate::interpreter) const DEFAULT_MKDIR_PERMISSIONS: i64 = 0o777;
 
 /// PHP's `STREAM_MKDIR_RECURSIVE`, set when `$recursive` is requested.
 const STREAM_MKDIR_RECURSIVE: i64 = 1;

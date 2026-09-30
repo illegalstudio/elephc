@@ -789,15 +789,15 @@ echo var_export(property_exists($src, "zz"), true);
         "2:x;x:1;{\"n\":1,\"zz\":\"x\"};{\"n\":1};false"
     );
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Deprecated: Creation of dynamic property Plain::$zz is deprecated"),
         "{}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
-        !out.stderr.contains("D::$zz"),
+        !out.diagnostics.contains("D::$zz"),
         "an #[AllowDynamicProperties] class must not deprecate: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -1629,12 +1629,12 @@ echo $c->readN();
     );
     assert_eq!(out.stdout, "7;1/8;1/9;1");
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches("Creation of dynamic property C::$n is deprecated")
             .count(),
         2,
         "the child-scope and global-scope clones each create the dynamic property once: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 

@@ -100,8 +100,8 @@ A program monitor LAUNCHES (a source or a binary) is measured from inside: an
 exact per-function profile rooted at {main} — wall time, call counts,
 allocations, retained objects, SQL query counts, database-driver wait, outgoing
 network operations and network wait. The display derives
-wall-minus-recorded-DB-wait; it is not an OS CPU clock. File I/O is not counted
-or timed. Every local export is available.
+wall-minus-recorded-DB-wait; it is not an OS CPU clock. File I/O is counted as
+stream operations, not timed. Every local export is available.
 
 A service monitor CONNECTS to answers from its sample ring: CPU-time shares that
 sharpen as samples accumulate, sampled allocation attribution, and per-route

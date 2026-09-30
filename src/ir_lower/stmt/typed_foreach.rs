@@ -683,6 +683,15 @@ fn pin_by_ref_foreach_borrowed_source(
 
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
 pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
+    // A Resource element must be recognized BEFORE `codegen_repr()`, which collapses it
+    // to Int: the scalar arm below then returned that Int and
+    // `foreach ([STDIN, STDOUT, STDERR] as $s) { stream_get_meta_data($s); }` was
+    // refused with "stream argument PHP type Int".
+    if let PhpType::Array(elem) = source_ty {
+        if matches!(**elem, PhpType::Resource(_)) {
+            return (**elem).clone();
+        }
+    }
     match source_ty.codegen_repr() {
         PhpType::Array(elem) => match elem.codegen_repr() {
             PhpType::Callable => PhpType::Callable,

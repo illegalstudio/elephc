@@ -2,7 +2,7 @@
 title: "_gmagick_norm_color() - internals"
 description: "Compiler internals for _gmagick_norm_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1158
+  order: 1193
 ---
 
 ## `_gmagick_norm_color()` - internals

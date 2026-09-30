@@ -108,6 +108,12 @@ pub struct Module {
     pub declared_interface_names: Vec<String>,
     pub declared_trait_names: Vec<String>,
     pub declared_trait_source_lines: HashMap<String, u32>,
+    /// `(line, message)` for php's tentative-return deprecations, raised while LINKING a class
+    /// and therefore emitted from the main prologue rather than at any call site.
+    pub tentative_return_deprecations: Vec<(u32, String)>,
+    /// `(line, message)` for the incompatible declaration php stops the script on, raised
+    /// while LINKING a class and therefore emitted from the main prologue like the above.
+    pub link_time_fatal: Option<(u32, String)>,
     pub declared_trait_uses: HashMap<String, Vec<String>>,
     pub declared_trait_method_names: HashMap<String, Vec<String>>,
     pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
@@ -170,6 +176,8 @@ impl Module {
             declared_interface_names: Vec::new(),
             declared_trait_names: Vec::new(),
             declared_trait_source_lines: HashMap::new(),
+            tentative_return_deprecations: Vec::new(),
+            link_time_fatal: None,
             declared_trait_uses: HashMap::new(),
             declared_trait_method_names: HashMap::new(),
             declared_trait_methods: HashMap::new(),

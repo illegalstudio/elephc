@@ -2,7 +2,7 @@
 title: "mb_ltrim()"
 description: "Removes Unicode whitespace or the specified characters from the beginning."
 sidebar:
-  order: 861
+  order: 889
 ---
 
 ## mb_ltrim()

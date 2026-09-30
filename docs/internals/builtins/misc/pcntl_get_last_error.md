@@ -2,7 +2,7 @@
 title: "pcntl_get_last_error() - internals"
 description: "Compiler internals for pcntl_get_last_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 651
+  order: 677
 ---
 
 ## `pcntl_get_last_error()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_get_last_error.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_get_last_error.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

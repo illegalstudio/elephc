@@ -131,9 +131,83 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_boxed_array_values(
         }
     }
     ctx.emitter.label(&invalid);
-    crate::codegen::lower_inst::exceptions::emit_type_error(ctx, invalid_message);
+    emit_not_an_array_type_error(ctx, invalid_message);
     ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Throws php's `TypeError` for a non-array argument, naming the value the way php does.
+///
+/// Entered with `__rt_mixed_unbox`'s state: the runtime tag in the integer result register and the
+/// payload in the unbox payload register. php's `zend_zval_value_name()` names the VALUE: `false`
+/// and `true` rather than `bool`, the class of an object, and the plain type otherwise —
+/// `sort(): Argument #1 ($array) must be of type array, false given`, MEASURED on php -n 8.5.10.
+pub(super) fn emit_not_an_array_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
+    const TAG_WORDS: &[(i64, &str)] = &[
+        (8, "null"),
+        (0, "int"),
+        (2, "float"),
+        (1, "string"),
+        (9, "resource"),
+    ];
+    let (tag, payload) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1"),
+        Arch::X86_64 => ("rax", "rdi"),
+    };
+    let bool_label = ctx.next_label("not_array_bool");
+    let true_label = ctx.next_label("not_array_true");
+    let object_label = ctx.next_label("not_array_object");
+    let word_labels: Vec<String> = TAG_WORDS
+        .iter()
+        .map(|(value_tag, _)| ctx.next_label(&format!("not_array_tag_{value_tag}")))
+        .collect();
+    let mut arms: Vec<(i64, &str)> = vec![(3, bool_label.as_str()), (6, object_label.as_str())];
+    arms.extend(TAG_WORDS.iter().map(|(value_tag, _)| *value_tag).zip(word_labels.iter().map(String::as_str)));
+    for (value_tag, label) in arms {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {tag}, #{value_tag}"));
+                ctx.emitter.instruction(&format!("b.eq {label}"));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {tag}, {value_tag}"));
+                ctx.emitter.instruction(&format!("je {label}"));
+            }
+        }
+    }
+    // No php word for what is left: the caller's own sentence, as before.
+    crate::codegen::lower_inst::exceptions::emit_type_error(ctx, message);
+
+    ctx.emitter.label(&bool_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {payload}, {true_label}")),
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {payload}, {payload}"));
+            ctx.emitter.instruction(&format!("jnz {true_label}"));
+        }
+    }
+    crate::codegen::lower_inst::exceptions::emit_type_error(ctx, &format!("{message}, false given"));
+    ctx.emitter.label(&true_label);
+    crate::codegen::lower_inst::exceptions::emit_type_error(ctx, &format!("{message}, true given"));
+
+    for ((_, word), label) in TAG_WORDS.iter().zip(word_labels.iter()) {
+        ctx.emitter.label(label);
+        crate::codegen::lower_inst::exceptions::emit_type_error(ctx, &format!("{message}, {word} given"));
+    }
+
+    ctx.emitter.label(&object_label);
+    let receiver = abi::int_result_reg(ctx.emitter);
+    ctx.emitter.instruction(&format!("mov {receiver}, {payload}"));             // the object whose class php names
+    crate::codegen::lower_inst::runtime_class_messages::emit_runtime_class_name_to_string_result(
+        ctx, receiver, "object",
+    );
+    crate::codegen::lower_inst::runtime_class_messages::emit_concat_static_prefix(
+        ctx,
+        &format!("{message}, "),
+    );
+    crate::codegen::lower_inst::runtime_class_messages::emit_concat_static_suffix(ctx, " given");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    crate::codegen::lower_inst::exceptions::emit_type_error_from_string_result(ctx);
 }
 
 /// Lowers `array_values()` for a PHP `array<mixed>` value that may hold indexed or hash storage.

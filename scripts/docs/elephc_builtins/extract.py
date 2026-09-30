@@ -549,18 +549,26 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``src/builtins/parity_tests.rs``'s ``injected_prelude_programs``, and its
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
-PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+PRELUDE_SOURCES: dict[
+    str,
+    tuple[str | tuple[str, ...], str, str] | list[tuple[str | tuple[str, ...], str, str]],
+] = {
     "curl": (
         "curl_prelude.rs",
         "curl",
         "crates/elephc-builtin-contract/src/catalog_curl.rs",
     ),
-    # The four hash_* contracts (`Area::String`).
-    "string": (
-        "hash_prelude.rs",
-        "hash",
-        "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
-    ),
+    # The four hash_* contracts, plus the string half of ext-zlib (`gzencode()`,
+    # `zlib_encode()`, ...) that the gz prelude declares (`Area::String`).
+    "string": [
+        ("hash_prelude.rs", "hash", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
+        ("gz_prelude.rs", "gz", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
+    ],
+    # The `gz*` stream functions and `dir()` with its `Directory` class (`Area::Io`).
+    "io": [
+        ("gz_prelude.rs", "gz", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
+        ("dir_prelude.rs", "dir", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
+    ],
     # Prelude-provided contracts seeded from the built prelude declarations live in
     # catalog_data.rs; each area maps to the prelude (or preludes) declaring it.
     "image": ("image_prelude.rs", "image", "crates/elephc-builtin-contract/src/catalog_data.rs"),
@@ -656,7 +664,7 @@ def resolve_non_registry_lowering(
     kind = aot_support.get("kind")
     if kind == "prelude":
         try:
-            source, label, sig_file = PRELUDE_SOURCES[area]
+            entries = PRELUDE_SOURCES[area]
         except KeyError:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
@@ -664,15 +672,22 @@ def resolve_non_registry_lowering(
                 f"comment) — falling back to another area's prelude would publish a page "
                 f"pointing at the wrong file with the wrong prose."
             ) from None
-        lowering.sig_file = sig_file
-        sources = (source,) if isinstance(source, str) else source
-        prelude, match = None, None
-        for candidate in sources:
-            prelude = repo / "src" / candidate
-            match = find_prelude_declaration(read(prelude), canonical)
+        # An area served by more than one prelude family lists one entry per family, each
+        # with its own label and contract file; the first family declaring the name wins.
+        entries = [entries] if isinstance(entries, tuple) else entries
+        prelude, match, searched = None, None, []
+        for source, label, sig_file in entries:
+            sources = (source,) if isinstance(source, str) else source
+            searched.extend(sources)
+            for candidate in sources:
+                prelude = repo / "src" / candidate
+                match = find_prelude_declaration(read(prelude), canonical)
+                if match is not None:
+                    break
             if match is not None:
+                lowering.sig_file = sig_file
                 break
-        source = "/".join(sources) if match is None else str(prelude.relative_to(repo / "src"))
+        source = "/".join(searched) if match is None else str(prelude.relative_to(repo / "src"))
         if match is None:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is not declared by src/{source}. "

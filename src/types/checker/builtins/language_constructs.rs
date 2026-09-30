@@ -45,9 +45,17 @@ pub(super) fn check(
                 return Err(CompileError::new(span, "exit() takes 0 or 1 arguments"));
             }
             if let Some(arg) = args.first() {
+                // php takes an int OR a string: `exit(2)` is a status, `die("message\n")` PRINTS
+                // the message and exits 0. MEASURED on `php -n` 8.5.6 — `echo "before\n";
+                // exit("bye\n");` writes both lines and answers status 0. Refusing the string
+                // form rejected fifteen tests of php-src's own streams corpus, all of them the
+                // `fopen(...) or die("Cannot open ...")` idiom.
                 let ty = checker.infer_type(arg, env)?;
-                if ty != PhpType::Int {
-                    return Err(CompileError::new(span, "exit() argument must be integer"));
+                if !matches!(ty.codegen_repr(), PhpType::Int | PhpType::Str) {
+                    return Err(CompileError::new(
+                        span,
+                        "exit() argument must be an integer status or a string to print",
+                    ));
                 }
             }
             Ok(PhpType::Void)

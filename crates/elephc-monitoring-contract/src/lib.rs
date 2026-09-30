@@ -19,6 +19,10 @@ pub enum IoKind {
     Database,
     /// Outgoing network transfers such as curl requests.
     Network,
+    /// Stream operations (`fopen`, `fread`, `fgets`, `file_get_contents`, …),
+    /// counted per function and broken down by operation, kept apart from
+    /// database and network work so a reopen loop is not read as an N+1 query.
+    Stream,
 }
 
 /// Whether an I/O boundary propagates the active W3C trace context.

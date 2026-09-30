@@ -63,7 +63,7 @@ pub(in crate::interpreter) fn eval_file_probe_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
-    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
+    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, eval_url_stat_flags(name), context, values)? {
         return eval_user_wrapper_file_probe_from_stat(name, stat, values);
     }
     if stream_wrappers::is_phar_stream(&path) {

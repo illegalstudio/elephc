@@ -73,6 +73,7 @@ mod array_set_int;
 mod array_set_mixed;
 mod array_set_mixed_key;
 mod array_set_refcounted;
+mod array_set_resource;
 mod array_set_str;
 mod array_rand;
 mod random_u32;
@@ -84,6 +85,8 @@ mod array_reduce_str;
 mod array_replace;
 mod array_replace_recursive;
 mod array_reverse;
+mod array_set_op_str;
+mod array_set_op_to_hash;
 mod array_reverse_boxed;
 mod array_reverse_refcounted;
 mod array_search;
@@ -170,6 +173,8 @@ mod heap_kind;
 mod heap_free;
 mod in_array_mixed_int;
 mod min_max_container;
+mod filter_truthy;
+mod natcmp;
 mod natsort;
 
 pub(super) mod deep_cleanup;
@@ -193,6 +198,7 @@ mod mixed_cast_string;
 mod mixed_from_value;
 mod mixed_instanceof;
 mod mixed_free_deep;
+mod count_reject;
 mod mixed_count;
 mod mixed_is_empty;
 mod mixed_numeric_binops;
@@ -339,6 +345,8 @@ pub use array_get_mixed_key::emit_array_get_mixed_key;
 /// Emit refcounted indexed-array set helper.
 pub use array_set_refcounted::emit_array_set_refcounted;
 /// Emit refcounted indexed-array set helper.
+pub use array_set_resource::emit_array_set_resource;
+/// Emit resource indexed-array set helper.
 pub use array_set_str::emit_array_set_str;
 /// Emit string indexed-array set helper.
 pub use array_rand::emit_array_rand;
@@ -358,6 +366,11 @@ pub use array_replace::emit_array_replace;
 pub use array_replace_recursive::emit_array_replace_recursive;
 /// Emit recursive array replace helper.
 pub use array_reverse::emit_array_reverse;
+pub use array_reverse::emit_array_reverse_str;
+pub use array_set_op_str::emit_array_merge_str;
+pub use array_set_op_str::emit_array_unique_str;
+pub use array_set_op_str::emit_array_set_op_str;
+pub use array_set_op_to_hash::{emit_array_set_op_to_hash, SetOpToHash};
 /// Emit reversal for a borrowed boxed PHP array with runtime key preservation.
 pub use array_reverse_boxed::emit_array_reverse_boxed;
 /// Emit array reverse helper.
@@ -530,11 +543,13 @@ pub use mixed_cast_bool::emit_mixed_cast_bool;
 /// Emit Mixed-to-boolean cast helper.
 pub use mixed_cast_float::emit_mixed_cast_float;
 /// Emit Mixed-to-float cast helper.
-pub use mixed_cast_int::emit_mixed_cast_int;
+pub use mixed_cast_int::{emit_mixed_cast_int, emit_mixed_cast_int_nullable};
 pub use mixed_intval_base::emit_mixed_intval_base;
 /// Emit Mixed-to-integer cast helper.
 pub use mixed_cast_string::emit_mixed_cast_string;
 /// Emit Mixed-to-string cast helper.
+pub use count_reject::{emit_count_reject_index, emit_count_type_message};
+pub(crate) use count_reject::count_type_error_symbols;
 pub use mixed_count::emit_mixed_count;
 /// Emit Mixed count helper.
 pub use mixed_free_deep::emit_mixed_free_deep;
@@ -560,11 +575,13 @@ pub use range::emit_range;
 /// Emit range helper.
 pub use refcount::emit_refcount;
 /// Emit reference count helper.
-pub use shuffle::emit_shuffle;
+pub use shuffle::{emit_shuffle, emit_shuffle_str};
 /// Emit array shuffle helper.
 pub use sort_int::emit_sort_int;
 /// Emit string sort helper.
-pub use sort_str::emit_sort_str;
+pub use filter_truthy::emit_filter_truthy_predicates;
+pub use natcmp::emit_natcmp;
+pub use sort_str::{emit_natsort_str, emit_sort_str};
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
 pub use float_key_to_int::emit_float_key_to_int;

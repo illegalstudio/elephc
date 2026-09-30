@@ -2,7 +2,7 @@
 title: "stream_set_read_buffer() - internals"
 description: "Compiler internals for stream_set_read_buffer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 382
+  order: 408
 ---
 
 ## `stream_set_read_buffer()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_set_read_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_set_read_buffer.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

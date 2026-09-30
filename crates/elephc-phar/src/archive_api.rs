@@ -9,13 +9,22 @@
 
 use super::*;
 
-/// Extracts a `phar://archive/entry` URL into bytes.
+/// Extracts a `phar://archive/entry` or `zip://archive#entry` URL into bytes.
 ///
-/// The archive portion is found by scanning slash-delimited prefixes until one
-/// names an existing file. This matches PHP's archive-boundary behavior while
-/// also supporting `.phar`, `.tar`, and `.zip` suffixes without hardcoding an
-/// extension list.
+/// For `phar://` the archive portion is found by scanning slash-delimited
+/// prefixes until one names an existing file. This matches PHP's
+/// archive-boundary behavior while also supporting `.phar`, `.tar`, and `.zip`
+/// suffixes without hardcoding an extension list.
+///
+/// For `zip://` php's `ext/zip` wrapper uses a completely different URL shape —
+/// a single `#` separates the archive from the entry — and reads the entry as a
+/// plain ZIP member with no phar semantics. Both schemes share this entry point
+/// because the generated runtime reaches the bridge through one function
+/// pointer, and the scheme in the URL already says which shape to parse.
 pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
+    if url.starts_with(b"zip://") {
+        return zip_extract_url_bytes(url);
+    }
     let rest = url.strip_prefix(b"phar://")?;
     let (archive_path, entry) = split_archive_entry(rest)?;
     let archive_path = std::str::from_utf8(archive_path).ok()?;
@@ -23,6 +32,43 @@ pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
     let data = std::fs::read(path).ok()?;
     let public_key = read_archive_public_key(path);
     extract_archive_entry(&data, entry, public_key.as_ref())
+}
+
+/// Splits a `zip://<archive>#<entry>` URL at its FIRST `#`.
+///
+/// Measured on `php -n` 8.5.6: an archive holding an entry literally named
+/// `a#b.txt` is read by `zip://h.zip#a#b.txt`, so the separator is the first `#`
+/// and every later one belongs to the entry name. An empty archive path or an
+/// empty entry name has no member to name, and php fails both.
+pub(super) fn split_zip_url(url: &[u8]) -> Option<(&[u8], &[u8])> {
+    let rest = url.strip_prefix(b"zip://")?;
+    let hash = rest.iter().position(|&byte| byte == b'#')?;
+    let (archive_path, entry) = rest.split_at(hash);
+    let entry = entry.get(1..)?;
+    (!archive_path.is_empty() && !entry.is_empty()).then_some((archive_path, entry))
+}
+
+/// Serializes every ZIP entry's `ZipArchive::statIndex()` fields for `archive_path`.
+///
+/// Returns `None` when the file cannot be read or is no ZIP at all — the two cases
+/// php's `ZipArchive::open()` answers with `ER_NOENT` and `ER_NOZIP`. See
+/// [`zip_stat_records`] for the wire shape.
+pub fn zip_stat_entries_bytes(archive_path: &[u8]) -> Option<Vec<u8>> {
+    let archive_path = std::str::from_utf8(archive_path).ok()?;
+    let archive = std::fs::read(archive_path).ok()?;
+    zip_stat_records(&archive)
+}
+
+/// Reads one entry out of the ZIP archive a `zip://archive#entry` URL names.
+///
+/// Returns `None` for a missing archive, a missing entry, a `#`-less URL, and an
+/// encrypted entry with no password — every one of which php reports as the same
+/// failed open.
+pub fn zip_extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
+    let (archive_path, entry) = split_zip_url(url)?;
+    let archive_path = std::str::from_utf8(archive_path).ok()?;
+    let archive = std::fs::read(archive_path).ok()?;
+    zip_entry_payload(&archive, entry)
 }
 
 /// Extracts `entry` from already-loaded archive bytes.

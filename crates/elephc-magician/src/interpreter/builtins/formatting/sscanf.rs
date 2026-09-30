@@ -1,16 +1,29 @@
 //! Purpose:
-//! Implements eval support for PHP `sscanf()` and its small scanning subset.
+//! Implements eval support for PHP `sscanf()`.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::hooks`.
 //!
 //! Key details:
-//! - Only the currently supported `%d`, `%f`, `%s`, and `%%` subset is parsed;
-//!   extra output variables are evaluated for side effects and ignored.
-//! - This file owns registry metadata, direct dispatch, by-value dispatch, and
-//!   the scanning implementation.
+//! - The scan itself is `super::scanf_engine`, the same rule set the compiled backend runs as
+//!   an injected elephc-PHP prelude, so `eval('sscanf(...)')` and a compiled `sscanf()` cannot
+//!   answer differently. This file used to carry a `%d`/`%f`/`%s`/`%%` subset that pushed every
+//!   match back as the matched STRING — `sscanf('77 xx', '%d %d')` gave `['77', '']` where php
+//!   gives `[77, NULL]` — and knew no widths, suppression, character classes or EOF result.
+//! - php's null result (end of input before any assignment) is returned as `null`, not as an
+//!   empty array: `sscanf('', '%d')` is `NULL` while `sscanf('abc', '%d')` is `[NULL]`.
+//! - A format php refuses raises the catchable `ValueError` it words itself, which is why the
+//!   dispatchers thread `context` through — a pending throw needs somewhere to land.
+//! - The by-ref `$vars` output form is REFUSED, matching the compiled builtin. php assigns
+//!   each field through the reference and returns the field COUNT; this interpreter used to
+//!   evaluate the extra arguments for side effects and IGNORE them, so the call silently
+//!   returned the matched-fields array and assigned nothing. Refusing keeps `eval()` from
+//!   being a silent-wrong workaround for the compiled path's refusal.
+//! - This file owns registry metadata, direct dispatch, by-value dispatch, and the bridge from
+//!   the engine's values to interpreter cells.
 
 use super::super::super::*;
+use super::scanf_engine::{scan, ScanfFormatError, ScanfValue};
 
 eval_builtin! {
     contract: "sscanf",
@@ -27,163 +40,69 @@ pub(in crate::interpreter) fn eval_builtin_sscanf(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if args.len() < 2 {
+    if args.len() != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
     let input = eval_expr(&args[0], context, scope, values)?;
     let format = eval_expr(&args[1], context, scope, values)?;
-    for arg in &args[2..] {
-        eval_expr(arg, context, scope, values)?;
-    }
-    eval_sscanf_result(input, format, values)
+    eval_sscanf_result(input, format, context, values)
 }
 
 
 /// Dispatches by-value `sscanf()` calls after argument binding.
 pub(in crate::interpreter) fn eval_sscanf_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [input, format, ..] = evaluated_args else {
+    // An exact two-element binding, not `[input, format, ..]`: a bound `$vars` tail is the
+    // unsupported by-ref output form, and swallowing it here returned the array in silence.
+    let [input, format] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    eval_sscanf_result(*input, *format, values)
+    eval_sscanf_result(*input, *format, context, values)
 }
 
-/// Parses one string through the eval `sscanf()` subset and returns an indexed array.
+/// Scans one string through php's scanf rules and returns php's own result shape.
 pub(in crate::interpreter) fn eval_sscanf_result(
     input: RuntimeCellHandle,
     format: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let input = values.string_bytes(input)?;
     let format = values.string_bytes(format)?;
-    let matches = eval_sscanf_matches(&input, &format);
-    let mut result = values.array_new(matches.len())?;
-    for (index, matched) in matches.iter().enumerate() {
+    let scanned = match scan(&input, &format) {
+        Ok(scanned) => scanned,
+        Err(error) => return eval_scanf_format_error(&error, context, values),
+    };
+    let Some(scanned) = scanned else {
+        return values.null();
+    };
+    let mut result = values.array_new(scanned.len())?;
+    for (index, scanned) in scanned.iter().enumerate() {
         let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        let value = values.string_bytes_value(matched)?;
+        let value = match scanned {
+            ScanfValue::Int(value) => values.int(*value)?,
+            ScanfValue::Float(value) => values.float(*value)?,
+            ScanfValue::Bytes(value) => values.string_bytes_value(value)?,
+            ScanfValue::Null => values.null()?,
+        };
         result = values.array_set(result, key, value)?;
     }
     Ok(result)
 }
 
-/// Extracts `%d`, `%f`, `%s`, and `%%` matches with the same subset as native `sscanf()`.
-pub(in crate::interpreter) fn eval_sscanf_matches(input: &[u8], format: &[u8]) -> Vec<Vec<u8>> {
-    let mut matches = Vec::new();
-    let mut input_index = 0;
-    let mut format_index = 0;
-
-    while format_index < format.len() {
-        if format[format_index] != b'%' {
-            if input_index >= input.len() || input[input_index] != format[format_index] {
-                break;
-            }
-            input_index += 1;
-            format_index += 1;
-            continue;
-        }
-
-        format_index += 1;
-        if format_index >= format.len() {
-            break;
-        }
-
-        match format[format_index] {
-            b'%' => {
-                if input_index >= input.len() || input[input_index] != b'%' {
-                    break;
-                }
-                input_index += 1;
-            }
-            b'd' => matches.push(eval_sscanf_scan_int(input, &mut input_index)),
-            b'f' => matches.push(eval_sscanf_scan_float(input, &mut input_index)),
-            b's' => matches.push(eval_sscanf_scan_word(input, &mut input_index)),
-            _ => {}
-        }
-        format_index += 1;
-    }
-
-    matches
-}
-
-/// Scans the native `sscanf()` `%d` subset as a matched byte slice.
-pub(in crate::interpreter) fn eval_sscanf_scan_int(
-    input: &[u8],
-    input_index: &mut usize,
-) -> Vec<u8> {
-    let start = *input_index;
-    if input.get(*input_index) == Some(&b'-') {
-        *input_index += 1;
-    }
-    while input
-        .get(*input_index)
-        .is_some_and(|byte| byte.is_ascii_digit())
-    {
-        *input_index += 1;
-    }
-    input[start..*input_index].to_vec()
-}
-
-/// Scans the native `sscanf()` `%f` subset as a matched byte slice.
-pub(in crate::interpreter) fn eval_sscanf_scan_float(
-    input: &[u8],
-    input_index: &mut usize,
-) -> Vec<u8> {
-    let start = *input_index;
-    if input
-        .get(*input_index)
-        .is_some_and(|byte| matches!(byte, b'+' | b'-'))
-    {
-        *input_index += 1;
-    }
-    while input
-        .get(*input_index)
-        .is_some_and(|byte| byte.is_ascii_digit())
-    {
-        *input_index += 1;
-    }
-    if input.get(*input_index) == Some(&b'.') {
-        *input_index += 1;
-        while input
-            .get(*input_index)
-            .is_some_and(|byte| byte.is_ascii_digit())
-        {
-            *input_index += 1;
-        }
-    }
-    if input
-        .get(*input_index)
-        .is_some_and(|byte| matches!(byte, b'e' | b'E'))
-    {
-        *input_index += 1;
-        if input
-            .get(*input_index)
-            .is_some_and(|byte| matches!(byte, b'+' | b'-'))
-        {
-            *input_index += 1;
-        }
-        while input
-            .get(*input_index)
-            .is_some_and(|byte| byte.is_ascii_digit())
-        {
-            *input_index += 1;
-        }
-    }
-    input[start..*input_index].to_vec()
-}
-
-/// Scans the native `sscanf()` `%s` subset as a non-space byte word.
-pub(in crate::interpreter) fn eval_sscanf_scan_word(
-    input: &[u8],
-    input_index: &mut usize,
-) -> Vec<u8> {
-    let start = *input_index;
-    while input
-        .get(*input_index)
-        .is_some_and(|byte| !matches!(byte, b' ' | b'\t' | b'\n'))
-    {
-        *input_index += 1;
-    }
-    input[start..*input_index].to_vec()
+/// Raises php's catchable `ValueError` for a format its scanner refuses.
+fn eval_scanf_format_error<T>(
+    error: &ScanfFormatError,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object("ValueError")?;
+    let message = values.string(&error.message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
 }

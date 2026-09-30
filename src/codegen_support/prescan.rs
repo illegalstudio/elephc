@@ -98,8 +98,49 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    collect_stream_constants(target_platform, &mut constants);
     collect_constant_decls(program, &mut constants);
     constants
+}
+
+/// Seeds the stream, output-handler and zlib constants the streams runtime relies on.
+///
+/// The catalog loop above wins for any name it already defines; these tables only fill in what it
+/// leaves out. Two values are deliberately overridden. `STDIN`/`STDOUT`/`STDERR` are resource
+/// REGISTRY handles here — generation 1, slots 1-3 — not raw descriptors, because every stream
+/// builtin resolves its handle through the registry. `STREAM_PF_INET6` is target-divergent
+/// (`AF_INET6` is 30 on macOS and 10 on Linux).
+fn collect_stream_constants(
+    target_platform: Platform,
+    constants: &mut HashMap<String, (ExprKind, PhpType)>,
+) {
+    for (name, value) in elephc_builtin_contract::php_constants::ALL_INT_CONSTANT_TABLES
+        .iter()
+        .flat_map(|table| table.iter())
+    {
+        constants
+            .entry((*name).to_string())
+            .or_insert((ExprKind::IntLiteral(*value), PhpType::Int));
+    }
+    for (name, handle) in [
+        ("STDIN", 0x1_0000_0001_i64),
+        ("STDOUT", 0x1_0000_0002),
+        ("STDERR", 0x1_0000_0003),
+    ] {
+        constants.insert(
+            name.to_string(),
+            (ExprKind::IntLiteral(handle), PhpType::stream_resource()),
+        );
+    }
+    let pf_inet6: i64 = match target_platform {
+        Platform::MacOS => 30,
+        Platform::Linux => 10,
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    };
+    constants.insert(
+        "STREAM_PF_INET6".to_string(),
+        (ExprKind::IntLiteral(pf_inet6), PhpType::Int),
+    );
 }
 
 /// Recursively scans statements for user-defined constant declarations.

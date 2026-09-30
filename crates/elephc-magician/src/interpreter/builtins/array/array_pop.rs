@@ -182,7 +182,7 @@ pub(in crate::interpreter) fn eval_array_pop_shift_declared_call(
     let [arg] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let (array, target) = super::mutation::eval_array_mutation_lvalue_arg(arg, context, scope, values)?;
+    let (array, target) = super::mutation::eval_array_mutation_lvalue_arg(name, arg, context, scope, values)?;
 
     let (result, replacement) = eval_array_pop_shift_replacement(name, array, values)?;
     eval_write_direct_ref_target(&target, replacement, context, values, None)?;

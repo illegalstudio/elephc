@@ -271,7 +271,7 @@ impl Checker {
             // scalar locals, properties, nested places or tagged nullable slots.
             if expected_ty.codegen_repr() == PhpType::Mixed
                 && matches!(arg.kind, ExprKind::ArrayAccess { .. })
-                && self.is_by_ref_argument_lvalue(arg, env)?
+                && self.is_by_ref_argument_lvalue(arg, env, false)?
             {
                 return Ok(());
             }
