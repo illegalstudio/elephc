@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// Discarded prefix updates accept indexed static properties on every scoped receiver.
+#[test]
+fn test_parse_static_property_array_prefix_updates() {
+    for receiver in ["Counter", "self", "parent", "static"] {
+        for operator in ["++", "--"] {
+            let source = format!("<?php {operator}{receiver}::$items[0];");
+            let stmts = parse_source(&source);
+            assert_eq!(stmts.len(), 1, "{source}");
+            let kind = match &stmts[0].kind {
+                StmtKind::Synthetic(statements) => &statements.last().unwrap().kind,
+                kind => kind,
+            };
+            assert!(matches!(kind, StmtKind::StaticPropertyArrayAssign { .. }),
+                "{source}: {kind:?}");
+        }
+    }
+}
+
 /// Parses `Counter::$count` inside an Echo statement and verifies the AST
 /// produces a `StaticPropertyAccess` node with `StaticReceiver::Named("Counter")`
 /// and property name `"count"`.

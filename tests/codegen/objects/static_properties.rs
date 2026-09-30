@@ -9,6 +9,49 @@
 
 use super::*;
 
+/// Prefix static-array updates preserve scoped receivers and evaluate effectful indices once.
+#[test]
+fn test_static_property_array_prefix_updates() {
+    let out = compile_and_run(r#"<?php
+class PrefixStaticBase {
+    public static array $items = [10, 20];
+    public static function key(): int { echo "k"; return 0; }
+    public static function update(): void {
+        ++self::$items[0];
+        --static::$items[1];
+    }
+}
+class PrefixStaticChild extends PrefixStaticBase {
+    public function updateParent(): void {
+        ++parent::$items[0];
+        --parent::$items[1];
+    }
+}
+++PrefixStaticBase::$items[PrefixStaticBase::key()];
+--PrefixStaticBase::$items[PrefixStaticBase::key()];
+++PrefixStaticBase::$items[0];
+--PrefixStaticBase::$items[1];
+PrefixStaticBase::update();
+(new PrefixStaticChild())->updateParent();
+echo "|", PrefixStaticBase::$items[0], "|", PrefixStaticBase::$items[1];
+"#);
+    assert_eq!(out, "kk|13|17");
+}
+
+/// A key changed by a float-key warning handler cannot redirect the update's write half.
+#[test]
+fn test_static_property_array_prefix_update_snapshots_warning_index() {
+    let out = compile_and_run(r#"<?php
+class PrefixStaticSnapshot { public static array $items = [10, 20]; }
+$key = 0.5;
+set_error_handler(function($level, $message) use (&$key) { $key = 1.0; return true; });
+++PrefixStaticSnapshot::$items[$key];
+restore_error_handler();
+echo PrefixStaticSnapshot::$items[0], "|", PrefixStaticSnapshot::$items[1], "|", $key;
+"#);
+    assert_eq!(out, "11|20|1");
+}
+
 /// Shutdown frees inherited static strings, containers, objects, and captured callbacks exactly once.
 #[test]
 fn test_class_static_properties_release_last_owners_at_shutdown() {
