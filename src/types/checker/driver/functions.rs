@@ -17,6 +17,10 @@ use crate::types::FunctionSig;
 
 use super::super::{Checker, FnDecl};
 
+#[cfg(test)]
+#[path = "function_variant_tests.rs"]
+mod tests;
+
 impl Checker {
     /// Collects top-level function declarations from the program, deduplicating by PHP case-insensitive
     /// symbol key. Emits `DuplicateFunction` for repeats and `CannotRedeclareBuiltin` when a user
@@ -275,7 +279,8 @@ impl Checker {
 
     /// Ensures a unified signature exists for a variant group named `name`. If no unified signature
     /// is cached yet, computes a provisional signature from the first variant and inserts it into
-    /// `functions`. Then resolves each individual variant's signature and verifies all variants
+    /// `functions`, after checking declared contracts before any recursive body uses it.
+    /// Then resolves each individual variant's signature and verifies all variants
     /// share an identical signature. On mismatch, returns an error; on success, inserts the unified
     /// signature and returns `Ok`.
     pub(crate) fn ensure_function_variant_group_signature(
@@ -297,6 +302,19 @@ impl Checker {
             .clone();
 
         if let Some(provisional) = self.provisional_variant_group_sig(&first_variant)? {
+            let declared = declared_variant_signature(provisional.clone());
+            for variant in variants.iter().skip(1) {
+                if let Some(candidate) = self.provisional_variant_group_sig(variant)? {
+                    if declared_variant_signature(candidate) != declared {
+                        let conflict_span = self.fn_decls.get(variant)
+                            .map_or(span, |decl| decl.span);
+                        return Err(CompileError::new(
+                            conflict_span,
+                            &format!("Function variants for '{}' must have identical signatures", name),
+                        ));
+                    }
+                }
+            }
             self.functions.insert(name.to_string(), provisional);
         }
 
@@ -332,11 +350,13 @@ impl Checker {
             .next()
             .transpose()?
             .ok_or_else(|| CompileError::new(span, &format!("Function '{}' has no variants", name)))?;
-        for sig in sigs {
+        for (index, sig) in sigs.enumerate() {
             let sig = sig?;
             if sig != first {
+                let conflict_span = self.fn_decls.get(&variants[index + 1])
+                    .map_or(span, |decl| decl.span);
                 return Err(CompileError::new(
-                    span,
+                    conflict_span,
                     &format!(
                         "Function variants for '{}' must have identical signatures",
                         name
@@ -367,6 +387,19 @@ impl Checker {
         let param_types = self.initial_function_param_types(first_variant, &decl)?;
         Ok(Some(self.provisional_function_sig(&decl, param_types)))
     }
+}
+
+/// Compares declaration contracts without treating inferred parameter/return placeholders as facts.
+fn declared_variant_signature(mut sig: FunctionSig) -> FunctionSig {
+    if !sig.declared_return {
+        sig.return_type = crate::types::PhpType::Mixed;
+    }
+    for (index, (_, ty)) in sig.params.iter_mut().enumerate() {
+        if !sig.declared_params.get(index).copied().unwrap_or(false) {
+            *ty = crate::types::PhpType::Mixed;
+        }
+    }
+    sig
 }
 
 /// Performs a case-insensitive PHP symbol key lookup on `map` and returns the canonical (case-
