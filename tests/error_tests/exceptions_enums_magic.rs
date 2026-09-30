@@ -9,6 +9,15 @@
 
 use super::*;
 
+/// Enum declarations cannot leave abstract instance or static methods unimplemented.
+#[test]
+fn test_error_enum_cannot_declare_abstract_methods() {
+    for declaration in ["abstract public function missing();", "abstract public static function missing();"] {
+        expect_error(&format!("<?php enum Mode {{ case Active; {declaration} }}"), "Enum method Mode::missing cannot be abstract");
+    }
+    expect_error("<?php trait T { abstract public function missing(); } enum Mode { use T; case Active; }", "Enum method Mode::missing cannot be abstract");
+}
+
 /// Verifies that checking multiple classes with conflicting magic method contracts
 /// (private vs public `__toString`) produces at least two distinct errors.
 /// Uses `check_source_full` to collect and flatten all diagnostics.
