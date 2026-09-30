@@ -795,6 +795,8 @@ A dynamically-typed (`mixed`) argument — such as a `foreach` value or an untyp
 
 Enums may declare instance methods, static methods, constants, and an `implements` clause. Instance methods dispatch on the case singleton, so `$this` is the case:
 
+Trait constants are imported alongside trait methods. Reflection lists the enum's own cases and constants in declaration order, followed by imported trait constants. Instance and static methods retain their `final` modifiers. Enum methods cannot remain abstract, including abstract requirements imported from traits.
+
 ```php
 <?php
 interface HasLabel {

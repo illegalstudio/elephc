@@ -347,6 +347,10 @@ pub(super) fn check_types_impl(
                 .get(name)
                 .map(|flattened| flattened.methods.as_slice())
                 .unwrap_or(methods.as_slice());
+            let enum_constants = flattened_enums
+                .get(name)
+                .map(|flattened| flattened.constants.as_slice())
+                .unwrap_or(constants.as_slice());
             let enum_used_traits = flattened_enums
                 .get(name)
                 .map(|flattened| flattened.used_traits.as_slice())
@@ -361,6 +365,7 @@ pub(super) fn check_types_impl(
                 cases,
                 implements,
                 enum_methods,
+                enum_constants,
                 constants,
                 enum_used_traits,
                 enum_trait_aliases,

@@ -101,6 +101,8 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `name`: enum identifier
 /// - `backing_type`: optional `TypeExpr` for backed enums
 /// - `cases`: parsed enum case declarations
+/// - `user_constants`: flattened constants, including trait imports
+/// - `declared_constants`: constants written directly in the enum, for reflection order
 /// - `span`: source location for error reporting
 /// - `is_internal`: whether compiler-generated source declared the enum (`ClassInfo::is_internal`)
 /// - `used_traits` / `trait_aliases`: flattened direct enum trait-use metadata
@@ -122,6 +124,7 @@ pub(crate) fn build_enum_info(
     implements: &[crate::names::Name],
     user_methods: &[crate::parser::ast::ClassMethod],
     user_constants: &[crate::parser::ast::ClassConst],
+    declared_constants: &[crate::parser::ast::ClassConst],
     used_traits: &[String],
     trait_aliases: &[(String, String)],
     attributes: &[crate::parser::ast::AttributeGroup],
@@ -147,6 +150,13 @@ pub(crate) fn build_enum_info(
         return Err(CompileError::new(
             span,
             &format!("Duplicate class or enum declaration: {}", name),
+        ));
+    }
+
+    if let Some(method) = user_methods.iter().find(|method| method.is_abstract) {
+        return Err(CompileError::new(
+            method.span,
+            &format!("Enum method {}::{} cannot be abstract", name, method.name),
         ));
     }
 
@@ -257,11 +267,17 @@ pub(crate) fn build_enum_info(
     let mut declared: Vec<(crate::span::Span, String)> = cases
         .iter()
         .map(|case| (case.span, case.name.clone()))
-        .chain(user_constants.iter().map(|constant| (constant.span, constant.name.clone())))
+        .chain(declared_constants.iter().map(|constant| (constant.span, constant.name.clone())))
         .collect();
     declared.sort_by_key(|(span, _)| (span.line, span.col));
     if let Some(class_info) = checker.classes.get_mut(name) {
         class_info.constant_order = declared.into_iter().map(|(_, name)| name).collect();
+        // Trait constants follow the enum's own declarations, regardless of their original spans.
+        for constant in user_constants {
+            if !class_info.constant_order.contains(&constant.name) {
+                class_info.constant_order.push(constant.name.clone());
+            }
+        }
         // The declaration's own attributes (`#[A] enum E {}`), which `ReflectionEnum` and
         // `ReflectionClass` report like a class's.
         class_info.attribute_names = collect_attribute_names(attributes);
@@ -407,6 +423,8 @@ pub(crate) fn insert_enum_metadata(
     let mut method_declaring_classes = HashMap::new();
     let mut method_impl_classes = HashMap::new();
     let mut abstract_methods = HashSet::new();
+    let mut final_methods = HashSet::new();
+    let mut final_static_methods = HashSet::new();
     let mut method_attribute_names = HashMap::new();
     let mut method_attribute_args = HashMap::new();
     for method in user_methods {
@@ -426,6 +444,9 @@ pub(crate) fn insert_enum_metadata(
             .filter(|return_type| return_type.contains_late_static())
             .cloned();
         if method.is_static {
+            if method.is_final {
+                final_static_methods.insert(key.clone());
+            }
             static_methods.insert(key.clone(), sig);
             if let Some(return_type) = late_static_return {
                 late_static_static_method_returns.insert(key.clone(), return_type);
@@ -440,6 +461,9 @@ pub(crate) fn insert_enum_metadata(
                 abstract_static_methods.remove(&key);
             }
         } else {
+            if method.is_final {
+                final_methods.insert(key.clone());
+            }
             methods.insert(key.clone(), sig);
             if let Some(return_type) = late_static_return {
                 late_static_method_returns.insert(key.clone(), return_type);
@@ -566,14 +590,14 @@ pub(crate) fn insert_enum_metadata(
             callable_method_return_sigs: HashMap::new(),
             callable_array_method_return_sigs: HashMap::new(),
             method_visibilities,
-            final_methods: HashSet::new(),
+            final_methods,
             method_declaring_classes,
             method_impl_classes,
             abstract_methods,
             vtable_methods: Vec::new(),
             vtable_slots: HashMap::new(),
             static_method_visibilities,
-            final_static_methods: HashSet::new(),
+            final_static_methods,
             static_method_declaring_classes,
             static_method_impl_classes,
             abstract_static_methods,
