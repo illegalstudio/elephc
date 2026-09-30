@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// A property override cannot narrow inherited write visibility while retaining public reads.
+#[test]
+fn test_error_asymmetric_property_override_reduces_set_visibility() {
+    for source in [
+        "<?php class Base { public int $x = 0; } class Child extends Base { public protected(set) int $x = 0; }",
+        "<?php class Base { public protected(set) int $x = 0; } class Child extends Base { public private(set) int $x = 0; }",
+        "<?php class Base { public public(set) readonly int $x; } class Child extends Base { public protected(set) readonly int $x; }",
+    ] {
+        expect_error(source, "Cannot reduce set visibility when overriding property: Child::$x");
+    }
+    check_source("<?php class Base { public protected(set) int $x = 0; } class Child extends Base { public int $x = 0; }").unwrap();
+}
+
 /// Defaults require a backing slot even when virtual hook bodies are concrete.
 #[test]
 fn test_error_virtual_property_hook_default() {
