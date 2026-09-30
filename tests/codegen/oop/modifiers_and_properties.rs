@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Explicit public(set) overrides readonly's implicit protected write visibility in reflection.
+#[test]
+fn test_asymmetric_property_readonly_explicit_public_set_reflection() {
+    let out = compile_and_run(r#"<?php
+class NativeSet {
+    public public(set) readonly int $explicit;
+    public readonly int $implicit;
+}
+$explicit = new ReflectionProperty(NativeSet::class, 'explicit');
+$implicit = new ReflectionProperty(NativeSet::class, 'implicit');
+echo $explicit->isProtectedSet() ? 'protected' : 'public', ':', $explicit->getModifiers(), "\n";
+echo $implicit->isProtectedSet() ? 'protected' : 'public', ':', $implicit->getModifiers(), "\n";
+eval('class EvalSet { public public(set) readonly int $explicit; public readonly int $implicit; }
+$explicit = new ReflectionProperty("EvalSet", "explicit");
+$implicit = new ReflectionProperty("EvalSet", "implicit");
+echo $explicit->isProtectedSet() ? "protected" : "public", ":", $explicit->getModifiers(), "\n";
+echo $implicit->isProtectedSet() ? "protected" : "public", ":", $implicit->getModifiers(), "\n";');
+"#);
+    assert_eq!(out, "public:129\nprotected:2177\npublic:129\nprotected:2177\n");
+}
+
 /// Verifies that a `readonly` class permits property initialization inside its constructor.
 /// The property is assigned in `__construct` and read back via `$user->id`.
 #[test]

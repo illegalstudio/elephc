@@ -320,6 +320,7 @@ Rules:
 - `protected(set)` allows writes from the declaring class and its subclasses; `private(set)` only from the declaring class.
 - The write visibility must not be weaker than the read visibility (`private public(set)` is rejected).
 - The property must be typed, and the modifier is not allowed on static properties.
+- A property may have only one `(set)` modifier. Explicit `public(set)` on a public readonly property suppresses the implicit `protected(set)` reflection flag.
 - Indirect writes through an array element (`$obj->items[] = x`, `$obj->items['k'] = x`) are writes too, so they honor the `set` visibility — not the (wider) read visibility.
 - Abstract and interface property hook contracts may carry asymmetric write visibility on writable (`{ set; }`) contracts. `private(set)` contracts are final and cannot be implemented or redeclared by a concrete child property.
 - Promoted constructor properties accept the same modifiers (`public private(set) int $x`, `protected(set) readonly string $label`), with the same rules, write checks, and Reflection flags as the equivalent declared property. See [Constructor](#constructor).
@@ -329,6 +330,7 @@ Rules:
 A child class may redeclare a property inherited from a non-private parent. The redeclaration is checked at compile time and must follow PHP rules:
 
 - Visibility cannot be reduced (`public` → `protected` is rejected; `protected` → `public` is allowed).
+- An explicit write visibility cannot narrow the inherited write visibility either. Without a `(set)` modifier, this override check uses the read visibility.
 - Declared types are invariant. A typed parent property must be redeclared with the same type. A typed parent property cannot become untyped, and an untyped parent property cannot gain a type in the child.
 - `readonly` is monotonic — a `readonly` parent property must stay `readonly` in the child. A non-readonly parent property may become `readonly` in the child.
 - The by-reference qualifier on a property cannot change across inheritance.
