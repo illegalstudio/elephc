@@ -312,6 +312,26 @@ fn test_error_class_alias_rejects_runtime_call_shape() {
     );
 }
 
+/// Explicitly disabled alias autoload has a flag diagnostic, not a class-name shape error.
+#[test]
+fn test_error_class_alias_disabled_autoload_diagnostic() {
+    for flag in ["false", "0"] {
+        expect_error(
+            &format!("<?php class Original {{}} class_alias(Original::class, 'Alias', {flag});"),
+            "class_alias() does not support autoload=false in AOT mode; omit autoload or pass true",
+        );
+    }
+}
+
+/// Shared argument planning preserves the disabled-autoload diagnostic for reordered names.
+#[test]
+fn test_error_class_alias_named_disabled_autoload_diagnostic() {
+    expect_error(
+        "<?php class Original {} class_alias(autoload: false, alias: 'Alias', class: Original::class);",
+        "class_alias() does not support autoload=false in AOT mode; omit autoload or pass true",
+    );
+}
+
 /// Verifies `class_alias()` still refuses a class name only known at run time even though
 /// `Name::class` constants are accepted (issue #849): `$object::class` names the runtime class
 /// of an object, and a call inside a function body is not a top-level declaration.
