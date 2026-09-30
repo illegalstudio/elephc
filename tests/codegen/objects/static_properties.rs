@@ -9,6 +9,39 @@
 
 use super::*;
 
+/// Static properties can be object receivers for property writes, reads and method calls.
+#[test]
+fn test_static_property_object_receiver_reads_and_writes() {
+    let out = compile_and_run(r#"<?php
+class StoredObject { public int $v = 1; public function value(): int { return $this->v; } }
+class ObjectHolder { public static ?StoredObject $o = null; }
+ObjectHolder::$o = new StoredObject();
+ObjectHolder::$o->v = 9;
+echo ObjectHolder::$o->v, "|", ObjectHolder::$o->value();
+"#);
+    assert_eq!(out, "9|9");
+}
+
+/// Lexical and late-static receivers use the same complex property assignment path.
+#[test]
+fn test_static_property_object_receiver_lexical_assignments() {
+    let out = compile_and_run(r#"<?php
+class StoredObject { public int $v = 1; }
+class ObjectHolder { public static ?StoredObject $o = null; }
+class ChildHolder extends ObjectHolder {
+    public static function update(): void {
+        self::$o->v = 2;
+        static::$o->v += 3;
+        parent::$o->v += 4;
+        echo self::$o->v, "|", static::$o->v, "|", parent::$o->v;
+    }
+}
+ObjectHolder::$o = new StoredObject();
+ChildHolder::update();
+"#);
+    assert_eq!(out, "9|9|9");
+}
+
 /// Shutdown frees inherited static strings, containers, objects, and captured callbacks exactly once.
 #[test]
 fn test_class_static_properties_release_last_owners_at_shutdown() {

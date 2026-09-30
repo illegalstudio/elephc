@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Named and lexical static properties remain receivers after a following object postfix.
+#[test]
+fn test_parse_static_property_object_receiver_assignments() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for tail in ["->v = 9;", "->v += 2;", "->method();"] {
+            let source = format!("<?php {receiver}::$object{tail}");
+            assert_eq!(parse_source(&source).len(), 1, "source: {source}");
+        }
+        let source = format!("<?php echo {receiver}::$object->v;");
+        assert_eq!(parse_source(&source).len(), 1, "source: {source}");
+    }
+}
+
 /// Verifies that compound assignment operators `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
 /// parse correctly as `Assign` nodes where the value is a `BinaryOp` on the variable.
 /// Each case checks the operator, lhs variable, and rhs integer literal match the expected AST shape.
