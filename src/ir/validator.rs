@@ -1576,9 +1576,9 @@ fn validate_use(
         return Err(ValidationError::VoidValueUsed(value));
     }
     // A structured lowering can leave a fully formed continuation unreachable after its only
-    // prospective predecessor terminates. Values from entry-reachable setup blocks remain valid
-    // there, but same-block ordering and values from unrelated dead blocks must still satisfy the
-    // ordinary SSA rules.
+    // prospective predecessor terminates. Cross-block dominance has no executable meaning there,
+    // including when the definition also belongs to a dead continuation. Keep checking IDs, types,
+    // and same-block ordering so malformed instructions still fail validation.
     let use_is_unreachable = use_block != function.entry
         && dominators
             .get(&use_block)
@@ -1586,11 +1586,7 @@ fn validate_use(
     let definition_block = match value_ref.def {
         ValueDef::BlockParam { block, .. } | ValueDef::Instruction { block, .. } => block,
     };
-    let definition_is_reachable = definition_block == function.entry
-        || dominators
-            .get(&definition_block)
-            .is_some_and(|set| set.contains(&function.entry));
-    if use_is_unreachable && definition_block != use_block && definition_is_reachable {
+    if use_is_unreachable && definition_block != use_block {
         return Ok(());
     }
     if definition_dominates_use(value_ref.def, use_block, use_inst_index, dominators) {
@@ -1638,8 +1634,8 @@ fn definition_dominates_use(
 /// would otherwise strip the entry block out of the header's dominators and
 /// produce spurious `UseNotDominated` errors for any value the entry defines and
 /// a later pass forwards into the loop. Unreachable blocks themselves resolve
-/// to `{self}`. Validation accepts values produced by entry-reachable setup,
-/// while still rejecting local use-before-definition and sibling dead-block uses.
+/// to `{self}`. Validation skips cross-block dominance for their uses while
+/// still rejecting same-block use-before-definition.
 fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
     let predecessors = compute_predecessors(function);
     let reachable = reachable_from_entry(function, &predecessors);

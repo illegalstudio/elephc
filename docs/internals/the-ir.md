@@ -1556,10 +1556,10 @@ CFG in three ways:
   `nop`.
 
 Like the other passes, unreachable blocks are neutralized **in place** rather than
-physically removed. The validator requires `block.id == index` and reports any
-*use* in an unreachable block as `UseNotDominated` (an unreachable block's
-dominator set collapses to itself). Neutralizing clears every use — terminator
-and instruction operands — so the block stays valid, while the block, value, and
+physically removed. The validator requires `block.id == index`. Cross-block
+dominance is checked only for reachable uses; dead continuations still undergo
+value-ID, type, and same-block definition-order checks. Neutralizing clears every
+terminator and instruction operand so the block stays valid, while the block, value, and
 instruction table slots keep their indices. This avoids renumbering and, crucially,
 keeps `try` handler block-id tokens (encoded in `try_push_handler` immediates)
 correct. Functions that use any exception-handling opcode are skipped wholesale,
