@@ -850,3 +850,21 @@ fn test_error_unparenthesized_call_as_instanceof_target() {
         );
     }
 }
+
+/// Static method targets get the same specific diagnostic as other unparenthesized calls.
+#[test]
+fn test_error_unparenthesized_static_call_as_instanceof_target() {
+    for target in ["Foo::method()", "self::method()", "parent::method()", "static::method()", r"\App\Foo::method()"] {
+        expect_error(&format!("<?php $x = 1; echo $x instanceof {target};"), "Cannot use an unparenthesized call as an instanceof target");
+    }
+}
+
+/// Constant-list diagnostics distinguish a missing first name from a missing comma successor.
+#[test]
+fn test_error_class_constant_name_after_comma() {
+    for owner in ["class", "trait", "interface", "enum"] {
+        expect_error(&format!("<?php {owner} C {{ const A = 1, ; }}"), "Expected a constant name after ',' in the declaration list");
+        expect_error(&format!("<?php {owner} C {{ const ; }}"), "Expected class constant name after 'const'");
+    }
+    expect_error("<?php class C { const FIRST = 1; const ; }", "Expected class constant name after 'const'");
+}
