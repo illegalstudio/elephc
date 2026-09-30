@@ -1233,6 +1233,32 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
         assert_eq!(demangle("_rt_heap_alloc"), "_rt_heap_alloc");
     }
 
+    /// Generator labels decode their PHP owner without confusing user underscores with suffixes.
+    #[test]
+    fn demangles_generator_entry_symbols() {
+        use elephc::names::{function_symbol, method_symbol, static_method_symbol};
+        for suffix in ["__genbody", "__gencb"] {
+            for (class, method) in [
+                ("App\\Foo", "gen"), ("My_Class", "hot_gen"), ("Engine", "gen"),
+                ("prop", "gen"), ("local", "gen"),
+            ] {
+                assert_eq!(demangle(&format!("{}{suffix}", method_symbol(class, method))), format!("{class}::{method}"));
+                let static_symbol = format!("{}{suffix}", static_method_symbol(class, method));
+                assert_eq!(demangle(&static_symbol), format!("{class}::{method}"));
+                assert!(is_php_symbol(&static_symbol), "{static_symbol}");
+            }
+            for name in ["App\\hot_gen", "hot_gen", "gen"] {
+                assert_eq!(demangle(&format!("{}{suffix}", function_symbol(name))), name);
+            }
+        }
+        for name in ["gen__genbody", "gen__gencb"] {
+            assert_eq!(demangle(&function_symbol(name)), name);
+            assert_eq!(demangle(&method_symbol("App\\Foo", name)), format!("App\\Foo::{name}"));
+        }
+        assert_eq!(demangle("_rt_helper__genbody"), "_rt_helper__genbody");
+        assert!(!is_php_symbol("_static_prop_Owner_field__genbody"));
+    }
+
     #[test]
     /// Runtime helpers are named as costs; PHP functions are left alone, since
     /// a user function is not a 'cause' of anything.
@@ -1372,6 +1398,28 @@ echo call_hot(1);
                 DeclRange { name: "call_hot".into(), start: 12, end: 14 },
             ]
         );
+    }
+
+    /// Semicolon namespaces qualify both free functions and methods across namespace changes.
+    #[test]
+    fn decl_ranges_qualify_semicolon_namespaces() {
+        let source = "<?php\nnamespace App\\One;\nfunction top() {\n return 1;\n}\nclass Foo {\n public function gen() {\n  yield 1;\n }\n}\nnamespace Other;\nfunction top() {\n return 2;\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\top".into(), start: 3, end: 5 },
+            DeclRange { name: "App\\One\\Foo::gen".into(), start: 7, end: 9 },
+            DeclRange { name: "Other\\top".into(), start: 12, end: 14 },
+        ]);
+    }
+
+    /// Braced namespaces expire at their closing brace and an explicit global block stays global.
+    #[test]
+    fn decl_ranges_qualify_braced_and_global_namespaces() {
+        let source = "<?php\nnamespace App\\Foo {\n class Worker {\n  public function run() {\n   return 1;\n  }\n }\n}\nnamespace {\n function global_run() {\n  return 2;\n }\n}\nnamespace\tNext {\n function run() {\n  return 3;\n }\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\Foo\\Worker::run".into(), start: 4, end: 6 },
+            DeclRange { name: "global_run".into(), start: 10, end: 12 },
+            DeclRange { name: "Next\\run".into(), start: 15, end: 17 },
+        ]);
     }
 
     #[test]
