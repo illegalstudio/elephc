@@ -31,6 +31,9 @@ pub(super) fn apply_properties(
     class: &FlattenedClass,
     checker: &Checker,
 ) -> Result<(), CompileError> {
+    super::property_defaults::validate_promoted_defaults(
+        &class.properties, &class.methods, &class.name, class.extends.as_deref(),
+    )?;
     for prop in &class.properties {
         if let Some(default) = &prop.default {
             super::constants::validate_lexical_property_default(default, class)?;

@@ -217,12 +217,12 @@ fn test_error_parent_class_without_parent() {
 }
 
 /// Verifies that using `static::` in a class constant expression reports
-/// "Cannot use static:: in class constant expression".
+/// PHP's compile-time constant diagnostic.
 #[test]
 fn test_error_static_constant_reference_in_class_constant_expression() {
     expect_error(
         "<?php class C { const A = 1; const B = static::A + 1; } echo C::B;",
-        "Cannot use static:: in class constant expression",
+        "\"static::\" is not allowed in compile-time constants",
     );
 }
 
