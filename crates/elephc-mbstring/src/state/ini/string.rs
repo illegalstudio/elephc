@@ -53,7 +53,7 @@ impl IniString {
 
     /// Assigns a never-reused identity, failing before exhaustion could alias an earlier string.
     fn allocate(bytes: &[u8], interned: bool) -> Self {
-        let identity = NEXT_IDENTITY.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_add(1).filter(|next| *next <= i64::MAX as u64))
+        let identity = next_identity(&NEXT_IDENTITY)
             .expect("INI string identity space exhausted");
         Self(Arc::new(Text { bytes: bytes.into(), identity, interned }))
     }
@@ -67,6 +67,19 @@ impl IniString {
     /// Applies ZVAL_SET_INI_STR's single-character interning to scalar getter and old-value results.
     pub(in crate::state) fn scalar_result(&self) -> Self {
         if !self.0.interned && self.len() <= 1 { Self::interned(self) } else { self.clone() }
+    }
+}
+
+/// Atomically advances a bounded identity counter without newer or deprecated atomic APIs.
+/// Failed weak exchanges retry with the observed value; exhaustion leaves the counter unchanged.
+fn next_identity(counter: &AtomicU64) -> Option<u64> {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.checked_add(1).filter(|next| *next <= i64::MAX as u64)?;
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(identity) => return Some(identity),
+            Err(observed) => current = observed,
+        }
     }
 }
 
@@ -86,6 +99,35 @@ impl Eq for IniString {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Exhaustion and overflow never change the counter or make an identity reusable.
+    #[test]
+    fn ini_identity_counter_stops_before_exhaustion() {
+        let counter = AtomicU64::new(i64::MAX as u64 - 1);
+        assert_eq!(next_identity(&counter), Some(i64::MAX as u64 - 1));
+        assert_eq!(counter.load(Ordering::Relaxed), i64::MAX as u64);
+        assert_eq!(next_identity(&counter), None);
+        assert_eq!(counter.load(Ordering::Relaxed), i64::MAX as u64);
+        let overflow = AtomicU64::new(u64::MAX);
+        assert_eq!(next_identity(&overflow), None);
+        assert_eq!(overflow.load(Ordering::Relaxed), u64::MAX);
+    }
+
+    /// Concurrent allocation keeps every identity unique despite weak-exchange retries.
+    #[test]
+    fn ini_identity_counter_is_unique_under_contention() {
+        let counter = AtomicU64::new(1);
+        let identities = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8).map(|_| {
+                scope.spawn(|| (0..1000).map(|_| next_identity(&counter).unwrap()).collect::<Vec<_>>())
+            }).collect();
+            handles.into_iter().flat_map(|handle| handle.join().unwrap()).collect::<std::collections::HashSet<_>>()
+        });
+        assert_eq!(identities.len(), 8000);
+        assert_eq!(counter.load(Ordering::Relaxed), 8001);
+        assert!(identities.contains(&1));
+        assert!(identities.contains(&8000));
+    }
 
     /// Releases intern-index byte storage immediately after the last alias dies and never recycles its ID.
     #[test]
