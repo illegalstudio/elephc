@@ -464,10 +464,14 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   compile time instead of answering. One gap of its own: an enum declared in the compiled
   program does not carry its implicit `UnitEnum`/`BackedEnum` interfaces, so
   `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP says `true`. This limitation does
-  not apply to enums declared inside `eval()`. For a compiled enum with an `implements` clause,
+  also affects compiled `is_a()` and `is_subclass_of()` calls for an enum declared only inside
+  `eval()`: those calls consult the AOT class table, which does not contain the eval declaration.
+  For a compiled enum with an `implements` clause,
   `class_implements()` lists only the directly declared interfaces; it omits their transitive
   parents and the implicit `UnitEnum`/`BackedEnum` interfaces. An enum declared inside `eval()`
-  already reports transitive parents and its implicit enum interfaces, like PHP.
+  reports transitive parents and its implicit enum interfaces to relation probes executed inside
+  `eval()`, like PHP. Compiled `class_implements()` also reports those interfaces for an
+  eval-declared enum; it does not share the compiled relation probes' limitation.
 - `strtotime()` answers `false` for some strings PHP parses. After an `@<timestamp>` it accepts
   only the one timezone token PHP ignores (`"@123 UTC"`, `"@123abc"`); a relative offset, time,
   zone identifier, UTC offset, or strtotime keyword after the epoch (`"@123 +1 day"`,

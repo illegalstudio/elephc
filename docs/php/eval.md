@@ -876,7 +876,10 @@ from `eval()` still omits their transitive parents and the implicit `UnitEnum`
 and `BackedEnum` interfaces. Relation probes such as `is_a()` and
 `is_subclass_of()` use the same incomplete metadata for those compiled enums.
 Enums declared inside `eval()` do report transitive interface parents and
-`UnitEnum`, plus `BackedEnum` for backed enums, like PHP.
+`UnitEnum`, plus `BackedEnum` for backed enums, to probes executed inside `eval()`, like PHP.
+Compiled `class_implements()` also reports these interfaces for eval-declared enums.
+Compiled `is_a()` and `is_subclass_of()` calls still return `false` for an enum declared
+only inside `eval()`, because their relation lookup uses the AOT class table.
 `class_uses()` reports direct trait uses for eval-declared and generated/AOT
 classes, traits, and enums. `class_alias()` can
 alias eval-declared and generated/AOT
