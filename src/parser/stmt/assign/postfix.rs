@@ -394,7 +394,7 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
 
     // A static property followed by object access is an instance-property target,
     // so its write must use the ordinary postfix lowering rather than the static store.
-    if matches!(lhs_expr.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }) {
+    if is_instance_property_assignment_target(&lhs_expr) {
         return try_parse_postfix_assignment(tokens, pos, span);
     }
 
@@ -463,6 +463,15 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     };
 
     Ok(Some(hoisted.finish_if_used(stmt, span)))
+}
+
+/// Recognizes an instance-property write even when one or more array dimensions follow it.
+fn is_instance_property_assignment_target(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => is_instance_property_assignment_target(array),
+        _ => false,
+    }
 }
 
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)

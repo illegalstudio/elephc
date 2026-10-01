@@ -28,9 +28,20 @@ pub(super) fn lower_property_assign(
         }
     });
     let object = lower_expr(ctx, object);
+    // Nullable static slots lend their boxed receiver. The RHS can replace that slot,
+    // so retain the box across evaluation and expose that lease to exception cleanup.
+    let retained_static_receiver = ctx.builder.value_defining_op(object.value) == Some(Op::LoadStaticProperty)
+        && matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+    let object = if retained_static_receiver {
+        crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, object, Some(span))
+    } else { object };
+    let receiver_pins = if retained_static_receiver {
+        crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span)
+    } else { Vec::new() };
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
     if let Some(message) = throw_access_message {
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, receiver_pins, span);
         if ctx.value_is_owning_temporary(object) {
             crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
         }
@@ -46,7 +57,7 @@ pub(super) fn lower_property_assign(
     // guard adds no evaluation and both branches see exactly the same two values.
     let magic_classes = magic_accessor_subclasses(ctx, object.value, property, "__set");
     if !magic_classes.is_empty() {
-        return lower_property_assign_guarding_magic_subclasses(
+        lower_property_assign_guarding_magic_subclasses(
             ctx,
             object,
             property,
@@ -55,8 +66,13 @@ pub(super) fn lower_property_assign(
             &magic_classes,
             span,
         );
+    } else {
+        lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span);
     }
-    lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span)
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, receiver_pins, span);
+    if retained_static_receiver {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
 }
 
 /// Emits the `instanceof` chain that hands a runtime subclass's `__set` its own call.
