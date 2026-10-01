@@ -19,7 +19,10 @@ mod constants;
 mod interfaces;
 mod methods;
 mod properties;
+mod property_defaults;
 mod state;
+
+pub(crate) use property_defaults::validate_trait_property_defaults;
 
 use super::super::Checker;
 use super::validation::build_constructor_param_map;

@@ -42,6 +42,7 @@ use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
     drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
     validate_deferred_declaration_defaults,
+    validate_trait_property_defaults,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::{CheckOptions, Checker};
@@ -94,6 +95,7 @@ pub(super) fn check_types_impl(
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));
+    errors.extend(validate_trait_property_defaults(program));
 
     checker.collect_function_decls(program, &mut errors);
 

@@ -37,9 +37,18 @@ pub(super) fn validate_lexical_property_default(
     value: &Expr,
     class: &FlattenedClass,
 ) -> Result<(), CompileError> {
-    rewrite_expr(value, &class.name, class.extends.as_deref()).map(|_| ()).map_err(|mut error| {
-        if error.message == "Cannot use static:: in class constant expression" {
-            error.message = "Cannot use static:: in property default expression".to_string();
+    validate_property_default_in_scope(value, &class.name, class.extends.as_deref())
+}
+
+/// Validates a property's lexical scope while retaining PHP's missing-parent diagnostic.
+pub(super) fn validate_property_default_in_scope(
+    value: &Expr,
+    class_name: &str,
+    parent_name: Option<&str>,
+) -> Result<(), CompileError> {
+    rewrite_expr(value, class_name, parent_name).map(|_| ()).map_err(|mut error| {
+        if error.message == format!("Class '{}' has no parent class", class_name) {
+            error.message = "Cannot use \"parent\" when current class scope has no parent".to_string();
         }
         error
     })
@@ -443,7 +452,7 @@ fn rewrite_constant_receiver(
             }),
         StaticReceiver::Static => Err(CompileError::new(
             span,
-            "Cannot use static:: in class constant expression",
+            "\"static::\" is not allowed in compile-time constants",
         )),
     }
 }
