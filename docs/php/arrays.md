@@ -77,7 +77,8 @@ foreach ($map as $k => $v) { echo "$k=$v "; } // a=1 c=3 b=9
 
 `unset()` also works on indexed arrays. PHP removes the key **without renumbering** the survivors,
 so the array becomes sparse (a hole is left). The remaining keys keep their original values, and a
-later `$arr[] = ...` append continues at `max_key + 1`.
+later `$arr[] = ...` append uses the array's next integer key. Removing a key does not move this
+counter backward, even when the removed key was the highest one.
 
 ```php
 <?php
@@ -115,7 +116,7 @@ echo count($snapshot); // 2 — the copy taken before the call is untouched
 
 This also works for an **indexed** array passed by reference. Removing an element leaves a hole
 without renumbering the surviving keys, and the caller observes the removal. Appending afterward
-continues after the highest surviving key:
+uses the preserved next integer key rather than one past the highest surviving key:
 
 ```php
 <?php
