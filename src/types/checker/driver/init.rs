@@ -134,6 +134,7 @@ impl Checker {
             retired_ref_detach_sites: HashSet::new(),
             local_retype_sites: HashMap::new(),
             statement_position_expr: None,
+            constant_alias_call_sites: HashSet::new(),
             body_contains_eval: false,
             program_contains_eval: false,
             mixed_storage_locals: HashSet::new(),

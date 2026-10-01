@@ -315,7 +315,7 @@ fn test_error_class_alias_rejects_runtime_call_shape() {
 /// Explicitly disabled alias autoload has a flag diagnostic, not a class-name shape error.
 #[test]
 fn test_error_class_alias_disabled_autoload_diagnostic() {
-    for flag in ["false", "0"] {
+    for flag in ["false", "0", "0.0", "''", "'0'", "null"] {
         expect_error(
             &format!("<?php class Original {{}} class_alias(Original::class, 'Alias', {flag});"),
             "class_alias() does not support autoload=false in AOT mode; omit autoload or pass true",
@@ -323,13 +323,43 @@ fn test_error_class_alias_disabled_autoload_diagnostic() {
     }
 }
 
-/// Shared argument planning preserves the disabled-autoload diagnostic for reordered names.
+/// Named calls retain their unsupported shape even when their autoload flag is false.
 #[test]
 fn test_error_class_alias_named_disabled_autoload_diagnostic() {
     expect_error(
         "<?php class Original {} class_alias(autoload: false, alias: 'Alias', class: Original::class);",
-        "class_alias() does not support autoload=false in AOT mode; omit autoload or pass true",
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names",
     );
+}
+
+/// Changing autoload cannot make function-body, conditional, named, or dynamic-name calls valid.
+#[test]
+fn test_error_class_alias_autoload_diagnostic_requires_collectible_shape() {
+    for flag in ["false", "true", "0", "0.0", "''", "'0'", "null"] {
+        for source in [
+            format!("<?php class Original {{}} function make() {{ class_alias(Original::class, 'Alias', {flag}); }} make();"),
+            format!("<?php class Original {{}} $alias = 'Alias'; class_alias(Original::class, $alias, {flag});"),
+            format!("<?php class Original {{}} class_alias(class: Original::class, alias: 'Alias', autoload: {flag});"),
+            format!("<?php class Original {{}} class_alias(Original::class, 'Alias', autoload: {flag});"),
+            format!("<?php class Original {{}} if ($argc > 0) {{ class_alias(Original::class, 'Alias', {flag}); }}"),
+            format!("<?php class Original {{}} $result = class_alias(Original::class, 'Alias', {flag});"),
+        ] {
+            expect_error(&source, "class_alias() is only supported as a top-level statement with compile-time-constant class names");
+        }
+    }
+}
+
+/// Every false literal on otherwise collectible constant-name forms gets the actionable flag error.
+#[test]
+fn test_error_class_alias_autoload_diagnostic_accepts_constant_name_forms() {
+    for flag in ["false", "0", "0.0", "''", "'0'", "null"] {
+        expect_error(
+            &format!("<?php namespace App; class Original {{}} class_alias(Original::class, 'App' . '\\\\Alias', {flag});"),
+            "class_alias() does not support autoload=false in AOT mode; omit autoload or pass true",
+        );
+    }
+    expect_no_error("<?php class Original {} class_alias(Original::class, 'Alias', true);");
+    expect_no_error("<?php class Original {} class_alias(Original::class, 'Alias');");
 }
 
 /// Verifies `class_alias()` still refuses a class name only known at run time even though

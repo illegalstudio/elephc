@@ -12,6 +12,7 @@
 //!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
 
 mod alias;
+pub(crate) use alias::constant_alias_call_sites;
 mod index;
 mod interpret;
 mod registry;

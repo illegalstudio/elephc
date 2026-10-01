@@ -16,7 +16,7 @@
 //! - Resolver-created include wrappers still count as top-level for included-file aliases.
 //! - The alias is a subclass, not a true PHP runtime alias, so identity checks differ in documented cases.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::names::{php_symbol_key, Name, NameKind};
 use crate::parser::ast::{
@@ -136,6 +136,21 @@ fn namespace_text(name: &Option<Name>) -> String {
 /// Extract class alias pair from a statement if it is a `class_alias` call whose class names
 /// are compile-time constants.
 fn extract_class_alias(stmt: &Stmt, scope: &AliasScope) -> Option<(String, String)> {
+    let args = positional_class_alias_args(stmt)?;
+    if let Some(autoload_arg) = args.get(2) {
+        match &autoload_arg.kind {
+            ExprKind::BoolLiteral(true) => {}
+            ExprKind::IntLiteral(n) if *n != 0 => {}
+            _ => return None,
+        }
+    }
+    let orig = constant_class_name(args.first()?, scope)?;
+    let alias = constant_class_name(args.get(1)?, scope)?;
+    Some((orig, alias))
+}
+
+/// Shares the collector's direct positional call shape with diagnostic eligibility.
+fn positional_class_alias_args(stmt: &Stmt) -> Option<&[Expr]> {
     let StmtKind::ExprStmt(expr) = &stmt.kind else {
         return None;
     };
@@ -149,19 +164,40 @@ fn extract_class_alias(stmt: &Stmt, scope: &AliasScope) -> Option<(String, Strin
     {
         return None;
     }
-    if args.len() < 2 || args.len() > 3 {
+    if args.len() < 2 || args.len() > 3
+        || args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+    {
         return None;
     }
-    if let Some(autoload_arg) = args.get(2) {
-        match &autoload_arg.kind {
-            ExprKind::BoolLiteral(true) => {}
-            ExprKind::IntLiteral(n) if *n != 0 => {}
-            _ => return None,
+    Some(args)
+}
+
+/// Records exact top-level calls whose names and positional shape permit collection.
+/// The autoload flag is deliberately excluded so only that independent limitation is diagnosed.
+pub(crate) fn constant_alias_call_sites(program: &Program) -> HashSet<usize> {
+    let mut sites = HashSet::new();
+    collect_constant_alias_call_sites(program, &mut sites);
+    sites
+}
+
+/// Mirrors only the collector's top-level wrapper traversal, not conditional or function bodies.
+fn collect_constant_alias_call_sites(program: &Program, sites: &mut HashSet<usize>) {
+    let scope = AliasScope::default();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::IncludeOnceGuard { body, .. }
+                | StmtKind::Synthetic(body) => collect_constant_alias_call_sites(body, sites),
+            StmtKind::ExprStmt(expr) => {
+                if positional_class_alias_args(stmt).is_some_and(|args| {
+                    constant_class_name(&args[0], &scope).is_some()
+                        && constant_class_name(&args[1], &scope).is_some()
+                }) {
+                    sites.insert(expr as *const Expr as usize);
+                }
+            }
+            _ => {}
         }
     }
-    let orig = constant_class_name(args.first()?, scope)?;
-    let alias = constant_class_name(args.get(1)?, scope)?;
-    Some((orig, alias))
 }
 
 /// Folds a compile-time-constant class-name argument to its string value.
@@ -282,4 +318,40 @@ fn synthesise_alias_decl(orig: &str, alias: &str, span: crate::span::Span) -> St
         },
         span,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses one direct alias call without changing its source positions.
+    fn alias_statement() -> Stmt {
+        let tokens = crate::lexer::tokenize("<?php class_alias('Original', 'Alias', false);").unwrap();
+        crate::parser::parse(&tokens).unwrap().remove(0)
+    }
+
+    /// Included and synthetic wrappers keep collector eligibility without relying on shared spans.
+    #[test]
+    fn alias_diagnostic_sites_preserve_wrapper_and_statement_identity() {
+        let call = alias_statement();
+        let span = call.span;
+        let program = vec![
+            call.clone(),
+            Stmt::new(StmtKind::Synthetic(vec![call.clone()]), span),
+            Stmt::new(StmtKind::IncludeOnceGuard { label: "review_include".into(), body: vec![call] }, span),
+        ];
+        let sites = constant_alias_call_sites(&program);
+        assert_eq!(sites.len(), 3);
+        for stmt in &program {
+            let direct = match &stmt.kind {
+                StmtKind::Synthetic(body) | StmtKind::IncludeOnceGuard { body, .. } => &body[0],
+                _ => stmt,
+            };
+            assert_eq!(direct.span, span);
+            let StmtKind::ExprStmt(expr) = &direct.kind else { panic!("alias statement") };
+            assert!(sites.contains(&(expr as *const Expr as usize)));
+        }
+        let cloned = program.clone();
+        assert!(sites.is_disjoint(&constant_alias_call_sites(&cloned)));
+    }
 }
