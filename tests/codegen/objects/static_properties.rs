@@ -42,6 +42,65 @@ ChildHolder::update();
     assert_eq!(out, "9|9|9");
 }
 
+/// Replacing the nullable static slot during the RHS must not retire the original receiver.
+#[test]
+fn test_static_property_object_receiver_survives_rhs_replacement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReviewReceiverObject { public int $v = 1; }
+class ReviewReceiverHolder { public static ?ReviewReceiverObject $o = null; }
+function replaceReviewReceiver(): int {
+    ReviewReceiverHolder::$o = new ReviewReceiverObject();
+    ReviewReceiverHolder::$o->v = 7;
+    return 9;
+}
+$original = new ReviewReceiverObject();
+ReviewReceiverHolder::$o = $original;
+ReviewReceiverHolder::$o->v = replaceReviewReceiver();
+echo $original->v, "|", ReviewReceiverHolder::$o->v;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "9|7", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An instance-array property reached through a static object supports indexed and compound writes.
+#[test]
+fn test_static_property_object_receiver_indexed_writes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReviewArrayObject { public array $items = [1, 2]; }
+class ReviewArrayHolder { public static ReviewArrayObject $o; }
+ReviewArrayHolder::$o = new ReviewArrayObject();
+ReviewArrayHolder::$o->items[0] = 9;
+ReviewArrayHolder::$o->items[1] += 3;
+ReviewArrayHolder::$o->items[] = 6;
+echo json_encode(ReviewArrayHolder::$o->items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[9,5,6]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Statement-position prefix operators can traverse named, lexical and late-static object receivers.
+#[test]
+fn test_static_property_object_receiver_prefix_statements() {
+    let out = compile_and_run(r#"<?php
+class ReviewPrefixObject { public int $v = 1; }
+class ReviewPrefixHolder { public static ?ReviewPrefixObject $o = null; }
+class ReviewPrefixChild extends ReviewPrefixHolder {
+    public static function update(): void {
+        ++self::$o->v;
+        ++static::$o->v;
+        --parent::$o->v;
+    }
+}
+ReviewPrefixHolder::$o = new ReviewPrefixObject();
+++ReviewPrefixHolder::$o->v;
+ReviewPrefixChild::update();
+echo ReviewPrefixHolder::$o->v;
+"#);
+    assert_eq!(out, "3");
+}
+
 /// Shutdown frees inherited static strings, containers, objects, and captured callbacks exactly once.
 #[test]
 fn test_class_static_properties_release_last_owners_at_shutdown() {
