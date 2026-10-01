@@ -1956,6 +1956,45 @@ var_dump($f == $g);
     );
 }
 
+/// Review regression: boxed string equality preserves exact numeric and byte-order rules.
+#[test]
+fn test_review_mixed_string_equality_preserves_php_numeric_context() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function row(mixed $a, mixed $b): void {
+    echo (int)($a == $b), ":", (int)($a != $b), "|";
+}
+row("1e309", "1e310");
+row("-99999999999999999999", "-100000000000000000000");
+row("9007199254740993", "9007199254740992");
+row("0", "00");
+row("alpha", "beta");
+row("2\0", "2");
+row("0", null);
+row("", null);
+row("0", false);
+echo "end";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0:1|0:1|0:1|1:0|0:1|0:1|0:1|1:0|1:0|end");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Review regression: both typed and boxed numeric tests reject NUL anywhere in PHP bytes.
+#[test]
+fn test_review_is_numeric_rejects_nul_bytes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function typed_numeric(string $s): bool { return is_numeric($s); }
+function boxed_numeric(mixed $s): bool { return is_numeric($s); }
+foreach (["2\0", "\0" . "2", "2\0x", "\0", "", "2", "\t-2.5e2 \n", "1e309"] as $s) {
+    echo (int)typed_numeric($s), ":", (int)boxed_numeric($s), "|";
+}
+echo "end";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0:0|0:0|0:0|0:0|0:0|1:1|1:1|1:1|end");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Issue #507 for `<=>`: the spaceship operator orders two strings by the same rule.
 ///
 /// It used to be rejected at compile time unless the optimizer could fold it, so

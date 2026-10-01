@@ -1575,8 +1575,9 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
 ///
 /// This is the numeric-operand set plus `PhpType::Str`: PHP 8 coerces numeric and
 /// leading-numeric strings in arithmetic. Relational comparison and the spaceship operator
-/// deliberately keep the stricter `is_numeric_operand_type`, so `"a" < 1` and `"a" <=> "b"`
-/// remain type errors. A fully non-numeric string *literal* is still rejected in
+/// also accept two strings with PHP's numeric-string or byte ordering, but mixed
+/// string-versus-number pairs such as `"a" < 1` remain type errors.
+/// A fully non-numeric string *literal* is still rejected in
 /// `Checker::check_arithmetic_string_operands`.
 fn is_arithmetic_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     is_numeric_operand_type(checker, ty) || matches!(ty, PhpType::Str)

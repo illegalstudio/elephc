@@ -90,11 +90,10 @@ var_dump("99999999999999999999" > "100000000000000000000");   // true  — byte 
 var_dump("9223372036854775807" == "9223372036854775808");     // false — the right side overflowed
 ```
 
-One inherited gap is left, and it is in the shared numeric scanner rather than in this rule:
-`is_numeric()` still reads a numeric prefix followed by an embedded NUL (`"2\0"`) as numeric,
-where PHP does not. Comparison is not affected — it measures the byte length itself, so
-`"2\0" > "10"` is `true` as in PHP — but `is_numeric("2\0")` answers `true` where PHP answers
-`false`.
+Numeric classification uses the full PHP byte length, including embedded NUL bytes.
+`is_numeric("2\0")` is `false`, and `"2\0" > "10"` uses byte ordering and is `true`,
+matching PHP. Boxed `mixed` strings use the same numeric-string and byte-order rules
+for loose equality as statically typed strings.
 
 ## Comparison
 
