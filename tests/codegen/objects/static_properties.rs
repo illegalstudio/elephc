@@ -52,6 +52,79 @@ echo PrefixStaticSnapshot::$items[0], "|", PrefixStaticSnapshot::$items[1], "|",
     assert_eq!(out, "11|20|1");
 }
 
+/// A nested update keeps the original leaf key when its warning handler mutates that key.
+#[test]
+fn test_static_property_array_prefix_update_nested_warning_index() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedPrefixSnapshot { public static array $items = [[1 => 10, 2 => 20]]; }
+$key = 1.9;
+$warnings = 0;
+set_error_handler(function($level, $message) use (&$key, &$warnings) { $key = 2.9; ++$warnings; return true; });
+++NestedPrefixSnapshot::$items[0][$key];
+restore_error_handler();
+echo json_encode(NestedPrefixSnapshot::$items), "|", $warnings, "|", $key;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"1\":11,\"2\":20}]|1|2.9", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Literal nested float keys are diagnosed once and an undefined leaf keeps its original key.
+#[test]
+fn test_static_property_array_prefix_update_nested_literal_and_missing_keys() {
+    let out = compile_and_run(r#"<?php
+class NestedPrefixKeys { public static array $literal = [[1 => 10]]; public static array $missing = [[]]; }
+$warnings = 0;
+set_error_handler(function($level, $message) use (&$warnings) { ++$warnings; return true; });
+++NestedPrefixKeys::$literal[0][1.9];
+restore_error_handler();
+echo json_encode(NestedPrefixKeys::$literal), "|", $warnings, "|";
+$key = 5;
+set_error_handler(function($level, $message) use (&$key) { $key = 6; return true; });
+++NestedPrefixKeys::$missing[0][$key];
+restore_error_handler();
+echo json_encode(NestedPrefixKeys::$missing);
+"#);
+    assert_eq!(out, "[{\"1\":11}]|1|[{\"5\":1}]");
+}
+
+/// An outer-key handler runs before the inner key is captured, and is not called again on write.
+#[test]
+fn test_static_property_array_prefix_update_nested_key_capture_order() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedPrefixOrder { public static array $items = [[1 => 10, 2 => 20]]; }
+$row = 0.5;
+$key = 1.9;
+$warnings = 0;
+set_error_handler(function($level, $message) use (&$key, &$warnings) { $key = 2.0; ++$warnings; return true; });
+++NestedPrefixOrder::$items[$row][$key];
+restore_error_handler();
+echo json_encode(NestedPrefixOrder::$items), "|", $warnings;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"1\":10,\"2\":21}]|1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Captured nested update keys preserve detached aliases and release string-key snapshots.
+#[test]
+fn test_static_property_array_prefix_update_nested_cow_and_string_key() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedPrefixCow { public static array $items = [[1 => 10]]; public static array $missing = [[]]; }
+$alias = NestedPrefixCow::$items;
+++NestedPrefixCow::$items[0][1];
+echo json_encode($alias), "|", json_encode(NestedPrefixCow::$items), "|";
+$key = "before";
+set_error_handler(function($level, $message) use (&$key) { $key = "after"; return true; });
+++NestedPrefixCow::$missing[0][$key];
+restore_error_handler();
+echo json_encode(NestedPrefixCow::$missing), "|", $key;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"1\":10}]|[{\"1\":11}]|[{\"before\":1}]|after", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Shutdown frees inherited static strings, containers, objects, and captured callbacks exactly once.
 #[test]
 fn test_class_static_properties_release_last_owners_at_shutdown() {
