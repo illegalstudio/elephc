@@ -247,6 +247,15 @@ pub(crate) fn build_enum_info(
         });
     }
 
+    for constant in user_constants {
+        if seen_case_names.contains(&constant.name) {
+            return Err(CompileError::new(
+                constant.span,
+                &format!("Enum constant {}::{} conflicts with enum case", name, constant.name),
+            ));
+        }
+    }
+
     insert_enum_metadata(
         name,
         resolved_backing,
