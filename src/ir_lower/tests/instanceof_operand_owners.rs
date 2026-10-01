@@ -170,15 +170,14 @@ echo probeBorrowedInstanceof(new InstBorrowChild(), "InstBorrowBase") ? "1" : "0
     }
 }
 
-/// A post-eval dynamic class-name target releases its detached string operand on every target.
+/// Checks one target's detached post-eval class-name operand without combining five compiles.
 ///
 /// The target exists before opaque `eval()` widens live locals to boxed `Mixed` storage.
 /// The later `$target = get_parent_class($object)` keeps that widened slot. Reading
 /// it as the dynamic `instanceof` target detaches an owned `Str` copy that the backend entry and
 /// the eval introspection adapter only borrow, so the lowering must retire that exact copy. One
 /// such leak accrued per call in the original fixture.
-#[test]
-fn post_eval_dynamic_target_releases_detached_class_name_string_on_all_targets() {
+fn check_post_eval_dynamic_target_releases_detached_class_name_string(target: &str) {
     let source = r#"<?php
 class InstEvalBase { public int $value = 7; }
 class InstEvalChild extends InstEvalBase { public function __destruct() {} }
@@ -191,47 +190,73 @@ function probeEvalInstanceof(InstEvalChild $object, string $source): bool {
 $source = 'return null; // ' . $argc;
 echo probeEvalInstanceof(new InstEvalChild(), $source) ? "1" : "0";
 "#;
-    for target in TARGETS {
-        let module = lower_for(source, target);
-        let function = module
-            .functions
-            .iter()
-            .find(|function| function.name == "probeEvalInstanceof")
-            .unwrap_or_else(|| panic!("{target}: missing probe function"));
-        let inst = function
-            .instructions
-            .iter()
-            .find(|inst| inst.op == Op::InstanceOfDynamic)
-            .unwrap_or_else(|| panic!("{target}: missing dynamic instanceof"));
-        let target_operand = inst.operands[1];
-        let load = function
-            .instructions
-            .iter()
-            .find(|other| other.result == Some(target_operand))
-            .unwrap_or_else(|| panic!("{target}: dynamic target must be defined"));
-        assert_eq!(load.op, Op::LoadLocal, "{target}: the target reads a local slot");
-        assert_eq!(
-            load.result_php_type,
-            PhpType::Str,
-            "{target}: the class-name target reads as a string"
-        );
-        let Some(Immediate::LocalSlot(slot)) = load.immediate else {
-            panic!("{target}: the target load must identify its slot");
-        };
-        assert_eq!(
-            function.locals[slot.as_raw() as usize]
-                .php_type
-                .codegen_repr(),
-            PhpType::Mixed,
-            "{target}: the eval-widened slot backs a detached string read"
-        );
-        assert_eq!(
-            release_count(function, target_operand), 1,
-            "{target}: the detached class-name string must be retired exactly once"
-        );
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
-    }
+    let module = lower_for(source, target);
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "probeEvalInstanceof")
+        .unwrap_or_else(|| panic!("{target}: missing probe function"));
+    let inst = function
+        .instructions
+        .iter()
+        .find(|inst| inst.op == Op::InstanceOfDynamic)
+        .unwrap_or_else(|| panic!("{target}: missing dynamic instanceof"));
+    let target_operand = inst.operands[1];
+    let load = function
+        .instructions
+        .iter()
+        .find(|other| other.result == Some(target_operand))
+        .unwrap_or_else(|| panic!("{target}: dynamic target must be defined"));
+    assert_eq!(load.op, Op::LoadLocal, "{target}: the target reads a local slot");
+    assert_eq!(
+        load.result_php_type,
+        PhpType::Str,
+        "{target}: the class-name target reads as a string"
+    );
+    let Some(Immediate::LocalSlot(slot)) = load.immediate else {
+        panic!("{target}: the target load must identify its slot");
+    };
+    assert_eq!(
+        function.locals[slot.as_raw() as usize].php_type.codegen_repr(),
+        PhpType::Mixed,
+        "{target}: the eval-widened slot backs a detached string read"
+    );
+    assert_eq!(
+        release_count(function, target_operand), 1,
+        "{target}: the detached class-name string must be retired exactly once"
+    );
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+/// The detached post-eval class-name owner is retired exactly once on macOS ARM64.
+#[test]
+fn post_eval_dynamic_target_releases_detached_class_name_string_macos() {
+    check_post_eval_dynamic_target_releases_detached_class_name_string("macos-aarch64");
+}
+
+/// The detached post-eval class-name owner is retired exactly once on iOS devices.
+#[test]
+fn post_eval_dynamic_target_releases_detached_class_name_string_ios() {
+    check_post_eval_dynamic_target_releases_detached_class_name_string("ios-arm64");
+}
+
+/// The detached post-eval class-name owner is retired exactly once on the iOS Simulator.
+#[test]
+fn post_eval_dynamic_target_releases_detached_class_name_string_ios_sim() {
+    check_post_eval_dynamic_target_releases_detached_class_name_string("ios-sim-arm64");
+}
+
+/// The detached post-eval class-name owner is retired exactly once on Linux ARM64.
+#[test]
+fn post_eval_dynamic_target_releases_detached_class_name_string_linux_arm64() {
+    check_post_eval_dynamic_target_releases_detached_class_name_string("linux-aarch64");
+}
+
+/// The detached post-eval class-name owner is retired exactly once on Linux x86_64.
+#[test]
+fn post_eval_dynamic_target_releases_detached_class_name_string_linux_x86_64() {
+    check_post_eval_dynamic_target_releases_detached_class_name_string("linux-x86_64");
 }
 
 /// An owned value operand is unwind-rooted across a dynamic target on every target.
