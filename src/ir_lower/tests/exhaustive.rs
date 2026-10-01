@@ -186,6 +186,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         scope_dynamic_property_storage: false,
         constants: HashMap::new(),
         constant_order: Vec::new(),
+        property_order: Vec::new(),
         constant_deprecations: HashMap::new(),
         constant_types: HashMap::new(),
         constant_visibilities: Default::default(),

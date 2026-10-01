@@ -8,6 +8,7 @@
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
+use std::collections::HashMap;
 
 /// Returns PHP case-insensitive method names visible to `ReflectionClass::hasMethod()`.
 pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
@@ -186,32 +187,116 @@ pub(super) fn reflection_class_constant_members(
     Ok(members)
 }
 
+/// How each class on a chain orders the properties it declares: the class is depth 0, its parent
+/// 1, and so on, and each depth carries that class's own declaration order.
+type PropertyRankTable = HashMap<String, (usize, HashMap<String, usize>)>;
+
+/// Builds the rank table for `class_name` and its ancestors, walking the chain once per listing
+/// rather than once per property.
+///
+/// The class's property lists follow the inherited storage layout, which puts an ancestor's
+/// properties first and keeps a redeclared property in its ancestor's slot; PHP lists a class's
+/// own properties before its parent's, in the order the class declares them.
+fn reflection_property_rank_table(ctx: &FunctionContext<'_>, class_name: &str) -> PropertyRankTable {
+    let mut table = HashMap::new();
+    let mut current = Some(class_name.to_string());
+    let mut depth = 0;
+    while let Some(name) = current {
+        let resolved = resolve_reflection_class(ctx, &name);
+        let order = resolved
+            .map(|(_, info)| {
+                info.property_order
+                    .iter()
+                    .enumerate()
+                    .map(|(index, property)| (property.clone(), index))
+                    .collect()
+            })
+            .unwrap_or_default();
+        table.entry(php_symbol_key(&name)).or_insert((depth, order));
+        current = resolved.and_then(|(_, info)| info.parent.clone());
+        depth += 1;
+    }
+    table
+}
+
+/// Returns a property's rank: its declaring class's depth, then its position in that class's own
+/// declarations. An unknown declaring class counts as the class itself, and a property missing
+/// from the declaration order (a trait's) sorts after the declared ones.
+fn reflection_property_rank(
+    table: &PropertyRankTable,
+    class_name: &str,
+    declaring_class: Option<&String>,
+    property_name: &str,
+) -> (usize, usize) {
+    let declaring = declaring_class.map(String::as_str).unwrap_or(class_name);
+    table
+        .get(&php_symbol_key(declaring))
+        .map(|(depth, order)| (*depth, order.get(property_name).copied().unwrap_or(usize::MAX)))
+        .unwrap_or((0, usize::MAX))
+}
+
 /// Returns materializable property defaults for `ReflectionClass::getDefaultProperties()`.
+///
+/// PHP lists the static properties first, then the instance ones; each group has the class's
+/// own properties before its ancestors', in declaration order.
 pub(super) fn reflection_class_default_property_members(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
     info: &crate::types::ClassInfo,
     property_names: &[String],
 ) -> Vec<ReflectionDefaultPropertyMember> {
-    property_names
+    let table = reflection_property_rank_table(ctx, class_name);
+    let mut ranked: Vec<(bool, (usize, usize), usize, ReflectionDefaultPropertyMember)> = property_names
         .iter()
-        .filter_map(|property_name| {
+        .enumerate()
+        .filter_map(|(position, property_name)| {
+            let is_static = info.static_properties.iter().any(|(name, _)| name == property_name);
+            let declaring_class = if is_static {
+                info.static_property_declaring_classes.get(property_name)
+            } else {
+                info.property_declaring_classes.get(property_name)
+            };
+            let rank = reflection_property_rank(&table, class_name, declaring_class, property_name);
             reflection_property_default_value(info, property_name).map(|value| {
-                ReflectionDefaultPropertyMember {
+                let member = ReflectionDefaultPropertyMember {
                     name: property_name.clone(),
                     value,
-                }
+                };
+                (!is_static, rank, position, member)
             })
         })
-        .collect()
+        .collect();
+    ranked.sort_by_key(|(instance, rank, position, _)| (*instance, *rank, *position));
+    ranked.into_iter().map(|(_, _, _, member)| member).collect()
 }
 
 /// Returns static-property storage slots for `ReflectionClass::getStaticProperties()`.
+///
+/// An ancestor's private static is not part of the class, as PHP reports it; the class's own
+/// statics come before its ancestors', in declaration order.
 pub(super) fn reflection_class_static_property_members(
+    ctx: &FunctionContext<'_>,
     class_name: &str,
     info: &crate::types::ClassInfo,
 ) -> Vec<ReflectionStaticPropertyMember> {
-    info.static_properties
+    let table = reflection_property_rank_table(ctx, class_name);
+    let mut visible: Vec<((usize, usize), usize, &(String, PhpType))> = info
+        .static_properties
         .iter()
-        .map(|(property_name, php_type)| {
+        .enumerate()
+        .filter(|(_, (property_name, _))| {
+            reflection_property_visible_from_class(info, class_name, property_name, true)
+        })
+        .map(|(position, entry)| {
+            let declaring_class = info.static_property_declaring_classes.get(&entry.0);
+            let rank = reflection_property_rank(&table, class_name, declaring_class, &entry.0);
+            (rank, position, entry)
+        })
+        .collect();
+    visible.sort_by_key(|(rank, position, _)| (*rank, *position));
+    visible
+        .into_iter()
+        .map(|(_, _, (property_name, php_type))| {
             let declaring_class_name = info
                 .static_property_declaring_classes
                 .get(property_name)

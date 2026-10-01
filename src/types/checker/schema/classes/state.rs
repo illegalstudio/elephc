@@ -155,6 +155,14 @@ impl ClassBuildState {
                 })
                 .collect::<Result<HashMap<_, _>, CompileError>>()?,
             constant_order: class.constants.iter().map(|c| c.name.clone()).collect(),
+            property_order: {
+                // Promoted constructor parameters sit among the declarations at the constructor's
+                // position, which their spans give; a stable sort keeps the AST order otherwise.
+                let mut declared: Vec<&crate::parser::ast::ClassProperty> =
+                    class.properties.iter().collect();
+                declared.sort_by_key(|property| (property.span.line, property.span.col));
+                declared.into_iter().map(|property| property.name.clone()).collect()
+            },
             constant_deprecations: class
                 .constants
                 .iter()

@@ -555,3 +555,66 @@ echo ($plain->hasHooks() ? "bad" : "plain") . ":" . count($plain->getHooks());
         "2:get:Set:T:H:2:$doubled::get:$doubled::set:ReflectPropertyHookMetadataTarget:0:1:value:G:S:$doubled::get:$doubled::set:R:1:$readonlyHook::get:RG:RS:N:plain:0"
     );
 }
+
+/// `ReflectionClass::getDefaultProperties()` lists the static properties first, then the
+/// instance ones, each group with the class's own before its ancestors', in declaration order.
+/// `getStaticProperties()` lists the class's own statics first and leaves out an ancestor's
+/// private static. Both used to follow the inherited storage layout (ancestors first, instance
+/// before static). Expected output measured on PHP 8.5.10. Regression for #1489.
+#[test]
+fn test_reflection_default_and_static_properties_follow_php_order() {
+    let out = compile_and_run(
+        r#"<?php
+class B {
+    public $bx = 1;
+    public static $bs = 2;
+    protected $bp = 3;
+    private static $bps = 4;
+}
+class C extends B {
+    public string $x = "a";
+    public static string $s = "b";
+    public int $n = 1;
+    protected static $ps = 5;
+    private $pr = 6;
+}
+echo implode(",", array_keys((new ReflectionClass('C'))->getDefaultProperties())), "\n";
+echo implode(",", array_keys((new ReflectionClass('B'))->getDefaultProperties())), "\n";
+echo implode(",", array_keys((new ReflectionClass('C'))->getStaticProperties())), "\n";
+echo implode(",", array_keys((new ReflectionClass('B'))->getStaticProperties())), "\n";
+var_dump((new ReflectionClass('C'))->getDefaultProperties()['s']);
+"#,
+    );
+    assert_eq!(
+        out,
+        "s,ps,bs,x,n,pr,bx,bp\nbs,bps,bx,bp\ns,ps,bs\nbs,bps\nstring(1) \"b\"\n"
+    );
+}
+
+/// A child that redeclares an inherited property lists it where the child declares it, among its
+/// own properties and before the parent's: the redeclaration keeps the parent's storage slot, so
+/// ordering by slot put `$a` and `$x` at the parent's position. Review follow-up for #1489.
+#[test]
+fn test_reflection_lists_redeclared_properties_in_the_childs_order() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    public static $a = 1;
+    public static $b = 2;
+    public $x = 10;
+    public $y = 20;
+}
+class C extends P {
+    public static $z = 3;
+    public static $a = 4;
+    public $w = 30;
+    public $x = 11;
+}
+$r = new ReflectionClass(C::class);
+echo implode(",", array_keys($r->getStaticProperties())), "\n";
+echo implode(",", array_keys($r->getDefaultProperties())), "\n";
+echo implode(",", $r->getStaticProperties()), "|", implode(",", $r->getDefaultProperties()), "\n";
+"#,
+    );
+    assert_eq!(out, "z,a,b\nz,a,b,w,x,y\n3,4,2|3,4,2,30,11,20\n");
+}

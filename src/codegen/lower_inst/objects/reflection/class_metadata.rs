@@ -78,8 +78,9 @@ pub(super) fn reflection_class_metadata_for_name(
         let constant_names = reflection_class_constant_names(ctx, class_name, info);
         let constant_members = reflection_class_constant_members(ctx, class_name, info)?;
         let default_property_members =
-            reflection_class_default_property_members(info, &property_names);
-        let static_property_members = reflection_class_static_property_members(class_name, info);
+            reflection_class_default_property_members(ctx, class_name, info, &property_names);
+        let static_property_members =
+            reflection_class_static_property_members(ctx, class_name, info);
         let constant_reflection_members =
             reflection_class_constant_reflection_members(ctx, class_name, info)?;
         let enum_case_members = if is_enum {

@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use std::collections::HashMap;
 
 /// Lowers `ReflectionClass::getStaticProperties()` to a live static-property map.
 pub(super) fn lower_reflection_class_get_static_properties(
@@ -134,22 +135,64 @@ pub(super) fn reflection_class_static_property_map_entries(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
 ) -> Option<Vec<(String, String, PhpType)>> {
-    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
-    Some(
-        class_info
-            .static_properties
-            .iter()
-            .map(|(property, property_ty)| {
-                let declaring_class = class_info
-                    .static_property_declaring_classes
-                    .get(property)
-                    .cloned()
-                    .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
-                let property_ty = normalize_value_php_type(property_ty.codegen_repr());
-                (property.clone(), declaring_class, property_ty)
+    let class_name = class_name.trim_start_matches('\\');
+    let class_info = ctx.classes.get(class_name)?;
+    let ranks = reflection_class_property_ranks(ctx, class_name);
+    let mut entries: Vec<((usize, usize), usize, (String, String, PhpType))> = class_info
+        .static_properties
+        .iter()
+        .enumerate()
+        .filter_map(|(position, (property, property_ty))| {
+            let declaring_class = class_info
+                .static_property_declaring_classes
+                .get(property)
+                .cloned()
+                .unwrap_or_else(|| class_name.to_string());
+            // An ancestor's private static is not a property of this class in PHP.
+            let private = class_info.static_property_visibilities.get(property)
+                == Some(&crate::parser::ast::Visibility::Private);
+            if private && php_symbol_key(&declaring_class) != php_symbol_key(class_name) {
+                return None;
+            }
+            let rank = ranks
+                .get(&php_symbol_key(&declaring_class))
+                .map(|(depth, order)| (*depth, order.get(property).copied().unwrap_or(usize::MAX)))
+                .unwrap_or((0, usize::MAX));
+            let property_ty = normalize_value_php_type(property_ty.codegen_repr());
+            Some((rank, position, (property.clone(), declaring_class, property_ty)))
+        })
+        .collect();
+    // The storage layout puts an ancestor's statics first and keeps a redeclared static in its
+    // ancestor's slot; PHP lists the class's own statics first, in the order it declares them.
+    entries.sort_by_key(|(rank, position, _)| (*rank, *position));
+    Some(entries.into_iter().map(|(_, _, entry)| entry).collect())
+}
+
+/// Returns, for `class_name` and each ancestor keyed by `php_symbol_key`, its depth (0 for the
+/// class, 1 for its parent) and its own property declaration order, walking the chain once.
+fn reflection_class_property_ranks(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+) -> HashMap<String, (usize, HashMap<String, usize>)> {
+    let mut ranks = HashMap::new();
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    let mut depth = 0;
+    while let Some(name) = current {
+        let info = ctx.classes.get(name.as_str());
+        let order = info
+            .map(|info| {
+                info.property_order
+                    .iter()
+                    .enumerate()
+                    .map(|(index, property)| (property.clone(), index))
+                    .collect()
             })
-            .collect(),
-    )
+            .unwrap_or_default();
+        ranks.entry(php_symbol_key(&name)).or_insert((depth, order));
+        current = info.and_then(|info| info.parent.clone());
+        depth += 1;
+    }
+    ranks
 }
 
 /// Boxes a concrete PHP value into the runtime `Mixed` cell representation.

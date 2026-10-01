@@ -297,6 +297,11 @@ pub struct ClassInfo {
     /// The names in `constants`, in declaration order (trait constants after the class's own).
     /// `constants` is a map and has no order; `ReflectionClass::getConstants()` needs PHP's.
     pub constant_order: Vec<String>,
+    /// The properties this class declares itself (instance and static, promoted constructor
+    /// parameters included), in source order. A redeclared inherited property keeps its parent's
+    /// storage slot, so the layout alone puts it at the parent's position; Reflection and
+    /// `get_class_vars()` list it where the class declares it.
+    pub property_order: Vec<String>,
     /// Deprecation reason for class constants carrying `#[\Deprecated]`, keyed
     /// by the case-sensitive constant name. An empty string means no reason.
     pub constant_deprecations: HashMap<String, String>,
