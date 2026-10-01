@@ -1177,7 +1177,11 @@ Validation has two modes:
 5. Every `InstId` belongs to exactly one block.
 6. Every operand references an existing value in the same function.
 7. Every use is dominated by its definition, unless the value is a destination
-   block parameter supplied by all incoming branches.
+   block parameter supplied by all incoming branches. Cross-block dominance is
+   not required for uses in blocks unreachable from the entry, even when the
+   definition is also unreachable. Same-block definition order, valid value IDs,
+   operand types, and the prohibition on void operands still apply; reachable
+   uses retain the full dominance check.
 8. Destination block argument count matches destination block parameter count.
 9. Destination block argument types match destination block parameter types.
 10. Entry block has no block parameters.
