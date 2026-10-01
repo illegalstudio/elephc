@@ -44,10 +44,11 @@ echo selected(1);
             Ok(_) => panic!("conflicting variant returns must fail on {target}"),
             Err(error) => error,
         };
-        let mismatch = error.flatten().into_iter().find(|error| {
+        let mismatches: Vec<_> = error.flatten().into_iter().filter(|error| {
             error.message.contains("Function variants for 'selected' must have identical signatures")
-        }).expect("report the conflicting signature rather than a body return mismatch");
-        assert_eq!(mismatch.span.line, 3, "{target}: point at the conflicting declaration");
+        }).collect();
+        assert_eq!(mismatches.len(), 1, "{target}: report the declaration mismatch once");
+        assert_eq!(mismatches[0].span.line, 3, "{target}: point at the conflicting declaration");
     }
 }
 
@@ -85,5 +86,42 @@ fn variant_signature_matching_inferred_returns_are_preserved() {
         "<?php\nfunction left_variant() { return 'left'; }\nfunction right_variant() { return 'right'; }\necho selected();",
     );
     let checked = crate::types::check(&program).expect("matching inferred variants remain valid");
+    assert_eq!(checked.functions["selected"].return_type, crate::types::PhpType::Str);
+}
+
+/// A yielding body does not change the declared contract compared during preflight.
+#[test]
+fn variant_signature_same_annotations_ignore_generator_placeholder() {
+    let program = grouped_program("<?php\nfunction left_variant(): int { return 1; }\nfunction right_variant(): int { yield 1; }\necho selected();");
+    let errors = crate::types::check(&program).err().expect("invalid generator hint must fail").flatten();
+    assert!(errors.iter().any(|error| error.message.contains("Generator")), "{errors:?}");
+    assert!(!errors.iter().any(|error| error.message.contains("must have identical signatures")), "{errors:?}");
+}
+
+/// Two Generator placeholders cannot hide different explicit return annotations.
+#[test]
+fn variant_signature_different_generator_annotations_report_contract_mismatch() {
+    let program = grouped_program("<?php\nfunction left_variant(): string { yield 'left'; }\nfunction right_variant(): int { yield 1; }\necho selected();");
+    let errors = crate::types::check(&program).err().expect("different annotations must fail").flatten();
+    let mismatches: Vec<_> = errors.iter().filter(|error| error.message.contains("must have identical signatures")).collect();
+    assert_eq!(mismatches.len(), 1, "{errors:?}");
+    assert_eq!(mismatches[0].span.line, 3);
+}
+
+/// Call-site specialization disagreements retain the conflicting declaration location.
+#[test]
+fn variant_signature_specialized_mismatch_uses_conflicting_declaration_span() {
+    let program = grouped_program("<?php\nfunction left_variant($value) { return $value; }\nfunction right_variant($value) { return strlen($value); }\necho selected('value');");
+    let errors = crate::types::check(&program).err().expect("specialized returns disagree").flatten();
+    let mismatches: Vec<_> = errors.iter().filter(|error| error.message.contains("must have identical signatures")).collect();
+    assert_eq!(mismatches.len(), 1, "{errors:?}");
+    assert_eq!(mismatches[0].span.line, 3);
+}
+
+/// A temporary inferred mismatch can still recover after argument-driven specialization.
+#[test]
+fn variant_signature_inferred_placeholder_mismatch_can_recover() {
+    let program = grouped_program("<?php\nfunction left_variant($value) { return $value; }\nfunction right_variant($value) { return 'right'; }\necho selected('value');");
+    let checked = crate::types::check(&program).expect("only declared contract failures are cached");
     assert_eq!(checked.functions["selected"].return_type, crate::types::PhpType::Str);
 }

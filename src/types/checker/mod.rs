@@ -75,6 +75,10 @@ pub(crate) struct Checker {
     /// Groups of function variant names that share the same logical function
     /// (used for overload resolution and `function_exists()`).
     pub function_variant_groups: HashMap<String, Vec<String>>,
+    /// Immutable declared-contract failures cached independently from recursive placeholders.
+    pub failed_variant_contracts: HashMap<String, CompileError>,
+    /// Signatures whose body and return validation completed, rather than mere placeholders.
+    pub completed_function_signatures: HashSet<String>,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
     /// Functions whose body is currently being checked.

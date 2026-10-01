@@ -355,7 +355,7 @@ echo selected_mismatch();
         ],
         "main.php",
     ).expect("conflicting declared signatures must fail compilation");
-    assert!(error.contains("Function variants for 'selected_mismatch' must have identical signatures"), "{error}");
+    assert_eq!(error.matches("Function variants for 'selected_mismatch' must have identical signatures").count(), 1, "{error}");
 }
 
 /// Conflicting recursive return hints report the group contract before a borrowed placeholder.
@@ -378,7 +378,7 @@ fn test_conditional_include_recursive_variant_signature_mismatch_diagnostic() {
         ],
         "main.php",
     ).expect("conflicting recursive signatures must fail compilation");
-    assert!(error.contains("Function variants for 'selected_recursive' must have identical signatures"), "{error}");
+    assert_eq!(error.matches("Function variants for 'selected_recursive' must have identical signatures").count(), 1, "{error}");
 }
 
 /// Verifies two regular includes of the same file in the same branch report a duplicate function error.
