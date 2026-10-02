@@ -2,7 +2,7 @@
 title: "session_cache_expire() - internals"
 description: "Compiler internals for session_cache_expire(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 981
+  order: 982
 ---
 
 ## `session_cache_expire()` - internals

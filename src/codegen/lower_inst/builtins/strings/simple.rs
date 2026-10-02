@@ -303,7 +303,7 @@ fn lower_strip_tags_allow_from_array(
             abi::emit_symbol_address(ctx.emitter, "x1", &glue_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", glue_len as i64);
             ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve `><` glue while loading the allow array
-            super::split::load_implode_array_aarch64(ctx, allowed)?;
+            super::split::load_implode_array(ctx, allowed, 1)?;
             ctx.emitter.instruction("mov x3, x0");                              // pass the indexed allow-array pointer to implode
             ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the `><` glue into implode's string argument
         }
@@ -311,7 +311,7 @@ fn lower_strip_tags_allow_from_array(
             abi::emit_symbol_address(ctx.emitter, "rax", &glue_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", glue_len as i64);
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            super::split::load_implode_array_x86_64(ctx, allowed)?;
+            super::split::load_implode_array(ctx, allowed, 1)?;
             ctx.emitter.instruction("mov rdx, rax");                            // pass the indexed allow-array pointer to implode
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
         }

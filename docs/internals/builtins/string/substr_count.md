@@ -2,7 +2,7 @@
 title: "substr_count() - internals"
 description: "Compiler internals for substr_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 936
+  order: 937
 ---
 
 ## `substr_count()` - internals
