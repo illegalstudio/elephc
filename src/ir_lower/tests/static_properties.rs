@@ -8,6 +8,27 @@
 //! - All five targets must skip uninitialized slots and detach inherited owners once.
 //! - Destructor boundaries must finish remaining slots before propagating exceptions.
 
+/// Nested updates capture keys once and reuse the read's normalization on every target.
+#[test]
+fn nested_static_update_keys_are_captured_on_all_targets() {
+    let source = r#"<?php
+class ReviewNestedKeys { public static array $items = [[1 => 10, 2 => 20]]; }
+$key = 1.9;
+set_error_handler(function($level, $message) use (&$key) { $key = 2.9; return true; });
+++ReviewNestedKeys::$items[0][$key];
+restore_error_handler();
+echo json_encode(ReviewNestedKeys::$items);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("main.php"), std::path::Path::new("."), target);
+        let ir = crate::ir::print_module(&module);
+        assert!(ir.contains("array.fetch_for_write_already_diagnosed"), "{name}: {ir}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every target retires inherited class-static owners before bounded shutdown release.
 #[test]
 fn class_static_shutdown_ownership_is_emitted_on_all_targets() {

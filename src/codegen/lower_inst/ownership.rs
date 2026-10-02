@@ -197,7 +197,8 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
     if inst.op == Op::RuntimeCall {
         let result_is_releasable = match inst.immediate {
             Some(crate::ir::Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
+                crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+                    | crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed,
             )) => false,
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::Function(target),
