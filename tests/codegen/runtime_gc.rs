@@ -12,6 +12,8 @@
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
+#[path = "runtime_gc/nullable_coalesce_objects.rs"]
+mod nullable_coalesce_objects;
 #[path = "runtime_gc/mixed_string_cast_return.rs"]
 mod mixed_string_cast_return;
 #[path = "runtime_gc/object_cast.rs"]

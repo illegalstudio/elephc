@@ -266,6 +266,28 @@ pub(super) fn coerce_value_for_temp(
         }
         PhpType::Float => coerce_to_float_at_span(ctx, value, Some(span)),
         PhpType::Str => coerce_to_string_at_span(ctx, value, Some(span)),
+        // A boxed `?C` (a nullable parameter or property) merged into a `C` temp: `$o ??= new C()`
+        // types the merge from the non-null side, so the arm that keeps `$o` must hand over the
+        // object inside the cell. Storing the cell pointer itself made the next member access
+        // read the box as the object (#1628). The unbox owns its own lease of the payload.
+        // `MixedUnbox` does not check the tag, so this arm relies on never seeing null: the
+        // only producer of an object temp from a nullable value is `null_coalesce_result_type`,
+        // and its value arm runs behind `IsNull`. Ternary, `match` and `?:` merges keep a
+        // nullable arm in a `Mixed` temp and never reach here.
+        PhpType::Object(_) | PhpType::Callable
+            if source_ty == PhpType::Mixed && value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
+        {
+            let unboxed = ctx.emit_owned_value(
+                Op::MixedUnbox,
+                vec![value.value],
+                None,
+                target_ty.clone(),
+                Op::mixed_unbox_effects(&target_ty),
+                Some(span),
+            );
+            release_coerced_source_if_owned(ctx, value, Some(span));
+            unboxed
+        }
         _ => coerce_container_to_mixed_payload(ctx, value, &source_ty, &target_ty, span),
     }
 }
