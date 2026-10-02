@@ -120,7 +120,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     );
 
     emitter.label("__rt_pma_cap_loop");
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", current_cstr_off));        // reload the current subject C-string cursor
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", current_cstr_off));       // reload the current subject C-string cursor
     emitter.instruction("ldrb w9, [x1]");                                       // inspect the byte at the current cursor
     emitter.instruction("cbz w9, __rt_pma_cap_done");                           // the trailing NUL ends the search
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
@@ -157,7 +157,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x14, #8]");                                  // load signed-64-bit full-match end
     emitter.instruction("cmp x11, #0");                                         // detect a zero-length match
     emitter.instruction("b.gt __rt_pma_cap_adv");                               // use rm_eo when the match consumed bytes
-    emitter.instruction("mov x11, #1");                                          // force zero-length matches to advance one byte
+    emitter.instruction("mov x11, #1");                                         // force zero-length matches to advance one byte
     emitter.label("__rt_pma_cap_adv");
     emitter.instruction(&format!("ldr x10, [sp, #{}]", current_cstr_off));      // reload the current C-string cursor
     emitter.instruction("add x10, x10, x11");                                   // advance past this match
@@ -222,11 +222,11 @@ fn emit_preg_match_all_capture_validate_flags_arm64(
     emitter.instruction(&format!(
         "and x11, x9, #{}",
         PREG_PATTERN_ORDER | PREG_SET_ORDER
-    )); // isolate the order bits
+    ));                                                                         // isolate the order bits
     emitter.instruction(&format!(
         "cmp x11, #{}",
         PREG_PATTERN_ORDER | PREG_SET_ORDER
-    )); // both order bits together are invalid
+    ));                                                                         // both order bits together are invalid
     emitter.instruction("b.eq __rt_pma_cap_empty");                             // conflicting order flags return count 0 and []
 }
 
@@ -941,7 +941,7 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     emitter.instruction("mov r9, -1");                                          // unmatched offset-capture uses -1
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", piece_offset_off)); // save the unmatched offset
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload PHP flags
-    emitter.instruction(&format!("test r9, {}", PREG_UNMATCHED_AS_NULL));        // should unmatched cells be Mixed null?
+    emitter.instruction(&format!("test r9, {}", PREG_UNMATCHED_AS_NULL));       // should unmatched cells be Mixed null?
     emitter.instruction(&format!("jz {empty}"));                                // default unmatched cell is an empty string
     emitter.instruction("mov rax, 8");                                          // runtime value tag 8 = null
     emitter.instruction("xor edi, edi");                                        // null payload is zero
@@ -1044,7 +1044,7 @@ fn emit_stamp_indexed_array_mixed_x86_64(emitter: &mut Emitter, array_reg: &str)
     emitter.instruction(&format!(
         "mov r8, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(0x80ff)
-    )); // preserve heap magic, indexed kind, and COW flag
+    ));                                                                         // preserve heap magic, indexed kind, and COW flag
     emitter.instruction("and r10, r8");                                         // clear stale value_type bits
     emitter.instruction("or r10, 0x700");                                       // stamp runtime value_type 7 = boxed Mixed
     emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg));    // store boxed-Mixed indexed-array metadata
