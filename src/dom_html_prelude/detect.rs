@@ -224,6 +224,10 @@ fn expr_refs_dom(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_dom(key) || expr_refs_dom(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_dom),
         ExprKind::Match {
             subject,
             arms,
@@ -591,6 +595,21 @@ mod tests {
     fn detects_nested_reference() {
         assert!(program_uses_dom_html(&parse(
             "<?php function run() { return new DOMDocument(); }"
+        )));
+    }
+
+    /// Mixed arrays visit keys, values, and spread sources introduced on main.
+    #[test]
+    fn detects_dom_in_mixed_array_entries() {
+        for source in [
+            "<?php $items = [new DOMDocument() => 1, 2];",
+            "<?php $items = ['dom' => new DOMDocument(), 2];",
+            "<?php $items = ['other' => 1, ...[new DOMDocument()]];",
+        ] {
+            assert!(program_uses_dom_html(&parse(source)), "{source}");
+        }
+        assert!(!program_uses_dom_html(&parse(
+            "<?php $items = ['other' => 1, ...[2]];"
         )));
     }
 
