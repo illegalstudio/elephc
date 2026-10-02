@@ -492,6 +492,7 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_indexed ---");
     emitter.label_global("__rt_print_r_indexed");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "x0", "__rt_print_r_hash");
 
     // Frame (64 bytes): [0]arr [8]base [16]entry_indent [24]count [32]index
     //   [40]stamp [48]x29 [56]x30.
@@ -585,6 +586,7 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_indexed ---");
     emitter.label_global("__rt_print_r_indexed");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "rdi", "__rt_print_r_hash");
 
     // rbp-relative frame: [-8]arr [-16]base [-24]entry_indent [-32]count
     //   [-40]index [-48]stamp.

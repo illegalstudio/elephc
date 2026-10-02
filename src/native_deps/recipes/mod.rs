@@ -15,4 +15,5 @@ pub mod nghttp2;
 pub mod oniguruma;
 pub mod openssl;
 pub mod pcre2;
+pub mod php_src;
 pub mod zlib;

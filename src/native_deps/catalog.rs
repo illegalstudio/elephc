@@ -100,6 +100,12 @@ const PCRE2_ARCHIVES: &[&str] = &[
     "lib/libpcre2-8.a",
 ];
 const PCRE2_HEADERS: &[&str] = &["include/pcre2.h", "include/pcre2posix.h"];
+/// PHP headers a hosted extension compiles against. Generated from a real
+/// php-src tree, never hand-written: `materialize` requires the retained list to
+/// be exhaustive, so an omission is a build failure rather than a silent gap.
+const PHP_SRC_HEADERS: &[&str] = super::php_src_headers::RETAINED_HEADERS;
+/// The Zend engine archive hosted extensions link against (`recipes::php_src`).
+const PHP_SRC_ARCHIVES: &[&str] = &["lib/libelephc_zend.a"];
 const ZLIB_ARCHIVES: &[&str] = &["lib/libz.a"];
 const ZLIB_HEADERS: &[&str] = &["include/zlib.h", "include/zconf.h"];
 const OPENSSL_ARCHIVES: &[&str] = &["lib/libssl.a", "lib/libcrypto.a"];
@@ -342,11 +348,36 @@ const LIBXML2_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: LIBXML2_HEADERS,
     provides: &["libxml2"],
 }];
+/// The pinned php-src release hosted PHP extensions are built against: its
+/// headers, and the Zend engine's own data-structure code compiled into
+/// `libelephc_zend.a` (see `recipes::php_src`). Every header under `Zend/`,
+/// `main/`, `TSRM/` and `ext/` is retained, so an extension that includes, say,
+/// `ext/session` does not fail on a header nobody measured.
+const PHP_SRC_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "8.5.6",
+    source: SourceArchive {
+        https_url: "https://www.php.net/distributions/php-8.5.6.tar.gz",
+        sha256: "169aaa21c2834b38df8e39169f43bc5bea8d4059a816cfbc59be08fc2bae60cd",
+        exact_size: 24_237_113,
+        body_limit: 48 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: PHP_SRC_ARCHIVES,
+    retained_headers: PHP_SRC_HEADERS,
+    provides: &["php-src"],
+}];
 const PACKAGES: &[PackageSpec] = &[
     PackageSpec {
         name: "pcre2",
         default_version: "10.47",
         versions: PCRE2_VERSIONS,
+    },
+    PackageSpec {
+        name: "php-src",
+        default_version: "8.5.6",
+        versions: PHP_SRC_VERSIONS,
     },
     PackageSpec {
         name: "zlib",
@@ -505,7 +536,7 @@ mod tests {
     fn catalog_rejects_unknown_selection() {
         assert_eq!(
             package("libfoo").unwrap_err().to_string(),
-            "native catalog error: unknown native package 'libfoo'; known packages: pcre2, zlib, openssl, nghttp2, libssh2, curl, oniguruma, libxml2"
+            "native catalog error: unknown native package 'libfoo'; known packages: pcre2, php-src, zlib, openssl, nghttp2, libssh2, curl, oniguruma, libxml2"
         );
         assert!(version("pcre2", Some("10.46")).is_err());
     }

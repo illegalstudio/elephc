@@ -18,15 +18,16 @@ exhaustive *what*.
 elephc [OPTIONS] <source-file>
 elephc --version
 elephc native <COMMAND> [OPTIONS]
+elephc extension <COMMAND> [OPTIONS]
 elephc monitor <PROGRAM> [OPTIONS]
 ```
 
 Except for `--help` and `--version`, exactly one positional argument is required:
 the path to tagged `.php` or tagless `.lfc` source. The binary is written next
 to it, named after the source without its extension.
-Only an exact first argument of `native` or `monitor` selects a subcommand
-family. A source file literally named `native` or `monitor` must therefore be
-passed as `./native` or by another explicit path.
+Only an exact first argument of `native`, `extension` or `monitor` selects a
+subcommand family. A source file literally named `native`, `extension` or
+`monitor` must therefore be passed as `./native` or by another explicit path.
 
 ## Native dependency commands
 
@@ -50,6 +51,18 @@ only through the explicit `native prune` command.
 
 See [Native dependencies](native-dependencies.md) for project files, cache
 selection, toolchain overrides, and transactional behavior.
+
+## Hosted PHP extension commands
+
+| Command | Arguments and flags | Description |
+|---|---|---|
+| `extension add` | `<name>[@<version>] \| <vendor/package>[@<version>] \| <name> --path DIR` plus `[--target TARGET] [--offline] [--manifest-path FILE]` | Declare the `php-src` package if needed, fetch a PECL release or PIE package (or use a local tree), pin its SHA-256, build it, and record its surface. |
+| `extension install` | `[--target TARGET] [--offline] [--manifest-path FILE]` | Build every declared extension that is not built yet, verifying pinned digests. |
+| `extension remove` | `<name> [--manifest-path FILE]` | Remove a declaration; built artifacts stay in the shared cache. |
+| `extension list` | `[--target TARGET] [--manifest-path FILE]` | Print each declared extension, whether it is built, and its surface. |
+
+A program whose project declares extensions is linked against them
+automatically; see [Hosting PHP extensions](../beyond-php/php-extensions.md).
 
 ## Performance monitoring command
 

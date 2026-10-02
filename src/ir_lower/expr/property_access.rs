@@ -960,6 +960,11 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
         Op::DynamicPropGet.default_effects(),
         Some(expr.span),
     );
+    // A name computed for this read (`$o->{(string) $mixed}`) is a temporary the
+    // lookup only reads; the result borrows from the object, never from it.
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
+    }
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
 }
 

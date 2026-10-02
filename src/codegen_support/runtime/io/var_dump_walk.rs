@@ -1363,6 +1363,7 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_indexed ---");
     emitter.label_global("__rt_var_dump_indexed");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "x0", "__rt_var_dump_hash");
 
     // Frame (64 bytes): [0]arr [8]index [16]count [24]stamp [48]x29 [56]x30.
     emitter.instruction("sub sp, sp, #64");                                     // allocate the indexed-walk frame
@@ -1442,6 +1443,7 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_indexed ---");
     emitter.label_global("__rt_var_dump_indexed");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "rdi", "__rt_var_dump_hash");
 
     // rbp-relative frame: [-8]arr [-16]index [-24]count [-32]stamp.
     emitter.instruction("push rbp");                                            // save caller frame pointer

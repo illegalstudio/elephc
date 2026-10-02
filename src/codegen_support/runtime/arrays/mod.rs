@@ -493,6 +493,7 @@ pub use heap_debug_report::emit_heap_debug_report;
 pub use heap_debug_validate_free_list::emit_heap_debug_validate_free_list;
 /// Emit heap free list validation helper.
 pub use heap_kind::emit_heap_kind;
+pub(crate) use heap_kind::emit_tail_jump_if_hash;
 /// Emit heap kind check helper.
 pub use heap_free::emit_heap_free;
 /// Emit heap free helper.

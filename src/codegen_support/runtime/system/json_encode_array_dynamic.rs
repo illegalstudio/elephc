@@ -30,6 +30,7 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_dynamic ---");
     emitter.label_global("__rt_json_encode_array_dynamic");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "x0", "__rt_json_encode_assoc");
 
     emitter.instruction("sub sp, sp, #112");                                    // allocate stack space for array metadata and element scratch values
     emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
@@ -285,6 +286,7 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_dynamic ---");
     emitter.label_global("__rt_json_encode_array_dynamic");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "rax", "__rt_json_encode_assoc");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-array scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for array metadata and concat-buffer cursors

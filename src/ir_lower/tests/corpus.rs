@@ -127,6 +127,10 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         // OPcache introspection functions are provided by the pay-for-use OPcache
         // prelude, which the plain CLI-mode corpus lowering does not inject.
         "opcache_get_configuration",
+        // Hosted PHP extension functions are declared by the extension prelude
+        // from the project's built extensions, which corpus lowering does not
+        // resolve.
+        "extension",
     ];
     main_php
         .parent()

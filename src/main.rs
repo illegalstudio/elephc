@@ -53,6 +53,7 @@ mod parser;
 mod php_version;
 mod mysqli_prelude;
 mod pdo_prelude;
+mod php_ext;
 mod monitor;
 mod call_graph;
 mod php_profile;
@@ -118,6 +119,7 @@ fn main_inner() {
             pipeline::compile(config);
         }
         cli::Command::Native(command) => run_native(command),
+        cli::Command::PhpExt(command) => run_php_ext(command),
         cli::Command::Monitor(command) => std::process::exit(monitor::run(command)),
     }
 }
@@ -155,6 +157,24 @@ fn run_native(command: native_deps::NativeCommand) {
                 std::process::exit(output.exit_code);
             }
         }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Executes a parsed `elephc extension` command, printing its output or error.
+fn run_php_ext(command: php_ext::cli::PhpExtCommand) {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            eprintln!("failed to read current directory: {error}");
+            std::process::exit(1);
+        }
+    };
+    match php_ext::cli::run_php_ext_command(&command, &cwd) {
+        Ok(output) => print!("{output}"),
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(1);

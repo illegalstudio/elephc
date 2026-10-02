@@ -11,7 +11,7 @@ records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
 The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
-libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, and libxml2 2.15.3.
+libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, and php-src 8.5.6.
 Programs using `preg_*`, `RegexIterator`, or `RecursiveRegexIterator` require
 PCRE2 at final link time. Mbstring uses the same managed package only when a
 program selects its custom output MIME-pattern provider. The contract-owned
@@ -37,6 +37,11 @@ built with the platform's iconv (built into glibc; `-liconv` on Apple targets)
 and without zlib, ICU, Python, readline, or dynamic modules, so it has no
 catalog dependencies of its own. Its complete public header set is retained
 so later XML extensions can compile against the same artifact.
+php-src is what [hosted PHP extensions](../beyond-php/php-extensions.md) build
+and link against: every header under `Zend/`, `main/`, `TSRM/` and `ext/`, plus
+`libelephc_zend.a`, the Zend engine's own data-structure units compiled with
+the small host layer that stands in for the executor. `elephc extension add`
+declares it for you.
 
 `elephc native add oniguruma` installs the pinned Oniguruma library and the
 versioned mbregex provider, with the provider archive before `libonig.a` in link
