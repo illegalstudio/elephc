@@ -487,6 +487,9 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
 }
 
 /// Terminates with a branch after running active finally bodies from inner to outer.
+///
+/// A branch to the exit of a `switch` being lowered is deferred instead (see
+/// `record_switch_exit_edge`), so the exit can join the facts of every `break` that reaches it.
 pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
@@ -499,6 +502,9 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
         return;
     }
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
+    if record_switch_exit_edge(ctx, target) {
+        return;
+    }
     ctx.builder.terminate(Terminator::Br {
         target,
         args: Vec::new(),

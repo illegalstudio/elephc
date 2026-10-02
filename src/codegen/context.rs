@@ -506,6 +506,25 @@ impl<'a> FunctionContext<'a> {
         self.is_by_ref_param_slot(slot) || super::frame::local_slot_has_epilogue_owner(self, slot)
     }
 
+    /// Returns whether every path reaching the current `load_local` of `slot` stored `null` last.
+    ///
+    /// Only then may a pointer slot read through a `null` view materialize PHP's null: see
+    /// `null_local_proof` for why the load's own flow fact is not enough.
+    pub(super) fn current_load_reads_stored_null(&self, slot: LocalSlotId) -> bool {
+        let Some(load) = self.current_inst else {
+            return false;
+        };
+        let slot_may_hold_ref_cell = self.local_analysis.ever_stores_ref_cell_pointer(slot)
+            || self.local_analysis.has_dynamic_ref_cell_state(slot)
+            || self.is_by_ref_param_slot(slot);
+        super::null_local_proof::null_store_reaches_load(
+            self.function,
+            load,
+            slot,
+            slot_may_hold_ref_cell,
+        )
+    }
+
     /// Selects the EIR instruction whose CFG-local representation facts codegen must use.
     pub(super) fn begin_instruction(&mut self, inst: InstId) {
         self.current_inst = Some(inst);

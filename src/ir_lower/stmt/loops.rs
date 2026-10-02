@@ -17,6 +17,7 @@ pub(super) fn lower_while(
     loop_span: Span,
 ) {
     apply_loop_storage_contracts(ctx, loop_span, Some(condition.span));
+    apply_null_entry_boxing(ctx, Some(condition), body, None);
     let header = ctx.builder.create_named_block("while.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("while.body", Vec::new());
     let exit = ctx.builder.create_named_block("while.exit", Vec::new());
@@ -60,6 +61,7 @@ pub(super) fn lower_do_while(
     loop_span: Span,
 ) {
     apply_loop_storage_contracts(ctx, loop_span, Some(condition.span));
+    apply_null_entry_boxing(ctx, Some(condition), body, None);
     let body_block = ctx.builder.create_named_block("do.body", Vec::new());
     let cond_block = ctx.builder.create_named_block("do.cond", Vec::new());
     let exit = ctx.builder.create_named_block("do.exit", Vec::new());
@@ -118,6 +120,7 @@ pub(super) fn lower_for(
         .map(|c| c.span)
         .or_else(|| body.first().map(|s| s.span));
     apply_loop_storage_contracts(ctx, loop_span, contract_span);
+    apply_null_entry_boxing(ctx, condition, body, update);
 
     repr_fixpoint::lower_for_body_at_type_fixpoint(
         ctx,

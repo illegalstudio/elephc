@@ -155,18 +155,24 @@ pub(super) fn lower_logical_binary(
         else_args: Vec::new(),
     });
 
+    // Only one path evaluates the right operand, so an assignment inside it must not leak into
+    // the facts after the merge as though it always ran.
+    let mut join = crate::ir_lower::stmt::ExprBranchJoin::at_split(ctx);
+
     ctx.builder.position_at_end(rhs_block);
+    join.enter_arm(ctx);
     let rhs = lower_expr(ctx, right);
     let rhs = ctx.truthy_consuming(rhs, Some(right.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, rhs, expr.span);
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
     ctx.builder.position_at_end(const_block);
+    join.enter_arm(ctx);
     let const_value = emit_bool_literal(ctx, matches!(op, BinOp::Or), Some(expr.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, const_value, expr.span);
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
-    ctx.builder.position_at_end(merge);
+    join.finish(ctx, merge, expr.span);
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 

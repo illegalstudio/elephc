@@ -64,6 +64,7 @@ mod static_property_helpers;
 use statement_basics::*;
 use local_assignments::*;
 use conditionals::*;
+pub(crate) use conditionals::ExprBranchJoin;
 use loops::*;
 use array_write_core::*;
 use nested_array_writes::*;

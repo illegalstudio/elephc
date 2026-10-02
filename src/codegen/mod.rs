@@ -33,6 +33,7 @@ mod function_variants;
 mod literal_defaults;
 mod local_analysis;
 mod mbstring_configuration;
+mod null_local_proof;
 pub(crate) mod lower_inst;
 mod lower_term;
 mod runtime_callable_invoker;

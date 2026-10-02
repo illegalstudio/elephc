@@ -1194,7 +1194,7 @@ fn lower_array_internal_pointer(
     } else {
         crate::ir::RuntimeFnId::ArrayPtrValue
     };
-    Some(ctx.emit_value(
+    let result = ctx.emit_value(
         Op::RuntimeCall,
         vec![container.value, cursor],
         Some(Immediate::RuntimeCall(
@@ -1203,7 +1203,14 @@ fn lower_array_internal_pointer(
         PhpType::Mixed,
         effects_lookup::runtime_effects(),
         Some(expr.span),
-    ))
+    );
+    // A later store (an `if` join boxing the local, say) can widen the slot to Mixed after
+    // this load was lowered, which turns the concrete load into an owned unbox. Retire it
+    // provisionally; builder finalization prunes the release while the slot stays concrete.
+    if ctx.value_needs_release_after_use(container) {
+        crate::ir_lower::ownership::release_if_owned(ctx, container, Some(expr.span));
+    }
+    Some(result)
 }
 
 /// Emits the generic runtime class-name dispatch for `new $class(...)`.

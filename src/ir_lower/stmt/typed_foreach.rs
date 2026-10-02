@@ -129,6 +129,7 @@ pub(super) fn lower_foreach(
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
+    apply_null_entry_boxing(ctx, None, body, None);
     // A direct instance property has a dedicated fetch-for-write operation that separates and
     // republishes its container before iteration. Reifying it as a synthetic alias here bypasses
     // that operation and loses the property's copy-on-write boundary. Static properties and

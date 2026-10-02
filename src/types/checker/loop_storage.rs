@@ -481,6 +481,31 @@ fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
     }
 }
 
+/// Returns every local a loop may assign on some iteration: in its condition, body, or update.
+///
+/// EIR lowering uses it for the entry shape the checker's environment cannot see: a local whose
+/// LOWERING fact is `null` at the loop head (`$o = new C; $o = null; for (…) { … $o = new C; }`
+/// keeps the checker's `C` type) while the body assigns it. See
+/// `ir_lower::stmt::conditionals::apply_null_entry_boxing`.
+pub(crate) fn loop_assigned_local_names(
+    condition: Option<&Expr>,
+    body: &[Stmt],
+    update: Option<&Stmt>,
+) -> HashSet<String> {
+    let mut assignments = Vec::new();
+    if let Some(condition) = condition {
+        collect_value_assignments_from_expr(condition, &mut assignments);
+    }
+    collect_value_assignments(body, &mut assignments);
+    if let Some(update) = update {
+        collect_value_assignment_stmt(update, &mut assignments);
+    }
+    assignments
+        .into_iter()
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
 /// Collects local assignments from every statement in source traversal order.
 fn collect_value_assignments<'a>(
     statements: &'a [Stmt],
