@@ -62,6 +62,8 @@ mod read_result_cleanup;
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]
 mod inline;
+#[path = "optimizer/integer_range.rs"]
+mod integer_range;
 #[path = "optimizer/memory_model_propagation.rs"]
 mod memory_model_propagation;
 #[path = "optimizer/mem2reg.rs"]

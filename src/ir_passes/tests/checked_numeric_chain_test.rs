@@ -80,6 +80,33 @@ fn emit_release(builder: &mut Builder<'_>, value: ValueId) {
     );
 }
 
+/// Boolean normalization cannot be replaced by a chain returning an arbitrary integer.
+#[test]
+fn boolean_cast_is_not_a_numeric_chain_sink() {
+    let mut function = Function::new("bool_chain".to_string(), IrType::I64, PhpType::Bool);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let seven = builder.emit_const_i64(7);
+        let product = emit_checked(&mut builder, Op::ICheckedMul, seven, seven);
+        let sum = emit_mixed(&mut builder, MixedNumericOp::Add, product, seven);
+        let boolean = builder.emit(
+            Op::Cast, vec![sum], Some(Immediate::CastTarget(IrType::I64)),
+            IrType::I64, PhpType::Bool, Ownership::NonHeap,
+        ).expect("boolean cast");
+        emit_release(&mut builder, product);
+        emit_release(&mut builder, sum);
+        builder.terminate(Terminator::Return { value: Some(boolean) });
+    }
+    assert!(validate_function(&function).is_ok());
+    assert!(!CheckedNumericChain.is_applicable(&function));
+    assert!(!fuse(&mut function));
+    assert_eq!(function.instructions[3].op, Op::Cast);
+    assert!(validate_function(&function).is_ok());
+}
+
 /// Fuses the benchmark-shaped multiply/add region and removes both boxed values.
 #[test]
 fn fuses_multiply_add_chain_at_integer_cast() {

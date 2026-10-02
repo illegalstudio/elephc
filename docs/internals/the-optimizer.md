@@ -810,7 +810,58 @@ classification and integer-sink specialization for checked add/subtract/multiply
 Those passes make
 proven-stable local loads pure and replace transient boxed Mixed arithmetic with
 allocation-free `ichecked_*_to_int` operations only when every use observes an
-integer. After `CheckedIntSink`, `CheckedNumericChain` may fuse a left-associated
+integer. `IntegerRange` then propagates inclusive signed 64-bit intervals through
+constants, branch comparisons, block arguments, masks, shifts, and integer
+arithmetic. It recognizes constant-step loop-carried parameters in natural loops
+and combines their initial value, comparison bound, and update step to constrain
+induction variables on the loop body and back edge.
+
+Boolean casts normalize to `[0, 1]`; sharing the `I64` representation with integers
+does not make them identity conversions. Integer-sink specialization and numeric
+chain fusion require an actual PHP `int` cast, never a `bool` cast. Loop-invariant
+expression analysis uses an iterative postorder walk and caches unknown results
+as well as proven intervals, so deep expressions and shared unsupported graphs
+do not cause recursive stack growth or exponential reevaluation.
+
+At joins, a fact survives only if every reachable incoming state provides it;
+losing a shift bound invalidates any earlier narrow result interval. Unsupported
+comparison predicates leave both edges reachable. Induction summaries require
+all edges from each latch to the header to agree, including parallel conditional
+and switch edges. Boxed result narrowing is validated as one conservative batch
+instead of cloning and validating the whole function for each operation.
+Direct static-local assignments remain boxed because their emitter does not
+rebox scalar values for `Mixed` storage, unlike static-local initialization.
+The shared `boxed_narrowing` policy also checks the cast target and storage type:
+array casts still require a boxed cell, typed reference stores must retain their
+numeric coercions, and static-property, global, and extern stores remain boxed
+when the function-local pass cannot establish their complete storage contract.
+Scalar casts and representation-polymorphic observations can still narrow.
+`PhpRelCmp` retains boxed operands because its lowering requires runtime tags.
+Spaceship narrowing is restricted to numeric or runtime-tagged counterparts,
+preserving boxed boolean/null truthiness comparisons. Loose equality compares
+integer-tagged boxed payloads with scalar integers exactly, without rounding
+through double precision before or after specialization.
+With `--null-repr=sentinel`, boxed integer results also stay boxed when their
+proven interval can contain `PHP_INT_MAX - 1`: narrowing that payload would make
+scalar consumers reinterpret an ordinary integer as null. Constant folding applies
+the same payload restriction and retains null predicates over ambiguous scalar
+sentinel bits. Tagged mode keeps the full integer range available for narrowing;
+already-scalar checked integer sinks preserve their existing representation.
+Constant folding uses the same consumer policy for both integer and floating-point
+results, so a later constant fold cannot bypass a range pass's representation guard.
+Block arguments and other terminator uses keep their declared representation;
+direct returns can narrow only to the function's exact PHP scalar return type.
+
+Checked add, subtract, and multiply instructions become ordinary scalar EIR only
+when the complete operand interval proves that every possible result remains in
+the signed 64-bit range. The proof uses wider intermediate arithmetic and fails
+closed for unknown values, unsupported CFG shapes, exception handlers, invalid
+shifts, or incomplete boxed-value use shapes. Every unproven operation keeps its
+checked PHP overflow-to-float path. This pass runs after `CheckedIntSink`, so it
+can also remove proven-safe checked integer-sink operations without weakening the
+original boxed semantics.
+
+After `IntegerRange`, `CheckedNumericChain` may fuse a left-associated
 add/subtract/multiply chain whose `Mixed` intermediates are used only by the next
 operation, the final integer cast, and removable `Release` instructions into
 `ICheckedNumericChainToInt`; its in-range path stays in i64 registers, while the

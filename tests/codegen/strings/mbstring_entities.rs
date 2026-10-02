@@ -115,18 +115,27 @@ echo mb_decode_numericentity("&#66;", $map, $encoding), "\n";
 /// Balances map snapshots and copied elements across repeated successful and rejected calls.
 #[test]
 fn test_mbstring_entities_map_ownership() {
-    for eval in [false, true] {
-        let source = |count| {
-            let repeated = "mb_encode_numericentity($text, $valid); try { mb_decode_numericentity($text, $invalid); } catch (ValueError) {}\n".repeat(count);
-            program(&format!("$text = str_repeat(\"A\", 64); $valid = [0, 100, 0, 255]; $invalid = [0, 100, [], 255]; {repeated}"), eval, false)
-        };
-        let mut residual = Vec::new();
-        for count in [1, 24] {
-            let output = compile_and_run_with_gc_stats(&source(count));
-            assert!(output.success, "{}", output.stderr);
-            let (allocated, freed) = parse_gc_stats(&output.stderr);
-            residual.push(allocated as i64 - freed as i64);
-        }
-        assert_eq!(residual[0], residual[1], "entity map ownership grew; eval={eval}");
+    check_mbstring_entities_map_ownership(false);
+}
+
+/// Checks eval entity map ownership independently of the native fixture's timeout.
+#[test]
+fn test_mbstring_entities_map_ownership_eval() {
+    check_mbstring_entities_map_ownership(true);
+}
+
+/// Compares successful and rejected map snapshot residuals at both repetition counts.
+fn check_mbstring_entities_map_ownership(eval: bool) {
+    let source = |count| {
+        let repeated = "mb_encode_numericentity($text, $valid); try { mb_decode_numericentity($text, $invalid); } catch (ValueError) {}\n".repeat(count);
+        program(&format!("$text = str_repeat(\"A\", 64); $valid = [0, 100, 0, 255]; $invalid = [0, 100, [], 255]; {repeated}"), eval, false)
+    };
+    let mut residual = Vec::new();
+    for count in [1, 24] {
+        let output = compile_and_run_with_gc_stats(&source(count));
+        assert!(output.success, "{}", output.stderr);
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        residual.push(allocated as i64 - freed as i64);
     }
+    assert_eq!(residual[0], residual[1], "entity map ownership grew; eval={eval}");
 }

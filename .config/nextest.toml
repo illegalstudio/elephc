@@ -90,6 +90,40 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'test(mbstring_regex) or test(mb_ereg_) or test(mbstring_catalog_forced_runtime_callable)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# These ownership probes still compile two dynamic-eval programs per test,
+# comparing allocation residuals at low and high repetition counts. The scalar
+# eval probe took 79s locally with warm bridges on Linux x86_64. Native variants
+# keep the 60s cap, and the existing ARM64 family budget remains authoritative.
+[[profile.default.overrides]]
+platform = 'cfg(all(target_os = "linux", target_arch = "x86_64"))'
+filter = '''
+binary(codegen_tests) and (
+    test(=codegen::runtime_gc::mbstring::test_mbstring_scalar_result_ownership_eval)
+    or test(=codegen::runtime_gc::mbstring::test_mbstring_check_array_argument_ownership_eval)
+    or test(=codegen::strings::mbstring_detect_order::test_mbstring_detect_order_entry_ownership_eval)
+    or test(=codegen::strings::mbstring_mime::test_mbstring_mime_encode_named_error_ownership_eval)
+    or test(=codegen::strings::mbstring_info::test_mbstring_info_result_ownership_eval)
+    or test(=codegen::strings::mbstring_entities::test_mbstring_entities_map_ownership_eval)
+    or test(=codegen::runtime_gc::mbstring::test_mbstring_eval_reference_parameter_ownership)
+)
+'''
+slow-timeout = { period = "120s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+platform = 'cfg(all(target_os = "linux", target_arch = "x86_64"))'
+filter = '''
+binary(codegen_tests) and (
+    test(=codegen::runtime_gc::mbstring::test_mbstring_scalar_result_ownership_eval)
+    or test(=codegen::runtime_gc::mbstring::test_mbstring_check_array_argument_ownership_eval)
+    or test(=codegen::strings::mbstring_detect_order::test_mbstring_detect_order_entry_ownership_eval)
+    or test(=codegen::strings::mbstring_mime::test_mbstring_mime_encode_named_error_ownership_eval)
+    or test(=codegen::strings::mbstring_info::test_mbstring_info_result_ownership_eval)
+    or test(=codegen::strings::mbstring_entities::test_mbstring_entities_map_ownership_eval)
+    or test(=codegen::runtime_gc::mbstring::test_mbstring_eval_reference_parameter_ownership)
+)
+'''
+slow-timeout = { period = "120s", terminate-after = 1 }
+
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.
 # It legitimately runs ~65-70s, just over the global 60s cap, so it needs a

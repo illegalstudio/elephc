@@ -13,6 +13,7 @@
 //!   builds.
 
 mod allocation;
+mod boxed_narrowing;
 mod branch_simplify;
 mod by_ref_alias;
 mod checked_int_sink;
@@ -27,6 +28,7 @@ mod dominance;
 mod driver;
 mod identity_arith;
 mod inline;
+mod integer_range;
 mod immutable_local_loads;
 mod intervals;
 mod licm;

@@ -125,7 +125,8 @@ fn terminator_used_values(function: &Function) -> HashSet<ValueId> {
 fn has_potential_integer_sink(function: &Function) -> bool {
     function.instructions.iter().any(|user| {
         let accepts_integer = match user.op {
-            Op::Cast => matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))),
+            Op::Cast => user.result_php_type == PhpType::Int
+                && matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))),
             Op::StoreLocal | Op::StoreStaticLocal | Op::InitStaticLocal => {
                 local_store_is_integer(function, user.immediate.as_ref())
             }
@@ -189,7 +190,9 @@ fn analyze_sink_graph(
             return false;
         };
         match user.op {
-            Op::Cast if matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))) => {
+            Op::Cast if user.result_php_type == PhpType::Int
+                && matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))) =>
+            {
                 let Some(cast_result) = user.result else {
                     return false;
                 };

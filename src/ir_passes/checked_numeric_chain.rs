@@ -35,6 +35,7 @@ impl IrPass for CheckedNumericChain {
     fn is_applicable(&self, function: &Function) -> bool {
         function.instructions.iter().any(|inst| {
             inst.op == Op::Cast
+                && inst.result_php_type == PhpType::Int
                 && matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64)))
                 && inst.operands.first().is_some_and(|value| {
                     defining_instruction(function, *value)
@@ -53,6 +54,7 @@ impl IrPass for CheckedNumericChain {
             .enumerate()
             .filter_map(|(raw, inst)| {
                 (inst.op == Op::Cast
+                    && inst.result_php_type == PhpType::Int
                     && matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64))))
                 .then_some(InstId::from_raw(raw as u32))
             })

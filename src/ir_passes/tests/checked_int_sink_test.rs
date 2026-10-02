@@ -104,6 +104,34 @@ fn specializes_all_checked_integer_opcodes_at_cast_sinks() {
     }
 }
 
+/// Boolean casts share I64 storage but are normalization operations, not integer sinks.
+#[test]
+fn boolean_cast_is_not_an_integer_sink() {
+    for op in [Op::ICheckedAdd, Op::ICheckedSub, Op::ICheckedMul] {
+        let mut function = Function::new("bool_sink".to_string(), IrType::I64, PhpType::Bool);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let lhs = builder.emit_const_i64(7);
+            let rhs = builder.emit_const_i64(2);
+            let checked = emit_checked(&mut builder, op, lhs, rhs);
+            let boolean = builder.emit(
+                Op::Cast, vec![checked], Some(Immediate::CastTarget(IrType::I64)),
+                IrType::I64, PhpType::Bool, Ownership::NonHeap,
+            ).expect("boolean cast");
+            builder.terminate(Terminator::Return { value: Some(boolean) });
+        }
+        assert!(validate_function(&function).is_ok());
+        assert!(!CheckedIntSink.is_applicable(&function));
+        assert!(!specialize(&mut function));
+        assert_eq!(function.instructions[2].op, op);
+        assert_eq!(function.instructions[3].op, Op::Cast);
+        assert!(validate_function(&function).is_ok());
+    }
+}
+
 /// Acquire/release scaffolding around a checked value is removed before an integer store.
 #[test]
 fn specializes_typed_local_store_through_acquire_release() {

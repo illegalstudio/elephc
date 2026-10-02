@@ -66,6 +66,7 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassOrigin {
     ConstFold,
+    IntegerRange,
     Licm,
 }
 
@@ -74,6 +75,7 @@ impl PassOrigin {
     pub fn name(self) -> &'static str {
         match self {
             PassOrigin::ConstFold => "const_fold",
+            PassOrigin::IntegerRange => "integer_range",
             PassOrigin::Licm => "licm",
         }
     }

@@ -157,7 +157,8 @@ PHP source (.php)
 │             │  small-function inliner interleaved with the per-function
 │             │  pass driver (identity folding, peephole rewrites, scalar
 │             │  local promotion, immutable local classification, checked-
-│             │  integer sinking, boxed numeric-chain fusion, constant folding,
+│             │  integer sinking, integer range analysis (IntegerRange),
+│             │  boxed numeric-chain fusion, constant folding,
 │             │  common-subexpression elimination, loop-invariant code motion,
 │             │  dead-instruction elimination, dead-store elimination, branch
 │             │  simplification) plus dominance and loop analysis and linear-

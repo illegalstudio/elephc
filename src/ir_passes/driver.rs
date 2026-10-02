@@ -33,6 +33,7 @@ use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
 use super::identity_arith::IdentityArith;
 use super::immutable_local_loads::ImmutableLocalLoads;
+use super::integer_range::IntegerRange;
 use super::licm::Licm;
 use super::mem2reg::Mem2Reg;
 use super::peephole::Peephole;
@@ -75,7 +76,7 @@ pub trait IrPass {
 /// Builds the ordered set of transformation passes run on every function:
 /// identity arithmetic folding, peephole rewrites, scalar local promotion,
 /// immutable-local discovery, checked-arithmetic int-sink specialization,
-/// boxed numeric-chain fusion, constant folding, common-subexpression
+/// integer range specialization, boxed numeric-chain fusion, constant folding, common-subexpression
 /// elimination, loop-invariant code motion, dead instruction elimination,
 /// dead store elimination, and branch simplification.
 /// The cross-function small-function inliner is not a member here; it runs as a
@@ -83,6 +84,8 @@ pub trait IrPass {
 ///
 /// Scalar promotion runs after peephole forwarding and before the issue-623
 /// passes, making loop-carried definitions explicit as block parameters.
+/// Integer range analysis then consumes those block parameters and comparison
+/// edges, rewriting only checked operations whose complete interval fits in I64.
 /// Constant folding runs after peephole and the two issue-623 passes: immutable
 /// scalar local loads become pure operands, and checked operations observed only
 /// through integer sinks become allocation-free `IChecked*ToInt` computations or fused
@@ -99,6 +102,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(Mem2Reg),
         Box::new(ImmutableLocalLoads),
         Box::new(CheckedIntSink),
+        Box::new(IntegerRange),
         Box::new(CheckedNumericChain),
         Box::new(ConstFold),
         Box::new(Cse),
