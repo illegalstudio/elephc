@@ -2,7 +2,7 @@
 title: "xml_parse_into_struct() - internals"
 description: "Compiler internals for xml_parse_into_struct(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1011
+  order: 1012
 ---
 
 ## `xml_parse_into_struct()` - internals

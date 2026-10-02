@@ -699,7 +699,7 @@ pub(super) fn lower_implode_x86_64(
 }
 
 /// Loads or normalizes an array into the dense payload required by the join renderers.
-fn load_implode_array(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+pub(super) fn load_implode_array(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
     ctx.load_value_to_result(array)?;
     match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => emit_boxed_implode_array_source(ctx),
