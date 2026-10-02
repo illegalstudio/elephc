@@ -294,6 +294,7 @@ routing and web transport verification remain open.
 | `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` always, `"` under `ENT_COMPAT`, `'` under `ENT_QUOTES`; `ENT_NOQUOTES` leaves both quotes literal. The single quote is `&#039;` under `ENT_HTML401` and `&apos;` under `ENT_HTML5`, `ENT_XHTML` or `ENT_XML1`. The `ENT_*` flag constants are defined with PHP's values; `$encoding` is accepted but not applied |
 | `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
 | `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
+| `strip_tags()` | `strip_tags(string $string, array\|string\|null $allowed_tags = null): string` | Strip HTML and PHP tags. Comments and PHP tags are always removed. `$allowed_tags` is a string like `"<p><a>"` or an array of tag names (`["p", "a"]`). `<` followed by whitespace is left as literal text (`"1 < 2"`). |
 | `parse_url()` | `parse_url(string $url, int $component = -1): array\|string\|int\|null\|false` | Parse present URL components without decoding them; `PHP_URL_*` selects one component |
 | `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
 | `urldecode()` | `urldecode($str): string` | URL-decode |

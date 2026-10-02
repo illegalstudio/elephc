@@ -2,7 +2,7 @@
 title: "session_cache_limiter()"
 description: "Reads or sets the cache limiter that controls session response caching."
 sidebar:
-  order: 982
+  order: 983
 ---
 
 ## session_cache_limiter()
