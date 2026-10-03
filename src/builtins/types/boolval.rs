@@ -38,9 +38,10 @@ fn effects(_input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
     Op::IsTruthy.default_effects()
 }
 
-/// Preserves the concrete source representations accepted by runtime callable wrappers.
+/// Accepts concrete truthiness operands and the boxed ABI used by runtime-selected callables.
+/// Unknown descriptor arguments retain the contract's Mixed parameter rather than a scalar ABI.
 fn callable_accepts(source: Option<&PhpType>) -> bool {
-    source.is_some_and(|source| {
+    source.is_none_or(|source| {
         matches!(
             source.codegen_repr(),
             PhpType::AssocArray { .. }
@@ -49,8 +50,11 @@ fn callable_accepts(source: Option<&PhpType>) -> bool {
                 | PhpType::Float
                 | PhpType::Int
                 | PhpType::Iterable
+                | PhpType::Mixed
                 | PhpType::Never
+                | PhpType::Object(_)
                 | PhpType::Str
+                | PhpType::TaggedScalar
                 | PhpType::Void
         )
     })

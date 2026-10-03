@@ -308,9 +308,8 @@ echo probeOwnedInstanceof("InstOwnedBase") ? "1" : "0";
     }
 }
 
-/// A throwing target cannot strand a fresh object or a detached post-eval string.
-#[test]
-fn instanceof_value_owners_are_published_before_throwing_target_calls_on_all_targets() {
+/// Checks throwing-target owner leases and assembly within one target's test budget.
+fn check_instanceof_value_owners_before_throwing_target(target: &str) {
     let source = r#"<?php
 class InstThrowValue {}
 function throwingInstTarget(): string { throw new RuntimeException("target"); }
@@ -326,34 +325,62 @@ function detachedInstValue(string $source): bool {
 try { freshInstValue(); } catch (RuntimeException $error) {}
 try { detachedInstValue('return null; // ' . $argc); } catch (RuntimeException $error) {}
 "#;
-    for target in TARGETS {
-        let module = lower_for(source, target);
-        for name in ["freshInstValue", "detachedInstValue"] {
-            let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let predicate = function.instructions.iter().position(|inst| inst.op == Op::InstanceOfDynamic).unwrap();
-            let value = function.instructions[predicate].operands[0];
-            let source_value = original_borrow(function, value);
-            let producer = function.instructions.iter().find(|inst| inst.result == Some(source_value)).unwrap();
-            if name == "detachedInstValue" {
-                assert_eq!(producer.op, Op::LoadLocal, "{target}: detached source is a local read");
-                assert_eq!(producer.result_php_type, PhpType::Str, "{target}: detached string representation");
-                let Some(Immediate::LocalSlot(slot)) = producer.immediate else { panic!("local read slot"); };
-                assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), PhpType::Mixed);
-            }
-            let store = function.instructions.iter().find(|inst| {
-                inst.op == Op::StoreLocal && inst.operands == [value]
-            }).expect("predicate owns a rooted value lease");
-            let push = function.instructions.iter().position(|inst| {
-                inst.op == Op::PushCallOperandOwner && inst.immediate == store.immediate
-            }).unwrap();
-            let target_call = function.instructions[..predicate].iter().rposition(|inst| inst.op == Op::Call).unwrap();
-            let pop = function.instructions.iter().position(|inst| {
-                inst.op == Op::PopCallOperandOwner && inst.immediate == store.immediate
-            }).unwrap();
-            assert!(push < target_call && target_call < predicate && predicate < pop,
-                "{target}: {name} keeps its operand rooted throughout the throwing target call");
+    let module = lower_for(source, target);
+    for name in ["freshInstValue", "detachedInstValue"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let predicate = function.instructions.iter().position(|inst| inst.op == Op::InstanceOfDynamic).unwrap();
+        let value = function.instructions[predicate].operands[0];
+        let source_value = original_borrow(function, value);
+        let producer = function.instructions.iter().find(|inst| inst.result == Some(source_value)).unwrap();
+        if name == "detachedInstValue" {
+            assert_eq!(producer.op, Op::LoadLocal, "{target}: detached source is a local read");
+            assert_eq!(producer.result_php_type, PhpType::Str, "{target}: detached string representation");
+            let Some(Immediate::LocalSlot(slot)) = producer.immediate else { panic!("local read slot"); };
+            assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), PhpType::Mixed);
         }
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        let store = function.instructions.iter().find(|inst| {
+            inst.op == Op::StoreLocal && inst.operands == [value]
+        }).expect("predicate owns a rooted value lease");
+        let push = function.instructions.iter().position(|inst| {
+            inst.op == Op::PushCallOperandOwner && inst.immediate == store.immediate
+        }).unwrap();
+        let target_call = function.instructions[..predicate].iter().rposition(|inst| inst.op == Op::Call).unwrap();
+        let pop = function.instructions.iter().position(|inst| {
+            inst.op == Op::PopCallOperandOwner && inst.immediate == store.immediate
+        }).unwrap();
+        assert!(push < target_call && target_call < predicate && predicate < pop,
+            "{target}: {name} keeps its operand rooted throughout the throwing target call");
     }
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+/// macOS preserves fresh-object and detached-string owners across a throwing target call.
+#[test]
+fn instanceof_value_owners_before_throwing_target_macos() {
+    check_instanceof_value_owners_before_throwing_target("macos-aarch64");
+}
+
+/// iOS devices preserve both value owners across a throwing target call.
+#[test]
+fn instanceof_value_owners_before_throwing_target_ios_device() {
+    check_instanceof_value_owners_before_throwing_target("ios-arm64");
+}
+
+/// iOS Simulator preserves both value owners across a throwing target call.
+#[test]
+fn instanceof_value_owners_before_throwing_target_ios_simulator() {
+    check_instanceof_value_owners_before_throwing_target("ios-sim-arm64");
+}
+
+/// Linux ARM64 preserves both value owners across a throwing target call.
+#[test]
+fn instanceof_value_owners_before_throwing_target_linux_arm64() {
+    check_instanceof_value_owners_before_throwing_target("linux-aarch64");
+}
+
+/// Linux x86_64 preserves both value owners across a throwing target call.
+#[test]
+fn instanceof_value_owners_before_throwing_target_linux_x86_64() {
+    check_instanceof_value_owners_before_throwing_target("linux-x86_64");
 }

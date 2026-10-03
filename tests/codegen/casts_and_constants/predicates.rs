@@ -9,6 +9,71 @@
 
 use super::*;
 
+/// Object truthiness through direct, opaque string and first-class callable surfaces.
+const BOOLVAL_OBJECT_CALLABLE_SOURCE: &str = r#"<?php
+class TruthyCallableObject {}
+function chooseBoolFunction(string $name): string { return $name; }
+$callback = chooseBoolFunction("BoOlVaL");
+$object = new TruthyCallableObject();
+echo boolval($object) ? "1" : "0";
+echo $callback($object) ? "1" : "0";
+echo call_user_func($callback, $object) ? "1" : "0";
+echo call_user_func_array($callback, [$object]) ? "1" : "0";
+$firstClass = boolval(...);
+echo $firstClass($object) ? "1" : "0";
+unset($firstClass, $object, $callback);
+"#;
+
+/// Callable boolval wrappers accept objects with the same truthiness as direct calls.
+#[test]
+fn test_boolval_object_callable_surfaces() {
+    assert_eq!(compile_and_run(BOOLVAL_OBJECT_CALLABLE_SOURCE), "11111");
+}
+
+/// Object callable conversion leaves no source or descriptor ownership behind.
+#[test]
+fn test_boolval_object_callable_ownership() {
+    let out = compile_and_run_with_heap_debug(BOOLVAL_OBJECT_CALLABLE_SOURCE);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "11111", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Capturing closures remain truthy through runtime-selected boolval calls without leaks.
+#[test]
+fn test_boolval_closure_callable_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function chooseClosureBoolFunction(string $name): string { return $name; }
+$callback = chooseClosureBoolFunction("BoOlVaL");
+$captured = str_repeat("closure", 4);
+$closure = function () use ($captured): string { return $captured; };
+echo $callback($closure) ? "1" : "0";
+echo call_user_func($callback, $closure) ? "1" : "0";
+echo call_user_func_array($callback, [$closure]) ? "1" : "0";
+unset($closure, $captured, $callback);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "111", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Runtime-selected boolval retains false and true scalar/container conversions.
+#[test]
+fn test_boolval_runtime_callable_truthiness_controls() {
+    let out = compile_and_run(
+        r#"<?php
+function chooseBoolControl(string $name): string { return $name; }
+$callback = chooseBoolControl("boolval");
+foreach ([0, 1, "", "0", "ok", null, false, true, [], [1]] as $value) {
+    echo $callback($value) ? "1" : "0";
+}
+"#,
+    );
+    assert_eq!(out, "0100100101");
+}
+
 /// Compiles `boolval(42)` and verifies it outputs "1" (non-zero truthy value).
 #[test]
 fn test_boolval_true() {
