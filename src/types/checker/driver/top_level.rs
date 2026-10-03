@@ -28,6 +28,7 @@ impl Checker {
         &mut self,
         program: &Program,
     ) -> (TypeEnv, Vec<Vec<CompileError>>) {
+        self.constant_alias_call_sites = crate::autoload::constant_alias_call_sites(program);
         let saved_eval_barrier_active = self.eval_barrier_active;
         self.eval_barrier_active = false;
         let saved_null_probe_scope = self.null_probe_scope_is_top_level;

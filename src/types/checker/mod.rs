@@ -428,6 +428,10 @@ pub(crate) struct Checker {
     /// immutable AST, and it is scoped by the save/restore around the one place that sets it
     /// (`check_stmt`'s `ExprStmt` arm), so it can never name a stale node.
     pub statement_position_expr: Option<usize>,
+    /// AST addresses of top-level positional constant-name alias calls in the checked program.
+    /// Uses collector eligibility and exact statement identity, not ambiguous cross-file spans.
+    /// The AST is immutably borrowed throughout checking, including both top-level passes.
+    pub constant_alias_call_sites: HashSet<usize>,
     /// Whether the body being checked calls `eval()` ANYWHERE, above or below the statement being
     /// checked. Recorded by `mixed_storage_scan::run_mixed_storage_scan` before the body's first
     /// statement is checked, and consulted by [`Checker::local_binding_is_killable`].
