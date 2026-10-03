@@ -18,8 +18,39 @@ pub(super) fn lower_property_array_push(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    // A value that may reassign the property is lowered, and pinned, before the property is
+    // fetched, so the append lands in the array the property holds afterwards (see
+    // `element_write_order`).
+    let mut slots = Vec::new();
+    let prelowered = super::element_write_order::property_element_operands_may_write_property(
+        property,
+        &[value],
+    )
+    .then(|| {
+        let lowered = lower_expr(ctx, value);
+        let (pinned, slot) = crate::ir_lower::expr::root_call_operand(ctx, lowered, span);
+        slots.extend(slot);
+        pinned
+    });
+    lower_property_array_push_into(ctx, object, property, value, span, prelowered);
+    for slot in slots.into_iter().rev() {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+    }
+}
+
+/// Lowers `$object->prop[] = value` into an already lowered receiver object. `prelowered` is the
+/// value when the caller lowered it before the property fetch.
+fn lower_property_array_push_into(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    value: &Expr,
+    span: Span,
+    prelowered: Option<LoweredValue>,
+) {
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
-        lower_php_array_property_write(ctx, object, property, None, value, span, false);
+        let prelowered = prelowered.map(|value| (None, value));
+        lower_php_array_property_write(ctx, object, property, None, value, span, false, prelowered);
         return;
     }
     if let Some(property_ty) =
@@ -36,7 +67,7 @@ pub(super) fn lower_property_array_push(
         );
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-        let value = lower_expr(ctx, value);
+        let value = prelowered.unwrap_or_else(|| lower_expr(ctx, value));
         ctx.emit_void(
             Op::ArrayPush,
             vec![property_value.value, value.value],
@@ -61,7 +92,7 @@ pub(super) fn lower_property_array_push(
         return;
     }
 
-    let value = lower_expr(ctx, value);
+    let value = prelowered.unwrap_or_else(|| lower_expr(ctx, value));
     let data = ctx.intern_string(property);
     ctx.emit_void(
         Op::RuntimeCall,
@@ -132,7 +163,45 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
     key_already_diagnosed: bool,
 ) {
     let object = lower_expr(ctx, object);
+    // A key or value that may reassign the property is lowered, and pinned, before the property
+    // is fetched, so the write lands in the array the property holds afterwards (see
+    // `element_write_order`).
+    let mut slots = Vec::new();
+    let prelowered = super::element_write_order::property_element_operands_may_write_property(
+        property,
+        &[index, value],
+    )
+    .then(|| {
+        let (index, value, pinned) =
+            crate::ir_lower::stmt::array_write_core::lower_pinned_write_key_and_value(
+                ctx, index, value, span,
+            );
+        slots = pinned;
+        (index, value)
+    });
+    lower_property_array_assign_into(
+        ctx, object, property, index, value, span, key_already_diagnosed, prelowered,
+    );
+    for slot in slots.into_iter().rev() {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+    }
+}
+
+/// Lowers `$object->prop[index] = value` into an already lowered receiver object. `prelowered`
+/// is the key and value when the caller lowered them before the property fetch.
+#[allow(clippy::too_many_arguments)]
+fn lower_property_array_assign_into(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+    prelowered: Option<(LoweredValue, LoweredValue)>,
+) {
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
+        let prelowered = prelowered.map(|(index, value)| (Some(index), value));
         lower_php_array_property_write(
             ctx,
             object,
@@ -141,6 +210,7 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
             value,
             span,
             key_already_diagnosed,
+            prelowered,
         );
         return;
     }
@@ -162,8 +232,9 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
         // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+        let (index, value) = prelowered.unwrap_or_else(|| {
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value)
+        });
         let index =
             coerce_array_key_to_int_at_span(ctx, index, Some(span), key_already_diagnosed);
         let value = coerce_indexed_array_set_value(ctx, &property_ty, value, Some(span));
@@ -208,8 +279,9 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
         // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+        let (index, value) = prelowered.unwrap_or_else(|| {
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value)
+        });
         ctx.emit_void(
             Op::HashSet,
             vec![property_value.value, index.value, value.value],
@@ -250,8 +322,9 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
         // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+        let (index, value) = prelowered.unwrap_or_else(|| {
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value)
+        });
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, index.value, value.value],
@@ -266,8 +339,9 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
     // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
     // rule; sharing the helper is what keeps the two from answering differently for
     // the same source line.
-    let (index, value) =
-        crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+    let (index, value) = prelowered.unwrap_or_else(|| {
+        crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value)
+    });
     let data = ctx.intern_string(property);
     ctx.emit_void(
         Op::RuntimeCall,
@@ -281,6 +355,9 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
 /// Separates a declared PHP array property before mutating its packed-or-hash boxed payload.
 /// `PropGetForWrite` publishes the detached cell and returns a borrow owned by the property.
 /// `key_already_diagnosed` lets the boxed writer rebuild a float key its read already reported.
+/// `prelowered` carries a key and value the caller lowered BEFORE the property fetch, because
+/// they may reassign the property (see `element_write_order`).
+#[allow(clippy::too_many_arguments)]
 fn lower_php_array_property_write(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
@@ -289,6 +366,7 @@ fn lower_php_array_property_write(
     value: &Expr,
     span: Span,
     key_already_diagnosed: bool,
+    prelowered: Option<(Option<LoweredValue>, LoweredValue)>,
 ) {
     let data = ctx.intern_string(property);
     let array = ctx.emit_value(
@@ -301,7 +379,10 @@ fn lower_php_array_property_write(
     );
     ctx.builder.set_value_ownership(array.value, Ownership::Borrowed);
     let value = if let Some(index) = index {
-        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+        let (index, value) = match prelowered {
+            Some((Some(index), value)) => (index, value),
+            _ => array_write_core::lower_write_key_and_value(ctx, index, value),
+        };
         ctx.emit_void(
             Op::RuntimeCall,
             vec![array.value, index.value, value.value],
@@ -312,7 +393,10 @@ fn lower_php_array_property_write(
         release_persisted_string_operand(ctx, index, span);
         value
     } else {
-        let value = lower_expr(ctx, value);
+        let value = match prelowered {
+            Some((_, value)) => value,
+            None => lower_expr(ctx, value),
+        };
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![array.value, value.value],

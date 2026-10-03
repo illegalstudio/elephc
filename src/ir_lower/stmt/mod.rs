@@ -44,6 +44,7 @@ mod local_assignments;
 mod conditionals;
 mod loops;
 mod array_write_core;
+mod element_write_order;
 mod nested_array_writes;
 mod array_write_storage;
 mod typed_foreach;
