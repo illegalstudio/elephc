@@ -459,6 +459,13 @@ pub(super) fn lower_dynamic_property_assign(
     crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
         ctx, &PhpType::Mixed, value, span,
     );
+    // Unpinning only unregisters the records, so the normal path still owes the receiver and
+    // the name their releases: `$h->next->{$k} = 9` read `$h->next` out of its slot, and a
+    // computed name (`"p" . $i`) is a fresh string. The store borrows both (#1643).
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
+    }
+    crate::ir_lower::stmt::release_owning_write_receiver(ctx, object, span);
 }
 
 /// Returns whether a runtime-name write needs a boxed value for a reachable fixed slot.

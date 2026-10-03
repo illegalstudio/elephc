@@ -464,6 +464,14 @@ fn emit_runtime_name_stacked_write_arm(
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
                 emit_property_store(ctx, value, slot, base_reg)?;
+                if matches!(
+                    slot.php_type.codegen_repr(),
+                    PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+                ) {
+                    // The runtime-name write boxes its value; a scalar or string slot copies the
+                    // payload out of that cell, as `lower_mixed_named_prop_set` retires (#1643).
+                    super::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
+                }
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 abi::emit_jump(ctx.emitter, done_label);
                 Ok(())
@@ -1209,6 +1217,14 @@ pub(super) fn lower_runtime_mixed_prop_set(
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
                 emit_property_store(ctx, value, slot, base_reg)?;
+                if matches!(
+                    slot.php_type.codegen_repr(),
+                    PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+                ) {
+                    // A scalar or string slot copies the payload out of the runtime-shaped box,
+                    // as `lower_mixed_named_prop_set` retires (#1643).
+                    super::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
+                }
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 abi::emit_jump(ctx.emitter, &done_label);
             }

@@ -90,7 +90,7 @@ pub(crate) use instance_property_writes::{
 pub(super) use typed_foreach::coerce_typed_assign_value;
 pub(crate) use typed_foreach::promote_by_ref_foreach_source;
 pub(super) use instance_property_writes::contextualize_property_array_value;
-pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;
+pub(super) use property_array_writes::{release_owning_write_receiver, release_property_assignment_source_after_retaining_store};
 pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };

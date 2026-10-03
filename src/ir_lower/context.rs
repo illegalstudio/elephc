@@ -763,6 +763,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         result
     }
 
+    /// Returns whether a write's RECEIVER is an owning temporary, even inside a write that
+    /// borrows its value operand.
+    ///
+    /// [`Self::with_borrowed_write_operand`] covers the value the write stores, which the
+    /// surrounding expression still owns. The receiver is different: the write lowered it
+    /// itself (`$h->next` read out of its slot for `$h->next->m ??= 5`), so nothing else will
+    /// release it.
+    pub(crate) fn write_receiver_is_owning_temporary(&mut self, value: LoweredValue) -> bool {
+        self.with_write_receiver_ownership(|ctx| ctx.value_is_owning_temporary(value))
+    }
+
+    /// Runs `f` with ownership judged the ordinary way, for work on a write's RECEIVER (pinning
+    /// it across a store that can throw, deciding its release) while the surrounding write may
+    /// still be borrowing its value operand. See [`Self::write_receiver_is_owning_temporary`].
+    pub(crate) fn with_write_receiver_ownership<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let previous = std::mem::replace(&mut self.write_operand_is_borrowed, false);
+        let result = f(self);
+        self.write_operand_is_borrowed = previous;
+        result
+    }
+
     /// Returns the storage type for a `global` alias name.
     ///
     /// Under `--web`, request superglobals resolve to their fixed
@@ -1743,6 +1764,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let ownership = if op == Op::LoadRefCell
             && Ownership::php_type_needs_lifetime_tracking(&php_type)
         {
+            Ownership::Borrowed
+        } else if self.write_operand_is_borrowed
+            && Ownership::php_type_needs_lifetime_tracking(&php_type)
+        {
+            // Inside a write that borrows its operands (the `??=` result temporary), a local
+            // read never hands its slot's reference over: the slot keeps it for the merge.
+            // `Borrowed` also keeps `finalize_value_ownership_metadata` from promoting the
+            // one-shot `OwnedTemp` load to `Owned`, which let the backend adopt the cell into a
+            // scalar property slot and free it, and the merge's release then freed it again (a
+            // bad refcount under `--heap-debug`, an empty value otherwise).
             Ownership::Borrowed
         } else {
             Ownership::for_php_type(&php_type)
