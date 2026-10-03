@@ -767,6 +767,7 @@ pub(crate) fn is_php_symbol(symbol: &str) -> bool {
 /// prefix; storage adds an owner and member. Escaped method names instead start
 /// with `static___`, as emitted by `names::static_method_symbol`.
 fn is_static_method_symbol(stem: &str) -> bool {
+    let stem = render::strip_generator_suffix(stem);
     let Some(rest) = stem.strip_prefix("static_") else { return false };
     match rest.strip_prefix("prop_").or_else(|| rest.strip_prefix("local_")) {
         Some(method) => !method.is_empty() && !method.contains('_'),

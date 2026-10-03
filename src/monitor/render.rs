@@ -219,6 +219,7 @@ pub(crate) fn decode_field(value: &str) -> String {
 /// placeholder swap stops `_u_` from being read as the separator.
 pub(crate) fn demangle(symbol: &str) -> String {
     let stem = symbol.trim_start_matches('_');
+    let stem = strip_generator_suffix(stem);
     if stem == "main" {
         return "{main}".to_string();
     }
@@ -248,7 +249,7 @@ pub(crate) fn demangle(symbol: &str) -> String {
     symbol.to_string()
 }
 
-/// Demangles the tail of a method symbol to `Class::method` when it is exactly the two
+/// Demangles the suffix-free tail of a method symbol to `Class::method` when it is exactly the two
 /// fragments `names::method_symbol` / `names::static_method_symbol` joined, in either
 /// separator regime; `None` for anything else, such as a suffixed internal label.
 fn demangle_member(tail: &str) -> Option<String> {
@@ -263,6 +264,28 @@ fn demangle_member(tail: &str) -> Option<String> {
     ))
 }
 
+/// Removes a generator entry suffix only when the complete encoded PHP name fails to decode.
+/// Escaped separators followed by literal `genbody` or `gencb` methods are complete names.
+pub(super) fn strip_generator_suffix(stem: &str) -> &str {
+    if complete_php_symbol(stem) {
+        return stem;
+    }
+    stem.strip_suffix("__genbody")
+        .or_else(|| stem.strip_suffix("__gencb"))
+        .filter(|candidate| complete_php_symbol(candidate))
+        .unwrap_or(stem)
+}
+
+/// Recognizes complete function or two-fragment method names without the classifier's fallback.
+fn complete_php_symbol(stem: &str) -> bool {
+    if let Some(name) = stem.strip_prefix("fn_") {
+        return !name.is_empty() && crate::names::demangle_fqn(name).is_some();
+    }
+    stem.strip_prefix("method")
+        .or_else(|| stem.strip_prefix("static"))
+        .is_some_and(|tail| demangle_member(tail).is_some())
+}
+
 /// Extracts function and method declaration ranges from PHP source with a
 /// brace scanner. Best-effort by design: braces inside strings can skew a
 /// range, which at worst misplaces one virtual frame — never a wrong weight.
@@ -270,16 +293,28 @@ pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
     let lines: Vec<&str> = source.lines().collect();
     let mut ranges = Vec::new();
     let mut classes: Vec<(String, u32)> = Vec::new(); // (name, end line)
+    let mut namespace = String::new();
+    let mut namespace_end = None;
     let mut i = 0usize;
     while i < lines.len() {
         let line = lines[i].trim_start();
         let decl_line = (i + 1) as u32;
+        if namespace_end.is_some_and(|end| decl_line > end) {
+            namespace.clear();
+            namespace_end = None;
+        }
+        if let Some((name, delimiter)) = namespace_declaration(line) {
+            namespace = name.to_string();
+            namespace_end = (delimiter == '{').then(|| brace_span_end(&lines, i));
+            i += 1;
+            continue;
+        }
         if let Some(name) = declared_name(line, "class ")
             .or_else(|| declared_name(line, "interface "))
             .or_else(|| declared_name(line, "trait "))
         {
             let end = brace_span_end(&lines, i);
-            classes.push((name, end));
+            classes.push((qualify_declared_name(&namespace, &name), end));
             i += 1;
             continue;
         }
@@ -292,7 +327,7 @@ pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
                 .map(|(class, _)| class.clone());
             let display = match owner {
                 Some(class) => format!("{class}::{name}"),
-                None => name,
+                None => qualify_declared_name(&namespace, &name),
             };
             ranges.push(DeclRange {
                 name: display,
@@ -306,6 +341,34 @@ pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
         i += 1;
     }
     ranges
+}
+
+/// Finds a namespace keyword at a word boundary and reads its actual declaration delimiter.
+/// Trailing comments cannot change semicolon versus braced scope, including after `<?php`.
+fn namespace_declaration(line: &str) -> Option<(&str, char)> {
+    for (index, _) in line.match_indices("namespace") {
+        if index > 0 && !line[..index].chars().next_back().is_some_and(|c| c.is_ascii_whitespace()) {
+            continue;
+        }
+        let rest = &line[index + "namespace".len()..];
+        if !rest.chars().next().is_some_and(|c| c.is_whitespace() || c == '{') {
+            continue;
+        }
+        let rest = rest.trim_start();
+        let name_end = rest.char_indices()
+            .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_' || *c == '\\' || !c.is_ascii()))
+            .map_or(rest.len(), |(index, _)| index);
+        let delimiter = rest[name_end..].trim_start().chars().next()?;
+        if delimiter == '{' || (delimiter == ';' && name_end > 0) {
+            return Some((&rest[..name_end], delimiter));
+        }
+    }
+    None
+}
+
+/// Keeps declaration-range names in the same namespace-qualified form as decoded symbols.
+fn qualify_declared_name(namespace: &str, name: &str) -> String {
+    if namespace.is_empty() { name.to_string() } else { format!("{namespace}\\{name}") }
 }
 
 /// Resolves sampled addresses to source lines with `atos` against the dSYM.

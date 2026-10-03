@@ -3,7 +3,7 @@
 //! budget assertions, and the stitching.
 //!
 //! Called from:
-//! - `cargo test -p elephc --lib`, through `mod tests` in `monitor/mod.rs`.
+//! - `cargo test -p elephc --bin elephc monitor::tests`, through `mod tests` in `monitor/mod.rs`.
 //!
 //! Key details:
 //! - Fixtures are canned captures with known numbers, so assertions are literal
@@ -1233,6 +1233,52 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
         assert_eq!(demangle("_rt_heap_alloc"), "_rt_heap_alloc");
     }
 
+    /// Generator labels decode their PHP owner without confusing user underscores with suffixes.
+    #[test]
+    fn demangles_generator_entry_symbols() {
+        use elephc::names::{function_symbol, method_symbol, static_method_symbol};
+        for suffix in ["__genbody", "__gencb"] {
+            for (class, method) in [
+                ("App\\Foo", "gen"), ("My_Class", "hot_gen"), ("Engine", "gen"),
+                ("prop", "gen"), ("local", "gen"),
+            ] {
+                assert_eq!(demangle(&format!("{}{suffix}", method_symbol(class, method))), format!("{class}::{method}"));
+                let static_symbol = format!("{}{suffix}", static_method_symbol(class, method));
+                assert_eq!(demangle(&static_symbol), format!("{class}::{method}"));
+                assert!(is_php_symbol(&static_symbol), "{static_symbol}");
+            }
+            for name in ["App\\hot_gen", "hot_gen", "gen"] {
+                assert_eq!(demangle(&format!("{}{suffix}", function_symbol(name))), name);
+            }
+        }
+        for name in ["gen__genbody", "gen__gencb"] {
+            assert_eq!(demangle(&function_symbol(name)), name);
+            assert_eq!(demangle(&method_symbol("App\\Foo", name)), format!("App\\Foo::{name}"));
+        }
+        assert_eq!(demangle("_rt_helper__genbody"), "_rt_helper__genbody");
+        assert!(!is_php_symbol("_static_prop_Owner_field__genbody"));
+    }
+
+    /// Escaped method separators must not turn literal method names into generator suffixes.
+    #[test]
+    fn monitor_review_preserves_generator_named_methods() {
+        use elephc::names::{method_symbol, static_method_symbol};
+        for class in ["App\\Foo", "My_Class", "Engine", "prop", "local"] {
+            for method in ["genbody", "gencb"] {
+                for symbol in [method_symbol(class, method), static_method_symbol(class, method)] {
+                    let expected = format!("{class}::{method}");
+                    assert_eq!(demangle(&symbol), expected, "{symbol}");
+                    assert!(is_php_symbol(&symbol), "{symbol}");
+                    for suffix in ["__genbody", "__gencb"] {
+                        let entry = format!("{symbol}{suffix}");
+                        assert_eq!(demangle(&entry), expected, "{entry}");
+                        assert!(is_php_symbol(&entry), "{entry}");
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     /// Runtime helpers are named as costs; PHP functions are left alone, since
     /// a user function is not a 'cause' of anything.
@@ -1372,6 +1418,60 @@ echo call_hot(1);
                 DeclRange { name: "call_hot".into(), start: 12, end: 14 },
             ]
         );
+    }
+
+    /// Semicolon namespaces qualify both free functions and methods across namespace changes.
+    #[test]
+    fn decl_ranges_qualify_semicolon_namespaces() {
+        let source = "<?php\nnamespace App\\One;\nfunction top() {\n return 1;\n}\nclass Foo {\n public function gen() {\n  yield 1;\n }\n}\nnamespace Other;\nfunction top() {\n return 2;\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\top".into(), start: 3, end: 5 },
+            DeclRange { name: "App\\One\\Foo::gen".into(), start: 7, end: 9 },
+            DeclRange { name: "Other\\top".into(), start: 12, end: 14 },
+        ]);
+    }
+
+    /// Braced namespaces expire at their closing brace and an explicit global block stays global.
+    #[test]
+    fn decl_ranges_qualify_braced_and_global_namespaces() {
+        let source = "<?php\nnamespace App\\Foo {\n class Worker {\n  public function run() {\n   return 1;\n  }\n }\n}\nnamespace {\n function global_run() {\n  return 2;\n }\n}\nnamespace\tNext {\n function run() {\n  return 3;\n }\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\Foo\\Worker::run".into(), start: 4, end: 6 },
+            DeclRange { name: "global_run".into(), start: 10, end: 12 },
+            DeclRange { name: "Next\\run".into(), start: 15, end: 17 },
+        ]);
+    }
+
+    /// A semicolon namespace stays active even when its declaration has a trailing comment.
+    #[test]
+    fn monitor_review_semicolon_namespace_comment_keeps_scope() {
+        let source = "<?php\nnamespace App\\One; // primary\nfunction first() {\n return 1;\n}\nfunction second() {\n return 2;\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\first".into(), start: 3, end: 5 },
+            DeclRange { name: "App\\One\\second".into(), start: 6, end: 8 },
+        ]);
+    }
+
+    /// A semicolon inside a trailing comment must not make a braced namespace persistent.
+    #[test]
+    fn monitor_review_braced_namespace_comment_expires_scope() {
+        let source = "<?php\nnamespace App\\Foo { // keep;\n function inside() {\n  return 1;\n }\n}\nnamespace {\n function after() {\n  return 2;\n }\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\Foo\\inside".into(), start: 3, end: 5 },
+            DeclRange { name: "after".into(), start: 8, end: 10 },
+        ]);
+        let without_global_marker = source.replace("namespace {\n", "{\n");
+        assert_eq!(php_decl_ranges(&without_global_marker), php_decl_ranges(source));
+    }
+
+    /// Namespace declarations following the PHP opening tag qualify functions and methods.
+    #[test]
+    fn monitor_review_namespace_after_opening_tag() {
+        let source = "<?php namespace App\\One;\nfunction top() {\n return 1;\n}\nclass Foo {\n public function gen() {\n  yield 1;\n }\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\top".into(), start: 2, end: 4 },
+            DeclRange { name: "App\\One\\Foo::gen".into(), start: 6, end: 8 },
+        ]);
     }
 
     #[test]
