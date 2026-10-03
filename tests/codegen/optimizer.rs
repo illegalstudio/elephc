@@ -11,6 +11,9 @@
 
 use crate::support::*;
 
+#[path = "optimizer/switch_fallthrough.rs"]
+mod switch_fallthrough;
+
 #[path = "optimizer/boxed_array_snapshots.rs"]
 mod boxed_array_snapshots;
 mod implode_effects;

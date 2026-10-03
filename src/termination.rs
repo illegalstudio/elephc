@@ -620,8 +620,14 @@ fn merge_terminal_effects(effects: impl Iterator<Item = TerminalEffect>) -> Term
 }
 
 /// Computes the terminal effect of a switch statement.
-/// Returns ExitsCurrentBlock only if a default exists and all cases (iterated in reverse)
-/// also exit the current block. Breaks or TerminatesMixed in any case body invalidates exit.
+///
+/// Returns ExitsCurrentBlock only when a default exists and entering at ANY body leaves the
+/// enclosing block: every case and the default are entry points. The bodies are walked from the
+/// last one in execution order, with `default` at its source position (see
+/// [`switch_default_position`]), so falling off the last body continues after the switch rather
+/// than into a default written earlier. A body that may leave the switch (`break`, or `continue`,
+/// which targets a switch like `break`) before a function exit does not exit, even when the
+/// `break` sits inside an `if` whose other path returns.
 fn switch_terminal_effect(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,
@@ -630,23 +636,21 @@ fn switch_terminal_effect(
     let Some(default_body) = default.as_ref() else {
         return TerminalEffect::FallsThrough;
     };
+    let mut bodies: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
+    bodies.insert(switch_default_position(cases, default_body), default_body);
 
-    let mut suffix_exits =
-        block_terminal_effect_with_divergence(default_body, additional_expr_diverges)
-            == TerminalEffect::ExitsCurrentBlock;
-    if !suffix_exits {
-        return TerminalEffect::FallsThrough;
-    }
-
-    for (_, body) in cases.iter().rev() {
-        suffix_exits = match block_terminal_effect_with_divergence(
-            body,
-            additional_expr_diverges,
-        ) {
-            TerminalEffect::ExitsCurrentBlock => true,
-            TerminalEffect::FallsThrough => suffix_exits,
-            TerminalEffect::Breaks | TerminalEffect::TerminatesMixed => false,
-        };
+    let mut suffix_exits = false;
+    for body in bodies.iter().rev() {
+        suffix_exits =
+            if block_may_leave_current_switch_before_function_exit(body, additional_expr_diverges) {
+                false
+            } else {
+                match block_terminal_effect_with_divergence(body, additional_expr_diverges) {
+                    TerminalEffect::ExitsCurrentBlock => true,
+                    TerminalEffect::FallsThrough => suffix_exits,
+                    TerminalEffect::Breaks | TerminalEffect::TerminatesMixed => false,
+                }
+            };
 
         if !suffix_exits {
             return TerminalEffect::FallsThrough;
@@ -654,4 +658,38 @@ fn switch_terminal_effect(
     }
 
     TerminalEffect::ExitsCurrentBlock
+}
+
+/// Returns how many case bodies run before the `default` body in execution order, by the rule
+/// `ir_lower::stmt::switches::switch_default_source_index` lowers with: the cases whose first pattern precedes the default's
+/// first statement, or all of them when a span is missing.
+pub(crate) fn switch_default_position(cases: &[(Vec<Expr>, Vec<Stmt>)], default: &[Stmt]) -> usize {
+    let Some(default_start) = default.first().map(|stmt| stmt.span) else {
+        return cases.len();
+    };
+    if default_start == crate::span::Span::dummy() {
+        return cases.len();
+    }
+    for (index, (patterns, _)) in cases.iter().enumerate() {
+        let Some(case_start) = patterns.first().map(|pattern| pattern.span) else {
+            return cases.len();
+        };
+        if case_start == crate::span::Span::dummy() {
+            return cases.len();
+        }
+        let case_is_after = case_start.line > default_start.line
+            || (case_start.line == default_start.line && case_start.col >= default_start.col);
+        if case_is_after {
+            return index;
+        }
+    }
+    cases.len()
+}
+
+/// Returns whether `stmt` may leave the switch it sits in from INSIDE a nested statement: a
+/// `break` or `continue` that targets the switch under an `if`, `try` or similar. A direct
+/// `break`/`continue` statement is not counted; its path is visible to a caller walking the body.
+pub(crate) fn stmt_may_leave_current_switch_from_nested(stmt: &Stmt) -> bool {
+    !matches!(stmt.kind, StmtKind::Break(_) | StmtKind::Continue(_))
+        && stmt_may_leave_current_switch(stmt, 1)
 }

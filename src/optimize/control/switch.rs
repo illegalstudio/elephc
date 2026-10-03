@@ -63,7 +63,16 @@ pub(crate) fn prune_switch_stmt(
         return expr_to_effect_stmt(subject);
     }
 
-    if switch_has_level_sensitive_loop_exit(&cases, &default) {
+    // A `break` nested under an `if` or `try` in a body targets this switch; inlining the bodies
+    // (the single-case `if`, a known subject) would leave it without its target, lowered as
+    // unreachable, and drop the writes before it. `if ($c) { $x = 2; break; } return 5;` did.
+    let has_nested_switch_exit = cases
+        .iter()
+        .map(|(_, body)| body)
+        .chain(default.iter())
+        .flatten()
+        .any(crate::termination::stmt_may_leave_current_switch_from_nested);
+    if has_nested_switch_exit || switch_has_level_sensitive_loop_exit(&cases, &default) {
         return vec![Stmt {
             kind: StmtKind::Switch {
                 subject,

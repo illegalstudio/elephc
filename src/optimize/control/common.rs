@@ -505,24 +505,5 @@ fn stmt_has_early_exit(stmt: &Stmt, depth: usize) -> bool {
 /// this mirrors that rule exactly. A default with no statements, a dummy span on the default or
 /// on any case pattern, or an empty case list all lower with the default last.
 pub(crate) fn switch_default_runs_last(cases: &[(Vec<Expr>, Vec<Stmt>)], default: &[Stmt]) -> bool {
-    let Some(default_start) = default.first().map(|stmt| stmt.span) else {
-        return true;
-    };
-    if default_start == crate::span::Span::dummy() {
-        return true;
-    }
-    for (patterns, _) in cases {
-        let Some(case_start) = patterns.first().map(|pattern| pattern.span) else {
-            return true;
-        };
-        if case_start == crate::span::Span::dummy() {
-            return true;
-        }
-        let case_is_after = case_start.line > default_start.line
-            || (case_start.line == default_start.line && case_start.col >= default_start.col);
-        if case_is_after {
-            return false;
-        }
-    }
-    true
+    crate::termination::switch_default_position(cases, default) == cases.len()
 }

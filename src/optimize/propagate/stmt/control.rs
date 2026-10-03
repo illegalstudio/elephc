@@ -177,8 +177,12 @@ pub(super) fn propagate_foreach_stmt(
 }
 
 /// Propagates constants through a `switch` statement.
-/// Propagates the subject, then propagates each case pattern and body in the base env (empty if subject has side effects).
-/// The exit environment is derived by merging all case paths and the default branch.
+///
+/// The subject is propagated first and its writes invalidated. Each label is then propagated
+/// after the writes of the labels before it, and each body from the environment with the writes
+/// of every label and of every body that can fall into it invalidated. The exit environment
+/// merges every simulated entry path, starting from the after-labels environment
+/// (`merge_switch_constant_env_paths`).
 pub(super) fn propagate_switch_stmt(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -192,19 +196,48 @@ pub(super) fn propagate_switch_stmt(
         expr_invalidation(&subject).apply(&mut base_env);
         base_env
     };
+    // Labels run in source order until one matches, so each label sees the writes of the ones
+    // before it (`case ($x = 5) > 0:`), and a body is entered only after its own label ran.
+    // Every label's writes are therefore invalidated before any body: which of them ran is a
+    // run-time fact.
+    let mut label_env = base_env;
     let cases: Vec<_> = cases
         .into_iter()
         .map(|(patterns, body)| {
             let patterns = patterns
                 .into_iter()
-                .map(|pattern| propagate_expr(pattern, &base_env))
-                .collect();
-            let (body, _) = propagate_block(body, base_env.clone());
+                .map(|pattern| {
+                    let pattern = propagate_expr(pattern, &label_env);
+                    expr_invalidation(&pattern).apply(&mut label_env);
+                    pattern
+                })
+                .collect::<Vec<_>>();
             (patterns, body)
         })
         .collect();
-    let default = default.map(|body| propagate_block(body, base_env.clone()).0);
-    let next_env = merge_switch_constant_env_paths(&subject, &cases, default.as_deref(), &base_env);
+    // A body is also entered by falling through from the body before it, so it starts with the
+    // writes of every earlier body invalidated. The `default` body's position among the cases
+    // is not tracked here, so it counts as earlier than every case, and every case body counts
+    // as earlier than it.
+    let default_writes = default.as_deref().map(block_invalidation);
+    let mut fallthrough_env = label_env.clone();
+    if let Some(writes) = &default_writes {
+        writes.apply(&mut fallthrough_env);
+    }
+    let mut default_env = label_env.clone();
+    let cases: Vec<_> = cases
+        .into_iter()
+        .map(|(patterns, body)| {
+            let entry_env = fallthrough_env.clone();
+            let writes = block_invalidation(&body);
+            writes.apply(&mut fallthrough_env);
+            writes.apply(&mut default_env);
+            let (body, _) = propagate_block(body, entry_env);
+            (patterns, body)
+        })
+        .collect();
+    let default = default.map(|body| propagate_block(body, default_env).0);
+    let next_env = merge_switch_constant_env_paths(&subject, &cases, default.as_deref(), &label_env);
     (
         Stmt::new(
             StmtKind::Switch {
