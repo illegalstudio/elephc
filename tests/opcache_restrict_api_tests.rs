@@ -102,6 +102,7 @@ fn compile(dir: &Path, stem: &str, ini: &[&str]) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, PROBE).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd.arg(&php);
@@ -318,6 +319,7 @@ fn restriction_follows_the_entry_script_not_the_executing_file() {
         let php = entrydir.join(format!("{stem}.php"));
         fs::write(&php, &entry_src).unwrap();
         let mut cmd = Command::new(elephc_bin());
+        cmd.arg("build");
         cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
         cmd.current_dir(&entrydir);
         cmd.arg(&php);

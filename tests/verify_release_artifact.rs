@@ -59,6 +59,12 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 state_dir="${{ELEPHC_MOCK_STATE:-$here/../.mock-state}}"
 mkdir -p "$state_dir"
+if [ "${{1:-}}" = build ]; then
+  shift
+elif [[ "${{1:-}}" == --with-* ]]; then
+  echo "build subcommand required for $*" >&2
+  exit 1
+fi
 case "${{1:-}}" in
   --version)
     echo "elephc 0.0.0-fixture"
@@ -282,7 +288,7 @@ fn truncated_archive_still_fails_without_inventing_native_add() {
 /// The probe's xml branch mirrors curl's exactly: the add happens BEFORE the one
 /// compile, and a tarball whose binary refuses `--with-xml` without the package is
 /// therefore never "retried" from a FAIL line. Proved by running the mock directly:
-/// `--with-xml` fail-closes until `native add libxml2` has been seen.
+/// `build --with-xml` fail-closes until `native add libxml2` has been seen.
 #[test]
 fn mock_with_xml_fails_closed_until_native_add_libxml2() {
     let dir = scratch("xml_fail_closed");
@@ -291,7 +297,7 @@ fn mock_with_xml_fails_closed_until_native_add_libxml2() {
     let state = dir.join("state");
 
     let before = Command::new(&mock)
-        .arg("--with-xml")
+        .args(["build", "--with-xml"])
         .env("ELEPHC_MOCK_STATE", &state)
         .current_dir(&dir)
         .output()
@@ -312,7 +318,7 @@ fn mock_with_xml_fails_closed_until_native_add_libxml2() {
         .expect("run mock native add libxml2");
     assert!(add.success());
     let after = Command::new(&mock)
-        .arg("--with-xml")
+        .args(["build", "--with-xml"])
         .env("ELEPHC_MOCK_STATE", &state)
         .current_dir(&dir)
         .status()

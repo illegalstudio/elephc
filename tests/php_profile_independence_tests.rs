@@ -209,6 +209,7 @@ fn compile_and_run(dir: &Path, source: &str, profile: &str, case: &str) -> Strin
     fs::write(&php, source).expect("failed to write corpus program");
 
     let mut command = Command::new(elephc_bin());
+    command.arg("build");
     command.env("XDG_CACHE_HOME", dir.join("cache-root"));
     managed_pcre2_support::configure_host_managed_pcre2(&mut command, dir);
     let compile = command

@@ -49,6 +49,7 @@ fn compile_raw(
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd.args(extra_args);

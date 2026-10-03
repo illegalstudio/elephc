@@ -9,7 +9,7 @@
 //   docker run -d --name my -e MARIADB_ROOT_PASSWORD=rootpw \
 //       -e MARIADB_DATABASE=testdb -e MARIADB_USER=test \
 //       -e MARIADB_PASSWORD=test -p 33060:3306 mariadb:11
-//   cargo run -- examples/pdo-mysql/main.php
+//   cargo run -- build examples/pdo-mysql/main.php
 //   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
 //       ./examples/pdo-mysql/main
 // Optional ELEPHC_MY_SERVER_PUBLIC_KEY and ELEPHC_MY_TLS_CIPHER values demonstrate

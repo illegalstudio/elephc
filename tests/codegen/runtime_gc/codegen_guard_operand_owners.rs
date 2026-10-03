@@ -308,6 +308,7 @@ echo targetGuardCount();
 /// user function the assertion reads is emitted either way.
 fn emit_guard_assembly(dir: &Path, target: &str) -> String {
     let mut command = Command::new(elephc_bin());
+    command.arg("build");
     command.env("XDG_CACHE_HOME", dir.join("cache-root"));
     command.current_dir(dir);
     command.args(["--emit-asm", "--target", target]);

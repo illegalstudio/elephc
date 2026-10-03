@@ -65,7 +65,7 @@ either build off. Both are compile-time flags; see
 [CLI reference — INI directives](../compiling/cli-reference.md#ini-directives).
 
 ```bash
-elephc --ini opcache.enable_cli=1 app.php
+elephc build --ini opcache.enable_cli=1 app.php
 ```
 
 Because the state is baked, `opcache.enable` / `opcache.enable_cli` are **not**
@@ -380,7 +380,7 @@ Compile with `--strict-opcache` to make that case throw a `RuntimeException`
 instead:
 
 ```console
-$ elephc --strict-opcache --ini opcache.enable=1 --ini opcache.enable_cli=1 app.php
+$ elephc build --strict-opcache --ini opcache.enable=1 --ini opcache.enable_cli=1 app.php
 ```
 
 The throw is deliberately narrow — only the request that cannot be honored:

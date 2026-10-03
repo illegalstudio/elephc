@@ -61,6 +61,7 @@ fn compile_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> P
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd.args(flags).arg(&php);
@@ -241,13 +242,14 @@ fn with_mysqli_forces_surface_past_reachability() {
     let php = dir.join("asm.php");
     fs::write(&php, src).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(&dir);
     cmd.args(["--with-mysqli", "--emit-asm"]).arg(&php);
-    let output = cmd.output().expect("failed to spawn elephc --emit-asm");
+    let output = cmd.output().expect("failed to spawn elephc build --emit-asm");
     assert!(
         output.status.success(),
-        "elephc --emit-asm failed:\n{}",
+        "elephc build --emit-asm failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let asm = fs::read_to_string(dir.join("asm.s")).expect("emitted assembly missing");

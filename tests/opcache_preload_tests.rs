@@ -100,6 +100,7 @@ fn try_compile(dir: &Path, stem: &str, ini: &[String]) -> (bool, String, String,
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, PROBE).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd.arg(&php);

@@ -65,7 +65,7 @@ fn emit_asm_repeatedly(name: &str, source: &str, runs: usize) -> Vec<String> {
     outputs
 }
 
-/// Runs one `elephc --emit-asm` invocation and returns the assembly it wrote.
+/// Runs one `elephc build --emit-asm` invocation and returns the assembly it wrote.
 fn emit_asm_once(
     dir: &Path,
     cache_root: &Path,
@@ -74,6 +74,7 @@ fn emit_asm_once(
     name: &str,
 ) -> String {
     let compile = Command::new(elephc_cli_bin())
+        .arg("build")
         .env("XDG_CACHE_HOME", cache_root)
         .current_dir(dir)
         .arg("--quiet")

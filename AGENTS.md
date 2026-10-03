@@ -21,7 +21,7 @@ When examples or internals docs use ARM64 snippets for readability, treat them a
 ```bash
 cargo build              # dev build
 cargo build --release    # optimized build
-cargo run -- file.php    # compile a PHP file
+cargo run -- build file.php    # compile a PHP file
 ```
 
 The compiler outputs a native binary next to the source file (e.g., `file.php` → `file`).
@@ -487,7 +487,7 @@ column 81, with `// -- description --` block comments before related groups.
 Each example lives in `examples/<name>/main.php` with its own `.gitignore`. To run:
 
 ```bash
-cargo run -- examples/fizzbuzz/main.php
+cargo run -- build examples/fizzbuzz/main.php
 ./examples/fizzbuzz/main
 ```
 
@@ -658,5 +658,5 @@ compiled programs. Standard build/test/run commands are documented above and in
   `scripts/test-linux-x86_64.sh` / `-arm64.sh` require Docker, which is not set
   up here. Rely on host `cargo test`/`cargo nextest` (this VM is `linux-x86_64`)
   and CI for the full target matrix.
-- **Quick end-to-end sanity check:** `cargo run -- examples/fizzbuzz/main.php`
+- **Quick end-to-end sanity check:** `cargo run -- build examples/fizzbuzz/main.php`
   then `./examples/fizzbuzz/main`.

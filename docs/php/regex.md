@@ -58,7 +58,7 @@ if (preg_match('/order-(\d+)/', $subject, $matches)) {
 Compile and run it like any other project source:
 
 ```bash
-elephc path/to/program.php
+elephc build path/to/program.php
 ./path/to/program
 ```
 
@@ -77,7 +77,7 @@ regex functions:
 
 ```bash
 elephc native add pcre2
-elephc --with-regex path/to/program.php
+elephc build --with-regex path/to/program.php
 ```
 
 Without `--with-regex` or another statically visible regex use, the program

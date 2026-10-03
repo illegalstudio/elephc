@@ -7,7 +7,7 @@
 // URL, so the phar:// argument must be a string literal (not a runtime
 // concatenation). The path resolves against the compiler's working directory,
 // so compile this from the repository root:
-//   cargo run -- examples/phar-writer/main.php
+//   cargo run -- build examples/phar-writer/main.php
 //   ./examples/phar-writer/main
 //
 // fwrite() buffers the entry content in memory; fclose() assembles the native

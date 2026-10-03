@@ -90,6 +90,7 @@ fn compile(dir: &Path, stem: &str, source: &str, extra: &[&str]) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd.args(extra);
@@ -201,7 +202,7 @@ echo var_export(opcache_invalidate(__FILE__, true), true), "\n";
     let dir = make_test_dir("opcache_strict_disabled");
     let php = dir.join("app.php");
     fs::write(&php, source).unwrap();
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .current_dir(&dir)
         .arg("--strict-opcache")

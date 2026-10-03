@@ -1,7 +1,7 @@
 <?php
 // SDL2 keyboard state polling without event unions.
 // Run with:
-// elephc -l SDL2 -L /opt/homebrew/lib examples/sdl_input/main.php
+// elephc build -l SDL2 -L /opt/homebrew/lib examples/sdl_input/main.php
 
 extern "SDL2" {
     function SDL_Init(int $flags): int;

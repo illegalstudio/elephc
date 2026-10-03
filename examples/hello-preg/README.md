@@ -8,7 +8,7 @@ From this directory:
 
 ```bash
 elephc native add pcre2
-elephc main.php
+elephc build main.php
 ./main
 ```
 

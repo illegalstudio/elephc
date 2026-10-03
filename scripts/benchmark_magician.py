@@ -221,7 +221,7 @@ def skipped_result(label: str, detail: str) -> CommandResult:
 
 def compile_elephc_variant(variant: str, cwd: Path) -> Path:
     source = cwd / f"{variant}.php"
-    run_process([str(elephc_bin()), str(source)], cwd)
+    run_process([str(elephc_bin()), "build", str(source)], cwd)
     return cwd / variant
 
 

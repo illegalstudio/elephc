@@ -15,18 +15,19 @@ exhaustive *what*.
 ## Synopsis
 
 ```text
-elephc [OPTIONS] <source-file>
+elephc build [OPTIONS] <source-file>
 elephc --version
 elephc native <COMMAND> [OPTIONS]
 elephc monitor <PROGRAM> [OPTIONS]
 ```
 
-Except for `--help` and `--version`, exactly one positional argument is required:
-the path to tagged `.php` or tagless `.lfc` source. The binary is written next
-to it, named after the source without its extension.
-Only an exact first argument of `native` or `monitor` selects a subcommand
-family. A source file literally named `native` or `monitor` must therefore be
-passed as `./native` or by another explicit path.
+`build` compiles tagged `.php` or tagless `.lfc` source. A source path is
+required, and the binary is written next to it, named after the source
+without its extension. Compiler options follow `build`.
+Passing a source directly as `elephc file.php` is no longer accepted.
+Only an exact first argument of `build`, `native`, or `monitor` selects a
+subcommand family. Source files named `build`, `native`, or `monitor` can be
+passed to `build` as `./build`, `./native`, or `./monitor`.
 
 ## Native dependency commands
 
@@ -267,7 +268,7 @@ takes the first directory that declares one, trying these in order:
 | *(nothing)* | The newest maintained profile. |
 
 ```
-$ elephc src/app.php          # composer.json pins config.platform.php = "8.3.11"
+$ elephc build src/app.php          # composer.json pins config.platform.php = "8.3.11"
 php profile 8.3 (composer.json); 2 constructs depend on it
 ```
 
@@ -317,7 +318,7 @@ When a program *does* depend on the profile, the compiler says so and points at
 the construct responsible:
 
 ```
-$ elephc app.php
+$ elephc build app.php
 php profile 8.5 (default); 2 constructs depend on it — pin it with --php-version to make the choice explicit
   note[3:5]: PHP_VERSION_ID reports 80200 through 80500 depending on the profile
   note[6:6]: phpversion() returns the profile's version string
@@ -356,7 +357,7 @@ therefore rejected, so a binary cannot claim a version its source could never
 have run under:
 
 ```
-$ elephc --php-version 8.2 app.php
+$ elephc build --php-version 8.2 app.php
 error[3:5]: this program needs PHP 8.4 (property hooks), but --php-version selected 8.2; a binary built for 8.2 could not have run this source
 ```
 
@@ -400,9 +401,9 @@ runtime arguments (not elephc compiler flags):
 | `--help` (`-h`), `--version` (`-V`) | No | — | Print usage / version and exit. |
 
 ```bash
-elephc --web app.php
-elephc --web --web-isolation=pool app.php
-elephc --web --web-isolation=request app.php
+elephc build --web app.php
+elephc build --web --web-isolation=pool app.php
+elephc build --web --web-isolation=request app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4 --max-body-size 1048576 --access-log
 ```
@@ -716,7 +717,7 @@ overrides through environment variables.
 | `--strict-opcache` | — | off | Throw a `RuntimeException` when `opcache_invalidate($file, true)` targets code compiled into this binary, instead of reporting the success reference PHP reports. Off, the default is byte-identical to reference PHP. See [`--strict-opcache`](../php/opcache.md#--strict-opcache). |
 
 ```bash
-elephc --ini opcache.enable_cli=1 --ini opcache.jit=tracing app.php
+elephc build --ini opcache.enable_cli=1 --ini opcache.jit=tracing app.php
 ```
 
 For OPcache, `--ini` moves both `ini_get()` (the raw
@@ -733,7 +734,7 @@ setting-function calls in one request do not change the next request's defaults.
 
 ```bash
 elephc native add pcre2
-elephc --ini default_charset=8bit --ini mbstring.strict_detection=1 app.php
+elephc build --ini default_charset=8bit --ini mbstring.strict_detection=1 app.php
 ```
 
 The contract-owned default mbstring MIME expression needs no native package.
@@ -895,9 +896,9 @@ changes size only, never behavior.
 
 | Invocation | Symbol table | DWARF |
 |---|---|---|
-| `elephc app.php` | stripped | — |
-| `elephc --keep-symbols app.php` | kept | — |
-| `elephc --debug-info app.php` | kept | emitted |
+| `elephc build app.php` | stripped | — |
+| `elephc build --keep-symbols app.php` | kept | — |
+| `elephc build --debug-info app.php` | kept | emitted |
 
 Use `--keep-symbols` when a profiler needs function names but the full DWARF of
 `--debug-info` is unwanted. Shared libraries built with `--emit cdylib` are

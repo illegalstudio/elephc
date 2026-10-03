@@ -6874,6 +6874,7 @@ fn compile_ir_backend_and_run_with_fixture(
     fs::write(&php_path, source).expect("failed to write IR backend PHP fixture");
 
     let mut command = Command::new(elephc_cli_bin());
+    command.arg("build");
     command.env("XDG_CACHE_HOME", dir.join("cache-root"));
     if managed_pcre2 {
         managed_pcre2_support::configure_host_managed_pcre2(&mut command, &dir);
@@ -6913,6 +6914,7 @@ fn compile_ir_backend_and_run_with_stdin(name: &str, source: &str, stdin: &str) 
     fs::write(&php_path, source).expect("failed to write IR backend PHP fixture");
 
     let compile = Command::new(elephc_cli_bin())
+        .arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .current_dir(&dir)
         .arg(&php_path)
@@ -6981,6 +6983,7 @@ fn compile_ir_backend_files_and_run(
     let entry_path = dir.join(entry);
 
     let compile = Command::new(elephc_cli_bin())
+        .arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .current_dir(&dir)
         .arg(&entry_path)

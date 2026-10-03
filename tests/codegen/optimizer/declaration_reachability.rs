@@ -845,7 +845,7 @@ fn test_cli_pdo_query_only_omits_begin_transaction_method() {
         .expect("failed to compile PDO fixture through the CLI");
     assert!(
         output.status.success(),
-        "elephc --emit-asm failed: {}",
+        "elephc build --emit-asm failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 

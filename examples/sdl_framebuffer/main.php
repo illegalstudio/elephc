@@ -1,7 +1,7 @@
 <?php
 // Software framebuffer demo using off-heap memory plus SDL2 rendering.
 // Run with:
-// elephc -l SDL2 -L /opt/homebrew/lib examples/sdl_framebuffer/main.php
+// elephc build -l SDL2 -L /opt/homebrew/lib examples/sdl_framebuffer/main.php
 
 extern "SDL2" {
     function SDL_Init(int $flags): int;

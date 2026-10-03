@@ -16,7 +16,7 @@ interpreter bridge in that same standalone binary.
 ## Basic invocation
 
 ```bash
-elephc hello.php
+elephc build hello.php
 ./hello
 ```
 
@@ -27,7 +27,7 @@ echo "Hello from tagless source!\n";
 ```
 
 ```bash
-elephc hello.lfc
+elephc build hello.lfc
 ./hello
 ```
 
@@ -39,7 +39,7 @@ pollution in your project directory. See
 includes/autoloading, and `--strict-php`.
 
 ```bash
-elephc src/app.php     # produces ./src/app
+elephc build src/app.php     # produces ./src/app
 ./src/app
 ```
 

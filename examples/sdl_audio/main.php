@@ -1,7 +1,7 @@
 <?php
 // Basic SDL2 audio subsystem init.
 // Run with:
-// elephc -l SDL2 -L /opt/homebrew/lib examples/sdl_audio/main.php
+// elephc build -l SDL2 -L /opt/homebrew/lib examples/sdl_audio/main.php
 
 extern "SDL2" {
     function SDL_Init(int $flags): int;

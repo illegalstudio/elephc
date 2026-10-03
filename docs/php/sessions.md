@@ -391,7 +391,7 @@ Three runnable `--web` examples live under `examples/`:
   rewriting: same-origin links, forms, and a `Location:` redirect gain the
   session id while off-host and `mailto:` URLs are left untouched.
 
-Each compiles with `cargo run -- --web examples/<name>/main.php` and runs as a
+Each compiles with `cargo run -- build --web examples/<name>/main.php` and runs as a
 standalone server binary.
 
 ## Limitations

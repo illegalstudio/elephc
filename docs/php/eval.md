@@ -69,7 +69,7 @@ echo $value . "|" . $result . "\n"; // 5|10
 Compile and run it like any other program:
 
 ```bash
-elephc example.php
+elephc build example.php
 ./example
 ```
 
@@ -100,7 +100,7 @@ enable the capability:
 
 ```bash
 elephc native add pcre2
-elephc --with-regex example.php
+elephc build --with-regex example.php
 ```
 
 The compiler prints a post-compilation reminder when a binary contains dynamic

@@ -77,7 +77,7 @@ than a second thing to reconcile.
 ## Building a program that can be profiled
 
 ```bash
-elephc --with-monitoring shop.php
+elephc build --with-monitoring shop.php
 ```
 
 `--with-monitoring` embeds the profiling machinery in the binary: the exact
@@ -96,7 +96,7 @@ stops:
 ```text
 elephc monitor: ./shop was not built with --with-monitoring, so there is nothing
 to monitor.
-  Rebuild it:  elephc --with-monitoring shop.php
+  Rebuild it:  elephc build --with-monitoring shop.php
   Or point monitor at the source and let it build:  elephc monitor shop.php
 ```
 
@@ -460,7 +460,7 @@ with an address opens the **endpoint**. Reading it takes the **key** — always,
 whatever the transport:
 
 ```console
-$ elephc --with-monitoring service.php
+$ elephc build --with-monitoring service.php
 probe build fingerprint: 9b28f463
 Compiled 'service.php' -> 'service'
 
@@ -716,8 +716,8 @@ or table shows sampled numbers it says so.
 ### Narrowing it to a few functions
 
 ```bash
-elephc --with-monitoring=process_order,'PDOStatement::*' app.php
-elephc --with-monitoring=@hot-functions.txt app.php
+elephc build --with-monitoring=process_order,'PDOStatement::*' app.php
+elephc build --with-monitoring=@hot-functions.txt app.php
 ```
 
 Hooks land only on the functions you name; `{main}` names the top-level frame, a
@@ -1258,7 +1258,7 @@ single-threaded PHP.
 For exact (not sampled) per-function call counts, compile with `--counters`:
 
 ```bash
-elephc --counters app.php
+elephc build --counters app.php
 ./app          # prints, to stderr at exit:
 # elephc-counters: hot_leaf 40
 # elephc-counters: call_hot 0

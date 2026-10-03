@@ -16,9 +16,9 @@ diagnostics that instrument a compile or the resulting program.
 Selects the kind of artifact to produce.
 
 ```bash
-elephc --emit executable app.php   # default: a native binary
-elephc --emit cdylib lib.php       # a C-ABI shared library
-elephc --emit staticlib lib.php    # a C-ABI static archive
+elephc build --emit executable app.php   # default: a native binary
+elephc build --emit cdylib lib.php       # a C-ABI shared library
+elephc build --emit staticlib lib.php    # a C-ABI static archive
 ```
 
 Accepted values and aliases:
@@ -41,7 +41,7 @@ preparation, native assembly, or linking. No assembler for the selected target
 is required. Useful for inspecting exactly what the backend produced.
 
 ```bash
-elephc --emit-asm hello.php
+elephc build --emit-asm hello.php
 ```
 
 ### `--emit-ir`
@@ -53,8 +53,8 @@ the optimized IR; combine with [`--no-ir-opt`](optimization.md#eir-optimization-
 to see the unoptimized form.
 
 ```bash
-elephc --emit-ir hello.php
-elephc --emit-ir --no-ir-opt hello.php
+elephc build --emit-ir hello.php
+elephc build --emit-ir --no-ir-opt hello.php
 ```
 
 See [The EIR Design](../internals/the-ir.md) for how to read the output.
@@ -68,7 +68,7 @@ validator, so `--check` cannot report a false success for a library whose
 export reaches a fatal or opaque path.
 
 ```bash
-elephc --check hello.php
+elephc build --check hello.php
 ```
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive.
@@ -81,7 +81,7 @@ ranges, assembly labels, opcode-tagged line mappings, and a PHP-line inverse
 index — see [Source maps](source-maps.md) for the schema contract.
 
 ```bash
-elephc --emit-asm --source-map hello.php
+elephc build --emit-asm --source-map hello.php
 ```
 
 ### `--debug-info`
@@ -93,7 +93,7 @@ compiled code back to PHP lines without any custom tooling. On macOS a `.dSYM`
 bundle is produced next to the binary:
 
 ```bash
-elephc --debug-info hello.php
+elephc build --debug-info hello.php
 lldb ./hello   # breakpoints and backtraces resolve to hello.php lines
 ```
 
@@ -119,7 +119,7 @@ does not suppress compiler errors, warnings, or the final success line. Timing
 tables requested with `--timings` still print, using ASCII borders.
 
 ```bash
-elephc --quiet hello.php
+elephc build --quiet hello.php
 ```
 
 ### `--timings`
@@ -131,7 +131,7 @@ use Unicode box drawing; non-interactive output and `--quiet` use ASCII borders
 without styling.
 
 ```bash
-elephc --timings hello.php
+elephc build --timings hello.php
 ```
 
 ```text
@@ -155,7 +155,7 @@ Prints elephc's built-in ASCII mascot and one randomly selected quote before
 normal help, diagnostic, or compilation output.
 
 ```bash
-elephc --mascotte hello.php
+elephc build --mascotte hello.php
 ```
 
 ## Runtime diagnostics
@@ -168,7 +168,7 @@ Compiles the program so it prints allocation and free counters to stderr when it
 exits — useful when debugging reference-counting and ownership behavior.
 
 ```bash
-elephc --gc-stats heavy.php
+elephc build --gc-stats heavy.php
 ./heavy
 ```
 
@@ -187,7 +187,7 @@ detection, bad-refcount checks, and free-list corruption checks. Slower, but
 invaluable when chasing memory bugs.
 
 ```bash
-elephc --heap-debug heavy.php
+elephc build --heap-debug heavy.php
 ./heavy
 ```
 

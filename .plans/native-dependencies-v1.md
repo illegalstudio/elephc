@@ -54,7 +54,7 @@ checksum, cache identity, transactional publication).
 - [x] No installing compilers, Make, CMake, SDKs, or cross toolchains
 - [x] No project-supplied recipes, arbitrary URLs, Git repos, or system-library declarations in catalog selection
 - [x] No silent system-library fallback for managed packages
-- [x] No download/build during ordinary `elephc <source.php>` compilation
+- [x] No download/build during ordinary `elephc build <source.php>` compilation
 - [x] User FFI / showcase libs (e.g. Doom SDL2 via `extern` + `-l`/`-L`) remain on the user-link path, not `native`
 
 ---
@@ -1065,7 +1065,7 @@ PHP example. Its README or adjacent documentation must show:
 ```bash
 cd examples/date-json-regex
 elephc native add pcre2
-elephc main.php
+elephc build main.php
 ./main
 ```
 

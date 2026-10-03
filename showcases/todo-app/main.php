@@ -1,6 +1,6 @@
 <?php
 // Todo App — interactive CLI task manager with file persistence
-// Usage: elephc showcases/todo-app/main.php && ./showcases/todo-app/main
+// Usage: elephc build showcases/todo-app/main.php && ./showcases/todo-app/main
 
 require_once 'storage.php';
 require_once 'ui.php';

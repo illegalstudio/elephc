@@ -93,12 +93,19 @@ pub(crate) fn elephc_cli_bin() -> String {
 
 // Constructs a `Command` preconfigured to run the `elephc` CLI in a given directory.
 // Sets `XDG_CACHE_HOME` to an isolated cache subdirectory and sets the working directory.
-// Used by CLI tests that invoke `elephc` as a subprocess.
-/// Provides the Elephc cli command helper used by the projects module.
-pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
+// Used by CLI tests that invoke top-level commands as subprocesses.
+/// Provides a command for top-level CLI dispatch tests.
+pub(crate) fn elephc_root_command(dir: &Path) -> Command {
     let mut cmd = Command::new(elephc_cli_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
+    cmd
+}
+
+/// Provides a command for compiling a source with the explicit `build` selector.
+pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
+    let mut cmd = elephc_root_command(dir);
+    cmd.arg("build");
     cmd
 }
 

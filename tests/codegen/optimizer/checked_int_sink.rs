@@ -17,7 +17,7 @@ fn emit_main_ir(source: &str, extra_args: &[&str]) -> String {
     fs::write(&php_path, source).expect("write issue-623 EIR fixture");
     let mut command = elephc_cli_command(&dir);
     command.arg("--emit-ir").args(extra_args).arg(&php_path);
-    let output = command.output().expect("run elephc --emit-ir");
+    let output = command.output().expect("run elephc build --emit-ir");
     assert!(
         output.status.success(),
         "emit-ir failed: {}",

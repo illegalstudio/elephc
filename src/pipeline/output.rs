@@ -35,7 +35,7 @@ pub(super) fn dynamic_eval_capability_warning(
         "warning: dynamic eval was compiled without optional regex support\n",
         "evaluated code that uses preg_* will fail at runtime; enable it with:\n",
         "  elephc native add pcre2\n",
-        "  elephc --with-regex <source-file>",
+        "  elephc build --with-regex <source-file>",
     ))
 }
 

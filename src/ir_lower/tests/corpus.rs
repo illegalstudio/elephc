@@ -60,7 +60,7 @@ echo pcntl_getcpu();
 /// Verifies every checked example program lowers to validated printable EIR.
 ///
 /// The `strict-php` example is lowered with strict-PHP mode enabled, matching
-/// its documented `elephc --strict-php` invocation: it deliberately declares a
+/// its documented `elephc build --strict-php` invocation: it deliberately declares a
 /// user function named after an extension builtin, which only PHP-compatible
 /// (strict) resolution accepts.
 #[test]

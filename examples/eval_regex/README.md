@@ -9,7 +9,7 @@ From this directory:
 
 ```bash
 elephc native add pcre2
-elephc --with-regex main.php
+elephc build --with-regex main.php
 ./main
 ```
 

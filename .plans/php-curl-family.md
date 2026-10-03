@@ -78,7 +78,7 @@ A pure-Rust HTTP client is rejected for this feature.
    (RustCrypto). Task 1 pins the exact OpenSSL version/URL/size/SHA-256.
    Reuse catalog `zlib` **1.3.2**.
 3. **No system fallback.** Homebrew/distro `-lcurl` / `-lssl` must not
-   satisfy the requirement. Ordinary `elephc file.php` never downloads or
+   satisfy the requirement. Ordinary `elephc build file.php` never downloads or
    builds native packages (same contract as PCRE2).
 4. **Pay-for-use.** Detection of a curl function, class, or constant that
    requires the runtime links `elephc_curl` and requires native `curl`.

@@ -18,7 +18,7 @@ echo ptr_is_null($pointer) ? "null\n" : "set\n";
 ```
 
 ```bash
-elephc --define DEBUG main.lfc
+elephc build --define DEBUG main.lfc
 ./main
 ```
 

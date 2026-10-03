@@ -1,6 +1,6 @@
 <?php
 // Toolbox — a collection of small CLI utilities
-// Usage: elephc showcases/toolbox/main.php && ./showcases/toolbox/main
+// Usage: elephc build showcases/toolbox/main.php && ./showcases/toolbox/main
 
 require_once 'password.php';
 require_once 'hash.php';

@@ -134,7 +134,7 @@ cp "$PROJECT_DIR/examples/curl-get/elephc.toml" "$WORK_DIR/elephc.toml"
 cp "$PROJECT_DIR/examples/curl-get/elephc.lock" "$WORK_DIR/elephc.lock"
 
 echo "==> compiling curl-using PHP as an $ELEPHC_TARGET staticlib"
-"$ELEPHC_BIN" --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
+"$ELEPHC_BIN" build --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
 test -s "$WORK_DIR/libmain.a"
 test -s "$WORK_DIR/libmain.h"
 

@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-php examples/strict-php/main.php
+// Compile with: elephc build --strict-php examples/strict-php/main.php
 //
 // Under --strict-php the compiler accepts only PHP-compatible constructs:
 // elephc extensions (ifdef, packed class, extern, ptr/buffer, extension
