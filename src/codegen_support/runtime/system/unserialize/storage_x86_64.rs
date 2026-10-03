@@ -10,6 +10,7 @@
 //!   uninitialized marker a typed property without a default starts with.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::runtime::data::UNSER_PROPERTY_ASSIGN_PREFIX;
 use crate::codegen_support::sentinels::{
     TAGGED_SCALAR_PROPERTY_TAG, TAGGED_SCALAR_TAG_INT, TAGGED_SCALAR_TAG_NULL,
 };
@@ -59,6 +60,32 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("add r8, 1");                                           // next byte
     emitter.instruction("jmp __rt_obj_store_prop_cmp");                         // continue comparing
     emitter.label("__rt_obj_store_prop_match");
+    // -- reject a hydrated value whose boxed tag the declared property type does not accept --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // row index
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // class id from the object header
+    emitter.instruction("lea r10, [rip + _class_serpdiag_ptrs]");               // diagnostic pointer table
+    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // diagnostic rows for this class
+    emitter.instruction("imul rax, rax, 32");                                   // diagnostic row stride
+    emitter.instruction("add r10, rax");                                        // diagnostic row = base + index*32
+    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // accepted boxed value tags
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // boxed value
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // boxed value tag
+    emitter.instruction("mov rcx, rax");                                        // variable shift count = boxed tag
+    emitter.instruction("mov r8, 1");                                           // probe bit for the boxed tag
+    emitter.instruction("shl r8, cl");                                          // tag bit
+    emitter.instruction("test r11, r8");                                        // is the tag accepted for this property?
+    emitter.instruction("jz __rt_obj_store_prop_type_error");                   // raise PHP's hydration TypeError
+    // -- PHP widens an accepted int into a `float`/`?float` slot; retag the owned box --
+    emitter.instruction("cmp QWORD PTR [r10 + 24], 0");                         // widen-int-to-float flag
+    emitter.instruction("je __rt_obj_store_prop_no_widen");                     // most slots keep the parsed type
+    emitter.instruction("test rax, rax");                                       // is the boxed value an int?
+    emitter.instruction("jnz __rt_obj_store_prop_no_widen");                    // only an int widens
+    emitter.instruction("mov r8, QWORD PTR [r9 + 8]");                          // integer payload
+    emitter.instruction("cvtsi2sd xmm0, r8");                                   // convert to the PHP float value
+    emitter.instruction("movq r8, xmm0");                                       // move the double bits into a GPR
+    emitter.instruction("mov QWORD PTR [r9 + 8], r8");                          // store the widened payload
+    emitter.instruction("mov QWORD PTR [r9], 2");                               // retag the owned box as a float
+    emitter.label("__rt_obj_store_prop_no_widen");
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the row pointer
     emitter.instruction("mov r8, QWORD PTR [rax + 16]");                        // property byte offset
     emitter.instruction("mov r9, QWORD PTR [rax + 24]");                        // property value tag
@@ -78,7 +105,8 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_tagged");
-    // Only an int is stored as one; see the AArch64 variant.
+    // Only an int or null reaches this arm; the declared-type check above already raised the
+    // TypeError for a mismatch. See the AArch64 variant.
     emitter.instruction(&format!("cmp QWORD PTR [rcx], {}", TAGGED_SCALAR_TAG_INT)); // is the boxed value an int?
     emitter.instruction("jne __rt_obj_store_prop_tagged_null");                 // null or a mismatched type: store the canonical tagged null pair
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // unbox the integer payload
@@ -112,6 +140,27 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], rcx");                            // store the boxed Mixed cell pointer
     emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    // -- declared-type mismatch: compose and throw PHP's hydration TypeError --
+    emitter.label("__rt_obj_store_prop_type_error");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // rejected value box
+    emitter.instruction("mov rdi, QWORD PTR [r9 + 8]");                         // rejected value payload (object class resolution)
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // rejected value runtime tag
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // class id from the object header
+    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // row index
+    emitter.instruction("lea r11, [rip + _class_serpdiag_ptrs]");               // diagnostic pointer table
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // diagnostic rows for this class
+    emitter.instruction("imul r9, r9, 32");                                     // diagnostic row stride
+    emitter.instruction("add r11, r9");                                         // diagnostic row for this property
+    emitter.instruction("mov r8, QWORD PTR [r11]");                             // message suffix pointer
+    emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                         // message suffix byte length
+    emitter.instruction("lea rsi, [rip + _unser_property_assign_prefix]");      // "Cannot assign " prefix
+    emitter.instruction(&format!("mov rdx, {}", UNSER_PROPERTY_ASSIGN_PREFIX.len())); // prefix byte length
+    emitter.instruction("mov r10, 1");                                          // spell a bool value as true/false
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // hand the rejected value box to the helper for release
+    emitter.instruction("add rsp, 64");                                         // drop the store frame so the error helper sees a normal entry
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_unser_throw_type_error");                     // close the context and throw the TypeError
     emitter.label("__rt_obj_store_prop_next");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the row index
     emitter.instruction("add rax, 1");                                          // advance to the next row
@@ -239,4 +288,38 @@ pub(super) fn emit_key(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // clear key payload on failure
     emitter.instruction("xor edx, edx");                                        // clear key metadata on failure
     emitter.instruction("ret");                                                 // caller/preflight rejects the sentinel
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// x86_64 rejects a hydrated value whose boxed tag the declared property type does not
+    /// accept, routing it through the catchable unserialize TypeError helper instead of
+    /// writing the mismatched payload.
+    #[test]
+    fn store_prop_rejects_a_mismatched_typed_property_on_x86_64() {
+        let mut emitter = Emitter::new(Target::parse("linux-x86_64").unwrap());
+        emit_object_storage(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains("_class_serpdiag_ptrs"), "{asm}");
+        assert!(asm.contains("__rt_obj_store_prop_type_error"), "{asm}");
+        assert!(asm.contains("__rt_unser_throw_type_error"), "{asm}");
+        assert!(asm.contains("_unser_property_assign_prefix"), "{asm}");
+        // The helper reads r8 as the suffix pointer and r9 as its length, so the store path
+        // must not swap them (a swap is invisible on aarch64 but corrupts the message here).
+        let suffix_ptr = asm
+            .find("mov r8, QWORD PTR [r11]")
+            .expect("the suffix pointer must load into r8");
+        let suffix_len = asm
+            .find("mov r9, QWORD PTR [r11 + 8]")
+            .expect("the suffix length must load into r9");
+        assert!(
+            suffix_ptr < suffix_len,
+            "the store path passes the suffix pointer/length in the helper's order:\n{asm}"
+        );
+        // An accepted int into a float slot is widened, not reinterpreted.
+        assert!(asm.contains("cvtsi2sd xmm0, r8"), "{asm}");
+    }
 }

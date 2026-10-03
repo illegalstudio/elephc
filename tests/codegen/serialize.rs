@@ -1542,13 +1542,11 @@ var_dump($u);
 }
 
 /// `unserialize()` into a tagged `?int` property stores an int and a null as themselves, and
-/// never exposes another value's payload word as an integer. PHP rejects a string, float, bool
-/// or array there with a `TypeError`, which elephc does not raise yet (#1629, `docs/php/types.md`);
-/// the slot holds null instead, rather than a string's heap pointer read as an int. The heap is
-/// not asserted clean: `unserialize()` of an object leaks on main whatever the property type
-/// (#1562).
+/// raises PHP's `TypeError` for a string, float, bool or array instead of writing the wrong
+/// payload (#1629). The heap is not asserted clean: `unserialize()` of an object leaks on main
+/// whatever the property type (#1562).
 #[test]
-fn test_unserialize_mismatched_value_into_nullable_int_property_stores_null() {
+fn test_unserialize_mismatched_value_into_nullable_int_property_raises_type_error() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class C { public ?int $n = null; }
@@ -1556,13 +1554,251 @@ $out = "";
 for ($i = 0; $i < 20 + $argc; $i++) {
     $out = "";
     foreach (['i:7;', 'N;', 's:3:"abc";', 'd:1.5;', 'b:1;', 'a:0:{}'] as $payload) {
-        $o = unserialize('O:1:"C":1:{s:1:"n";' . $payload . '}');
-        $out .= json_encode($o->n) . " ";
+        try {
+            $o = unserialize('O:1:"C":1:{s:1:"n";' . $payload . '}');
+            $out .= json_encode($o->n) . " ";
+        } catch (Throwable $error) {
+            $out .= get_class($error) . " ";
+        }
     }
 }
 echo $out, "\n";
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "7 null null null null null \n");
+    assert_eq!(out.stdout, "7 null TypeError TypeError TypeError TypeError \n");
+}
+
+/// The exact wording of PHP 8.4's typed-property hydration `TypeError` for every mismatched
+/// scalar, array and null, plus the values PHP accepts (int and null for `?int`, int for
+/// `?float`).
+#[test]
+fn test_unserialize_typed_property_type_error_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public ?int $n = null; }
+class F { public ?float $f = null; }
+class S { public ?string $s = null; }
+class B { public ?bool $b = null; }
+$cases = [
+    ['C', 's:3:"abc";'], ['C', 's:1:"5";'], ['C', 'd:1.5;'], ['C', 'd:2;'], ['C', 'b:1;'],
+    ['C', 'i:7;'], ['C', 'N;'], ['F', 'i:3;'], ['F', 's:3:"1.5";'], ['S', 'i:9;'],
+    ['B', 'i:1;'], ['C', 'a:0:{}'],
+];
+foreach ($cases as [$cls, $payload]) {
+    $prop = ['C' => 'n', 'F' => 'f', 'S' => 's', 'B' => 'b'][$cls];
+    $data = 'O:1:"' . $cls . '":1:{s:1:"' . $prop . '";' . $payload . '}';
+    try {
+        $o = unserialize($data);
+        echo $cls, " ", $payload, " => ", json_encode($o->$prop), "\n";
+    } catch (Throwable $e) {
+        echo $cls, " ", $payload, " => ", get_class($e), ": ", $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "C s:3:\"abc\"; => TypeError: Cannot assign string to property C::$n of type ?int\n",
+            "C s:1:\"5\"; => TypeError: Cannot assign string to property C::$n of type ?int\n",
+            "C d:1.5; => TypeError: Cannot assign float to property C::$n of type ?int\n",
+            "C d:2; => TypeError: Cannot assign float to property C::$n of type ?int\n",
+            "C b:1; => TypeError: Cannot assign true to property C::$n of type ?int\n",
+            "C i:7; => 7\n",
+            "C N; => null\n",
+            "F i:3; => 3\n",
+            "F s:3:\"1.5\"; => TypeError: Cannot assign string to property F::$f of type ?float\n",
+            "S i:9; => TypeError: Cannot assign int to property S::$s of type ?string\n",
+            "B i:1; => TypeError: Cannot assign int to property B::$b of type ?bool\n",
+            "C a:0:{} => TypeError: Cannot assign array to property C::$n of type ?int\n",
+        )
+    );
+}
+
+/// The message names a non-nullable type without the `?`, resolves a mismatched object's
+/// concrete class, and spells a private property by its plain name rather than the NUL-mangled
+/// wire key. The values PHP accepts still hydrate.
+#[test]
+fn test_unserialize_typed_property_type_error_names_declared_type_and_plain_property() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public int $i = 0; protected string $s = ""; private ?bool $b = null; }
+class O { public ?stdClass $o = null; }
+class A { public array $a = []; }
+function show(string $cls, string $key, string $payload): void {
+    try {
+        $o = unserialize('O:1:"' . $cls . '":1:{' . $key . $payload . '}');
+        echo $cls, " => ok\n";
+    } catch (Throwable $e) {
+        echo $cls, " => ", $e->getMessage(), "\n";
+    }
+}
+show('P', 's:1:"i";', 'N;');
+show('P', 's:4:"' . "\0" . '*' . "\0" . 's";', 'i:5;');
+show('P', 's:4:"' . "\0" . 'P' . "\0" . 'b";', 'i:1;');
+show('P', 's:4:"' . "\0" . 'P' . "\0" . 'b";', 'b:0;');
+show('O', 's:1:"o";', 'a:0:{}');
+show('O', 's:1:"o";', 'O:8:"stdClass":0:{}');
+show('A', 's:1:"a";', 'i:3;');
+show('A', 's:1:"a";', 'a:1:{i:0;i:1;}');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "P => Cannot assign null to property P::$i of type int\n",
+            "P => Cannot assign int to property P::$s of type string\n",
+            "P => Cannot assign int to property P::$b of type ?bool\n",
+            "P => ok\n",
+            "O => Cannot assign array to property O::$o of type ?stdClass\n",
+            "O => ok\n",
+            "A => Cannot assign int to property A::$a of type array\n",
+            "A => ok\n",
+        )
+    );
+}
+
+/// PHP widens an `int` into a `float` property on hydration, for both the nullable (`?float`,
+/// boxed storage) and non-nullable (`float`, inline slot) shapes, so the stored value must be a
+/// real float rather than the integer bits reinterpreted as a double.
+#[test]
+fn test_unserialize_widens_int_into_float_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class F { public ?float $f = null; }
+class G { public float $g = 0.0; }
+$f = unserialize('O:1:"F":1:{s:1:"f";i:3;}');
+$g = unserialize('O:1:"G":1:{s:1:"g";i:3;}');
+var_dump($f->f, $g->g);
+var_dump(is_float($f->f), is_float($g->g));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "float(3)\n",
+            "float(3)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+/// PHP names the class that DECLARES a typed property in the hydration `TypeError`, not the
+/// concrete class being hydrated, so an inherited property reports the parent.
+#[test]
+fn test_unserialize_typed_property_type_error_names_the_declaring_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Parent1 { public int $p = 0; }
+class Child1 extends Parent1 {}
+try {
+    unserialize('O:6:"Child1":1:{s:1:"p";s:3:"abc";}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign string to property Parent1::$p of type int\n"
+    );
+}
+
+/// An untyped property (`public $x = 5;`) has no PHP declaration to enforce: elephc infers an
+/// `int` slot from the default, but PHP accepts any value there, so hydration must not raise a
+/// `TypeError` naming a declaration the source never wrote.
+#[test]
+fn test_unserialize_untyped_property_with_inferred_default_accepts_any_value() {
+    let out = compile_and_run(
+        r#"<?php
+class PU { public $x = 5; }
+$u = unserialize('O:2:"PU":1:{s:1:"x";s:3:"abc";}');
+echo "ok\n";
+"#,
+    );
+    assert_eq!(out, "ok\n");
+}
+
+/// PHP coerces an `int` into a `float` member when the type has a `float` member and no `int`
+/// member (`float|string`), but keeps the `int` when the type also declares `int` (`int|float`).
+#[test]
+fn test_unserialize_widens_int_into_a_float_union_member() {
+    let out = compile_and_run(
+        r#"<?php
+class FS { public float|string $fs = 0; }
+class Num { public int|float $num = 0; }
+$fs = unserialize('O:2:"FS":1:{s:2:"fs";i:1;}');
+$num = unserialize('O:3:"Num":1:{s:3:"num";i:1;}');
+var_dump($fs->fs, $num->num);
+var_dump(is_float($fs->fs), is_int($num->num));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "float(1)\n",
+            "int(1)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+/// PHP prints union members in its canonical order (string, int, float), not the source order,
+/// so the hydration `TypeError` text matches reference PHP regardless of how the union is written.
+#[test]
+fn test_unserialize_type_error_uses_php_canonical_union_order() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public int|float $x = 0; }
+class B { public float|string $y = 0; }
+try {
+    unserialize('O:1:"A":1:{s:1:"x";s:3:"abc";}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    unserialize('O:1:"B":1:{s:1:"y";a:0:{}}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Cannot assign string to property A::$x of type int|float\n",
+            "Cannot assign array to property B::$y of type string|float\n",
+        )
+    );
+}
+
+/// A `false` payload is spelled `false` (not `bool`), and an object rejected by a scalar slot
+/// names its concrete class — the case that resolves the class name before releasing the box.
+#[test]
+fn test_unserialize_type_error_spells_false_and_object() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public ?int $n = null; }
+try {
+    unserialize('O:1:"C":1:{s:1:"n";b:0;}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    unserialize('O:1:"C":1:{s:1:"n";O:8:"stdClass":0:{}}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Cannot assign false to property C::$n of type ?int\n",
+            "Cannot assign stdClass to property C::$n of type ?int\n",
+        )
+    );
 }

@@ -202,13 +202,17 @@ that treats a union as boxed.
 
 The per-class property descriptors the runtime walkers read (`_class_vd_desc_*` for `var_dump`,
 `_class_prop_desc_*` for `print_r`/`var_export`, `_class_json_desc_*`, `_class_serprop_*` for
-`serialize`/`unserialize`/`get_object_vars`/`(array)`) had the same hole: a `?int` property got
+`serialize`/`unserialize`/`get_object_vars`/`(array)`, and `_class_serpdiag_*` for the
+`unserialize` hydration type guard) had the same hole: a `?int` property got
 the union's static tag 7, so every walker dereferenced the integer payload as a Mixed cell
 pointer (#1503). No static tag can describe that slot, because its tag is only known at run
 time, so those descriptors carry `TAGGED_SCALAR_PROPERTY_TAG` (12) instead, and each walker
 replaces it with the slot's high word before dispatching
 (`emit_resolve_tagged_scalar_property_tag`). `unserialize` writes the `{payload, tag}` pair
-back into such a slot. The GC descriptor (`_class_gc_desc_*`) records the slot as `0`: it owns
+back into such a slot, and `__rt_obj_store_prop` first consults the parallel `_class_serpdiag_*`
+row: it rejects a boxed tag the declared type does not accept with PHP's catchable `TypeError`,
+and rewrites an accepted `int` into a `float` for a float-bearing slot. The GC descriptor
+(`_class_gc_desc_*`) records the slot as `0`: it owns
 no heap reference, and tag 7 there had handed the payload to decref, clone and cycle marking.
 
 ### Pointer values
@@ -959,6 +963,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>` — per-class JSON descriptors used by object encoding and JsonSerializable dispatch
 - `_class_tostring_count`, `_class_tostring_ptrs` — dense per-class `__toString` method table used by runtime string coercions of boxed `mixed` objects
 - `_class_iface_method_count` (plus per-interface method tables), `_class_serprop_declaring_ptrs`, `_class_serprop_declaring_missing`, `_class_serprop_declaring_<id>` — interface-method ordering and property declaring-class tables used by `get_object_vars()` visibility filtering and object-to-array projection
+- `_class_serpdiag_ptrs`, `_class_serpdiag_<id>`, `_class_serpdiag_missing`, `_class_serpsuffix_<id>_<slot>` — per-class serialize-property hydration guard read by `__rt_obj_store_prop`: the declared-type message suffix, the set of accepted boxed value tags, and the flag to widen an accepted `int` into a `float`
 - `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — per-class PHP attribute metadata emitted from `ClassInfo`; current helper and Reflection APIs materialize supported static lookups during codegen instead of performing dynamic runtime class/member lookup
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual tables used for inherited instance-method dispatch
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used for late static binding
