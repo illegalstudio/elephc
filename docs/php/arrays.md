@@ -323,10 +323,10 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill with values using keys |
 | `array_pad()` | `array_pad($arr, $size, $value): array` | Pad to length; a negative `$size` pads on the left. A `$size` whose magnitude exceeds `1073741824` — including `PHP_INT_MIN`, whose magnitude is not representable — throws `\ValueError`. |
 | `range()` | `range($start, $end, $step = 1): array` | Sequential integers. `$step`'s sign never picks the direction (`$start` vs `$end` does); a zero step, a negative step on an increasing range, or a step wider than the spanned interval raises `ValueError`, and so does a range of more than `1073741823` elements (`The supplied range exceeds the maximum array size: start=… end=… step=…`, naming the ordered endpoints and `abs($step)`) |
-| `array_diff()` | `array_diff($arr1, $arr2): array` | Values in $arr1 not in $arr2 |
-| `array_intersect()` | `array_intersect($arr1, $arr2): array` | Values in both |
-| `array_diff_key()` | `array_diff_key($arr1, $arr2): array` | Keys in $arr1 not in $arr2 |
-| `array_intersect_key()` | `array_intersect_key($arr1, $arr2): array` | Keys in both |
+| `array_diff()` | `array_diff($arr1, $arr2): array` | Values in $arr1 not in $arr2, compared as `(string)$a === (string)$b`. Each survivor keeps its original key, so an indexed input returns a sparse, hash-shaped result (`[0 => 1, 2 => 3]` for `array_diff([1, 2, 3], [2])`), exactly as in PHP |
+| `array_intersect()` | `array_intersect($arr1, $arr2): array` | Values of $arr1 also in $arr2 (string comparison), each keeping its original key |
+| `array_diff_key()` | `array_diff_key($arr1, $arr2): array` | Entries of $arr1 whose key is absent from $arr2, keeping their keys; indexed inputs are accepted |
+| `array_intersect_key()` | `array_intersect_key($arr1, $arr2): array` | Entries of $arr1 whose key is present in $arr2, keeping their keys; indexed inputs are accepted |
 | `array_diff_assoc()` | `array_diff_assoc($arr1, $arr2): array` | Entries of $arr1 whose `(key, value)` pair is absent from $arr2 (values compared as `(string)$a === (string)$b`). Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
 | `array_intersect_assoc()` | `array_intersect_assoc($arr1, $arr2): array` | Entries of $arr1 whose `(key, value)` pair is present in $arr2 (values compared as strings). Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
 | `array_udiff()` | `array_udiff($arr1, $arr2, $cmp): array` | Two-array form: keeps values absent from $arr2, preserving $arr1 keys and value types. The comparator result is cast to int before testing equality with zero. Supports closures, function names and first-class callables. |
