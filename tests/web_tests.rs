@@ -2848,3 +2848,27 @@ echo count($c6), "|", implode(",", array_keys($_GET)), "\n";
     assert!(r1.ends_with(expected), "first response body: {:?}", r1);
     assert!(r2.ends_with(expected), "second response body: {:?}", r2);
 }
+
+/// `array_push()` onto a request superglobal publishes the grown or split table without
+/// releasing the old one a second time (#1341).
+///
+/// Under `--web` the request superglobals are associative arrays read with `LoadGlobal`. A push
+/// that grows the table, or splits it because `$held` still shares it, must publish the result
+/// the way `$_GET[] = $v` does; retiring the old pointer on top of what the insert already
+/// released double-freed it, which a later request then trips over.
+#[test]
+fn web_array_push_onto_a_request_superglobal_keeps_the_worker_alive() {
+    let dir = make_test_dir("web_array_push_super");
+    let src = "<?php $held = $_GET; for ($i = 0; $i < 40; $i++) { array_push($_GET, $i, 'v' . $i); } echo count($_GET), '/', count($held);";
+    let bin = compile_web_with_flags(&dir, src, "app", &["--heap-debug"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> =
+        (0..4).map(|_| http_request(&addr, "GET", "/?a=1&b=2", &[], "")).collect();
+    let _ = child.kill();
+    let _ = child.wait();
+    for (index, response) in responses.iter().enumerate() {
+        assert!(response.ends_with("82/2"), "response {index}: {response:?}");
+    }
+}

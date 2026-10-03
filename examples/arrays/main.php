@@ -90,6 +90,20 @@ $middle = array_slice($names, 1, 2);
 $middle[0] = "GRACE";
 echo "Sliced names: " . implode(", ", $middle) . " (source still " . implode(", ", $names) . ")\n";
 
+// A PHP array can keep string keys and still append at its next free integer key.
+$associative = ["label" => "values", 5 => "first"];
+$size = array_push($associative, "next");
+echo "Associative push: ";
+foreach ($associative as $key => $value) {
+    echo $key . "=" . $value . " ";
+}
+echo "(now " . $size . " elements)\n";
+
+// With no values, array_push() reports the current count and leaves the hash untouched.
+$before = count($associative);
+$size = array_push($associative);
+echo "Zero-value push: " . $before . " -> " . $size . " elements\n";
+
 // array_splice() removes a window IN PLACE and returns what it removed; the optional
 // fourth argument is spliced in where the removed window was, so the array can grow.
 $queue = [10, 20, 30, 40, 50];

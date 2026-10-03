@@ -48,6 +48,12 @@ pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ));
     }
     let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        return lower_array_push_into_hash(ctx, inst, array);
+    }
     let boxed_receiver = matches!(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
@@ -65,6 +71,117 @@ pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     load_array_push_length_to_result(ctx, array)?;
     store_if_result(ctx, inst)
+}
+
+/// Lowers `array_push()` onto an ASSOCIATIVE receiver, appending at PHP's next automatic
+/// integer key.
+///
+/// PHP draws no distinction between an indexed and an associative array here: `array_push()` is
+/// `$hash[] = $value` repeated, and a hash appends at `max(int keys) + 1`, or `0` when it has
+/// none. The receiver bookkeeping is done ONCE around the whole run of values rather than per
+/// value, because a hash insert does not relocate the table the way an indexed append can — it
+/// is `__rt_hash_set` underneath, which handles growth and the copy-on-write split itself
+/// (issue #1087).
+fn lower_array_push_into_hash(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    // An `AssocArray`-typed value can still be the in-band null-container sentinel at run time:
+    // a missed hash read materializes one, typed as the element type it failed to find. PHP
+    // answers that with a TypeError; dereferencing it segfaults, which is what
+    // `array_push($h["missing"], 2)` did. Guarding here covers the inserts and the count read
+    // alike, since neither may touch the table on that path.
+    let sentinel_label = ctx.next_label("array_push_hash_null");
+    let done_label = ctx.next_label("array_push_hash_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(array, result_reg)?;
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &sentinel_label,
+    );
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    // A zero-value call only reads the count below; it never publishes a replacement pointer.
+    // Releasing a boxed local here would leave its slot unchanged, so epilogue cleanup would
+    // decref the same owner again. The first append is what makes the old owner mutable/consumed.
+    if inst.operands.len() > 1 {
+        if let Some(slot) = receiver.slot() {
+            ctx.release_mutated_source_local_owner(slot, array)?;
+        }
+    }
+    let storage_value_ty = match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_push for PHP type {:?}",
+                other
+            )))
+        }
+    };
+    for index in 1..inst.operands.len() {
+        let value = expect_operand(inst, index)?;
+        require_hash_push_value_fits_storage(ctx, value, &storage_value_ty)?;
+        crate::codegen::lower_inst::hashes::append_one_value_to_hash(ctx, array, value, inst)?;
+        // An insert can split the table for copy-on-write or grow it, so the pointer the
+        // receiver must publish is the helper's RESULT, not the one this side started with.
+        // Recording it per value is what makes the next insert address the new table. The
+        // insert already released or dropped the block it replaced, so the receiver KEEPS the
+        // new pointer rather than retiring the old one a second time -- the same publication
+        // `$hash[] = $v` uses (#1341: a request superglobal read with `LoadGlobal` lost the
+        // table a copy still shared).
+        ctx.store_result_value(array)?;
+        receiver.store_back_container_writeback(ctx, array)?;
+    }
+    ctx.writeback_global_array_source(array)?;
+    // Read the count back from the table rather than from the last insert's return register:
+    // the write-back above can clobber it, and `array_push($hash)` with no values never calls
+    // a helper at all. The logical entry count is the table's first payload word.
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(array, result_reg)?;
+    abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&sentinel_label);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "array_push(): Argument #1 ($array) must be of type array, null given",
+    );
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Refuses a pushed value the receiver's entry storage cannot hold.
+///
+/// `$hash[] = $value` gets its receiver widened by the checker before it is lowered, so a
+/// `string` appended to an `array<string, int>` arrives with `Mixed` entry storage waiting for
+/// it. `array_push()` cannot: its receiver is a by-reference builtin argument, which the checker
+/// pins as a reference alias root and never retypes, so the declared entry type is still `int`.
+/// Storing the string into int-sized, int-tagged slots read back as the pointer's integer value
+/// — silent corruption, with no diagnostic anywhere (issue #1087).
+///
+/// Refusing is the honest answer until the receiver can be widened. It is not a regression:
+/// before this change every associative receiver was a compile error, so the shapes this still
+/// rejects are exactly the ones that never compiled.
+fn require_hash_push_value_fits_storage(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    storage_value_ty: &PhpType,
+) -> Result<()> {
+    if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable) {
+        return Ok(());
+    }
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if value_ty == *storage_value_ty {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_push() of {:?} into an array whose entries are {:?}: the receiver keeps its \
+         declared entry type across a by-reference builtin argument, so the value has nowhere \
+         to go. Assign through `$array[] = ...` instead, which widens the receiver",
+        value_ty, storage_value_ty
+    )))
 }
 
 /// Materializes the receiver's post-append element count into the int result register.
