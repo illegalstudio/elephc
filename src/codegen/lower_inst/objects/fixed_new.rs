@@ -15,7 +15,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     if is_fiber_class(&class_name) {
         return lower_fiber_new(ctx, inst);
     }
-    if reflection::is_reflection_owner_class(&class_name) {
+    if reflection::reflection_owner_base_class(ctx, &class_name).is_some() {
         return reflection::lower_reflection_owner_new(ctx, inst, &class_name);
     }
     if class_name == "CallbackFilterIterator" || class_name == "RecursiveCallbackFilterIterator" {

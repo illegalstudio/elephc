@@ -4482,3 +4482,116 @@ eval('echo implode(",", array_keys((new ReflectionClass("E"))->getConstants())),
          B,X,A\n"
     );
 }
+
+
+/// Reflection casts and get_object_vars expose only PHP's public name/class fields.
+#[test]
+fn test_reflection_builtin_public_properties_are_projected() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute] class PublicViewAttribute {}
+#[PublicViewAttribute] class PublicViewBase { public int $field = 1; public const VALUE = 7; public function inherited() {} }
+class PublicViewChild extends PublicViewBase { public function own() {} }
+class PublicViewReflectionChild extends ReflectionClass { private string $custom; }
+enum PublicViewUnit { case Case; }
+enum PublicViewBacked: string { case Case = 'value'; }
+function public_view_target(int $value) {}
+function public_view_union(int|string $value) {}
+interface PublicViewContract {}
+class PublicViewImplementation implements PublicViewContract {}
+function public_view_intersection(PublicViewImplementation&PublicViewContract $value) {}
+$attribute = (new ReflectionClass(PublicViewBase::class))->getAttributes()[0];
+$reflectionSubclass = new PublicViewReflectionChild(PublicViewChild::class);
+(new ReflectionProperty(PublicViewReflectionChild::class, 'custom'))->setValue($reflectionSubclass, 'user');
+$values = [
+    'attribute' => $attribute,
+    'class' => new ReflectionClass(PublicViewChild::class),
+    'object' => new ReflectionObject(new PublicViewChild()),
+    'enum' => new ReflectionEnum(PublicViewBacked::class),
+    'function' => new ReflectionFunction('public_view_target'),
+    'method' => new ReflectionMethod(PublicViewChild::class, 'inherited'),
+    'property' => new ReflectionProperty(PublicViewChild::class, 'field'),
+    'parameter' => new ReflectionParameter('public_view_target', 'value'),
+    'named-type' => (new ReflectionParameter('public_view_target', 'value'))->getType(),
+    'union-type' => (new ReflectionParameter('public_view_union', 'value'))->getType(),
+    'intersection-type' => (new ReflectionParameter('public_view_intersection', 'value'))->getType(),
+    'constant' => new ReflectionClassConstant(PublicViewChild::class, 'VALUE'),
+    'unit' => new ReflectionEnumUnitCase(PublicViewUnit::class, 'Case'),
+    'backed' => new ReflectionEnumBackedCase(PublicViewBacked::class, 'Case'),
+];
+foreach ($values as $label => $value) {
+    echo $label, ':', json_encode((array)$value), '|', json_encode(get_object_vars($value)), "\n";
+}
+echo 'subclass:', json_encode((array)$reflectionSubclass), '|', json_encode(get_object_vars($reflectionSubclass)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "attribute:{\"name\":\"PublicViewAttribute\"}|{\"name\":\"PublicViewAttribute\"}\n\
+class:{\"name\":\"PublicViewChild\"}|{\"name\":\"PublicViewChild\"}\n\
+object:{\"name\":\"PublicViewChild\"}|{\"name\":\"PublicViewChild\"}\n\
+enum:{\"name\":\"PublicViewBacked\"}|{\"name\":\"PublicViewBacked\"}\n\
+function:{\"name\":\"public_view_target\"}|{\"name\":\"public_view_target\"}\n\
+method:{\"name\":\"inherited\",\"class\":\"PublicViewBase\"}|{\"name\":\"inherited\",\"class\":\"PublicViewBase\"}\n\
+property:{\"name\":\"field\",\"class\":\"PublicViewBase\"}|{\"name\":\"field\",\"class\":\"PublicViewBase\"}\n\
+parameter:{\"name\":\"value\"}|{\"name\":\"value\"}\n\
+named-type:[]|[]\n\
+union-type:[]|[]\n\
+intersection-type:[]|[]\n\
+constant:{\"name\":\"VALUE\",\"class\":\"PublicViewBase\"}|{\"name\":\"VALUE\",\"class\":\"PublicViewBase\"}\n\
+unit:{\"name\":\"Case\",\"class\":\"PublicViewUnit\"}|{\"name\":\"Case\",\"class\":\"PublicViewUnit\"}\n\
+backed:{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}|{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}\n\
+subclass:{\"name\":\"PublicViewChild\",\"\\u0000PublicViewReflectionChild\\u0000custom\":\"user\"}|{\"name\":\"PublicViewChild\"}\n"
+    );
+}
+
+/// User subclasses of ReflectionClass, ReflectionObject, and ReflectionEnum are populated by
+/// the Reflection owner path, so they must carry the builtin's patched member types: with the
+/// unpatched indexed-array tags, `getInterfaces()` failed to type-check and releasing the object
+/// freed its name-keyed maps as packed arrays. Expected output measured on PHP 8.5.
+#[test]
+fn test_reflection_user_subclasses_share_builtin_member_types() {
+    let out = compile_and_run(
+        r#"<?php
+interface SubclassMarker {}
+trait SubclassHelper { public function help() {} }
+class SubclassTarget implements SubclassMarker {
+    use SubclassHelper;
+    public int $field = 1;
+    public static int $count = 3;
+    public function go(int $a) {}
+}
+enum SubclassBacked: string { case One = 'one'; }
+class SubclassOfClass extends ReflectionClass { private string $mine = 'c'; }
+class SubclassOfObject extends ReflectionObject {}
+class SubclassOfEnum extends ReflectionEnum {}
+$values = [
+    'class' => new SubclassOfClass('SubclassTarget'),
+    'object' => new SubclassOfObject(new SubclassTarget()),
+    'enum' => new SubclassOfEnum('SubclassBacked'),
+];
+foreach ($values as $label => $value) {
+    echo $label, ' ', get_class($value), ' ', $value->name, ' ', $value->getName(), ' ',
+        json_encode(get_object_vars($value)), "\n";
+}
+$class = $values['class'];
+echo json_encode(array_keys($class->getInterfaces())), ' ',
+    json_encode(array_keys($class->getTraits())), ' ',
+    json_encode($class->getStaticProperties()), ' ', count($class->getMethods()), "\n";
+echo json_encode(array_keys($values['object']->getInterfaces())), "\n";
+unset($values, $class);
+$bare = new SubclassOfClass('SubclassTarget');
+unset($bare);
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "class SubclassOfClass SubclassTarget SubclassTarget {\"name\":\"SubclassTarget\"}\n\
+object SubclassOfObject SubclassTarget SubclassTarget {\"name\":\"SubclassTarget\"}\n\
+enum SubclassOfEnum SubclassBacked SubclassBacked {\"name\":\"SubclassBacked\"}\n\
+[\"SubclassMarker\"] [\"SubclassHelper\"] {\"count\":3} 2\n\
+[\"SubclassMarker\"]\n\
+done\n"
+    );
+}
