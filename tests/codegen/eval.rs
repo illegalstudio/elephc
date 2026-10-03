@@ -30503,3 +30503,16 @@ if ($w instanceof Wide) { echo readwide($w); }
     );
     assert_eq!(out, "2|7s");
 }
+
+/// Verifies that eval allows an exception subclass implementing a throwable interface.
+#[test]
+fn eval_allows_exception_subclass_implementing_throwable_interface() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface UserThrowable extends Throwable {} class Good extends RuntimeException implements UserThrowable {}');
+$e = new Good('boom');
+echo $e instanceof Throwable ? "throwable" : "no", "|", $e->getMessage(), "\n";
+"#,
+    );
+    assert_eq!(out, "throwable|boom\n");
+}

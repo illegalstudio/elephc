@@ -66,7 +66,7 @@ pub(super) fn validate_concrete_class_aot_interface_requirements(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for requirement in pending_class_aot_interface_method_requirements(class, context, values)? {
-        if !class_has_aot_interface_method(class, &requirement, context) {
+        if !class_has_aot_interface_method(class, &requirement, context, values)? {
             return Err(EvalStatus::RuntimeFatal);
         }
     }

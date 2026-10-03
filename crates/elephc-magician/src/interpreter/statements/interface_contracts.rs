@@ -319,23 +319,43 @@ pub(super) fn class_has_builtin_interface_method(
 }
 
 /// Returns whether a class or its eval parents satisfy one generated/AOT interface method.
+///
+/// When neither the class nor its eval parents declare the method, it may still be inherited
+/// from a builtin/AOT parent: a class that extends `Exception` satisfies `Throwable`'s methods
+/// through that parent, so the AOT dispatch hierarchy is consulted before giving up.
 pub(super) fn class_has_aot_interface_method(
     class: &EvalClass,
     requirement: &EvalAotInterfaceMethodRequirement,
     context: &ElephcEvalContext,
-) -> bool {
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     if let Some((declaring_class, method)) = pending_class_method(class, &requirement.name, context)
     {
-        return class_method_satisfies_aot_interface_requirement(
+        return Ok(class_method_satisfies_aot_interface_requirement(
             &method,
             &declaring_class,
             requirement,
             Some(class),
             context,
             true,
-        );
+        ));
     }
-    false
+    let Some(parent) = class.parent() else {
+        return Ok(false);
+    };
+    // The inherited AOT method only has dispatch metadata (visibility/static/abstract), not a
+    // full signature; the requirement is accepted when the parent provides a concrete public
+    // instance method of that name. An inherited abstract method is rejected here and again by
+    // `validate_concrete_class_aot_parent_requirements`.
+    Ok(eval_aot_method_dispatch_metadata_in_hierarchy(
+        parent,
+        &requirement.name,
+        context,
+        values,
+    )?
+    .is_some_and(|(_, visibility, is_static, is_abstract)| {
+        visibility == EvalVisibility::Public && !is_static && !is_abstract
+    }))
 }
 
 /// Returns whether a class or its eval parents satisfy one interface method signature.
