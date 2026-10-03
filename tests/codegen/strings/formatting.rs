@@ -707,3 +707,32 @@ echo "[", sprintf($f, null), "]";
     );
     assert_eq!(out, "[][][0][0][]");
 }
+
+/// `sprintf()` / `vsprintf()` with a format built at run time release that format after the call:
+/// the result is written into the concat arena and never aliases an argument, so keeping the
+/// owned format alive for the result's lifetime leaked one block per call. `var_export()` of a
+/// float formats through `sprintf("%." . $p . "e", ...)`, which is how #629 surfaced. Output and
+/// a clean heap under `--heap-debug` over a loop. Regression for #629.
+#[test]
+fn test_sprintf_runtime_format_and_var_export_float_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function mk(int $n): string { return str_repeat("ab", $n); }
+$p = $argc + 1;
+$r = "";
+for ($i = 0; $i < 40; $i++) {
+    $r = sprintf("%." . $p . "e|%s|%s", 1.5, mk(2), "x" . $p)
+        . vsprintf("%" . $p . "s|", ["q"])
+        . var_export(1.5, true) . var_export(-0.1, true) . var_export(1e100, true)
+        . var_export([1.25, "a" => 0.1 + 0.2], true);
+}
+echo $r, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "1.50e+0|abab|x2 q|1.5-0.11.0E+100array (\n  0 => 1.25,\n  'a' => 0.30000000000000004,\n)\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
