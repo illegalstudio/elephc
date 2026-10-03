@@ -205,6 +205,12 @@ out-of-range value is reduced modulo 2^64 before being read back as a signed 64-
 (so `(int)1e300` is `0` and `(int)1.5e19` is `-3446744073709551616`). The same conversion is
 used for float array keys, so `$a[NAN]` and `$a[INF]` both write index `0`.
 
+Under the PHP 8.5 profile (the default), converting `NAN` to a string (`echo`, `(string)`,
+interpolation, concatenation, a `string` parameter, `print_r()`) prints `NAN` and raises
+`Warning: unexpected NAN value was coerced to string`, and converting it to a bool raises the
+matching `coerced to bool` warning. Formatting that is not a conversion (`var_dump()`,
+`var_export()`, `serialize()`, a comparison) stays silent, as in PHP. Older profiles never warn.
+
 Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 
 ### Type functions
