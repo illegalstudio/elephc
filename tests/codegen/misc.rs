@@ -571,7 +571,7 @@ fn session_status_int_constants_resolve_to_php_values() {
 /// `if (!defined('PHP_SESSION_NONE')) { define(...); }` guard (removed later by the
 /// prelude owner once every consumer relies on the predefined constants). Because
 /// `defined()` on a registry-backed name now folds true unconditionally, the guarded
-/// `define()` calls become unreachable and never run, so no "Constant already defined"
+/// `define()` calls become unreachable and never run, so no "Constant X already defined"
 /// warning can occur across repeated (request-like) executions of the guard.
 #[test]
 fn session_status_constants_coexist_with_guarded_define() {

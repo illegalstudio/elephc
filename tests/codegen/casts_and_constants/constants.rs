@@ -76,3 +76,51 @@ var_dump(\constant('Demo\PHP_EOL'));
         )
     );
 }
+
+/// Redefining a constant keeps its first value and warns where the second declaration runs,
+/// whichever of `const` and `define()` spells either one: `define()` then returns false. A
+/// constant PHP predefines (`NAN`) warns on its first user declaration. A namespaced name
+/// prints its namespace lowercased, as PHP stores it. Expected output measured on PHP 8.5.10.
+/// Regression for #1482.
+#[test]
+fn test_constant_redefinition_warns_and_keeps_the_first_value() {
+    let out = compile_and_run_capture(
+        r#"<?php
+namespace App {
+    const X = 1;
+    const X = 5;
+    function f() { return X; }
+    echo f(), " ", \defined('App\X') ? "d" : "n", "\n";
+}
+namespace {
+    const FOO = 1;
+    const FOO = 2;
+    var_dump(FOO, constant("FOO"));
+    define('BAR', 1);
+    define('BAR', 2);
+    define('BAZ', 1);
+    const BAZ = 3;
+    const QUX = 4;
+    var_dump(BAR, BAZ, define('QUX', 5), QUX);
+    const NAN = 1;
+    var_dump(is_nan(NAN));
+}
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "1 d\nint(1)\nint(1)\nint(1)\nint(1)\nbool(false)\nint(4)\nbool(true)\n"
+    );
+    assert_eq!(
+        out.stderr,
+        concat!(
+            "Warning: Constant app\\X already defined, this will be an error in PHP 9\n",
+            "Warning: Constant FOO already defined, this will be an error in PHP 9\n",
+            "Warning: Constant BAR already defined, this will be an error in PHP 9\n",
+            "Warning: Constant BAZ already defined, this will be an error in PHP 9\n",
+            "Warning: Constant QUX already defined, this will be an error in PHP 9\n",
+            "Warning: Constant NAN already defined, this will be an error in PHP 9\n",
+        )
+    );
+}

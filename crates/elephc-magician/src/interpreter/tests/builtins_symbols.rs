@@ -304,7 +304,7 @@ echo call_user_func_array("defined", ["constant_name" => "\\DynEvalConst"]) ? "Y
     assert_eq!(values.output, "YokokYYNNYY");
     assert_eq!(
         values.warnings,
-        vec![DEFINE_ALREADY_DEFINED_WARNING.to_string()]
+        vec![define_already_defined_warning("DynEvalConst")]
     );
 }
 /// Verifies eval predefined runtime constants are fetchable and cannot be redefined.
@@ -336,7 +336,7 @@ return PHP_INT_MAX;"#,
     assert_eq!(values.get(result), FakeValue::Int(i64::MAX));
     assert_eq!(
         values.warnings,
-        vec![DEFINE_ALREADY_DEFINED_WARNING.to_string()]
+        vec![define_already_defined_warning("PHP_OS")]
     );
 }
 

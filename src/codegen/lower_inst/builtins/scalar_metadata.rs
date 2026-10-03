@@ -10,11 +10,22 @@
 use super::*;
 
 /// Lowers `define("NAME", value)` with the duplicate-name runtime guard.
+///
+/// A top-level `const NAME = value;` lowers to the same call, so both spellings share one
+/// guard: whichever runs second warns and keeps the first value. A constant PHP itself defines
+/// (`NAN`, `PHP_EOL`, `E_ALL`) is already defined before the program starts, so redefining it
+/// always warns and returns false.
 pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "define", 2)?;
     let name_value = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
     let constant_name = const_string_operand(ctx, name_value)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if crate::types::predefined_constants::is_registered_constant(&constant_name) {
+        emit_duplicate_define_warning(ctx, &constant_name);
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        return store_if_result(ctx, inst);
+    }
     let flag_symbol = ctx.data.add_comm(define_seen_symbol(&constant_name), 8);
     let global_symbol = ir_global_symbol(&constant_name);
     let value_ty = ctx.value_php_type(value)?;
@@ -23,10 +34,9 @@ pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
     let first_label = ctx.next_label("define_first");
     let done_label = ctx.next_label("define_done");
-    let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &flag_symbol, 0);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &first_label);
-    emit_duplicate_define_warning(ctx);
+    emit_duplicate_define_warning(ctx, &constant_name);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -40,22 +50,35 @@ pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
-/// Emits the PHP warning for a repeated `define()` call.
-pub(in crate::codegen::lower_inst) fn emit_duplicate_define_warning(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.adrp("x1", "_diag_define_already_defined_msg");
-            ctx.emitter.add_lo12("x1", "x1", "_diag_define_already_defined_msg");
-            let length = format!("mov x2, #{}", DEFINE_ALREADY_DEFINED_WARNING.len());
-            ctx.emitter.instruction(&length);                                   // pass the duplicate-define warning byte length
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("lea rdi, [rip + _diag_define_already_defined_msg]"); // pass the duplicate-define warning pointer
-            let length = format!("mov esi, {}", DEFINE_ALREADY_DEFINED_WARNING.len());
-            ctx.emitter.instruction(&length);                                   // pass the duplicate-define warning byte length
-        }
-    }
+/// Emits the PHP warning for redefining the constant `name`, from `define()` or `const`.
+pub(in crate::codegen::lower_inst) fn emit_duplicate_define_warning(ctx: &mut FunctionContext<'_>, name: &str) {
+    let message = duplicate_constant_warning(name);
+    let (label, len) = ctx.data.add_string(message.as_bytes());
+    let (pointer, length) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_symbol_address(ctx.emitter, pointer, &label);
+    abi::emit_load_int_immediate(ctx.emitter, length, len as i64);
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+}
+
+/// Returns PHP's warning line for redefining the constant `name`. PHP 8.5 adds that it will
+/// become an error in PHP 9; earlier profiles print the bare sentence. The namespace part of a
+/// namespaced name prints lowercased, as PHP stores it (`app\X`); the constant's own name keeps
+/// its case.
+pub(crate) fn duplicate_constant_warning(name: &str) -> String {
+    let suffix = if crate::codegen_support::compile_php_version().version_id() >= 80500 {
+        ", this will be an error in PHP 9"
+    } else {
+        ""
+    };
+    let name = name.trim_start_matches('\\');
+    let shown = match name.rfind('\\') {
+        Some(split) => format!("{}{}", name[..split].to_ascii_lowercase(), &name[split..]),
+        None => name.to_string(),
+    };
+    format!("Warning: Constant {shown} already defined{suffix}\n")
 }
 
 /// Lowers `gettype(value)` for statically concrete PHP types.

@@ -9728,7 +9728,7 @@ echo eval('return function_exists("define") && function_exists("defined") ? "Y" 
     assert_eq!(out.stdout, "YY77NNYYYYY");
     assert!(
         out.stderr
-            .contains("Warning: define(): Constant already defined"),
+            .contains("Warning: Constant DynEvalConst already defined, this will be an error in PHP 9"),
         "expected duplicate eval define warning, got stderr={}",
         out.stderr
     );
@@ -9753,7 +9753,7 @@ echo eval('return (PHP_EOL === "\n" ? "eol" : "bad") . ":" .
     assert_eq!(out.stdout, "eol:os:/:int:defined:root:case:locked");
     assert!(
         out.stderr
-            .contains("Warning: define(): Constant already defined"),
+            .contains("Warning: Constant PHP_OS already defined, this will be an error in PHP 9"),
         "expected predefined eval define warning, got stderr={}",
         out.stderr
     );
@@ -9889,7 +9889,7 @@ echo eval('return define("EvalErrorContractConst", 2) ? "bad" : "ok";');
     assert!(
         warning
             .stderr
-            .contains("Warning: define(): Constant already defined"),
+            .contains("Warning: Constant EvalErrorContractConst already defined, this will be an error in PHP 9"),
         "stderr did not contain eval warning diagnostic: {}",
         warning.stderr
     );

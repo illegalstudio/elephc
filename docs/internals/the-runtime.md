@@ -1618,7 +1618,7 @@ Additionally, the runtime emits static data tables:
 - `_ob_handler_name`, `_ob_closure_invoke_name`, `_ob_k_*` — the default-handler / `Closure::__invoke` display names and status-array key strings used by `ob_get_status()` and `ob_list_handlers()`
 - `_ob_ntc_*`, `_ob_warn_bad_callback_*`, `_ob_fatal_in_handler` — PHP-parity `ob_*` notice, warning, and fatal texts, routed through `__rt_stdout_write` so parent buffers capture them like PHP
 - `_uncaught_exc_msg` — fatal exception string written by `__rt_throw_current` when no handler exists
-- `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — suppressible runtime warning text routed through `__rt_diag_warning`
+- `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg` — suppressible runtime warning text routed through `__rt_diag_warning`. A repeated `define()` or `const` names its constant, so its `Constant X already defined` warning is a per-constant string the define lowering adds to the program's data, not a shared runtime symbol.
 - `_fiber_msg_already_started`, `_fiber_msg_not_suspended`, `_fiber_msg_throw_not_suspended`, `_fiber_msg_not_terminated`, `_fiber_msg_suspend_outside`, `_fiber_msg_unsupported_callable`, `_fiber_msg_stack_alloc_failed` — messages used by `FiberError` runtime paths
 - `_fiber_class_id`, `_fiber_error_class_id` — per-program class ids used by Fiber object cleanup and `FiberError` construction
 - `_generator_class_id` — per-program class id used to recognize Generator frames during object deep-free
