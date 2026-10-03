@@ -180,10 +180,10 @@ fn entry_value_in_unreachable_block_is_valid() {
     assert_eq!(validate_function(&function), Ok(()));
 }
 
-/// An unreachable block cannot import a value from an unrelated unreachable block.
+/// Cross-block uses in dead continuations have no executable dominance requirement.
 #[test]
-fn sibling_unreachable_value_use_is_invalid() {
-    let mut function = Function::new("dead_siblings".to_string(), IrType::Void, PhpType::Void);
+fn connected_unreachable_value_use_is_valid() {
+    let mut function = Function::new("dead_continuation".to_string(), IrType::Void, PhpType::Void);
     {
         let mut builder = Builder::new(&mut function);
         let entry = builder.create_named_block("entry", vec![]);
@@ -194,7 +194,7 @@ fn sibling_unreachable_value_use_is_invalid() {
         builder.terminate(Terminator::Return { value: None });
         builder.position_at_end(producer);
         let value = builder.emit_const_i64(1);
-        builder.terminate(Terminator::Unreachable);
+        builder.terminate(Terminator::Br { target: consumer, args: vec![] });
         builder.position_at_end(consumer);
         let _ = builder.emit_with_effects(
             Op::EchoValue,
@@ -208,10 +208,7 @@ fn sibling_unreachable_value_use_is_invalid() {
         );
         builder.terminate(Terminator::Unreachable);
     }
-    assert!(matches!(
-        validate_function(&function),
-        Err(ValidationError::UseNotDominated { .. })
-    ));
+    assert_eq!(validate_function(&function), Ok(()));
 }
 
 /// Dead code still cannot use a same-block value before its definition.
