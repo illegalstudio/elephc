@@ -3613,6 +3613,27 @@ mod tests {
         assert_eq!(child_final, ("HY001".into(), 222));
     }
 
+    /// A `sqlsrv:` constructor failure publishes the ODBC CLI diagnostic captured by
+    /// `remember_open_error` into PDO's last-open cells (issue #1729). Before the fix,
+    /// `store_open_failure` read the CLI diagnostic only for `odbc:` / `informix:` /
+    /// `ibm:` DSNs, so SQLSRV fell back to the empty SQLSTATE and a null native code.
+    #[cfg(feature = "sqlsrv")]
+    #[test]
+    fn sqlsrv_open_failure_publishes_the_cli_diagnostic() {
+        remember_open_error(&ErrorState {
+            sqlstate: "42S22".into(),
+            native_code: 207,
+            message: "Invalid column name".into(),
+        });
+        crate::store_open_failure(
+            "sqlsrv:Server=tcp:example.database.windows.net,1433;Database=app",
+            "SQLSRV connection failed",
+        );
+        let state = unsafe { std::ffi::CStr::from_ptr(crate::elephc_pdo_last_open_sqlstate()) };
+        assert_eq!(state.to_str().unwrap(), "42S22");
+        assert_eq!(crate::elephc_pdo_last_open_native_code(), 207);
+    }
+
     /// Appends one driver-format length-prefixed UTF-16 classification field.
     #[cfg(feature = "sqlsrv")]
     fn push_classification_text(blob: &mut Vec<u8>, value: &str) {

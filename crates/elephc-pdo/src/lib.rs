@@ -374,7 +374,11 @@ fn store_open_failure(dsn: &str, message: &str) {
         {
             (String::new(), 0)
         }
-    } else if dsn.starts_with("odbc:") || dsn.starts_with("informix:") || dsn.starts_with("ibm:") {
+    } else if dsn.starts_with("odbc:")
+        || dsn.starts_with("informix:")
+        || dsn.starts_with("ibm:")
+        || dsn.starts_with("sqlsrv:")
+    {
         #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm", feature = "sqlsrv"))]
         {
             odbc::open_diagnostic()
