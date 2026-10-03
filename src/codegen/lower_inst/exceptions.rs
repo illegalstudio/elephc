@@ -34,7 +34,7 @@ use super::super::context::FunctionContext;
 use super::super::Result;
 
 /// Throws a catchable PHP `Error` carrying a static message.
-pub(super) fn emit_error(ctx: &mut FunctionContext<'_>, message: &str) {
+pub(in crate::codegen) fn emit_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "Error", "_spl_error_class_id", message);
 }
 

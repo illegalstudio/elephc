@@ -115,7 +115,7 @@ for ($i = 0; $i < 3; $i++) {
     );
 }
 
-/// Invalid Mixed throws release scalar and non-Throwable object boxes before TypeError.
+/// Invalid Mixed throws release scalar and non-Throwable object boxes before distinct PHP Errors.
 #[test]
 fn test_eval_mixed_throw_failure_releases_scalar_and_plain_object_boxes() {
     let baseline = compile_and_run_with_heap_debug(r#"<?php
@@ -132,15 +132,15 @@ echo 'baseline';
     let out = compile_and_run_with_heap_debug(r#"<?php
 for ($i = 0; $i < 3; $i++) {
     eval('$scalar = 42; $plain_object = new stdClass();');
-    try { throw $scalar; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
-    try { throw $plain_object; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
-    try { $unused = true ? throw $scalar : null; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
-    try { $unused = true ? throw $plain_object : null; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    try { throw $scalar; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    try { throw $plain_object; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    try { $unused = true ? throw $scalar : null; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    try { $unused = true ? throw $plain_object : null; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
     unset($scalar, $plain_object, $error, $unused);
 }
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "Can only throw objects|".repeat(12));
+    assert_eq!(out.stdout, "Error:Can only throw objects|Error:Cannot throw objects that do not implement Throwable|".repeat(6));
     assert_eq!(
         eval_operand_owner_live_blocks(&out.stderr),
         baseline_live_blocks,

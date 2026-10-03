@@ -558,17 +558,17 @@ try { throw new EvalThrownRuntimeException('direct'); } catch (Exception $error)
     assert_eq!(out, "expression|local|direct");
 }
 
-/// PHP still raises a catchable TypeError if eval has widened a non-object throw operand to Mixed.
+/// Invalid Mixed throws raise PHP Error with distinct non-object and non-Throwable diagnostics.
 #[test]
 fn test_aot_throw_runtime_checks_eval_mixed_values_are_throwable() {
     let out = compile_and_run(r#"<?php
 eval('$scalar = 42; $plain_object = new stdClass();');
-try { throw $scalar; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
-try { throw $plain_object; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
-try { $unused = true ? throw $scalar : null; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
-try { $unused = true ? throw $plain_object : null; } catch (TypeError $error) { echo $error->getMessage(); }
+try { throw $scalar; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+try { throw $plain_object; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+try { $unused = true ? throw $scalar : null; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+try { $unused = true ? throw $plain_object : null; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(); }
 "#);
-    assert_eq!(out, "Can only throw objects|Can only throw objects|Can only throw objects|Can only throw objects");
+    assert_eq!(out, "Error:Can only throw objects|Error:Cannot throw objects that do not implement Throwable|Error:Can only throw objects|Error:Cannot throw objects that do not implement Throwable");
 }
 
 /// An eval-declared class that extends Error is throwable and is not an Exception.

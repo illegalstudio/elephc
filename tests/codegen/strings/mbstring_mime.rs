@@ -91,9 +91,8 @@ echo mb_decode_mimeheader("=?UTF-16?B?//5BAA==?= =?UTF-16?B?QgA=?="), "\n";
     }
 }
 
-/// Rejects runtime arity/type mistakes and preserves the strict caller's string contract.
-#[test]
-fn test_mbstring_mime_decode_runtime_errors() {
+/// Checks runtime arity/type mistakes through one native or opaque eval compile cycle.
+fn check_mime_decode_runtime_errors(eval: bool) {
     let body = r#"
 $decode = $argc > 0 ? "mb_decode_mimeheader" : "strlen";
 try { $decode(); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
@@ -101,16 +100,40 @@ try { $decode("x", "y"); } catch (ArgumentCountError $e) { echo $e->getMessage()
 try { $decode([]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 echo $decode(123), "\n";
 "#;
-    for eval in [false, true] {
-        assert_eq!(compile_and_run(&program(body, eval)), "mb_decode_mimeheader() expects exactly 1 argument, 0 given\nmb_decode_mimeheader() expects exactly 1 argument, 2 given\nmb_decode_mimeheader(): Argument #1 ($string) must be of type string, array given\n123\n");
-    }
+    assert_eq!(compile_and_run(&program(body, eval)), "mb_decode_mimeheader() expects exactly 1 argument, 0 given\nmb_decode_mimeheader() expects exactly 1 argument, 2 given\nmb_decode_mimeheader(): Argument #1 ($string) must be of type string, array given\n123\n");
+}
+
+/// Native runtime MIME calls reject arity/type mistakes and preserve weak scalar coercion.
+#[test]
+fn test_mbstring_mime_decode_runtime_errors() {
+    check_mime_decode_runtime_errors(false);
+}
+
+/// Opaque eval MIME calls keep the same runtime arity/type and weak scalar checks.
+#[test]
+fn test_mbstring_mime_decode_eval_runtime_errors() {
+    check_mime_decode_runtime_errors(true);
+}
+
+/// Checks the strict caller boundary through one native or opaque eval compile cycle.
+fn check_mime_decode_strict_runtime_errors(eval: bool) {
     let strict = r#"$decode = "mb_decode_mimeheader";
 try { echo $decode(123); } catch (TypeError $e) { echo $e->getMessage(); }"#;
-    for eval in [false, true] {
-        let source = program(strict, eval).replacen("<?php", "<?php declare(strict_types=1);", 1);
-        let expected = if eval { "123" } else { "mb_decode_mimeheader(): Argument #1 ($string) must be of type string, int given" };
-        assert_eq!(compile_and_run(&source), expected);
-    }
+    let source = program(strict, eval).replacen("<?php", "<?php declare(strict_types=1);", 1);
+    let expected = if eval { "123" } else { "mb_decode_mimeheader(): Argument #1 ($string) must be of type string, int given" };
+    assert_eq!(compile_and_run(&source), expected);
+}
+
+/// Native MIME decoding preserves the strict caller's string parameter contract.
+#[test]
+fn test_mbstring_mime_decode_strict_runtime_errors() {
+    check_mime_decode_strict_runtime_errors(false);
+}
+
+/// Opaque eval keeps its own weak boundary even when its native caller is strict.
+#[test]
+fn test_mbstring_mime_decode_strict_eval_runtime_errors() {
+    check_mime_decode_strict_runtime_errors(true);
 }
 
 /// Keeps known callable arity failures catchable instead of emitting invalid typed EIR.

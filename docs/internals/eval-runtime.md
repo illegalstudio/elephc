@@ -73,8 +73,10 @@ defers the `Throwable` check to runtime. The emitted path validates the boxed
 `Mixed` value against the runtime `Throwable` interface before unwinding. For
 a valid throwable it moves the object owner out of the `Mixed` box into the
 active exception slot and releases the box; for an invalid value it releases
-the box before raising the catchable `TypeError`. This ownership transfer is
-shared by statement-form and expression-form throws. A runnable program is
+the box before raising a catchable `Error`. A non-object raises
+`Can only throw objects`; an object that does not implement `Throwable` raises
+`Cannot throw objects that do not implement Throwable`. This ownership transfer
+is shared by statement-form and expression-form throws. A runnable program is
 `examples/eval-throw/`.
 
 `src/ir_lower/program.rs` repeats the final bridge-requirement check against the

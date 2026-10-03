@@ -59,6 +59,7 @@ mod capture_view_owners;
 mod static_properties;
 mod synthetic_arrays;
 mod throwable_constructors;
+mod mixed_throw_errors;
 mod xml_parser_arguments;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.

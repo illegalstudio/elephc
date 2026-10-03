@@ -47,7 +47,6 @@ mod comparisons;
 mod conversions;
 mod enums;
 pub(super) mod exceptions;
-pub(super) use exceptions::emit_type_error;
 mod mixed_narrowing;
 mod externs;
 mod floats;
