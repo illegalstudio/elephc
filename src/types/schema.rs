@@ -164,6 +164,9 @@ fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
 /// Folds one supported associative attribute array key.
 fn fold_attr_key(expr: &Expr) -> Option<AttrKey> {
     match &expr.kind {
+        ExprKind::ClassConstant { receiver: StaticReceiver::Named(name) } => {
+            Some(AttrKey::Str(name.as_str().to_string()))
+        }
         ExprKind::IntLiteral(value) => Some(AttrKey::Int(*value)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(n) => Some(AttrKey::Int(n.wrapping_neg())),

@@ -11,6 +11,26 @@
 
 use super::*;
 
+/// Reflection retains namespace-resolved class names used as associative attribute keys.
+#[test]
+fn test_attribute_array_keys_accept_named_class_constants() {
+    let out = compile_and_run(r#"<?php
+namespace Attributes;
+#[\Attribute] class MapAttribute { public function __construct(public array $map) {} }
+class Payload {}
+use Attributes\Payload as Alias;
+#[MapAttribute([Alias::class => 1])]
+class Target {}
+#[MapAttribute([Alias::class => 2])]
+function probe() {}
+$arguments = (new \ReflectionClass(Target::class))->getAttributes()[0]->getArguments();
+echo $arguments[0][Payload::class], "|";
+$arguments = (new \ReflectionFunction("Attributes\\probe"))->getAttributes()[0]->getArguments();
+echo $arguments[0][Payload::class];
+"#);
+    assert_eq!(out, "1|2");
+}
+
 /// Verifies that arbitrary user-defined attributes on classes, methods,
 /// and properties do not change the compiled output or observable runtime
 /// behavior. The class under test has multiple attributes and a method

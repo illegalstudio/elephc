@@ -211,6 +211,12 @@ impl Scanner<'_> {
                     self.usage
                         .methods
                         .insert((class, php_symbol_key(method), true));
+                } else {
+                    // Named ::class constants have already folded to strings. Keep the
+                    // class edge even when a runtime call obscures the resulting value.
+                    // Text alone does not perform Reflection discovery. Strings without
+                    // a matching declaration add no graph node.
+                    self.usage.classes.insert(php_symbol_key(name));
                 }
             }
             ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)

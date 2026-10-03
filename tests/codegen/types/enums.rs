@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Class-name constant expressions survive enum schema construction as string backing values.
+#[test]
+fn test_backed_enum_values_accept_named_class_constant_expressions() {
+    let out = compile_and_run(r#"<?php
+namespace EnumNames;
+class Payload {}
+use EnumNames\Payload as Alias;
+enum Kind: string { case Plain = Alias::class; case Handler = \EnumNames\Payload::class . "Handler"; }
+echo Kind::Plain->value, "|", Kind::Handler->value;
+"#);
+    assert_eq!(out, "EnumNames\\Payload|EnumNames\\PayloadHandler");
+}
+
 /// Verifies `Enum` can name an enum and remain usable in type hints and scoped access.
 #[test]
 fn test_enum_soft_keyword_name_across_runtime_contexts() {

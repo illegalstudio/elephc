@@ -450,6 +450,11 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             element_type,
             len: Box::new(fold_expr(*len)),
         },
+        // Namespace resolution has already fixed a named receiver's spelling. Lexical
+        // and late-static class names still depend on their declaration or runtime scope.
+        ExprKind::ClassConstant { receiver: crate::parser::ast::StaticReceiver::Named(name) } => {
+            ExprKind::StringLiteral(name.as_str().trim_start_matches('\\').to_string())
+        }
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
         ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
             object: Box::new(fold_expr(*object)),

@@ -14,6 +14,28 @@
 
 use super::*;
 
+/// Named class strings fold with their span, while lexical and late-static receivers stay intact.
+#[test]
+fn test_fold_named_class_constant_preserves_scope_and_span() {
+    let span = Span::new_in_source(3, 7, 4);
+    let expr = Expr::new(ExprKind::ClassConstant {
+        receiver: StaticReceiver::Named(Name::from_parts(
+            crate::names::NameKind::FullyQualified, vec!["App".to_string(), "Payload".to_string()],
+        )),
+    }, span);
+    let result = fold_constants(vec![Stmt::echo(expr)]);
+    let StmtKind::Echo(expr) = &result[0].kind else { panic!("expected echo"); };
+    assert_eq!(expr.kind, ExprKind::StringLiteral("App\\Payload".to_string()));
+    assert_eq!(expr.span, span);
+    for receiver in [StaticReceiver::Self_, StaticReceiver::Parent, StaticReceiver::Static] {
+        let result = fold_constants(vec![Stmt::echo(Expr::new(
+            ExprKind::ClassConstant { receiver: receiver.clone() }, span,
+        ))]);
+        let StmtKind::Echo(expr) = &result[0].kind else { panic!("expected echo"); };
+        assert_eq!(expr.kind, ExprKind::ClassConstant { receiver });
+    }
+}
+
 /// Builds the literal expression named by the comparison table's operand keys.
 ///
 /// The names mirror the PHP fixture that generated the expected results, so a row can be read
