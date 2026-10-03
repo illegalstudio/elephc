@@ -77,7 +77,8 @@ foreach ($map as $k => $v) { echo "$k=$v "; } // a=1 c=3 b=9
 
 `unset()` also works on indexed arrays. PHP removes the key **without renumbering** the survivors,
 so the array becomes sparse (a hole is left). The remaining keys keep their original values, and a
-later `$arr[] = ...` append continues at `max_key + 1`.
+later `$arr[] = ...` append uses the array's next integer key. Removing a key does not move this
+counter backward, even when the removed key was the highest one.
 
 ```php
 <?php
@@ -113,32 +114,19 @@ echo count($x);        // 1
 echo count($snapshot); // 2 — the copy taken before the call is untouched
 ```
 
-The one shape this does not cover is an **indexed** array reached by reference
-(`function f(array &$a) { unset($a[1]); }`). Removing a key from a packed list leaves a hole, so
-the array has to become a hash — and the caller's slot, still described as `array<T>`, is storage
-the callee cannot retype. That case reports a named compile error instead.
-
-**This refusal is deliberate and permanent, not a gap waiting to be filled.** Lifting it would
-mean a callee silently changing the representation of a caller's local, which is the one thing
-the typed-slot model does not allow; refusing loudly is the intended behaviour. Two workarounds
-cover every use:
+This also works for an **indexed** array passed by reference. Removing an element leaves a hole
+without renumbering the surviving keys, and the caller observes the removal. Appending afterward
+uses the preserved next integer key rather than one past the highest surviving key:
 
 ```php
 <?php
-// 1. Key the array with strings: the removal happens in place, through the reference.
-function dropAssoc(array &$a, string $k) { unset($a[$k]); }
-$map = ["a" => 10, "b" => 20];
-dropAssoc($map, "b");
-print_r($map);    // ["a" => 10]
-
-// 2. Or rebuild and return, letting the CALLER rebind its own slot.
-function dropIndexed(array $a, int $i): array {
-    unset($a[$i]);
-    return $a;
-}
+function dropIndexed(array &$a) { unset($a[1]); }
 $list = [10, 20, 30];
-$list = dropIndexed($list, 1);
-print_r($list);   // [0 => 10, 2 => 30] — PHP's holes, no renumbering
+dropIndexed($list);
+echo implode(",", array_keys($list)); // 0,2
+echo "|", implode(",", $list);       // |10,30
+$list[] = 40;
+echo "|", implode(",", array_keys($list)); // |0,2,3
 ```
 
 ## Array union
