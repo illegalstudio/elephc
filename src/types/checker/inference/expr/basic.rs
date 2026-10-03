@@ -429,18 +429,9 @@ impl Checker {
                     CastType::Float => PhpType::Float,
                     CastType::String => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
-                    CastType::Array
-                        if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
-                    PhpType::AssocArray {
-                        key: Box::new(PhpType::Str),
-                        value: Box::new(PhpType::Mixed),
-                    },
-                    CastType::Array
-                        if matches!(
-                            source_ty.codegen_repr(),
-                            PhpType::Mixed | PhpType::Union(_)
-                        ) => PhpType::Mixed,
-                    CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+                    // Shared with EIR lowering so the static type always names the storage
+                    // the lowered conversion produces.
+                    CastType::Array => crate::types::array_cast_result_type(&source_ty),
                     // `(object)` is the identity on an object, so the static class survives the
                     // cast; a runtime-typed source may already hold an unrelated class, which
                     // only `mixed` can describe. Every other source becomes a fresh stdClass.

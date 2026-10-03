@@ -63,6 +63,9 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     if matches!(target, CastType::Object) {
         return lower_object_cast(ctx, inner, expr);
     }
+    if matches!(target, CastType::Array) {
+        return lower_array_cast(ctx, inner, expr);
+    }
     let value = lower_expr(ctx, inner);
     // Keep the original producer visible for a no-op string cast. Wrapping an
     // owned string temporary in `Cast(Str)` would hide its ownership from the
@@ -82,12 +85,82 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     );
     if matches!(target, CastType::String) {
         release_coerced_source_if_owned(ctx, value, Some(expr.span));
-    } else if matches!(target, CastType::Int | CastType::Float | CastType::Bool | CastType::Array)
+    } else if matches!(target, CastType::Int | CastType::Float | CastType::Bool)
         && ctx.value_is_owning_temporary(value)
     {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     result
+}
+
+/// Lowers PHP's `(array)` cast by the source classification it shares with the checker.
+///
+/// An array is returned UNCHANGED (PHP's `(array)` is the identity on an array), `null` becomes
+/// a fresh empty array, and a scalar becomes a fresh one-element packed array holding it at
+/// key 0. An object is projected to its property map by the backend's hash cast, and every
+/// runtime-typed source is boxed when it is not already and dispatched on its runtime tag by
+/// `__rt_mixed_cast_array`, which applies the same four rules.
+fn lower_array_cast(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
+    let value = lower_expr(ctx, inner);
+    let source_type = ctx.builder.value_php_type(value.value);
+    let cast = crate::types::ArrayCast::for_source(&source_type);
+    let result_type = cast.result_type(&source_type);
+    match cast {
+        crate::types::ArrayCast::Identity => value,
+        crate::types::ArrayCast::Empty => ctx.emit_value(
+            Op::ArrayNew,
+            Vec::new(),
+            Some(Immediate::Capacity(0)),
+            result_type,
+            Op::ArrayNew.default_effects(),
+            Some(expr.span),
+        ),
+        crate::types::ArrayCast::WrapScalar(element_type) => {
+            let array = ctx.emit_value(
+                Op::ArrayNew,
+                Vec::new(),
+                Some(Immediate::Capacity(1)),
+                result_type,
+                Op::ArrayNew.default_effects(),
+                Some(expr.span),
+            );
+            ctx.emit_void(
+                Op::ArrayPush,
+                vec![array.value, value.value],
+                None,
+                Op::ArrayPush.default_effects(),
+                Some(inner.span),
+            );
+            crate::ir_lower::stmt::release_indexed_array_write_operand(
+                ctx,
+                Some(&element_type),
+                value,
+                inner.span,
+            );
+            array
+        }
+        crate::types::ArrayCast::ObjectProperties | crate::types::ArrayCast::Dynamic => {
+            let source = if matches!(cast, crate::types::ArrayCast::Dynamic)
+                && !matches!(value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+            {
+                ctx.box_value_as_mixed(value, PhpType::Mixed, Some(inner.span))
+            } else {
+                value
+            };
+            let result = ctx.emit_value(
+                Op::Cast,
+                vec![source.value],
+                Some(Immediate::CastTarget(value_ir_type(&result_type))),
+                result_type,
+                Op::Cast.default_effects(),
+                Some(expr.span),
+            );
+            if ctx.value_is_owning_temporary(source) {
+                crate::ir_lower::ownership::release_if_owned(ctx, source, Some(expr.span));
+            }
+            result
+        }
+    }
 }
 
 /// Lowers PHP's `(object)` cast.
@@ -173,18 +246,7 @@ pub(super) fn cast_php_type(target: &CastType, source_type: &PhpType) -> PhpType
         CastType::Float => PhpType::Float,
         CastType::String => PhpType::Str,
         CastType::Bool => PhpType::Bool,
-        CastType::Array
-            if matches!(source_type.codegen_repr(), PhpType::Object(_)) =>
-        PhpType::AssocArray {
-            key: Box::new(PhpType::Str),
-            value: Box::new(PhpType::Mixed),
-        },
-        CastType::Array
-            if matches!(
-                source_type.codegen_repr(),
-                PhpType::Mixed | PhpType::Union(_)
-            ) => PhpType::Mixed,
-        CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+        CastType::Array => crate::types::array_cast_result_type(source_type),
         // Mirrors the checker's `(object)` arms in
         // `types::checker::inference::expr::basic`: identity on an object, `mixed` for a
         // runtime-typed source that may already hold an unrelated class, stdClass otherwise.

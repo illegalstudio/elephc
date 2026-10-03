@@ -65,7 +65,7 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         IrType::Heap(IrHeapKind::Hash) => {
             super::builtins::types::lower_object_array_cast(ctx, inst)
         }
-        IrType::Heap(IrHeapKind::Mixed) if inst.result_php_type == PhpType::Mixed => {
+        IrType::Heap(IrHeapKind::Mixed) if inst.result_php_type.codegen_repr() == PhpType::Mixed => {
             lower_mixed_array_cast(ctx, inst)
         }
         target => Err(CodegenIrError::unsupported(format!(

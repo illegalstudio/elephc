@@ -176,6 +176,8 @@ $f = (float)42;      // 42.0
 $s = (string)42;     // "42"
 $b = (bool)0;        // false
 $a = (array)42;      // [42]
+$l = (array)[1, 2];  // [1, 2] (the same array, unchanged)
+$n = (array)null;    // []
 $o = (array)$obj;    // property name => value hash, with PHP's visibility-mangled keys
 $m = (array)$mixed;  // dispatches on the runtime tag: arrays pass through, scalars wrap, objects project
 $p = (object)['k' => 1]; // stdClass with a `k` property
@@ -188,6 +190,12 @@ array's keys rendered as strings (so `(object)['x', 'y']` has the properties
 other non-object value to a `stdClass` carrying it in a single `scalar`
 property. An object source is returned **unchanged** — `(object)$obj === $obj`
 — rather than copied.
+
+`(array)` returns an array **unchanged**, turns `null` into an empty array,
+and wraps any scalar (`int`, `float`, `bool`, `string`) as a one-element list
+`[0 => value]`. The static type follows the source: `(array)"x"` is a list of
+strings, `(array)$list` keeps the list's own type, and a runtime-typed source
+(`mixed`, a union such as `int|string` or `?array`) is typed as PHP `array`.
 
 `(array)` on an object projects all of its properties into a string-keyed hash
 using PHP's exact key mangling — `x` for a public property, `"\0*\0y"` for a
