@@ -88,6 +88,16 @@ $arr[] = 9;                                    // appended at key 3
 echo isset($arr[1]) ? "y" : "n";               // n
 ```
 
+After a negative integer key, the next implicit key follows the `--php-version` profile, as it
+does in PHP: from 8.3 it continues from the negative key, and on 8.2 and earlier it restarts at 0.
+
+```php
+<?php
+$a = [-5 => "a"];
+$a[] = "b";            // key -4 on 8.3+, key 0 on 8.2
+$b = [-5 => "a", "b"]; // the same rule for a bare element in a literal
+```
+
 `unset()` respects copy-on-write: removing a key from one array never mutates another array that
 was assigned from it. Unsetting a key that is not present is a no-op.
 

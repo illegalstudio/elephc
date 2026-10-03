@@ -6,20 +6,35 @@
 //!
 //! Key details:
 //! - The signed counter survives deletion and saturates at PHP_INT_MAX.
+//! - Before PHP 8.3 a negative key never moves the counter, so an append after `[-5 => x]`
+//!   lands at 0; 8.3 made it land at -4. The rule follows the compile profile.
 //! - A nonthrowing probe lets query registration stop a field on append exhaustion.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use super::hash_layout::NEXT_INDEX_OFFSET;
 
+/// Returns whether a negative integer key advances the next append index: PHP 8.3 and later.
+///
+/// Before 8.3, PHP started the next free element at 0 and only a key at or above it moved it,
+/// so a negative key never did. The counter here starts at `i64::MIN` (read as 0 by an append),
+/// so skipping negative keys reproduces that rule exactly.
+fn negative_keys_advance_next_index() -> bool {
+    crate::codegen_support::compile_php_version().version_id() >= 80300
+}
+
 /// Records a newly inserted integer key, preserving all registers except the documented scratch set.
 /// ARM uses x13-x15; x86 uses r11/r13/r14. The caller supplies a unique branch-label prefix.
 pub(super) fn record_insert(emitter: &mut Emitter, hash: &str, entry: &str, prefix: &str) {
     let done = format!("{prefix}_next_index_done");
+    let negative_keys_advance = negative_keys_advance_next_index();
     if emitter.target.arch == Arch::AArch64 {
         emitter.instruction(&format!("ldr x13, [{entry}, #16]"));               // inspect the normalized key length
         emitter.instruction("cmn x13, #1");                                     // integer keys carry the negative-one length sentinel
         emitter.instruction(&format!("b.ne {done}"));                           // string keys leave automatic indexing unchanged
         emitter.instruction(&format!("ldr x13, [{entry}, #8]"));                // recover the newly inserted signed integer key
+        if !negative_keys_advance {
+            emitter.instruction(&format!("tbnz x13, #63, {done}"));             // before PHP 8.3 a negative key never moves the next index
+        }
         emitter.instruction(&format!("ldr x15, [{hash}, #{NEXT_INDEX_OFFSET}]")); // read the persistent insertion history
         emitter.instruction("cmp x13, x15");                                    // compare signed keys, including PHP's negative starting indices
         emitter.instruction(&format!("b.lt {done}"));                           // older keys never rewind the next index
@@ -30,6 +45,10 @@ pub(super) fn record_insert(emitter: &mut Emitter, hash: &str, entry: &str, pref
         emitter.instruction(&format!("cmp QWORD PTR [{entry} + 16], -1"));      // distinguish normalized integer keys from string keys
         emitter.instruction(&format!("jne {done}"));                            // string keys do not advance automatic indexing
         emitter.instruction(&format!("mov r13, QWORD PTR [{entry} + 8]"));      // recover the inserted signed integer key
+        if !negative_keys_advance {
+            emitter.instruction("test r13, r13");                               // is the inserted key negative?
+            emitter.instruction(&format!("js {done}"));                         // before PHP 8.3 a negative key never moves the next index
+        }
         emitter.instruction(&format!("cmp r13, QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}]")); // compare against the persistent signed counter
         emitter.instruction(&format!("jl {done}"));                             // preserve history when inserting a smaller key
         emitter.instruction("mov r14, r13");                                    // preserve the original key for overflow saturation

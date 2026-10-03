@@ -311,7 +311,14 @@ has to go out of its way to notice which profile it was built for: by asking
 the runtime about its own version (`PHP_VERSION`, `PHP_VERSION_ID`,
 `PHP_MINOR_VERSION`, `phpversion()`, `zend_version()`), by querying OPcache
 (`opcache_get_configuration()`, `opcache_get_status()`, `ini_get('opcache.*')`,
-`ini_get_all()`), or — under `--web` — by driving sessions.
+`ini_get_all()`), by appending after a negative integer key (PHP 8.3 continues
+from it, 8.2 restarts at 0), or — under `--web` — by driving sessions.
+
+The negative-key case is reported when a program spells both a negative integer
+literal key (`[-5 => …]`, `$a[-5] = …`) and an implicit-key insertion
+(`$a[] = …`, or a bare element after a key in a literal), even if the two never
+touch the same array: which append follows which key is a run-time fact. A
+negative key that arrives through a variable is not detected.
 
 When a program *does* depend on the profile, the compiler says so and points at
 the construct responsible:
