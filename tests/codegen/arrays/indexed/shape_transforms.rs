@@ -491,16 +491,16 @@ echo count($o), ",", $o[32], "\n";
 /// receiver, not only through a by-reference parameter.
 ///
 /// #1104 pinned `store_value_to_ref_cell_local` after `__rt_array_grow`. These two receivers
-/// republish through different store paths — a property slot and an element slot — and were
+/// republish through different store paths (a property slot and an element slot) and were
 /// covered only by the 2-value `viaRef` rows of the signature test, which never reallocate.
 /// A dropped republish here is a use-after-free rather than a leak, because
 /// `__rt_array_grow` frees the old buffer as soon as it has published the new pointer, so the
 /// stdout assertion is the load-bearing one and the heap assertion catches the double release.
 ///
-/// The STATIC property receiver is the third one the follow-up asks for. It is broken: in a
-/// loop it loses one element per reallocation and, read through `implode()` in the same loop,
-/// fails outright. That is issue #1207, filed from this fixture; the row belongs here once it
-/// is fixed.
+/// Static-property growth is also fixed. Its count/element and in-loop `implode()` cases
+/// have separate heap-clean regressions in `pinned_fixed_issues`:
+/// `test_issue_1207_array_push_into_static_property_grows_inside_a_loop` and
+/// `test_issue_1207_static_property_array_push_then_implode_in_a_loop`.
 ///
 /// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
 #[test]

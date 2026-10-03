@@ -516,8 +516,8 @@ fn test_implicit_retype_array_to_string_leaves_a_clean_heap() {
 
 /// The RHS reads the old heap binding and the retype still answers correctly.
 ///
-/// No heap assertion: the `strlen($a)` read sits ABOVE the abandon, so it pays the boxed-detach
-/// leak described on `test_string_read_above_a_kill_still_answers_correctly`.
+/// This fixture asserts the value; heap cleanliness for the same read-before-retype shape
+/// is covered by `pinned_fixed_issues::test_issue_789_retype_reading_the_old_string_leaves_a_clean_heap`.
 #[test]
 fn test_retype_rhs_reads_the_old_heap_value() {
     let out = compile_and_run(fixtures::RETYPE_RHS_READS_OLD_HEAP_VALUE);
@@ -529,8 +529,8 @@ fn test_retype_rhs_reads_the_old_heap_value() {
 ///
 /// `$a = [$a]` retypes `string` to `array<string>` while the array element is the very string the
 /// old slot holds. A release ordered before the array literal takes its own reference would be a
-/// use-after-free. The read of `$a` above the abandon means this shape leaks (same boxed-detach
-/// cause as above), so only the ANSWER is asserted.
+/// use-after-free. This fixture asserts the value; the corresponding clean-heap regression is
+/// `pinned_fixed_issues::test_issue_789_retype_wrapping_the_old_string_leaves_a_clean_heap`.
 #[test]
 fn test_retype_whose_new_value_contains_the_old_one() {
     let out = compile_and_run(fixtures::RETYPE_NEW_VALUE_CONTAINS_OLD);
@@ -629,21 +629,18 @@ fn test_bool_and_int_retype_merges_without_a_warning() {
 }
 
 /// A `null`-typed binding is a WIDENING merge too, not the incompatible-retype shape, in both
-/// directions — but not by merging "into whatever the other side is" symmetrically.
+/// directions, but not by merging "into whatever the other side is" symmetrically.
 /// `merged_assignment_type` has two distinct `Void` arms: when the EXISTING binding is `null` (a
 /// bare `null`'s inferred `Void`), the merge takes the NEW value's type, so `$a = null; $a =
 /// $argc;` leaves `$a` checked as `int` going forward. When the value being ASSIGNED is `null`
 /// instead, the merge keeps the EXISTING type: `$c = $argc; $c = null;` leaves `$c` checked as
-/// `int` still — only the RUNTIME value is null, which is why the fixture below asserts
+/// `int` still; only the RUNTIME value is null, which is why the fixture below asserts
 /// `is_null($c)` rather than a type. Either way no warning fires and the checker accepts it
 /// mode-independently (probed under `--strict-locals` too).
 ///
-/// The middle case (`null` then a HEAP string) is pinned with `compile_and_run` only, on purpose:
-/// probing found it pays the same pre-existing "boxed-detach" leak described on
-/// `test_string_read_above_a_kill_still_answers_correctly` — a `null`-typed slot widens to boxed
-/// `Mixed` frame-wide the same way an abandoned slot does, so the `echo` read after it detaches an
-/// unreleased copy. That is a pre-existing leak class, not something this fixture should assert
-/// clean; only the VALUE is this test's contract.
+/// The middle case (`null` then a heap string) asserts value and checker behavior here.
+/// The old boxed-detach leak is fixed; repeated reads with a clean heap are covered by
+/// `pinned_fixed_issues::test_issue_789_null_then_string_reads_leave_a_clean_heap`.
 #[test]
 fn test_null_involved_retype_is_a_widening_merge_not_a_retype() {
     let null_then_int = "<?php $a = null; $a = $argc; echo $a;";
@@ -904,9 +901,9 @@ fn test_retype_whose_throwing_rhs_unwinds_out_of_the_callee_frame() {
 /// The heap shape: the string the RE-BOUND binding allocates is owned once, however many copies
 /// of the retype the optimizer made.
 ///
-/// The local read above the retype is an `int` here on purpose. The shape with a STRING read
-/// above it (the fixtures directly above) is the one that pays the pre-existing boxed-detach
-/// leak, which would mask what this fixture is for.
+/// The local read above the retype is an `int` to isolate ownership of the new string.
+/// String reads above a retype are also leak-free, as pinned separately by
+/// `test_string_reads_above_a_retype_leave_a_clean_heap`.
 #[test]
 fn test_retype_below_an_if_leaves_a_clean_heap() {
     let out = compile_and_run_with_heap_debug(fixtures::RETYPE_SCALAR_TAIL_SINKING);
