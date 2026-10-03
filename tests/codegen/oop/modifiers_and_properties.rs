@@ -622,3 +622,32 @@ fn test_example_asymmetric_visibility_compiles_and_runs() {
         "balance: 120\ninsufficient funds\nbalance: 120\ntransfer TX-1: 35\n"
     );
 }
+
+/// A promoted `array` parameter whose default is a global array constant is typed from the
+/// constant, not the syntactic `Int` fallback, so the class compiles and reads the default
+/// (issue #1308).
+#[test]
+fn test_promoted_array_parameter_defaulting_to_a_global_constant() {
+    let out = compile_and_run(
+        r#"<?php
+const ITEMS = [1, 2];
+class Crate { public function __construct(public array $items = ITEMS) {} }
+echo count((new Crate())->items), "\n";
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// PHP resolves constant-expression defaults independently of declaration order, so the
+/// constant may be declared after the class that uses it as a default.
+#[test]
+fn test_promoted_array_default_constant_may_follow_the_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Crate { public function __construct(public array $items = ITEMS) {} }
+const ITEMS = [3, 4, 5];
+echo count((new Crate())->items), "\n";
+"#,
+    );
+    assert_eq!(out, "3\n");
+}

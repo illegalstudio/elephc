@@ -41,7 +41,7 @@ use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
     drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
-    validate_deferred_declaration_defaults,
+    validate_deferred_declaration_defaults, DefaultPhase,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::{CheckOptions, Checker};
@@ -380,6 +380,7 @@ pub(super) fn check_types_impl(
         &mut checker,
         &flattened_classes,
         program,
+        DefaultPhase::SchemaComplete,
     ));
     errors.extend(validate_deferred_class_constants(
         &mut checker,
@@ -438,6 +439,17 @@ pub(super) fn check_types_impl(
             errors.extend(initial_errors);
         }
     }
+
+    // Top-level `const` statements are registered by `check_top_level_program`, so a property or
+    // promoted-parameter default naming a global constant is typed now, not during schema
+    // construction (issue #1308). PHP resolves constant-expression defaults independently of
+    // declaration order, so a constant declared after the class is still accepted.
+    errors.extend(validate_deferred_declaration_defaults(
+        &mut checker,
+        &flattened_classes,
+        program,
+        DefaultPhase::AfterConstants,
+    ));
 
     if !errors.is_empty() {
         return Err(CompileError::from_many(errors));
