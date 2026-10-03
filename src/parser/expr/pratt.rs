@@ -103,6 +103,9 @@ fn parse_expr_bp_inner(
             Token::LBracket => {
                 let span = tokens[*pos].1.span;
                 *pos += 1;
+                if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBracket)) {
+                    return Err(CompileError::new(span, "Cannot use [] for reading"));
+                }
                 let index = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
                     return Err(CompileError::new(span, "Expected ']'"));

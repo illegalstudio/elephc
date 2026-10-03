@@ -24,10 +24,19 @@ fn test_error_compound_assignment_missing_rhs() {
     }
 }
 
-/// Tests that array-append target (`$items[]`) is rejected as an invalid compound assignment target.
+/// Compound append targets report PHP's read-of-empty-dimension diagnostic on every receiver.
 #[test]
 fn test_error_compound_assignment_rejects_append_target() {
-    expect_error("<?php $items = [1]; $items[] += 2;", "Invalid assignment target");
+    for source in [
+        "<?php $items = [1]; $items[] += 2;",
+        "<?php $items = []; $items[]['k'] .= 'x';",
+        "<?php $items = []; echo ($items[] += 2);",
+        "<?php $items = []; echo ($items[]['k'] .= 'x');",
+        "<?php class Box { public array $items = []; } $box = new Box(); $box->items[] += 2;",
+        "<?php class Box { public static array $items = []; } Box::$items[] += 2;",
+    ] {
+        expect_error(source, "Cannot use [] for reading");
+    }
 }
 
 /// Tests that `instanceof` with a non-class RHS (integer literal) produces the expected error.

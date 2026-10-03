@@ -43,7 +43,7 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         && lhs[lhs.len() - 2].0 == Token::LBracket
         && lhs[lhs.len() - 1].0 == Token::RBracket;
     if is_append && op != AssignmentOperator::Assign {
-        return Err(CompileError::new(span, "Invalid assignment target"));
+        return Err(CompileError::new(span, "Cannot use [] for reading"));
     }
     let contains_postfix = lhs
         .iter()
@@ -379,7 +379,7 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
         && lhs[lhs.len() - 2].0 == Token::LBracket
         && lhs[lhs.len() - 1].0 == Token::RBracket;
     if is_append && op != AssignmentOperator::Assign {
-        return Err(CompileError::new(span, "Invalid assignment target"));
+        return Err(CompileError::new(span, "Cannot use [] for reading"));
     }
     let mut lhs_pos = 0;
     let lhs_expr_tokens = if is_append {
