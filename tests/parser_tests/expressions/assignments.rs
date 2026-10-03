@@ -9,6 +9,45 @@
 
 use super::*;
 
+/// Named and lexical static properties remain receivers after a following object postfix.
+#[test]
+fn test_parse_static_property_object_receiver_assignments() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for tail in ["->v = 9;", "->v += 2;", "->method();"] {
+            let source = format!("<?php {receiver}::$object{tail}");
+            assert_eq!(parse_source(&source).len(), 1, "source: {source}");
+        }
+        let source = format!("<?php echo {receiver}::$object->v;");
+        assert_eq!(parse_source(&source).len(), 1, "source: {source}");
+    }
+}
+
+/// Static object receivers keep indexed instance writes on the property-array statement path.
+#[test]
+fn test_parse_static_property_object_receiver_indexed_writes() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for tail in ["->items[0] = 9;", "->items[1] += 3;"] {
+            let source = format!("<?php {receiver}::$object{tail}");
+            let statements = parse_source(&source);
+            assert!(matches!(&statements[0].kind, StmtKind::PropertyArrayAssign { property, .. }
+                if property == "items"), "{source}: {:?}", statements[0]);
+        }
+    }
+}
+
+/// Scoped prefix updates use the same instance-property statement shape as postfix updates.
+#[test]
+fn test_parse_static_property_object_receiver_prefix_statements() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for operator in ["++", "--"] {
+            let source = format!("<?php {operator}{receiver}::$object->v;");
+            let statements = parse_source(&source);
+            assert!(matches!(&statements[0].kind, StmtKind::PropertyAssign { property, .. }
+                if property == "v"), "{source}: {:?}", statements[0]);
+        }
+    }
+}
+
 /// Verifies that compound assignment operators `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
 /// parse correctly as `Assign` nodes where the value is a `BinaryOp` on the variable.
 /// Each case checks the operator, lhs variable, and rhs integer literal match the expected AST shape.
