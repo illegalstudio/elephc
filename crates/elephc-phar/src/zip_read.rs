@@ -45,6 +45,7 @@ pub(super) fn parse_zip_entry_with_public_key(
             .checked_add(entry_comment_len)?;
         if name == entry && !is_phar_control_entry(name) {
             let (encrypted, check_byte) = zip_entry_crypto(data, p)?;
+            let crc = le32(data, p + 16)?;
             return decode_zip_local_entry(
                 data,
                 local_offset,
@@ -53,6 +54,7 @@ pub(super) fn parse_zip_entry_with_public_key(
                 uncompressed_size,
                 encrypted,
                 check_byte,
+                crc,
             );
         }
         p = central_end;
@@ -113,6 +115,7 @@ pub(super) fn parse_zip_archive_with_public_key(
             &mut local_offset,
         )?;
         let (encrypted, check_byte) = zip_entry_crypto(data, p)?;
+        let crc = le32(data, p + 16)?;
         let payload = decode_zip_local_entry(
             data,
             local_offset,
@@ -121,6 +124,7 @@ pub(super) fn parse_zip_archive_with_public_key(
             uncompressed_size,
             encrypted,
             check_byte,
+            crc,
         )?;
         let comment_start = name_start.checked_add(name_len)?.checked_add(extra_len)?;
         if name == PHAR_STUB_ENTRY {
@@ -264,7 +268,8 @@ pub(super) fn zip_entry_crypto(data: &[u8], central_off: usize) -> Option<(bool,
 /// expected last byte of its 12-byte encryption header used to reject a wrong
 /// password. Encrypted entries require a password set via
 /// [`elephc_phar_set_zip_password`]; without one (or with the wrong one) they
-/// return `None`.
+/// return `None`. The decoded bytes must also match the central-directory CRC,
+/// because ZipCrypto's one-byte header check can collide for an incorrect password.
 pub(super) fn decode_zip_local_entry(
     data: &[u8],
     local_offset: usize,
@@ -273,6 +278,7 @@ pub(super) fn decode_zip_local_entry(
     uncompressed_size: usize,
     encrypted: bool,
     check_byte: u8,
+    expected_crc: u32,
 ) -> Option<Vec<u8>> {
     if uncompressed_size > MAX_PHAR_ENTRY_DECOMPRESSED_BYTES {
         return None;
@@ -297,7 +303,7 @@ pub(super) fn decode_zip_local_entry(
     } else {
         stored
     };
-    match method {
+    let decoded = match method {
         ZIP_METHOD_STORE => (body.len() == uncompressed_size).then(|| body.to_vec()),
         ZIP_METHOD_DEFLATE => {
             if uncompressed_size > body.len().checked_mul(MAX_PHAR_DECOMPRESSION_RATIO)? {
@@ -312,5 +318,6 @@ pub(super) fn decode_zip_local_entry(
             (out.len() == uncompressed_size).then_some(out)
         }
         _ => None,
-    }
+    }?;
+    (crc32(&decoded) == expected_crc).then_some(decoded)
 }

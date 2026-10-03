@@ -12,9 +12,7 @@
 //! - Existing archive families, compression, metadata, and signatures are preserved.
 
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod archive_api;
 mod archive_core;

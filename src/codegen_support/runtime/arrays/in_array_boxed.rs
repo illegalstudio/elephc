@@ -24,8 +24,8 @@ pub fn emit_in_array_boxed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.label_global("__rt_in_array_boxed");
     abi::emit_frame_prologue(emitter, FRAME_SIZE);
-    abi::emit_store_to_sp(emitter, abi::int_arg_reg_name(emitter.target, 0), NEEDLE);
-    abi::emit_store_to_sp(emitter, abi::int_arg_reg_name(emitter.target, 2), STRICT);
+    abi::emit_store_to_sp(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), NEEDLE);
+    abi::emit_store_to_sp(emitter, abi::runtime_helper_int_arg_reg(emitter, 2), STRICT);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction("mov x0, x1"),                     // unbox the borrowed haystack, not the saved needle
         Arch::X86_64 => emitter.instruction("mov rax, rsi"),                    // use the internal Mixed-unbox input register
@@ -49,8 +49,8 @@ pub fn emit_in_array_boxed(emitter: &mut Emitter) {
     abi::emit_store_to_sp(emitter, result, CURSOR);
 
     emitter.label("__rt_in_array_boxed_loop");
-    abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 0), PAYLOAD);
-    abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 1), CURSOR);
+    abi::emit_load_temporary_stack_slot(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), PAYLOAD);
+    abi::emit_load_temporary_stack_slot(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), CURSOR);
     abi::emit_call_label(emitter, "__rt_array_iter_next");
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -93,8 +93,8 @@ pub fn emit_in_array_boxed(emitter: &mut Emitter) {
 
 /// Passes two borrowed cells to the shared comparison helpers' platform ABI.
 fn load_comparison_operands(emitter: &mut Emitter) {
-    abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 0), NEEDLE);
-    abi::emit_temporary_stack_address(emitter, abi::int_arg_reg_name(emitter.target, 1), CELL);
+    abi::emit_load_temporary_stack_slot(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), NEEDLE);
+    abi::emit_temporary_stack_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), CELL);
 }
 
 #[cfg(test)]

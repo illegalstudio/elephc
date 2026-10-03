@@ -119,6 +119,10 @@ strcmp("bb", "bb");
 /// Verifies `extern global ptr $environ` declares an FFI external global pointer variable.
 #[test]
 fn test_ffi_extern_global() {
+    if target().platform == Platform::Windows {
+        eprintln!("skipping POSIX environ global fixture on Windows");
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 extern global ptr $environ;

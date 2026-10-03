@@ -53,21 +53,5 @@ pub(in crate::interpreter) fn eval_inet_ntop_result(
 /// Renders sixteen network-order bytes through the platform's `inet_ntop(3)`.
 fn eval_inet_ntop_ipv6(address: &[u8]) -> Option<Vec<u8>> {
     let address: &[u8; 16] = address.try_into().ok()?;
-    // INET6_ADDRSTRLEN (46) is the longest IPv6 presentation form plus its NUL.
-    let mut text = [0 as libc::c_char; 46];
-    // SAFETY: `address` holds the sixteen bytes AF_INET6 reads, and `text` is as large as the
-    // size passed, so the platform formatter cannot write past it.
-    let rendered = unsafe {
-        libc_inet_ntop(
-            libc::AF_INET6,
-            address.as_ptr().cast::<libc::c_void>(),
-            text.as_mut_ptr(),
-            text.len() as libc::socklen_t,
-        )
-    };
-    if rendered.is_null() {
-        return None;
-    }
-    // SAFETY: a non-null result is `text`, NUL-terminated by the formatter.
-    Some(unsafe { CStr::from_ptr(text.as_ptr()) }.to_bytes().to_vec())
+    eval_os_inet_ntop_ipv6(address)
 }

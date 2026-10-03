@@ -18,40 +18,46 @@
 
 use super::*;
 
+/// Stages the shared leading words of a method metadata registration export.
+fn stage_method_metadata_prefix(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    method_key_label: &str,
+    method_key_len: usize,
+    param_index: Option<usize>,
+) {
+    stage_eval_native_local_word(ctx, context_offset, PhpType::Pointer(None));
+    stage_eval_native_label(ctx, method_key_label);
+    stage_eval_native_int(ctx, method_key_len as i64);
+    if let Some(param_index) = param_index {
+        stage_eval_native_int(ctx, param_index as i64);
+    }
+}
+
+/// Chooses the instance or static Rust eval-metadata export without target mangling.
+fn method_metadata_symbol(is_static: bool, instance: &'static str, static_method: &'static str) -> &'static str {
+    if is_static { static_method } else { instance }
+}
+
 /// Emits one native method signature registration call into the eval context.
 pub(super) fn register_eval_native_method(
     ctx: &mut FunctionContext<'_>,
     context_offset: usize,
     registration: &EvalNativeMethodRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let method_key = format!("{}::{}", registration.class_name, registration.method_name);
     let (method_key_label, method_key_len) = ctx.data.add_string(method_key.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &method_key_label,
+    stage_method_metadata_prefix(ctx, context_offset, &method_key_label, method_key_len, None);
+    stage_eval_native_int(ctx, registration.signature.params.len() as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        method_metadata_symbol(
+            registration.is_static,
+            "__elephc_eval_register_native_method",
+            "__elephc_eval_register_native_static_method",
+        ),
+        &[PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int, PhpType::Int],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        registration.signature.params.len() as i64,
-    );
-    let symbol = if registration.is_static {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_static_method")
-    } else {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_method")
-    };
-    abi::emit_call_label(ctx.emitter, &symbol);
     register_eval_native_method_bridge_support(
         ctx,
         context_offset,
@@ -197,42 +203,32 @@ fn register_eval_native_method_compiled_default(
     param_index: usize,
     helper_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+    stage_method_metadata_prefix(
+        ctx,
+        context_offset,
         method_key_label,
+        method_key_len,
+        Some(param_index),
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
+    stage_eval_native_int(ctx, NATIVE_DEFAULT_COMPILED);
+    let helper_symbol = function_symbol(helper_name);
+    stage_eval_native_label(ctx, &helper_symbol);
+    emit_eval_native_c_abi_call(
+        ctx,
+        method_metadata_symbol(
+            is_static,
+            "__elephc_eval_register_native_method_param_default_scalar",
+            "__elephc_eval_register_native_static_method_param_default_scalar",
+        ),
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Pointer(None),
+        ],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        NATIVE_DEFAULT_COMPILED,
-    );
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        &function_symbol(helper_name),
-    );
-    let symbol = if is_static {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_static_method_param_default_scalar")
-    } else {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_method_param_default_scalar")
-    };
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native method bridge-support registration call.
@@ -244,32 +240,17 @@ pub(super) fn register_eval_native_method_bridge_support(
     is_static: bool,
     bridge_supported: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
+    stage_method_metadata_prefix(ctx, context_offset, method_key_label, method_key_len, None);
+    stage_eval_native_int(ctx, i64::from(bridge_supported));
+    emit_eval_native_c_abi_call(
+        ctx,
+        method_metadata_symbol(
+            is_static,
+            "__elephc_eval_register_native_method_bridge_support",
+            "__elephc_eval_register_native_static_method_bridge_support",
+        ),
+        &[PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int, PhpType::Int],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        if bridge_supported { 1 } else { 0 },
-    );
-    let symbol = if is_static {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_static_method_bridge_support")
-    } else {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_method_bridge_support")
-    };
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native method parameter-name registration call.
@@ -282,43 +263,28 @@ pub(super) fn register_eval_native_method_param(
     param_index: usize,
     param_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
     let (param_name_label, param_name_len) = ctx.data.add_string(param_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &param_name_label,
+    stage_method_metadata_prefix(
+        ctx,
+        context_offset,
+        method_key_label,
+        method_key_len,
+        Some(param_index),
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        param_name_len as i64,
+    stage_eval_native_label(ctx, &param_name_label);
+    stage_eval_native_int(ctx, param_name_len as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        method_metadata_symbol(
+            is_static,
+            "__elephc_eval_register_native_method_param",
+            "__elephc_eval_register_native_static_method_param",
+        ),
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int, PhpType::Int,
+            PhpType::Pointer(None), PhpType::Int,
+        ],
     );
-    let symbol = if is_static {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_static_method_param")
-    } else {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_method_param")
-    };
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native method parameter-flags registration call.
@@ -332,42 +298,21 @@ pub(super) fn register_eval_native_method_param_flags(
     is_by_ref: bool,
     is_variadic: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
+    stage_method_metadata_prefix(ctx, context_offset, method_key_label, method_key_len, Some(param_index));
+    stage_eval_native_int(ctx, i64::from(is_by_ref));
+    stage_eval_native_int(ctx, i64::from(is_variadic));
+    emit_eval_native_c_abi_call(
+        ctx,
+        method_metadata_symbol(
+            is_static,
+            "__elephc_eval_register_native_method_param_flags",
+            "__elephc_eval_register_native_static_method_param_flags",
+        ),
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int, PhpType::Int,
+            PhpType::Int, PhpType::Int,
+        ],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        if is_by_ref { 1 } else { 0 },
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        if is_variadic { 1 } else { 0 },
-    );
-    let symbol = if is_static {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_static_method_param_flags")
-    } else {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_method_param_flags")
-    };
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native method parameter-type registration call.
@@ -380,43 +325,22 @@ pub(super) fn register_eval_native_method_param_type(
     param_index: usize,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &type_label,
+    stage_method_metadata_prefix(ctx, context_offset, method_key_label, method_key_len, Some(param_index));
+    stage_eval_native_label(ctx, &type_label);
+    stage_eval_native_int(ctx, type_len as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        method_metadata_symbol(
+            is_static,
+            "__elephc_eval_register_native_method_param_type",
+            "__elephc_eval_register_native_static_method_param_type",
+        ),
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int, PhpType::Int,
+            PhpType::Pointer(None), PhpType::Int,
+        ],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        type_len as i64,
-    );
-    let symbol = if is_static {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_static_method_param_type")
-    } else {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_method_param_type")
-    };
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native method return-type registration call.
@@ -428,38 +352,22 @@ pub(super) fn register_eval_native_method_return_type(
     is_static: bool,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &type_label,
+    stage_method_metadata_prefix(ctx, context_offset, method_key_label, method_key_len, None);
+    stage_eval_native_label(ctx, &type_label);
+    stage_eval_native_int(ctx, type_len as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        method_metadata_symbol(
+            is_static,
+            "__elephc_eval_register_native_method_return_type",
+            "__elephc_eval_register_native_static_method_return_type",
+        ),
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int,
+            PhpType::Pointer(None), PhpType::Int,
+        ],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        type_len as i64,
-    );
-    let symbol = if is_static {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_static_method_return_type")
-    } else {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_method_return_type")
-    };
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native method parameter-default registration call.
@@ -472,120 +380,64 @@ pub(super) fn register_eval_native_method_param_default(
     param_index: usize,
     default: &EvalNativeCallableDefault,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
+    stage_method_metadata_prefix(ctx, context_offset, method_key_label, method_key_len, Some(param_index));
     let symbol = match default {
         EvalNativeCallableDefault::Scalar { kind, payload } => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                *kind,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                *payload,
-            );
+            stage_eval_native_int(ctx, *kind);
+            stage_eval_native_int(ctx, *payload);
             if is_static {
-                ctx.emitter.target.extern_symbol(
-                    "__elephc_eval_register_native_static_method_param_default_scalar",
-                )
+                "__elephc_eval_register_native_static_method_param_default_scalar"
             } else {
-                ctx.emitter
-                    .target
-                    .extern_symbol("__elephc_eval_register_native_method_param_default_scalar")
+                "__elephc_eval_register_native_method_param_default_scalar"
             }
         }
         EvalNativeCallableDefault::String(value) => {
             let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
+            stage_eval_native_label(ctx, &default_label);
+            stage_eval_native_int(ctx, default_len as i64);
             if is_static {
-                ctx.emitter.target.extern_symbol(
-                    "__elephc_eval_register_native_static_method_param_default_string",
-                )
+                "__elephc_eval_register_native_static_method_param_default_string"
             } else {
-                ctx.emitter
-                    .target
-                    .extern_symbol("__elephc_eval_register_native_method_param_default_string")
+                "__elephc_eval_register_native_method_param_default_string"
             }
         }
         EvalNativeCallableDefault::Object { .. } => {
             let spec = encode_eval_native_object_default(default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
+            stage_eval_native_label(ctx, &default_label);
+            stage_eval_native_int(ctx, default_len as i64);
             if is_static {
-                ctx.emitter.target.extern_symbol(
-                    "__elephc_eval_register_native_static_method_param_default_object",
-                )
+                "__elephc_eval_register_native_static_method_param_default_object"
             } else {
-                ctx.emitter
-                    .target
-                    .extern_symbol("__elephc_eval_register_native_method_param_default_object")
+                "__elephc_eval_register_native_method_param_default_object"
             }
         }
         EvalNativeCallableDefault::Array(_) => {
             let spec = encode_eval_native_array_default(default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
+            stage_eval_native_label(ctx, &default_label);
+            stage_eval_native_int(ctx, default_len as i64);
             if is_static {
-                ctx.emitter.target.extern_symbol(
-                    "__elephc_eval_register_native_static_method_param_default_array",
-                )
+                "__elephc_eval_register_native_static_method_param_default_array"
             } else {
-                ctx.emitter
-                    .target
-                    .extern_symbol("__elephc_eval_register_native_method_param_default_array")
+                "__elephc_eval_register_native_method_param_default_array"
             }
         }
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_native_c_abi_call(
+        ctx,
+        symbol,
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int, PhpType::Int,
+            PhpType::Int, PhpType::Int,
+        ],
+    );
 }
 
 /// Emits one native method explicit PHP signature shape registration call.
 ///
 /// The instance and static entry points differ only in the symbol, exactly like every other
-/// method registration emitter, and both take the same six target-aware ABI words.
+/// method registration emitter, and both materialize six words through the native C ABI planner.
 pub(super) fn register_eval_native_method_shape(
     ctx: &mut FunctionContext<'_>,
     context_offset: usize,
@@ -594,40 +446,20 @@ pub(super) fn register_eval_native_method_shape(
     is_static: bool,
     shape: &EvalNativeSignatureShape,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
+    stage_method_metadata_prefix(ctx, context_offset, method_key_label, method_key_len, None);
+    stage_eval_native_int(ctx, shape.visible_regular_param_count as i64);
+    stage_eval_native_int(ctx, shape.required_param_count as i64);
+    stage_eval_native_int(ctx, shape.flags());
+    emit_eval_native_c_abi_call(
+        ctx,
+        method_metadata_symbol(
+            is_static,
+            "__elephc_eval_register_native_method_shape",
+            "__elephc_eval_register_native_static_method_shape",
+        ),
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int,
+            PhpType::Int, PhpType::Int, PhpType::Int,
+        ],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        shape.visible_regular_param_count as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        shape.required_param_count as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        shape.flags(),
-    );
-    let symbol = if is_static {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_static_method_shape")
-    } else {
-        ctx.emitter
-            .target
-            .extern_symbol("__elephc_eval_register_native_method_shape")
-    };
-    abi::emit_call_label(ctx.emitter, &symbol);
 }

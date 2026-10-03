@@ -2,7 +2,7 @@
 title: "mb_regex_set_options() - internals"
 description: "Compiler internals for mb_regex_set_options(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 867
+  order: 883
 ---
 
 ## `mb_regex_set_options()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_regex_set_options.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_regex_set_options.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:699](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L699) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

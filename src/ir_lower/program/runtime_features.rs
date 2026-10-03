@@ -165,7 +165,8 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                             Some(ResourceCleanupKind::Directory) => {
                                 features.directory_resource = true
                             }
-                            Some(ResourceCleanupKind::StreamFd) | None => {}
+                            Some(ResourceCleanupKind::StreamFd | ResourceCleanupKind::Process)
+                            | None => {}
                         }
                         features.object_clone |= target == RuntimeFnId::CloneWith;
                     }

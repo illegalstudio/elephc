@@ -2,7 +2,7 @@
 title: "inet_ntop()"
 description: "Renders a packed 4-byte IPv4 or 16-byte IPv6 address as its presentation string, or false for any other length."
 sidebar:
-  order: 822
+  order: 838
 ---
 
 ## inet_ntop()

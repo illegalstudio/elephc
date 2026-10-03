@@ -47,9 +47,9 @@ pub(super) fn lower_array_map_mixed_callback(
     let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, result);
     abi::emit_temporary_stack_address(ctx.emitter, owner, 0);
     abi::emit_push_call_operand_owner(ctx.emitter, owner, true);
-    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let array_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let env_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let callback_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let array_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
+    let env_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg, &wrapper);
     ctx.load_value_to_reg(array, array_arg)?;
     abi::emit_temporary_stack_address(ctx.emitter, env_arg, 48);

@@ -50,6 +50,14 @@ pub struct RuntimeFeatures {
     pub mbregex: bool,
     /// True when output conversion or startup validation requires the managed PCRE2 MIME provider.
     pub mbstring_mime: bool,
+    /// True when the target runtime must provide the late-bound TLS bridge slots.
+    pub tls: bool,
+    /// True when the Windows runtime must emit the zlib ABI adapters.
+    pub zlib: bool,
+    /// True when the Windows runtime must emit the bzip2 ABI adapters.
+    pub bzip2: bool,
+    /// True when the Windows runtime must emit the iconv ABI adapters.
+    pub iconv: bool,
     pub phar_archive: bool,
     /// True when codegen can emit the runtime callable dispatcher (descriptor
     /// invoker) that builds per-builtin wrappers referencing `elephc_crypto`.
@@ -143,6 +151,10 @@ impl RuntimeFeatures {
             | ((self.object_clone as u64) << 13)
             | ((self.mbregex as u64) << 14)
             | ((self.mbstring_mime as u64) << 15)
+            | ((self.tls as u64) << 16)
+            | ((self.zlib as u64) << 17)
+            | ((self.bzip2 as u64) << 18)
+            | ((self.iconv as u64) << 19)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -152,6 +164,10 @@ impl RuntimeFeatures {
             mbstring: false,
             mbregex: false,
             mbstring_mime: false,
+            tls: false,
+            zlib: false,
+            bzip2: false,
+            iconv: false,
             phar_archive: false,
             descriptor_invoker: false,
             eval_bridge: false,
@@ -175,6 +191,10 @@ impl RuntimeFeatures {
             mbstring: true,
             mbregex: true,
             mbstring_mime: true,
+            tls: true,
+            zlib: true,
+            bzip2: true,
+            iconv: true,
             phar_archive: true,
             descriptor_invoker: true,
             eval_bridge: true,
@@ -188,6 +208,19 @@ impl RuntimeFeatures {
             handler_state: true,
             object_clone: true,
         }
+    }
+
+    /// Includes Windows runtime shim families selected by the type checker's
+    /// already-pruned library requirement set.
+    ///
+    /// The runtime must not rescan the AST: builtin requirement resolvers own
+    /// literal-versus-dynamic URL/filter precision, and reachability may remove
+    /// an otherwise matching source call before EIR is lowered.
+    pub(crate) fn include_required_libraries(&mut self, required_libraries: &[String]) {
+        self.tls |= required_libraries.iter().any(|library| library == "elephc_tls");
+        self.zlib |= required_libraries.iter().any(|library| library == "z");
+        self.bzip2 |= required_libraries.iter().any(|library| library == "bz2");
+        self.iconv |= required_libraries.iter().any(|library| library == "iconv");
     }
 }
 
@@ -1058,6 +1091,25 @@ fn is_fiber_class_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the post-reachability requirement list drives each optional
+    /// Windows C-ABI shim family without reconstructing builtin requirements.
+    #[test]
+    fn required_libraries_enable_windows_runtime_shim_features() {
+        let libraries = vec![
+            "elephc_tls".to_string(),
+            "z".to_string(),
+            "bz2".to_string(),
+            "iconv".to_string(),
+        ];
+        let mut features = RuntimeFeatures::none();
+        features.include_required_libraries(&libraries);
+
+        assert!(features.tls);
+        assert!(features.zlib);
+        assert!(features.bzip2);
+        assert!(features.iconv);
+    }
 
     /// Parses a source string and returns the runtime features discovered after name resolution.
     fn features_for(source: &str) -> RuntimeFeatures {

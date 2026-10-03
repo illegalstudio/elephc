@@ -31,24 +31,26 @@ const NUMBER_TAG: usize = 88;
 /// Status zero is fully numeric, one is a numeric prefix, and two means no numeric prefix.
 pub fn emit_str_numeric_value(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
-    let arg2 = abi::int_arg_reg_name(emitter.target, 2);
+    let runtime_arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let runtime_arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
+    let c_arg0 = abi::int_arg_reg_name(emitter.target, 0);
+    let c_arg1 = abi::int_arg_reg_name(emitter.target, 1);
+    let c_arg2 = abi::int_arg_reg_name(emitter.target, 2);
     emitter.blank();
     emitter.label_global("__rt_str_numeric_value");
     abi::emit_frame_prologue(emitter, FRAME);
-    abi::store_at_offset(emitter, arg0, SOURCE);
-    abi::store_at_offset(emitter, arg1, LENGTH);
-    abi::emit_reg_move(emitter, result, arg1);
+    abi::store_at_offset(emitter, runtime_arg0, SOURCE);
+    abi::store_at_offset(emitter, runtime_arg1, LENGTH);
+    abi::emit_reg_move(emitter, result, runtime_arg1);
     ins(emitter, "add x0, x0, #1", "add rax, 1");
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     abi::store_at_offset(emitter, result, BUFFER);
-    abi::emit_reg_move(emitter, arg0, result);
-    abi::load_at_offset(emitter, arg1, SOURCE);
-    abi::load_at_offset(emitter, arg2, LENGTH);
-    emitter.bl_c("memcpy");                                                     // copy exactly the PHP byte range into privately owned scratch
+    abi::emit_reg_move(emitter, c_arg0, result);
+    abi::load_at_offset(emitter, c_arg1, SOURCE);
+    abi::load_at_offset(emitter, c_arg2, LENGTH);
+    emitter.emit_call_c("memcpy");                                              // copy exactly the PHP byte range into privately owned scratch
     terminate_and_measure(emitter);
-    abi::load_at_offset(emitter, arg0, BUFFER);
+    abi::load_at_offset(emitter, runtime_arg0, BUFFER);
     abi::emit_call_label(emitter, "__rt_php_num_scan");
     abi::store_at_offset(emitter, result, RUN);
     abi::load_at_offset(emitter, abi::secondary_scratch_reg(emitter), STATUS);
@@ -67,20 +69,20 @@ pub fn emit_str_numeric_value(emitter: &mut Emitter) {
         Platform::Linux => "__errno_location",
         Platform::Windows => "_errno",
     };
-    emitter.bl_c(errno_symbol);                                                 // access the target's thread-local errno for strtoll overflow
+    emitter.emit_call_c(errno_symbol);                                           // access the target's thread-local errno for strtoll overflow
     abi::store_at_offset(emitter, result, ERRNO);
     ins(emitter, "str wzr, [x0]", "mov DWORD PTR [rax], 0");
-    abi::load_at_offset(emitter, arg0, RUN);
-    abi::emit_frame_slot_address(emitter, arg1, END_INT);
-    abi::emit_load_int_immediate(emitter, arg2, 10);
-    emitter.bl_c("strtoll");                                                    // retain every in-range integer bit without a double round trip
+    abi::load_at_offset(emitter, c_arg0, RUN);
+    abi::emit_frame_slot_address(emitter, c_arg1, END_INT);
+    abi::emit_load_int_immediate(emitter, c_arg2, 10);
+    emitter.emit_call_c("strtoll");                                             // retain every in-range integer bit without a double round trip
     abi::store_at_offset(emitter, result, INTEGER);
     abi::load_at_offset(emitter, abi::secondary_scratch_reg(emitter), ERRNO);
     ins(emitter, "ldr w10, [x10]", "mov r10d, DWORD PTR [r10]");
     abi::store_at_offset(emitter, abi::secondary_scratch_reg(emitter), RANGE_ERROR);
-    abi::load_at_offset(emitter, arg0, RUN);
-    abi::emit_frame_slot_address(emitter, arg1, END_FLOAT);
-    emitter.bl_c("strtod");                                                     // parse the already clipped decimal or exponent spelling
+    abi::load_at_offset(emitter, c_arg0, RUN);
+    abi::emit_frame_slot_address(emitter, c_arg1, END_FLOAT);
+    emitter.emit_call_c("strtod");                                              // parse the already clipped decimal or exponent spelling
     abi::load_at_offset(emitter, result, RANGE_ERROR);
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_str_numeric_value_float");
     abi::load_at_offset(emitter, result, END_INT);
@@ -121,7 +123,7 @@ fn terminate_and_measure(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, scratch, LENGTH);
     ins(emitter, "strb wzr, [x0, x10]", "mov BYTE PTR [rax + r10], 0");
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
-    emitter.bl_c("strlen");                                                     // recognize embedded NUL bytes before the grammar scanner clips the copy
+    emitter.emit_call_c("strlen");                                              // recognize embedded NUL bytes before the grammar scanner clips the copy
     abi::load_at_offset(emitter, scratch, LENGTH);
     ins(emitter, "cmp x0, x10", "cmp rax, r10");
     ins(emitter, "cset x0, eq", "sete al");

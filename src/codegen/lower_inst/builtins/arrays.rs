@@ -287,8 +287,8 @@ fn emit_mixed_splice_replacement_insert(
 
 /// Allocates the one-element replacement shell with the requested payload slot width.
 fn emit_splice_one_element_array_new(ctx: &mut FunctionContext<'_>, slot_size: i64) {
-    let count_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let size_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let count_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let size_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     abi::emit_load_int_immediate(ctx.emitter, count_reg, 1);
     abi::emit_load_int_immediate(ctx.emitter, size_reg, slot_size);
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
@@ -403,7 +403,7 @@ fn emit_splice_boxing_tag(ctx: &mut FunctionContext<'_>, replacement: &SpliceRep
     let Some(tag) = replacement.boxing_tag() else {
         return;
     };
-    let reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    let reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 3);
     abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(tag));
 }
 
@@ -573,9 +573,9 @@ fn lower_hash_link_sort_with_flags(
         ensure_unique_hash_sort_source(ctx, array)?;
         receiver.store_back_after_consuming_split(ctx, array)?;
     }
-    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let array_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(array, array_arg_reg)?;
-    let flags_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let flags_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     match flags {
         HashSortFlags::None => {}
         HashSortFlags::Regular => {

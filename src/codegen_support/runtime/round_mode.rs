@@ -95,7 +95,7 @@ pub fn emit_round_mode(emitter: &mut Emitter) {
     emitter.label("__rt_round_mode_pow_call");
     emitter.instruction("scvtf d1, x0");                                        // convert abs($precision) into pow()'s exponent argument
     emitter.instruction("fmov d0, #10.0");                                      // pow() base 10.0
-    emitter.bl_c("pow");
+    emitter.emit_call_c("pow");
     emitter.instruction("fmov d1, d0");                                         // move the computed exponent into the shared register
     emitter.label("__rt_round_mode_pow_done");
 
@@ -316,7 +316,7 @@ fn emit_round_mode_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cvtsi2sd xmm1, rax");                                  // convert abs($precision) into pow()'s exponent argument
     emitter.instruction(&format!("mov rcx, 0x{:x}", TEN_BITS));                 // IEEE-754 payload of 10.0
     emitter.instruction("movq xmm0, rcx");                                      // pow() base 10.0
-    emitter.bl_c("pow");
+    emitter.emit_call_c("pow");
     emitter.instruction("movsd xmm1, xmm0");                                    // move the computed exponent into the shared register
     emitter.label("__rt_round_mode_pow_done_x86");
 

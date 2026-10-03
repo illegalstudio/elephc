@@ -2,7 +2,7 @@
 title: "imagefilledrectangle() - internals"
 description: "Compiler internals for imagefilledrectangle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 504
+  order: 508
 ---
 
 ## `imagefilledrectangle()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2699](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2699) (`imagefilledrectangle`)
+- **Lowering**: [`src/image_prelude.rs`:2770](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2770) (`imagefilledrectangle`)
 - **Function symbol**: `imagefilledrectangle()`
 
 

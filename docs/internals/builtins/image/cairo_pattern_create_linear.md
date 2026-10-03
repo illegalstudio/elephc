@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_linear() - internals"
 description: "Compiler internals for cairo_pattern_create_linear(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 425
+  order: 429
 ---
 
 ## `cairo_pattern_create_linear()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13765](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13765) (`cairo_pattern_create_linear`)
+- **Lowering**: [`src/image_prelude.rs`:13836](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13836) (`cairo_pattern_create_linear`)
 - **Function symbol**: `cairo_pattern_create_linear()`
 
 

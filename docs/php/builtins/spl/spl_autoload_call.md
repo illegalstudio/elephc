@@ -2,7 +2,7 @@
 title: "spl_autoload_call()"
 description: "Try all registered __autoload() functions to load the requested class."
 sidebar:
-  order: 770
+  order: 784
 ---
 
 ## spl_autoload_call()

@@ -8,7 +8,7 @@ sidebar:
 ## next()
 
 ```php
-function next(array $array): mixed
+function next(array &$array): mixed
 ```
 
 Advances the array's internal pointer and returns the new element.

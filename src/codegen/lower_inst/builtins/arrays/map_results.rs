@@ -31,8 +31,8 @@ pub(super) fn emit_array_map_runtime_call(
         ArrayMapTarget::Hash | ArrayMapTarget::Boxed => {
             let result_kind = hash_map_result_kind(callback_elem_ty, env_bytes);
             let dest_value_tag = runtime_value_tag("array_map", callback_elem_ty)?;
-            let kind_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-            let tag_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+            let kind_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 3);
+            let tag_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 4);
             abi::emit_load_int_immediate(ctx.emitter, kind_arg_reg, result_kind as i64);
             abi::emit_load_int_immediate(ctx.emitter, tag_arg_reg, dest_value_tag as i64);
             let helper = if target == ArrayMapTarget::Boxed {

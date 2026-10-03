@@ -97,6 +97,7 @@ fn lower_builtin_callable_body(
         &mut function,
         None,
         &mut module.data,
+        module.target.platform,
         &statements,
         env_from_signature(signature, false),
         TypeEnv::new(),

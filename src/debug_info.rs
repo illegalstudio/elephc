@@ -18,6 +18,8 @@
 //!   linker needs it to build the `N_SO` stab; without it the debug map is
 //!   silently dropped). All of it is hand-encoded here, the same way
 //!   `-g`-enabled assemblers do it.
+//! - Windows GNU/COFF uses the standard DWARF section names with the `"dr"`
+//!   characteristics accepted by MinGW GAS (discardable, read-only debug data).
 //! - Markers only appear in the text section, which keeps `.loc` legal.
 //! - Every value spliced into assembly text is attacker-influenced (the source
 //!   path and the working directory come from the invocation). Quoted operands
@@ -115,7 +117,10 @@ fn debug_info_sections(
             ".section .debug_abbrev,\"\",@progbits",
             ".section .debug_info,\"\",@progbits",
         ),
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        Platform::Windows => (
+            ".section .debug_abbrev,\"dr\"",
+            ".section .debug_info,\"dr\"",
+        ),
     };
     // `DW_AT_stmt_list` is an offset into the LINKED `.debug_line`, and this unit
     // is not the only contributor to it: every libc object linked in brings its
@@ -334,6 +339,17 @@ _php_foo:
             linux.contains(".section .debug_info,\"\",@progbits"),
             "{linux}"
         );
+
+        let windows = inject_line_directives(ASM, "a.php", Platform::Windows);
+        assert!(
+            windows.contains(".section .debug_abbrev,\"dr\""),
+            "{windows}"
+        );
+        assert!(
+            windows.contains(".section .debug_info,\"dr\""),
+            "{windows}"
+        );
+        assert!(windows.contains(".loc 1 3 5"), "{windows}");
     }
 
     /// Verifies non-marker lines pass through untouched and malformed markers

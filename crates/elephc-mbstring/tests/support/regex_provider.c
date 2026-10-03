@@ -1,15 +1,35 @@
 /* Exercise real decoder lookahead at an inaccessible page boundary without requiring sanitizer builds. */
 #include "elephc_oniguruma.h"
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <fcntl.h>
-#include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
+#include <string.h>
 
 /* Return a numbered setup/provider failure; an unpadded native read fails at the protected page. */
 int elephc_test_guarded_subjects(void) {
     const elephc_onig_provider_v1 *provider = elephc_oniguruma_v1_provider();
-    long page_size = sysconf(_SC_PAGESIZE);
+    long page_size;
+#if defined(_WIN32)
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    page_size = (long)info.dwPageSize;
+#else
+    page_size = sysconf(_SC_PAGESIZE);
+#endif
     if (page_size < 32) return 1;
+#if defined(_WIN32)
+    uint8_t *pages = VirtualAlloc(NULL, (size_t)page_size * 2, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!pages) return 3;
+    DWORD previous_protection = 0;
+    if (!VirtualProtect(pages + page_size, (size_t)page_size, PAGE_NOACCESS, &previous_protection)) {
+        VirtualFree(pages, 0, MEM_RELEASE);
+        return 4;
+    }
+#else
 #if defined(__APPLE__)
     int descriptor = -1;
     int mapping_flags = MAP_PRIVATE | MAP_ANON;
@@ -27,6 +47,7 @@ int elephc_test_guarded_subjects(void) {
         munmap(pages, (size_t)page_size * 2);
         return 4;
     }
+#endif
     const uint8_t subjects[][12] = {
         {0xc3, 0xa9, 0xce, 0xb1, 0xf0, 0x9f, 0xa6, 0x80},
         {0, 0xe9, 3, 0xb1, 0xd8, 0x3e, 0xdd, 0x80},
@@ -61,6 +82,10 @@ int elephc_test_guarded_subjects(void) {
             provider->free_regex(regex);
         }
     }
+#if defined(_WIN32)
+    VirtualFree(pages, 0, MEM_RELEASE);
+#else
     munmap(pages, (size_t)page_size * 2);
+#endif
     return failure;
 }

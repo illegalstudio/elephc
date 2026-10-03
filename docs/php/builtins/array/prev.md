@@ -8,7 +8,7 @@ sidebar:
 ## prev()
 
 ```php
-function prev(array $array): mixed
+function prev(array &$array): mixed
 ```
 
 Rewinds the array's internal pointer and returns the new element.

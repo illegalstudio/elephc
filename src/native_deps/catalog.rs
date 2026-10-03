@@ -94,6 +94,29 @@ const TARGETS: &[&str] = &[
     "linux-aarch64",
     "linux-x86_64",
 ];
+/// PCRE2 is also available through the MinGW toolchain used by the Windows PE backend.
+/// Keep this separate from the Unix-only catalog set until the other native recipes have
+/// equivalent Windows build and link contracts.
+const PCRE2_TARGETS: &[&str] = &[
+    "macos-aarch64",
+    "ios-arm64",
+    "ios-sim-arm64",
+    "linux-aarch64",
+    "linux-x86_64",
+    "windows-x86_64",
+];
+/// Oniguruma is built as a static MinGW archive for the Windows mbregex provider.
+///
+/// Keep this distinct from `TARGETS`: the remaining Autoconf packages have not all completed
+/// the same Windows archive/link review, while Oniguruma's dependency-free static recipe has.
+const ONIGURUMA_TARGETS: &[&str] = &[
+    "macos-aarch64",
+    "ios-arm64",
+    "ios-sim-arm64",
+    "linux-aarch64",
+    "linux-x86_64",
+    "windows-x86_64",
+];
 const PCRE2_ARCHIVES: &[&str] = &[
     "lib/libelephc_pcre2_shim.a",
     "lib/libpcre2-posix.a",
@@ -205,7 +228,7 @@ const PCRE2_VERSIONS: &[PackageVersion] = &[PackageVersion {
     },
     recipe_revision: 3,
     dependencies: &[],
-    supported_targets: TARGETS,
+    supported_targets: PCRE2_TARGETS,
     ordered_link_outputs: PCRE2_ARCHIVES,
     retained_headers: PCRE2_HEADERS,
     provides: &["pcre2"],
@@ -315,9 +338,9 @@ const ONIGURUMA_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 979_159,
         body_limit: 16 * 1024 * 1024,
     },
-    recipe_revision: 3,
+    recipe_revision: 4,
     dependencies: &[],
-    supported_targets: TARGETS,
+    supported_targets: ONIGURUMA_TARGETS,
     ordered_link_outputs: &["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"],
     retained_headers: &["include/oniguruma.h", "include/oniggnu.h", "include/elephc_oniguruma.h"],
     provides: &["oniguruma"],
@@ -441,11 +464,17 @@ mod tests {
         assert_eq!(entry.version, "6.9.10");
         assert_eq!(entry.source.exact_size, 979_159);
         assert_eq!(entry.source.sha256, "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05");
-        assert_eq!(entry.recipe_revision, 3);
-        assert_eq!(entry.supported_targets, TARGETS);
+        assert_eq!(entry.recipe_revision, 4);
+        assert_eq!(entry.supported_targets, ONIGURUMA_TARGETS);
         assert_eq!(entry.ordered_link_outputs, ["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"]);
         assert_eq!(entry.retained_headers, ["include/oniguruma.h", "include/oniggnu.h", "include/elephc_oniguruma.h"]);
         assert!(entry.dependencies.is_empty());
+        assert!(ensure_target(
+            entry,
+            Target::new(crate::codegen_support::platform::Platform::Windows,
+                crate::codegen_support::platform::Arch::X86_64),
+        )
+        .is_ok());
     }
 
     /// Verifies the official PCRE2 source identity and immutable archive order.
@@ -457,7 +486,13 @@ mod tests {
         assert_eq!(version.source.exact_size, 2_792_969);
         assert_eq!(version.source.sha256, "c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16");
         assert_eq!(version.ordered_link_outputs, PCRE2_ARCHIVES);
-        assert_eq!(version.supported_targets, TARGETS);
+        assert_eq!(version.supported_targets, PCRE2_TARGETS);
+        assert!(ensure_target(
+            version,
+            Target::new(crate::codegen_support::platform::Platform::Windows,
+                crate::codegen_support::platform::Arch::X86_64),
+        )
+        .is_ok());
     }
 
     /// Verifies the official zlib source identity and static archive contract.

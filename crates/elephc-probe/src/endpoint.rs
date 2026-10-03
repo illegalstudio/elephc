@@ -693,7 +693,7 @@ fn handle<S: std::io::Read + std::io::Write>(
     mut stream: S,
     gate: &Gate,
 ) -> std::io::Result<()> {
-    let Some(key) = crate::build_key() else {
+    let Some(key) = crate::sampler::build_key() else {
         return Ok(());
     };
     let nonce_c = wire::read_exact_vec(&mut stream, NONCE_LEN)?;

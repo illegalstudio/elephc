@@ -109,7 +109,7 @@ fn contract_record_json(contract: &BuiltinContract) -> Value {
         "min_args": contract.min_args,
         "max_args": contract.max_args,
         "arity_error": contract.arity_error,
-        "semantics": Value::Null,
+        "semantics": non_registry_semantics_json(contract),
         "summary": contract.summary,
         "examples": contract.examples,
         "php_manual": contract.php_manual,
@@ -119,6 +119,18 @@ fn contract_record_json(contract: &BuiltinContract) -> Value {
         "aot": aot_support_json(contract),
         "eval": eval_support_json(contract),
     })
+}
+
+/// Exposes target restrictions for non-registry surfaces whose implementation lives in a
+/// compiler-injected prelude rather than a `builtin!` semantic descriptor.
+fn non_registry_semantics_json(contract: &BuiltinContract) -> Value {
+    match contract.kind {
+        BuiltinKind::WindowsOnlyPreludeProvided => json!({
+            "target_support_kind": "windows",
+            "target_support": ["windows-x86_64"],
+        }),
+        _ => Value::Null,
+    }
 }
 
 /// Builds the compiler support block from shared support and signature contracts.
@@ -293,7 +305,9 @@ fn kind_name(kind: BuiltinKind) -> &'static str {
         BuiltinKind::Function => "function",
         BuiltinKind::LanguageConstruct => "language-construct",
         BuiltinKind::DedicatedSyntax => "dedicated-syntax",
-        BuiltinKind::PreludeProvided => "prelude-provided",
+        BuiltinKind::PreludeProvided | BuiltinKind::WindowsOnlyPreludeProvided => {
+            "prelude-provided"
+        }
         BuiltinKind::NameResolverRewrite => "name-resolver-rewrite",
     }
 }

@@ -157,7 +157,7 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("lsr x10, x9, #60");                                    // reject slot counts whose 16-byte size would overflow
     emitter.instruction("cbnz x10, __rt_preg_match_capture_malloc_fail");       // free the handle instead of allocating a wrapped size
     emitter.instruction("lsl x0, x9, #4");                                      // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
+    emitter.emit_call_c("malloc");                                                     // allocate the fixed offset-pair vector
     emitter.instruction("cbz x0, __rt_preg_match_capture_malloc_fail");         // allocation failure returns no match after freeing the handle
     emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
 
@@ -230,14 +230,14 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_match_capture_success");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic offset-pair buffer for cleanup
-    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning matches
+    emitter.emit_call_c("free");                                                       // free the dynamic offset-pair vector before returning matches
     emitter.instruction("mov x0, #1");                                          // report that preg_match found a match
     emitter.instruction(&format!("ldr x1, [sp, #{}]", matches_array_off));      // return the matches array pointer in x1
     emitter.instruction("b __rt_preg_match_capture_ret");                       // share helper epilogue
 
     emitter.label("__rt_preg_match_capture_no_match");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for the no-match cleanup path
-    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
+    emitter.emit_call_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
     emitter.instruction("b __rt_preg_match_capture_empty");                     // allocate and return the empty matches array
 
     emitter.label("__rt_preg_match_capture_malloc_fail");
@@ -369,7 +369,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r10, 60");                                         // detect a wrapped 16-byte pair-vector size
     emitter.instruction("jnz __rt_preg_match_capture_malloc_fail_linux_x86_64"); // free the handle instead of allocating a wrapped size
     emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
+    emitter.emit_call_c("malloc");                                                     // allocate the fixed offset-pair vector
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
     emitter.instruction("jz __rt_preg_match_capture_malloc_fail_linux_x86_64"); // allocation failure frees the opaque handle and returns no match
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
@@ -444,14 +444,14 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_match_capture_success_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning matches
+    emitter.emit_call_c("free");                                                       // free the dynamic offset-pair vector before returning matches
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", matches_array_off)); // return matches array pointer in rdx
     emitter.instruction("mov eax, 1");                                          // report that preg_match found a match
     emitter.instruction("jmp __rt_preg_match_capture_ret_linux_x86_64");        // share helper epilogue
 
     emitter.label("__rt_preg_match_capture_no_match_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for the no-match cleanup path
-    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
+    emitter.emit_call_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
     emitter.instruction("jmp __rt_preg_match_capture_empty_linux_x86_64");      // allocate and return the empty matches array
 
     emitter.label("__rt_preg_match_capture_malloc_fail_linux_x86_64");

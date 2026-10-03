@@ -50,6 +50,14 @@ impl BuiltinCheckCtx<'_> {
             Some(crate::types::call_args::PlannedRegularArg::Default(_))
         )
     }
+
+    /// Returns whether this call is being checked for PHP's Windows platform surface.
+    ///
+    /// Builtin homes use this backend-neutral capability query instead of importing
+    /// code-generation platform types into semantic/checker code.
+    pub fn target_is_windows(&self) -> bool {
+        self.checker.target.platform.php_os_family_name() == "Windows"
+    }
 }
 
 /// Rejects a process-spawning builtin on a target whose sandbox forbids `fork`.
@@ -61,8 +69,7 @@ impl BuiltinCheckCtx<'_> {
 ///
 /// Call this first from the `check:` hook of any builtin that spawns a process.
 /// The set is `system`, `passthru`, `exec`, `shell_exec`, `popen` and `pclose`;
-/// `proc_open` and its family do not exist in the compiler yet, and must adopt
-/// this guard on the day they do.
+/// `proc_open` and its process-resource family use the same guard.
 pub fn reject_if_process_spawn_forbidden(
     cx: &BuiltinCheckCtx<'_>,
 ) -> Result<(), crate::errors::CompileError> {

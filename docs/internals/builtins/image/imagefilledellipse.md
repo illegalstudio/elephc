@@ -2,7 +2,7 @@
 title: "imagefilledellipse() - internals"
 description: "Compiler internals for imagefilledellipse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 502
+  order: 506
 ---
 
 ## `imagefilledellipse()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2733](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2733) (`imagefilledellipse`)
+- **Lowering**: [`src/image_prelude.rs`:2804](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2804) (`imagefilledellipse`)
 - **Function symbol**: `imagefilledellipse()`
 
 

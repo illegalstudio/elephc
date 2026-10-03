@@ -45,11 +45,11 @@ pub fn emit_array_predicate_boxed(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_predicate_boxed");
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [CALLBACK, BORROWED_SOURCE, MODE].into_iter().enumerate() {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     abi::store_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 3),
+        abi::runtime_helper_int_arg_reg(emitter, 3),
         INVOCATION_SCOPE,
     );
     for offset in [SOURCE, CURSOR, INPUT, KEY, ARGUMENTS, NEXT, ANSWER, PENDING] {
@@ -66,7 +66,7 @@ pub fn emit_array_predicate_boxed(emitter: &mut Emitter) {
     // -- the iterator supplies logical keys and complete value triples for either layout --
     emitter.label("__rt_array_predicate_boxed_loop");
     for (index, offset) in [PAYLOAD, CURSOR].into_iter().enumerate() {
-        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     abi::emit_call_label(emitter, "__rt_array_iter_next");
     ins(emitter, "cmn x0, #1", "cmp rax, -1");
@@ -87,11 +87,11 @@ pub fn emit_array_predicate_boxed(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, CALLBACK);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_array_predicate_boxed_no_callback");
     prepare_arguments(emitter);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CALLBACK);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENTS);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), CALLBACK);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), ARGUMENTS);
     abi::load_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 2),
+        abi::runtime_helper_int_arg_reg(emitter, 2),
         INVOCATION_SCOPE,
     );
     clear_slot(emitter, ARGUMENTS);
@@ -176,7 +176,7 @@ fn initialize_answer(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, result, ANSWER);
     abi::emit_jump(emitter, "__rt_array_predicate_boxed_answer_ready");
     emitter.label("__rt_array_predicate_boxed_filter_answer");
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 4);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), 4);
     abi::emit_call_label(emitter, "__rt_hash_new");
     value_boxing::emit_box_current_owned_value_as_mixed(emitter, &PhpType::AssocArray {
         key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed),
@@ -203,8 +203,8 @@ fn box_key(emitter: &mut Emitter) {
 /// Builds owned callback arguments while retaining the original value/key for result publication.
 fn prepare_arguments(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
+    let arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
     abi::emit_load_int_immediate(emitter, arg0, 2);
     abi::emit_load_int_immediate(emitter, arg1, 8);
     abi::emit_call_label(emitter, "__rt_array_new");
@@ -267,7 +267,7 @@ fn decide_match(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, TRUTH);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_array_predicate_boxed_next");
     for (index, offset) in [ANSWER, KEY_LO, KEY_HI, INPUT].into_iter().enumerate() {
-        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     clear_slot(emitter, INPUT);
     abi::emit_call_label(emitter, "__rt_mixed_array_set");
@@ -296,7 +296,7 @@ fn install_boundary(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
+    abi::emit_frame_slot_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.bl_c("setjmp");                                                    // keep all predicate-owned cells reachable across callback and cleanup throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_predicate_boxed_caught");
 }

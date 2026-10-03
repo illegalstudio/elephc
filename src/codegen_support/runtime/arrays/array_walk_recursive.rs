@@ -151,7 +151,7 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_array_walk_recursive_idx_call");               // no environment keeps the one-argument callback ABI
     emitter.instruction("mov rsi, r14");                                        // pass the callback environment as the second argument
     emitter.label("__rt_array_walk_recursive_idx_call");
-    emitter.instruction("call r12");                                            // invoke callback(leaf [, env]); return value discarded
+    emitter.emit_platform_callback_call("r12", 2);
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the index after the callback call
     emitter.instruction("add rax, 1");                                          // advance to the next element
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the advanced index
@@ -188,7 +188,7 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_array_walk_recursive_hash_call");              // no environment keeps the one-argument callback ABI
     emitter.instruction("mov rsi, r14");                                        // pass the callback environment as the second argument
     emitter.label("__rt_array_walk_recursive_hash_call");
-    emitter.instruction("call r12");                                            // invoke callback(leaf [, env]); return value discarded
+    emitter.emit_platform_callback_call("r12", 2);
     emitter.instruction("jmp __rt_array_walk_recursive_hash_loop");             // continue iterating the hash entries
     emitter.label("__rt_array_walk_recursive_hash_rec");
     emitter.instruction("mov rdi, r12");                                        // pass the callback address to the recursive call

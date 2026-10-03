@@ -147,6 +147,10 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     emitter.instruction("b.eq __rt_mixed_free_deep_resource_curl_share");       // CurlShareHandle needs curl_share_cleanup via the elephc_curl bridge (a no-op if persistent)
 
+    emitter.instruction("cmp x9, #5");                                          // is the resource a proc_open process handle?
+
+    emitter.instruction("b.eq __rt_mixed_free_deep_resource_proc");             // proc handles reap the child via __rt_proc_close
+
     emitter.instruction("b __rt_mixed_free_deep_box");                          // unknown resource kind, free the box without destructor
 
 
@@ -229,6 +233,20 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("bl __rt_curl_share_free");                             // release the share handle through the indirect curl slot (no-op if persistent)
 
     emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after releasing the handle
+
+
+    emitter.label("__rt_mixed_free_deep_resource_proc");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the process descriptor from the low payload word
+
+    emitter.instruction("mov x9, #0x40000000");                                 // load the synthetic/sentinel handle threshold into a scratch register
+
+    emitter.instruction("cmp x0, x9");                                          // skip the -1 sentinel left by an explicit proc_close
+
+    emitter.instruction("b.hs __rt_mixed_free_deep_box");                       // skip release for already-closed process handles
+
+    emitter.instruction("bl __rt_proc_close");                                  // proc_close reaps the child process and frees its resources
+
+    emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after releasing the process handle
 
 
     emitter.label("__rt_mixed_free_deep_string");
@@ -350,6 +368,10 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
     emitter.instruction("je __rt_mixed_free_deep_resource_curl_share");         // CurlShareHandle needs curl_share_cleanup via the elephc_curl bridge (a no-op if persistent)
 
+    emitter.instruction("cmp r9, 5");                                           // is the resource a proc_open process handle?
+
+    emitter.instruction("je __rt_mixed_free_deep_resource_proc");               // proc handles reap the child via __rt_proc_close
+
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // unknown resource kind, free the box without destructor
 
 
@@ -429,6 +451,18 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after releasing the handle
 
 
+    emitter.label("__rt_mixed_free_deep_resource_proc");
+    emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the process descriptor from the low payload word
+
+    emitter.instruction("cmp rdi, 0x40000000");                                 // sentinel(-1)/synthetic handle threshold
+
+    emitter.instruction("jae __rt_mixed_free_deep_box");                        // skip release for already-closed process handles
+
+    emitter.instruction("call __rt_proc_close");                                // proc_close reaps the child process and frees its resources
+
+    emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after releasing the process handle
+
+
     emitter.label("__rt_mixed_free_deep_string");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed string pointer from the mixed payload before releasing it
 
@@ -462,6 +496,7 @@ mod tests {
         compare: &'static str,
         popen_branch: &'static str,
         dir_branch: &'static str,
+        process_branch: &'static str,
     }
 
     const LADDERS: &[LadderShapes] = &[
@@ -471,6 +506,7 @@ mod tests {
             compare: "cmp x9, #",
             popen_branch: "b.eq __rt_mixed_free_deep_resource_popen\n",
             dir_branch: "b.eq __rt_mixed_free_deep_resource_dir\n",
+            process_branch: "b.eq __rt_mixed_free_deep_resource_proc\n",
         },
         LadderShapes {
             platform: Platform::Linux,
@@ -478,6 +514,7 @@ mod tests {
             compare: "cmp r9, ",
             popen_branch: "je __rt_mixed_free_deep_resource_popen\n",
             dir_branch: "je __rt_mixed_free_deep_resource_dir\n",
+            process_branch: "je __rt_mixed_free_deep_resource_proc\n",
         },
     ];
 
@@ -512,6 +549,10 @@ mod tests {
             let wide = emit_for(shapes, RuntimeFeatures::all());
             assert!(wide.contains(shapes.popen_branch), "{arch:?}: popen arm must be emitted");
             assert!(wide.contains(shapes.dir_branch), "{arch:?}: directory arm must be emitted");
+            assert!(
+                wide.contains(shapes.process_branch),
+                "{arch:?}: process arm must be emitted"
+            );
             assert!(
                 wide.contains("__rt_pclose"),
                 "{arch:?}: the popen arm is the only runtime reference to the pclose helper"
@@ -614,6 +655,7 @@ mod tests {
             for (kind, branch) in [
                 (ResourceCleanupKind::PopenPipe, shapes.popen_branch),
                 (ResourceCleanupKind::Directory, shapes.dir_branch),
+                (ResourceCleanupKind::Process, shapes.process_branch),
             ] {
                 let dispatch = format!("{}{}\n    {}", shapes.compare, kind.stamp(), branch);
                 assert!(

@@ -86,7 +86,7 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x2", "_fmt_g");
     // -- Apple ARM64 variadic ABI: float arg goes on stack, not in SIMD reg --
     emitter.instruction("str d0, [sp]");                                        // push double onto stack for variadic call
-    emitter.bl_c("snprintf");                                                   // format the double at 14 significant digits
+    emitter.emit_call_c("snprintf");                                            // format through the target-aware C ABI
 
     // -- destination: the caller window, or _concat_buf at the current _concat_off --
     emitter.instruction("ldr x13, [sp, #56]");                                  // caller destination, or 0

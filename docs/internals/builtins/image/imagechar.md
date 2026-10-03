@@ -2,7 +2,7 @@
 title: "imagechar() - internals"
 description: "Compiler internals for imagechar(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 462
+  order: 466
 ---
 
 ## `imagechar()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2930](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2930) (`imagechar`)
+- **Lowering**: [`src/image_prelude.rs`:3001](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3001) (`imagechar`)
 - **Function symbol**: `imagechar()`
 
 

@@ -1,12 +1,13 @@
 ---
 title: "Web Server (--web)"
-description: "Compile a PHP program into a standalone prefork HTTP server binary with --web."
+description: "Compile a PHP program into a standalone HTTP server binary with --web."
 sidebar:
   order: 7
 ---
 
 `--web` is an elephc compiler extension: it compiles a standard PHP file into a
-standalone prefork HTTP server binary instead of a plain CLI executable. The PHP
+standalone HTTP server binary instead of a plain CLI executable. Unix targets use
+a prefork supervisor; Windows uses a single-process event loop. The PHP
 source you compile is standard PHP — the same file would also run under the PHP
 interpreter or php-fpm — but the compile-and-serve mechanism is specific to
 elephc.

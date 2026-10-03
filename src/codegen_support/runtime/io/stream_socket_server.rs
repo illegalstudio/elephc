@@ -9,7 +9,7 @@
 //! - Creates a TCP listening socket: `socket` + `bind` + `listen` on the
 //!   parsed `[tcp://]A.B.C.D:port` address; returns the descriptor or -1.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
 /// stream_socket_server: open a listening TCP socket on an IPv4 address.
 /// Input:  x0 = address string pointer, x1 = address string length
@@ -24,6 +24,14 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_socket_server ---");
     emitter.label_global("__rt_stream_socket_server");
+    emitter.instruction("mov x9, #0");                                          // prepare listener syscall arguments
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_stream_socket_errno", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_stream_socket_error_ptr", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_stream_socket_error_len", 0);
+    abi::emit_symbol_address(emitter, "x9", "_empty_str");
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_stream_socket_error_ptr", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x2", "_stream_server_flags", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x3", "_stream_server_context", 0);
 
     // -- bracketed-host detection: any '[' in the address routes us to the
     //    IPv6 helper. Mirrors __rt_stream_socket_client's probe so both
@@ -133,6 +141,13 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
     // -- detect the udp:// transport before parsing the address --
     emitter.instruction("str x0, [sp, #56]");                                   // save the address pointer across the scheme probe
     emitter.instruction("str x1, [sp, #64]");                                   // save the address length across the scheme probe
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload listener state after the socket helper call
+    emitter.instruction("ldr x1, [sp, #64]");                                   // reload listener state after the socket helper call
+    emitter.instruction("bl __rt_addr_tls_crypto_method");                      // call bl __rt_addr_tls_crypto_method for the stream operation
+    emitter.instruction("bic x0, x0, #1");                                      // server mode clears PHP's client selector bit
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_stream_server_tls_method", 0);
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload listener state after the socket helper call
+    emitter.instruction("ldr x1, [sp, #64]");                                   // reload listener state after the socket helper call
     emitter.instruction("bl __rt_addr_is_udp");                                 // x0 = 1 for a udp:// address
     emitter.instruction("str x0, [sp, #72]");                                   // save the udp transport flag
     emitter.instruction("ldr x0, [sp, #56]");                                   // reload the address pointer
@@ -154,9 +169,36 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative descriptor means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_server_sock_ok")); // continue when socket succeeded
+    emitter.instruction("neg x9, x0");                                          // prepare listener syscall arguments
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_stream_socket_errno", 0);
     emitter.instruction("b __rt_stream_socket_server_fail");                    // socket() failed
     emitter.label("__rt_stream_socket_server_sock_ok");
     emitter.instruction("str x0, [sp, #32]");                                   // save the socket descriptor
+
+    // -- setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &1, 4) --
+    // php enables SO_REUSEADDR by default on every listener and treats the
+    // socket.so_reuseaddr context option purely as an opt-out
+    // (main/streams/xp_socket.c). Without it a server cannot rebind its own port
+    // while the previous socket is still in TIME_WAIT. The IPv6 helper already
+    // does this; the option value is staged in the sockaddr area, which is only
+    // built further down, so no extra frame slot is needed.
+    {
+        let (sol_socket, so_reuseaddr): (i64, i64) = match plat {
+            Platform::MacOS => (0xffff, 4),
+            Platform::Linux => (1, 2),
+            Platform::Windows => (1, 2),
+        };
+        emitter.instruction("mov w9, #1");                                      // SO_REUSEADDR option value = 1
+        emitter.instruction("str w9, [sp, #40]");                               // stage it in the not-yet-built sockaddr area
+        emitter.instruction("ldr x0, [sp, #32]");                               // reload the socket descriptor
+        emitter.instruction(&format!("mov x1, #{}", sol_socket));               // level: SOL_SOCKET
+        emitter.instruction(&format!("mov x2, #{}", so_reuseaddr));             // name: SO_REUSEADDR
+        emitter.instruction("add x3, sp, #40");                                 // pointer to the option value
+        emitter.instruction("mov x4, #4");                                      // option length = sizeof(int)
+        emitter.syscall(105);                                                   // best-effort: a failure must not fail the bind
+    }
+
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the descriptor for the options helper
     emitter.instruction("bl __rt_apply_socket_server_opts");                    // apply so_reuseport before bind (best-effort)
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the descriptor (helper clobbers x0)
 
@@ -189,17 +231,25 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // socket descriptor
     emitter.instruction("add x1, sp, #40");                                     // pointer to the sockaddr_in
     emitter.instruction("mov x2, #16");                                         // sockaddr_in length
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_stream_server_flags", 0);
+    emitter.instruction("tst x9, #4");                                          // STREAM_SERVER_BIND
+    emitter.instruction("b.eq __rt_stream_socket_server_bind_ok");              // handle the listener bind or listen result
     emitter.syscall(104);
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_server_bind_ok")); // continue when bind succeeded
+    emitter.instruction("neg x9, x0");                                          // prepare listener syscall arguments
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_stream_socket_errno", 0);
     emitter.instruction("b __rt_stream_socket_server_fail_close");              // bind() failed
     emitter.label("__rt_stream_socket_server_bind_ok");
 
     // -- a udp socket is ready after bind; only tcp needs listen --
     emitter.instruction("ldr x9, [sp, #72]");                                   // load the udp transport flag
     emitter.instruction("cbnz x9, __rt_stream_socket_server_ok");               // udp sockets skip listen()
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_stream_server_flags", 0);
+    emitter.instruction("tst x9, #8");                                          // STREAM_SERVER_LISTEN
+    emitter.instruction("b.eq __rt_stream_socket_server_ok");                   // handle the listener bind or listen result
 
     // -- listen(fd, socket.backlog) --
     emitter.instruction("bl __rt_socket_backlog");                              // resolve the configured backlog (default 128)
@@ -210,10 +260,20 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_server_ok")); // continue when listen succeeded
+    emitter.instruction("neg x9, x0");                                          // prepare listener syscall arguments
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_stream_socket_errno", 0);
     emitter.instruction("b __rt_stream_socket_server_fail_close");              // listen() failed
 
     emitter.label("__rt_stream_socket_server_ok");
     emitter.instruction("ldr x0, [sp, #32]");                                   // return the listening descriptor
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_stream_server_context", 0);
+    abi::emit_call_label(emitter, "__rt_stream_context_lookup");
+    emitter.instruction("mov x1, x0");                                          // prepare listener syscall arguments
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload listener state after the socket helper call
+    abi::emit_load_symbol_to_reg(emitter, "x2", "_stream_server_flags", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x3", "_stream_server_tls_method", 0);
+    abi::emit_call_label(emitter, "__rt_stream_listener_register");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload listener state after the socket helper call
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the listening socket
@@ -234,6 +294,14 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_socket_server ---");
     emitter.label_global("__rt_stream_socket_server");
+    emitter.instruction("xor r10d, r10d");                                      // return the listener operation status
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_stream_socket_errno", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_stream_socket_error_ptr", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_stream_socket_error_len", 0);
+    abi::emit_symbol_address(emitter, "r10", "_empty_str");
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_stream_socket_error_ptr", 0);
+    abi::emit_store_reg_to_symbol(emitter, "rdx", "_stream_server_flags", 0);
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_stream_server_context", 0);
 
     // -- bracketed-host detection: any '[' in the address routes us to the
     //    IPv6 helper. Mirrors __rt_stream_socket_client's probe so both
@@ -343,6 +411,13 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     // -- detect the udp:// transport before parsing the address --
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the address pointer across the scheme probe
     emitter.instruction("mov QWORD PTR [rbp - 56], rsi");                       // save the address length across the scheme probe
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // prepare listener syscall arguments
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // prepare listener syscall arguments
+    emitter.instruction("call __rt_addr_tls_crypto_method");                    // call call __rt_addr_tls_crypto_method for the stream operation
+    emitter.instruction("and rax, -2");                                         // server mode clears PHP's client selector bit
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_stream_server_tls_method", 0);
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // prepare listener syscall arguments
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // prepare listener syscall arguments
     emitter.instruction("call __rt_addr_is_udp");                               // rax = 1 for a udp:// address
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the udp transport flag
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the address pointer
@@ -361,9 +436,35 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 41");                                         // Linux x86_64 syscall 41 = socket
     emitter.instruction("syscall");                                             // create the socket
     emitter.instruction("test rax, rax");                                       // did socket() fail?
-    emitter.instruction("js __rt_stream_socket_server_fail_x86");               // socket() failed
+    emitter.instruction("jns __rt_stream_socket_server_sock_ok_x86");           // retain a valid socket descriptor before failure reporting
+    if emitter.platform == Platform::Windows {
+        abi::emit_call_label(emitter, "__rt_wsa_capture_errno");
+        abi::emit_store_reg_to_symbol(emitter, "rax", "_stream_socket_errno", 0);
+    } else {
+        emitter.instruction("mov r10, rax");                                    // preserve the raw syscall failure
+        emitter.instruction("neg r10");                                         // normalize -errno to PHP's positive code
+        abi::emit_store_reg_to_symbol(emitter, "r10", "_stream_socket_errno", 0);
+    }
+    abi::emit_call_label(emitter, "__rt_stream_socket_error_message");
+    emitter.instruction("jmp __rt_stream_socket_server_fail_x86");              // socket() failed
+    emitter.label("__rt_stream_socket_server_sock_ok_x86");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the socket descriptor
-    emitter.instruction("mov rdi, rax");                                        // pass the fd to the options helper
+
+    // -- setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &1, 4) --
+    // See the AArch64 arm: php enables this by default on every listener. The
+    // POSIX level/optname pair is emitted verbatim because the Windows shim
+    // translates them to their Winsock values itself (shims_net.rs), and the
+    // option value is staged in the sockaddr area, which is built further down.
+    emitter.instruction("mov DWORD PTR [rbp - 40], 1");                         // SO_REUSEADDR option value = 1
+    emitter.instruction("mov rdi, rax");                                        // fd
+    emitter.instruction("mov rsi, 1");                                          // level: POSIX SOL_SOCKET
+    emitter.instruction("mov rdx, 2");                                          // name: POSIX SO_REUSEADDR
+    emitter.instruction("lea r10, [rbp - 40]");                                 // pointer to the option value
+    emitter.instruction("mov r8, 4");                                           // option length = sizeof(int)
+    emitter.instruction("mov eax, 54");                                         // Linux x86_64 syscall 54 = setsockopt
+    emitter.instruction("syscall");                                             // best-effort: a failure must not fail the bind
+
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the fd for the options helper
     emitter.instruction("call __rt_apply_socket_server_opts");                  // apply so_reuseport before bind (best-effort)
 
     emitter.instruction("mov WORD PTR [rbp - 40], 2");                          // Linux sin_family = AF_INET
@@ -388,14 +489,32 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // socket descriptor
     emitter.instruction("lea rsi, [rbp - 40]");                                 // pointer to the sockaddr_in
     emitter.instruction("mov edx, 16");                                         // sockaddr_in length
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stream_server_flags", 0);
+    emitter.instruction("test r10, 4");                                         // STREAM_SERVER_BIND
+    emitter.instruction("jz __rt_stream_socket_server_bind_ok_x86");            // null or false result follows __rt_stream_socket_server_bind_ok_x86
     emitter.instruction("mov eax, 49");                                         // Linux x86_64 syscall 49 = bind
     emitter.instruction("syscall");                                             // bind the socket
     emitter.instruction("test rax, rax");                                       // did bind() fail?
-    emitter.instruction("js __rt_stream_socket_server_fail_close_x86");         // bind() failed
+    emitter.instruction("jns __rt_stream_socket_server_bind_ok_x86");           // handle the listener bind or listen result
+    if emitter.platform == Platform::Windows {
+        abi::emit_call_label(emitter, "__rt_wsa_capture_errno");
+        abi::emit_store_reg_to_symbol(emitter, "rax", "_stream_socket_errno", 0);
+    } else {
+        emitter.instruction("mov r10, rax");                                    // preserve the raw syscall failure
+        emitter.instruction("neg r10");                                         // normalize -errno to PHP's positive code
+        abi::emit_store_reg_to_symbol(emitter, "r10", "_stream_socket_errno", 0);
+    }
+    abi::emit_call_label(emitter, "__rt_stream_socket_error_message");
+    emitter.instruction("jmp __rt_stream_socket_server_fail_close_x86");        // bind() failed
+
+    emitter.label("__rt_stream_socket_server_bind_ok_x86");
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the udp transport flag
     emitter.instruction("test rax, rax");                                       // is this a udp socket?
     emitter.instruction("jnz __rt_stream_socket_server_ok_x86");                // udp sockets skip listen()
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stream_server_flags", 0);
+    emitter.instruction("test r10, 8");                                         // STREAM_SERVER_LISTEN
+    emitter.instruction("jz __rt_stream_socket_server_ok_x86");                 // null or false result follows __rt_stream_socket_server_ok_x86
 
     emitter.instruction("call __rt_socket_backlog");                            // resolve the configured backlog (default 128)
     emitter.instruction("mov esi, eax");                                        // backlog → listen() arg 1
@@ -403,10 +522,22 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 50");                                         // Linux x86_64 syscall 50 = listen
     emitter.instruction("syscall");                                             // mark the socket as listening
     emitter.instruction("test rax, rax");                                       // did listen() fail?
-    emitter.instruction("js __rt_stream_socket_server_fail_close_x86");         // listen() failed
+    emitter.instruction("jns __rt_stream_socket_server_ok_x86");                // handle the listener bind or listen result
+    emitter.instruction("mov r10, rax");                                        // prepare listener syscall arguments
+    emitter.instruction("neg r10");                                             // prepare listener syscall arguments
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_stream_socket_errno", 0);
+    emitter.instruction("jmp __rt_stream_socket_server_fail_close_x86");        // listen() failed
 
     emitter.label("__rt_stream_socket_server_ok_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the listening descriptor
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_server_context", 0);
+    emitter.instruction("call __rt_stream_context_lookup");                     // look up the stream context for this descriptor
+    emitter.instruction("mov rsi, rax");                                        // prepare listener syscall arguments
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // prepare listener syscall arguments
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_stream_server_flags", 0);
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_stream_server_tls_method", 0);
+    emitter.instruction("call __rt_stream_listener_register");                  // register the bound listener with its stream context
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload listener state after the socket helper call
     emitter.instruction("add rsp, 64");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the listening socket
@@ -421,4 +552,31 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 64");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies a successful IPv4 socket reaches the listener setup on both
+    /// x86_64 runtime targets instead of falling through the errno path.
+    #[test]
+    fn x86_socket_success_skips_listener_failure_path() {
+        for platform in [Platform::Linux, Platform::Windows] {
+            let mut emitter = Emitter::new(Target::new(platform, Arch::X86_64));
+            emit_stream_socket_server(&mut emitter);
+            let asm = emitter.output();
+            let socket = asm
+                .find("mov eax, 41")
+                .expect("x86 listener emits the socket syscall");
+            let success = asm[socket..]
+                .find("jns __rt_stream_socket_server_sock_ok_x86")
+                .expect("successful socket skips the errno path");
+            let failure = asm[socket..]
+                .find("jmp __rt_stream_socket_server_fail_x86")
+                .expect("socket failure remains observable");
+            assert!(success < failure, "{asm}");
+        }
+    }
 }

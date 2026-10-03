@@ -4,7 +4,7 @@ schema = 1
 [[package]]
 name = "oniguruma"
 version = "6.9.10"
-recipe = 3
+recipe = 4
 dependencies = []
 provides = ["oniguruma"]
 
@@ -39,6 +39,12 @@ frameworks = []
 
 [[package.target]]
 name = "linux-x86_64"
+archives = ["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "windows-x86_64"
 archives = ["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"]
 system_libraries = []
 frameworks = []
@@ -81,6 +87,12 @@ frameworks = []
 
 [[package.target]]
 name = "linux-x86_64"
+archives = ["lib/libelephc_pcre2_shim.a", "lib/libpcre2-posix.a", "lib/libpcre2-8.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "windows-x86_64"
 archives = ["lib/libelephc_pcre2_shim.a", "lib/libpcre2-posix.a", "lib/libpcre2-8.a"]
 system_libraries = []
 frameworks = []

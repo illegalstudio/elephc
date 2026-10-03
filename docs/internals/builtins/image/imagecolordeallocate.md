@@ -2,7 +2,7 @@
 title: "imagecolordeallocate() - internals"
 description: "Compiler internals for imagecolordeallocate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 470
+  order: 474
 ---
 
 ## `imagecolordeallocate()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2361](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2361) (`imagecolordeallocate`)
+- **Lowering**: [`src/image_prelude.rs`:2432](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2432) (`imagecolordeallocate`)
 - **Function symbol**: `imagecolordeallocate()`
 
 

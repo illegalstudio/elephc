@@ -2,7 +2,7 @@
 title: "cairo_stroke()"
 description: "Strokes the current path with the current source and clears the path."
 sidebar:
-  order: 442
+  order: 446
 ---
 
 ## cairo_stroke()

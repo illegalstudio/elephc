@@ -62,6 +62,7 @@ mod pdo_cubrid;
 mod pdo_mysql;
 mod pdo_pgsql;
 mod image;
+#[cfg(unix)]
 mod pcntl;
 mod xml;
 mod arrays;
@@ -94,3 +95,4 @@ mod dead_strip;
 mod locals_retype;
 mod stack_guard;
 mod zval;
+mod windows_pe;

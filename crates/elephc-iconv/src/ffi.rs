@@ -6,8 +6,8 @@
 //! - `crate::convert`, `crate::text`, and `crate::mime` whenever bytes must be transcoded.
 //!
 //! Key details:
-//! - macOS resolves `iconv_open` from `libiconv`, so the extern block links it there;
-//!   glibc and musl provide the same symbols from libc itself.
+//! - macOS resolves `iconv_open` from `libiconv`, GNU/MinGW exports the Windows
+//!   variants as `libiconv_*`, and glibc/musl provide the ordinary names from libc.
 //! - Opening a converter first installs a UTF-8 `LC_CTYPE`, because glibc drives
 //!   `//TRANSLIT` from that locale and the PHP CLI installs one at startup too.
 //! - Apple's iconv (Citrus-based since macOS 14) stores the `//TRANSLIT` and `//IGNORE`
@@ -30,7 +30,9 @@ use crate::error::{IconvError, IconvResult};
 
 #[cfg_attr(target_os = "macos", link(name = "iconv"))]
 unsafe extern "C" {
+    #[cfg_attr(target_os = "windows", link_name = "libiconv_open")]
     fn iconv_open(tocode: *const c_char, fromcode: *const c_char) -> *mut c_void;
+    #[cfg_attr(target_os = "windows", link_name = "libiconv")]
     fn iconv(
         cd: *mut c_void,
         inbuf: *mut *mut c_char,
@@ -38,6 +40,7 @@ unsafe extern "C" {
         outbuf: *mut *mut c_char,
         outbytesleft: *mut usize,
     ) -> usize;
+    #[cfg_attr(target_os = "windows", link_name = "libiconv_close")]
     fn iconv_close(cd: *mut c_void) -> c_int;
     fn setlocale(category: c_int, locale: *const c_char) -> *mut c_char;
     /// Sets one GNU-compatible option on a descriptor; Apple stores it per charset pair.

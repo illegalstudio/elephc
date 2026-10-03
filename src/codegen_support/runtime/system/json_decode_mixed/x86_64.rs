@@ -452,7 +452,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_decode_mixed_float_copy_done");
     emitter.instruction("mov BYTE PTR [r10 + rcx], 0");                         // append the NUL terminator atof needs
     emitter.instruction("mov rdi, r10");                                        // pass the C-string pointer to atof in rdi
-    emitter.bl_c("atof");                                                       // libc atof → xmm0 = double
+    emitter.emit_call_c("atof");                                                // libc atof → xmm0 = double
     emitter.instruction("movq rdi, xmm0");                                      // move the double bits into the integer payload register
     emitter.instruction("mov rax, 2");                                          // tag = float
     emitter.instruction("xor rsi, rsi");                                        // update the JSON decoder cursor or counter

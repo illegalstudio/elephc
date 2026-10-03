@@ -61,7 +61,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // first libc chown arg = path
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second arg = uid
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // third arg = gid
-    emitter.instruction("call chown");                                          // libc chown(path, uid, gid)
+    emitter.emit_call_c("chown");                                               // libc chown(path, uid, gid) — false on Windows
     emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
@@ -82,7 +82,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // first libc lchown arg = path
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second arg = uid
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // third arg = gid
-    emitter.instruction("call lchown");                                         // libc lchown(path, uid, gid) without following symlinks
+    emitter.emit_call_c("lchown");                                              // libc lchown(path, uid, gid) — false on Windows
     emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
@@ -112,7 +112,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first chown arg = C path
     emitter.instruction("mov esi, eax");                                        // second chown arg = resolved uid
     emitter.instruction("mov rdx, -1");                                         // gid = -1 (leave group unchanged)
-    emitter.instruction("call chown");                                          // libc chown(path, uid, -1)
+    emitter.emit_call_c("chown");                                               // libc chown(path, uid, -1) — false on Windows
     emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
@@ -146,7 +146,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first lchown arg = C path
     emitter.instruction("mov esi, eax");                                        // second lchown arg = resolved uid
     emitter.instruction("mov rdx, -1");                                         // gid = -1 (leave group unchanged)
-    emitter.instruction("call lchown");                                         // libc lchown(path, uid, -1) without following symlinks
+    emitter.emit_call_c("lchown");                                              // libc lchown(path, uid, -1) — false on Windows
     emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
@@ -180,7 +180,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first chown arg = C path
     emitter.instruction("mov rsi, -1");                                         // uid = -1 (leave owner unchanged)
     emitter.instruction("mov edx, eax");                                        // third chown arg = resolved gid
-    emitter.instruction("call chown");                                          // libc chown(path, -1, gid)
+    emitter.emit_call_c("chown");                                               // libc chown(path, -1, gid) — false on Windows
     emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
@@ -214,7 +214,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first lchown arg = C path
     emitter.instruction("mov rsi, -1");                                         // uid = -1 (leave owner unchanged)
     emitter.instruction("mov edx, eax");                                        // third lchown arg = resolved gid
-    emitter.instruction("call lchown");                                         // libc lchown(path, -1, gid) without following symlinks
+    emitter.emit_call_c("lchown");                                              // libc lchown(path, -1, gid) — false on Windows
     emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
@@ -274,7 +274,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish frame
     emitter.instruction("mov rdi, rax");                                        // fd
     if emitter.platform == crate::codegen_support::platform::Platform::Linux {
-        emitter.instruction("call fdatasync");                                  // libc fdatasync(fd) on Linux
+        emitter.emit_call_c("fdatasync");                                       // libc fdatasync(fd) on Linux
     } else {
         emitter.instruction("call fsync");                                      // Darwin fallback
     }

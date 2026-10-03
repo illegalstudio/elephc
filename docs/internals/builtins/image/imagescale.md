@@ -2,7 +2,7 @@
 title: "imagescale() - internals"
 description: "Compiler internals for imagescale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 527
+  order: 533
 ---
 
 ## `imagescale()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3101](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3101) (`imagescale`)
+- **Lowering**: [`src/image_prelude.rs`:3172](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3172) (`imagescale`)
 - **Function symbol**: `imagescale()`
 
 

@@ -972,9 +972,11 @@ $db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
 $db->exec("DROP TABLE IF EXISTS pg_copy_file");
 $db->exec("CREATE TABLE pg_copy_file (id INT, name TEXT)");
 $src = tempnam(sys_get_temp_dir(), "elephc_pg_copy_in_");
+if ($src === false) { throw new RuntimeException("tempnam failed for COPY input"); }
 file_put_contents($src, "1\tAda\n2\tBob\n");
 $in = $db->copyFromFile("pg_copy_file", $src) ? "1" : "0";
 $dst = tempnam(sys_get_temp_dir(), "elephc_pg_copy_out_");
+if ($dst === false) { throw new RuntimeException("tempnam failed for COPY output"); }
 $out = $db->copyToFile("pg_copy_file", $dst) ? "1" : "0";
 $back = (string) file_get_contents($dst);
 unlink($src);

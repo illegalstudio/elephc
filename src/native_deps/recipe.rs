@@ -55,7 +55,7 @@ enum BuiltInRecipe {
 /// Resolves a package and immutable recipe revision to its built-in executor.
 fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
-        ("oniguruma", 3) => Some(BuiltInRecipe::Oniguruma),
+        ("oniguruma", 4) => Some(BuiltInRecipe::Oniguruma),
         ("pcre2", 3) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),

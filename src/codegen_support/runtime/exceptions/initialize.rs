@@ -9,7 +9,7 @@
 //! - New field owners are installed before releasing displaced owners, including self aliases.
 //! - Previous-slot metadata selects a raw object or a nullable Mixed cell without changing layout.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::{Arch, Platform}};
 
 const FRAME: usize = 96;
 const RECEIVER: usize = 8;
@@ -34,7 +34,19 @@ pub fn emit_throwable_initialize(emitter: &mut Emitter) {
     // -- preserve the borrowed constructor inputs before acquiring replacement field owners --
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [RECEIVER, MESSAGE, MESSAGE_LEN, CODE, PREVIOUS].into_iter().enumerate() {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        if (emitter.target.platform, emitter.target.arch) == (Platform::Windows, Arch::X86_64) && index == 4 {
+            // The PHP callable ABI has four MS x64 integer registers. The normalized
+            // `$previous` Mixed is its fifth word, so the caller leaves it above the
+            // mandatory shadow space rather than in a nonexistent fifth register.
+            abi::load_from_caller_stack(
+                emitter,
+                scratch,
+                abi::caller_stack_start_offset(emitter.target),
+            );
+            abi::store_at_offset(emitter, scratch, offset);
+        } else {
+            abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
+        }
     }
     abi::load_at_offset(emitter, result, RECEIVER);
     abi::emit_call_label(emitter, "__rt_throwable_previous_slot");
@@ -100,14 +112,15 @@ mod tests {
     /// Every target stages the five ABI words and publishes replacement owners before old cleanup.
     #[test]
     fn throwable_initializer_preserves_layout_and_owner_order_on_all_targets() {
-        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64", "windows-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             emit_throwable_initialize(&mut emitter);
             let asm = emitter.output();
-            let previous_argument = match target.arch {
-                Arch::AArch64 => "stur x4, [x29, #-40]",
-                Arch::X86_64 => "mov QWORD PTR [rbp - 40], r8",
+            let previous_argument = match (target.platform, target.arch) {
+                (_, Arch::AArch64) => "stur x4, [x29, #-40]",
+                (Platform::Windows, Arch::X86_64) => "mov r10, QWORD PTR [rbp + 48]",
+                (_, Arch::X86_64) => "mov QWORD PTR [rbp - 40], r8",
             };
             let publish_previous = match target.arch {
                 Arch::AArch64 => "str x0, [x9]",

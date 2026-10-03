@@ -2,7 +2,7 @@
 title: "stream_set_read_buffer()"
 description: "Sets the read file buffering on a stream."
 sidebar:
-  order: 382
+  order: 386
 ---
 
 ## stream_set_read_buffer()

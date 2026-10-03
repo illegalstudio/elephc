@@ -8,7 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
 
 /// Emits the `__rt_basename` runtime helper for ARM64 targets, with an x86_64 Linux variant.
 ///
@@ -115,7 +115,16 @@ fn emit_basename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r8, 1");                                           // r8 = index of the last byte
     emitter.instruction("movzx r9d, BYTE PTR [rax + r8]");                      // load the last byte
     emitter.instruction("cmp r9b, 0x2F");                                       // is it a forward slash?
-    emitter.instruction("jne __rt_basename_scan_init_x86");                     // not a slash: scan for the last separator
+    if emitter.platform == Platform::Windows {
+        // PHP's IS_SLASH accepts both separators on Windows (Zend/zend_virtual_cwd.h),
+        // so a backslash-terminated path must be trimmed exactly like a slash one.
+        emitter.instruction("je __rt_basename_strip_sep_x86");                  // a forward slash is already a separator
+        emitter.instruction("cmp r9b, 0x5C");                                   // is it a backslash separator?
+        emitter.instruction("jne __rt_basename_scan_init_x86");                 // neither separator: scan for the last one
+        emitter.label("__rt_basename_strip_sep_x86");
+    } else {
+        emitter.instruction("jne __rt_basename_scan_init_x86");                 // not a slash: scan for the last separator
+    }
     emitter.instruction("sub rdx, 1");                                          // drop the trailing slash from the slice length
     emitter.instruction("jmp __rt_basename_strip_x86");                         // continue stripping further trailing slashes
 
@@ -130,6 +139,10 @@ fn emit_basename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r10d, BYTE PTR [rax + r9]");                     // load the candidate byte
     emitter.instruction("cmp r10b, 0x2F");                                      // is the candidate a separator?
     emitter.instruction("je __rt_basename_slash_x86");                          // found the rightmost slash, slice past it
+    if emitter.platform == Platform::Windows {
+        emitter.instruction("cmp r10b, 0x5C");                                  // is the candidate a backslash separator?
+        emitter.instruction("je __rt_basename_slash_x86");                      // found the rightmost separator, slice past it
+    }
     emitter.instruction("sub r8, 1");                                           // step left toward the start of the path
     emitter.instruction("jmp __rt_basename_scan_x86");                          // continue the right-to-left scan
 

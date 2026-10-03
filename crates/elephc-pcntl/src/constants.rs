@@ -86,10 +86,13 @@ pub const LINUX_PCNTL_INT_CONSTANTS: &[(&str, i64)] = &[
 
 /// Looks up one PCNTL constant using the build host's supported target table.
 pub fn host_pcntl_int_constant(name: &str) -> Option<i64> {
-    let constants = if cfg!(target_os = "macos") {
-        MACOS_PCNTL_INT_CONSTANTS
-    } else {
-        LINUX_PCNTL_INT_CONSTANTS
+    let constants = match () {
+        _ if cfg!(target_os = "macos") => MACOS_PCNTL_INT_CONSTANTS,
+        _ if cfg!(target_os = "linux") => LINUX_PCNTL_INT_CONSTANTS,
+        // PCNTL has no Windows host implementation. Returning Linux values
+        // would make target-selected constant resolution claim capabilities
+        // that every operation then refuses.
+        _ => return None,
     };
     constants
         .iter()

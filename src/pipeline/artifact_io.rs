@@ -162,21 +162,35 @@ pub(crate) fn write_artifact(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// Writes one generated artifact that must never be readable by anyone but its owner.
 ///
-/// The permissions are applied to the STAGED file, before the rename — so the bytes are
-/// never reachable at the destination's well-known name under a permissive umask, not even
-/// for the instant between creating the file and a `set_permissions` call afterwards. The
-/// probe key is the monitoring HMAC credential and the `.key` path is derived from the
+/// On Unix, the permissions are applied to the STAGED file before the rename — so the bytes
+/// are never reachable at the destination's well-known name under a permissive umask, not
+/// even for the instant between creating the file and a `set_permissions` call afterwards.
+/// The probe key is the monitoring HMAC credential and the `.key` path is derived from the
 /// binary's, so on a shared build host that instant repeats on every rebuild.
 ///
 /// `mode(0o600)` is an upper bound, not an assignment: the umask can only clear further
-/// bits, so the file is never MORE permissive than this.
+/// bits, so the file is never MORE permissive than this. Windows ACLs cannot be represented by
+/// Rust's portable file-permission API; fail closed there rather than silently publishing a
+/// credential under an inherited ACL we did not inspect or set.
 pub(crate) fn write_private_artifact(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    write_staged(path, bytes, Some(0o600))
+    #[cfg(unix)]
+    {
+        write_staged(path, bytes, Some(0o600))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, bytes);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "private artifacts require an explicit owner-only ACL on this platform",
+        ))
+    }
 }
 
 /// Stages, writes, syncs and renames one artifact, optionally with an explicit creation mode.
 fn write_staged(path: &Path, bytes: &[u8], mode: Option<u32>) -> io::Result<()> {
     use std::io::Write;
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
 
     let directory = path.parent().unwrap_or(Path::new("."));
@@ -188,9 +202,12 @@ fn write_staged(path: &Path, bytes: &[u8], mode: Option<u32>) -> io::Result<()> 
 
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
+    #[cfg(unix)]
     if let Some(mode) = mode {
         options.mode(mode);
     }
+    #[cfg(not(unix))]
+    let _ = mode;
     let mut file = options.open(&temporary)?;
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     drop(file);
@@ -248,6 +265,7 @@ mod tests {
 
     /// Issue #888: a symlink at a generated-artifact path is refused, and its target is left
     /// alone.
+    #[cfg(unix)]
     #[test]
     fn a_symlink_destination_is_refused() {
         let dir = scratch("symlink");
@@ -325,6 +343,7 @@ mod tests {
     /// external tool unchecked. `ELOOP` is the one such failure a test can produce
     /// portably, and it is also the most pointed: a symlink cycle is precisely a
     /// destination that is a symlink.
+    #[cfg(unix)]
     #[test]
     fn an_uninspectable_destination_is_refused() {
         let dir = scratch("eloop");
@@ -343,6 +362,7 @@ mod tests {
 
     /// The probe key is created owner-only BEFORE it reaches its well-known name, so a
     /// permissive umask never exposes the monitoring credential even briefly.
+    #[cfg(unix)]
     #[test]
     fn a_private_artifact_is_never_group_or_world_readable() {
         use std::os::unix::fs::PermissionsExt;
@@ -367,6 +387,7 @@ mod tests {
     /// `--check` and `--emit-ir` return before the backend runs, and `--emit-asm` stops
     /// after the assembly, so an unrelated symlink at `main`, `main.o` or `main.key` must
     /// not refuse any of them.
+    #[cfg(unix)]
     #[test]
     fn validation_covers_only_the_artifacts_the_command_produces() {
         let dir = scratch("plan");
@@ -412,6 +433,7 @@ mod tests {
 
     /// Even if a symlink appears AFTER the up-front check, the write replaces the link
     /// itself rather than following it — `rename(2)`'s own guarantee.
+    #[cfg(unix)]
     #[test]
     fn writing_replaces_a_symlink_instead_of_following_it() {
         let dir = scratch("rename");
@@ -440,5 +462,15 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Windows must not turn a private probe credential into a file with an
+    /// unchecked inherited ACL just to keep monitoring compilation moving.
+    #[cfg(not(unix))]
+    #[test]
+    fn private_artifacts_fail_closed_without_owner_only_acl_support() {
+        let error = write_private_artifact(Path::new("monitor.key"), b"secret")
+            .expect_err("private artifact creation must not weaken access control");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }
 }

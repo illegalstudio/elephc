@@ -12,7 +12,6 @@
 
 use std::ffi::OsString;
 use std::io::Write;
-use std::os::unix::ffi::OsStringExt;
 use std::process::{Command, Stdio};
 
 use elephc_builtin_contract::mbstring_abi::array::{Key, Value};
@@ -69,14 +68,41 @@ pub(super) fn send(message: Vec<u8>, state: &State, additional: Option<&[u8]>) -
 fn command(state: &State, additional: Option<&[u8]>) -> Result<Command, MbError> {
     let mut parts = state.mail_command().split(|byte| byte.is_ascii_whitespace()).filter(|part| !part.is_empty());
     let Some(path) = parts.next() else { return Err(MbError::Runtime("mb_send_mail(): No mail transport is configured".into())); };
-    let mut command = Command::new(OsString::from_vec(path.to_vec()));
-    command.args(parts.map(|part| OsString::from_vec(part.to_vec())));
+    let mut command = Command::new(command_argument(path)?);
+    for argument in parts {
+        command.arg(command_argument(argument)?);
+    }
     if let Some(additional) = additional { no_nul(additional, 5, "additional_params")?; }
     if let Some(parameters) = state.mail_force_extra_parameters().or(additional) {
-        command.args(parameters.split(|byte| byte.is_ascii_whitespace()).filter(|part| !part.is_empty())
-            .map(|part| OsString::from_vec(part.to_vec())));
+        for argument in parameters.split(|byte| byte.is_ascii_whitespace()).filter(|part| !part.is_empty()) {
+            command.arg(command_argument(argument)?);
+        }
     }
     Ok(command)
+}
+
+/// Converts PHP command bytes to the host process API's string representation.
+///
+/// Unix process arguments are byte strings and remain exact. Windows process arguments are
+/// UTF-16, so the same replacement conversion used by the eval environment surface is the only
+/// representation available through `std::process::Command`. Invalid UTF-8 is rejected before
+/// process creation rather than silently changing the configured command.
+#[cfg(unix)]
+fn command_argument(bytes: &[u8]) -> Result<OsString, MbError> {
+    use std::os::unix::ffi::OsStringExt;
+
+    Ok(OsString::from_vec(bytes.to_vec()))
+}
+
+/// Converts one PHP byte string to a Windows process argument without Unix-only APIs.
+#[cfg(windows)]
+fn command_argument(bytes: &[u8]) -> Result<OsString, MbError> {
+    let argument = std::str::from_utf8(bytes).map_err(|_| {
+        MbError::Runtime(
+            "mb_send_mail(): Mail transport command must be valid UTF-8 on Windows".into(),
+        )
+    })?;
+    Ok(OsString::from(argument))
 }
 
 /// Encodes PHP's subject and body and appends absent MIME headers in source order.
@@ -447,6 +473,19 @@ mod tests {
         ], crate::state::CoreEncodingDefaults::default(), |_| Ok(()));
         let command = command(&state, None).expect("mail command");
         assert_eq!(command.get_args().collect::<Vec<_>>(), ["'-f", "quoted@example.test'", ";", "echo"]);
+    }
+
+    /// Windows process arguments are UTF-16, so invalid PHP command bytes fail before spawning
+    /// rather than being rewritten through a lossy conversion.
+    #[cfg(windows)]
+    #[test]
+    fn windows_mail_transport_rejects_invalid_utf8_command_bytes() {
+        assert_eq!(
+            command_argument(b"sendmail-\xff").unwrap_err(),
+            MbError::Runtime(
+                "mb_send_mail(): Mail transport command must be valid UTF-8 on Windows".into(),
+            )
+        );
     }
 
     /// Matches both PHP warnings and the fallback MIME conversion order.

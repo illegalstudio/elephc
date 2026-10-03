@@ -2,7 +2,7 @@
 title: "imagetypes()"
 description: "Returns a bitmask of the image formats this build supports."
 sidebar:
-  order: 536
+  order: 542
 ---
 
 ## imagetypes()

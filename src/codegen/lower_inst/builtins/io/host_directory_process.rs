@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::codegen::platform::Platform;
 use crate::ir::{ResourceCleanupKind, RuntimeFnId};
 
 /// The cleanup kind `opendir()` stamps into its boxed resource.
@@ -29,6 +30,424 @@ const POPEN_CLEANUP_KIND: ResourceCleanupKind = match RuntimeFnId::Popen.resourc
     Some(kind) => kind,
     None => panic!("RuntimeFnId::Popen boxes a kinded resource and must declare its kind"),
 };
+
+/// The cleanup kind `proc_open()` stamps into the returned process resource.
+///
+/// The typed runtime target owns this classification so resource cleanup and
+/// the emitted `__rt_mixed_free_deep` dispatch remain synchronized.
+const PROC_OPEN_CLEANUP_KIND: ResourceCleanupKind = match RuntimeFnId::ProcOpen
+    .resource_cleanup_kind()
+{
+    Some(kind) => kind,
+    None => panic!("RuntimeFnId::ProcOpen boxes a kinded resource and must declare its kind"),
+};
+
+/// Lowers `proc_open()` into its eight-word runtime ABI.
+///
+/// The semantic descriptor always supplies six public PHP values and three hidden
+/// Windows-marshalling operands. The native ABI consumes descriptor, command
+/// pointer/length, pipes, cwd pointer/length, environment pointer, and packed flags.
+pub(crate) fn lower_proc_open(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 9 {
+        ensure_arg_count_between(inst, "proc_open", 3, 6)?;
+    }
+    let public_command = expect_operand(inst, 0)?;
+    let command_override = inst.operands.get(6).copied();
+    let command = match command_override {
+        Some(value) if ctx.value_php_type(value)? == PhpType::Str => value,
+        _ => public_command,
+    };
+    let descriptor_spec = expect_operand(inst, 1)?;
+    let pipes = expect_operand(inst, 2)?;
+    let pipes_local = source_load_local_slot(ctx, pipes)?;
+    let cwd = inst.operands.get(3).copied();
+    let public_env_vars = inst.operands.get(4).copied();
+    let public_options = inst.operands.get(5).copied();
+    let env_vars = if inst.operands.len() == 9 {
+        inst.operands.get(7).copied()
+    } else {
+        public_env_vars
+    };
+    let packed_flags = if inst.operands.len() == 9 {
+        inst.operands.get(8).copied()
+    } else {
+        public_options
+    };
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_result(descriptor_spec)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_string_to_result(ctx, command, "proc_open command")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.emitter.instruction("mov x0, #0");                              // proc_open replaces the by-ref pipes value with a fresh container
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_optional_proc_open_string(ctx, cwd, "proc_open cwd")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            load_optional_proc_open_pointer(ctx, env_vars)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_optional_proc_open_pointer(ctx, packed_flags)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_pop_reg(ctx.emitter, "x7");
+            abi::emit_pop_reg(ctx.emitter, "x6");
+            abi::emit_pop_reg_pair(ctx.emitter, "x4", "x5");
+            abi::emit_pop_reg(ctx.emitter, "x3");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 48");                             // reserve dynamic ownership, result, and validation slots
+            ctx.emitter.instruction("mov QWORD PTR [rsp], 0");                  // no owned command buffer unless runtime argv marshalling runs
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");              // no owned environment block unless runtime hash marshalling runs
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 32], 0");             // dynamic command marshalling has not failed
+            ctx.load_value_to_result(descriptor_spec)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            if matches!(ctx.value_php_type(command)?, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                ctx.load_value_to_result(command)?;
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the runtime argv array to the Windows marshaller
+                abi::emit_call_label(ctx.emitter, "__rt_win_proc_command_array");
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");       // retain the allocation above the staged descriptor slot
+                ctx.emitter.instruction("test rax, rax");                       // did argv marshalling succeed?
+                let command_valid = ctx.next_label("proc_open_command_valid");
+                ctx.emitter.instruction(&format!("jnz {command_valid}"));       // non-null buffer is a valid command line
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 48], 1");         // record command marshalling failure
+                ctx.emitter.label(&command_valid);
+            } else {
+                load_string_to_result(ctx, command, "proc_open command")?;
+            }
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.emitter.instruction("xor eax, eax");                            // proc_open replaces the by-ref pipes value with a fresh container
+            abi::emit_push_reg(ctx.emitter, "rax");
+            load_optional_proc_open_string(ctx, cwd, "proc_open cwd")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            let dynamic_environment = public_env_vars
+                .filter(|_| inst.operands.len() == 9)
+                .filter(|value| matches!(ctx.value_php_type(*value), Ok(PhpType::Array(_) | PhpType::AssocArray { .. })));
+            if let Some(environment) = dynamic_environment {
+                ctx.load_value_to_result(environment)?;
+                ctx.emitter.instruction("mov rdi, rax");                        // pass computed environment storage to the runtime marshaller
+                abi::emit_call_label(ctx.emitter, "__rt_win_proc_environment");
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 72], rax");       // retain the owned environment block above staged ABI slots
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 88], rdx");       // preserve its counted byte length for packed flags
+            } else {
+                load_optional_proc_open_pointer(ctx, env_vars)?;
+            }
+            abi::emit_push_reg(ctx.emitter, "rax");
+            load_optional_proc_open_pointer(ctx, packed_flags)?;
+            if matches!(ctx.value_php_type(command)?, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                ctx.emitter.instruction("or rax, 1");                           // runtime command arrays always bypass cmd.exe wrapping
+            }
+            if dynamic_environment.is_some() {
+                ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 104]");      // reload dynamic environment byte length after stacking its pointer
+                ctx.emitter.instruction("cmp rdx, -1");                         // marshalling failure sentinel?
+                let environment_valid = ctx.next_label("proc_open_environment_valid");
+                let environment_flags_ready = ctx.next_label("proc_open_environment_flags_ready");
+                ctx.emitter.instruction(&format!("jne {environment_valid}"));   // valid length can be packed normally
+                ctx.emitter.instruction("bts rax, 63");                         // mark runtime ABI invalid while preserving helper errno
+                ctx.emitter.instruction(&format!("jmp {environment_flags_ready}")); // skip length packing after failure
+                ctx.emitter.label(&environment_valid);
+                ctx.emitter.instruction("and rax, 31");                         // retain all five Windows proc_open option bits
+                ctx.emitter.instruction("shl rdx, 5");                          // pack environment length above the option bits
+                ctx.emitter.instruction("or rax, rdx");                         // combine environment length and Windows options
+                ctx.emitter.label(&environment_flags_ready);
+            }
+            ctx.emitter.instruction("cmp QWORD PTR [rsp + 112], 0");            // did dynamic command marshalling fail before flags were loaded?
+            let command_flags_ready = ctx.next_label("proc_open_command_flags_ready");
+            ctx.emitter.instruction(&format!("je {command_flags_ready}"));      // valid/static commands leave flags unchanged
+            ctx.emitter.instruction("bts rax, 63");                             // propagate argv validation failure without overwriting errno
+            ctx.emitter.label(&command_flags_ready);
+            if let Some(options) = public_options.filter(|_| inst.operands.len() == 9) {
+                if matches!(ctx.value_php_type(options)?, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    abi::emit_push_reg(ctx.emitter, "rax");
+                    ctx.load_value_to_result(options)?;
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass computed proc_open options to the runtime validator
+                    abi::emit_call_label(ctx.emitter, "__rt_win_proc_options");
+                    ctx.emitter.instruction("mov r10, rax");                    // retain the dynamic Windows option-bit mask
+                    abi::emit_pop_reg(ctx.emitter, "rax");
+                    ctx.emitter.instruction("cmp r10, -1");                     // did runtime option validation fail?
+                    let options_valid = ctx.next_label("proc_open_options_valid");
+                    ctx.emitter.instruction(&format!("jne {options_valid}"));   // valid false/true values continue normally
+                    ctx.emitter.instruction("bts rax, 63");                     // mark the packed ABI invalid without losing errno
+                    ctx.emitter.label(&options_valid);
+                    ctx.emitter.instruction("or rax, r10");                     // merge recognized dynamic Windows options
+                }
+            }
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_pop_reg(ctx.emitter, "r11");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            abi::emit_pop_reg_pair(ctx.emitter, "r8", "r9");
+            abi::emit_pop_reg(ctx.emitter, "rcx");
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve aligned SysV stack-argument slots 7 and 8
+            ctx.emitter.instruction("mov QWORD PTR [rsp], r10");                // pass environment storage after the six integer registers
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r11");            // pass packed flags after environment storage
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_proc_open");
+    // Register the returned `$pipes` before boxing the process resource: the registry
+    // retains the exact promoted container for proc_close's deadlock-safe cleanup.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_proc_pipe_registry_register");
+            abi::emit_push_reg_pair(ctx.emitter, "x0", "x1");
+            load_string_to_result(ctx, command, "proc_open status command")?;
+            ctx.emitter.instruction("ldr x0, [sp]");                            // restore the raw process result as the status helper's first runtime argument
+            abi::emit_call_label(ctx.emitter, "__rt_proc_status_register");
+            abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the raw process HANDLE to the pipe registry
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the paired final pipes container to the registry
+            abi::emit_call_label(ctx.emitter, "__rt_proc_pipe_registry_register");
+        }
+    }
+    if let Some(slot) = pipes_local {
+        store_proc_open_pipes_result(ctx, slot)?;
+    }
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("add rsp, 16");                                 // release the two optional stack-argument slots
+        if matches!(ctx.value_php_type(command)?, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            if ctx.emitter.target.platform == Platform::Windows {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the raw process HANDLE to the Windows status registry
+                ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");            // pass the still-owned marshalled argv command line
+                abi::emit_call_label(ctx.emitter, "__rt_proc_status_register_cstr");
+            } else {
+                return Err(CodegenIrError::unsupported(
+                    "proc_open() array commands require the Windows status registry",
+                ));
+            }
+        } else {
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the process descriptor while loading its source command
+            load_string_to_result(ctx, command, "proc_open status command")?;
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the command pointer to the status registry
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // restore the raw process descriptor after string materialization
+            abi::emit_call_label(ctx.emitter, "__rt_proc_status_register");
+        }
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");               // preserve the process result across marshalling-buffer cleanup
+        ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                    // load the optional owned dynamic command buffer
+        ctx.emitter.instruction("test rax, rax");                               // did runtime argv marshalling allocate a command line?
+        let skip_dynamic_command_free = ctx.next_label("proc_open_command_free_done");
+        ctx.emitter.instruction(&format!("jz {skip_dynamic_command_free}"));    // static string commands own no staging buffer here
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+        ctx.emitter.label(&skip_dynamic_command_free);
+        ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                // load the optional owned environment block
+        ctx.emitter.instruction("test rax, rax");                               // was a custom dynamic environment marshalled?
+        let skip_dynamic_environment_free = ctx.next_label("proc_open_environment_free_done");
+        ctx.emitter.instruction(&format!("jz {skip_dynamic_environment_free}")); // inherited/static environments own no block here
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+        ctx.emitter.label(&skip_dynamic_environment_free);
+        ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");               // restore the process result
+        ctx.emitter.instruction("add rsp, 48");                                 // release dynamic marshalling ownership state
+    }
+    box_stream_fd_or_false_result_kind(ctx, "proc_open", PROC_OPEN_CLEANUP_KIND);
+    store_if_result(ctx, inst)
+}
+
+/// Stores the runtime's replacement `$pipes` array through the original by-ref local.
+fn store_proc_open_pipes_result(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+    let target_ty = ctx.local_php_type(slot)?.codegen_repr();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x0", "x1");
+            ctx.release_local_before_refcounted_writeback(slot)?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("mov x0, x1");                              // present the returned pipes array to the established local-store path
+            if target_ty == PhpType::Mixed {
+                crate::codegen::emit_box_current_owned_value_as_mixed(
+                    ctx.emitter,
+                    &PhpType::Iterable,
+                );
+            }
+            ctx.store_current_result_to_local(slot)?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.release_local_before_refcounted_writeback(slot)?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rax, rdx");                            // present the returned pipes array to the established local-store path
+            if target_ty == PhpType::Mixed {
+                crate::codegen::emit_box_current_owned_value_as_mixed(
+                    ctx.emitter,
+                    &PhpType::Iterable,
+                );
+            }
+            ctx.store_current_result_to_local(slot)?;
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    Ok(())
+}
+
+/// Loads an optional process string or the null/zero pair expected by the runtime.
+fn load_optional_proc_open_string(
+    ctx: &mut FunctionContext<'_>,
+    value: Option<ValueId>,
+    name: &str,
+) -> Result<()> {
+    let Some(value) = value else {
+        zero_proc_open_string_result(ctx);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Void | PhpType::Never) {
+        zero_proc_open_string_result(ctx);
+        return Ok(());
+    }
+    load_string_to_result(ctx, value, name)
+}
+
+/// Clears the target string-result pair for an omitted optional process string.
+fn zero_proc_open_string_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, #0");                              // absent optional string has no byte pointer
+            ctx.emitter.instruction("mov x2, #0");                              // absent optional string has zero byte length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor eax, eax");                            // absent optional string has no byte pointer
+            ctx.emitter.instruction("xor edx, edx");                            // absent optional string has zero byte length
+        }
+    }
+}
+
+/// Loads an optional process array/settings pointer or a null pointer when absent.
+fn load_optional_proc_open_pointer(
+    ctx: &mut FunctionContext<'_>,
+    value: Option<ValueId>,
+) -> Result<()> {
+    let Some(value) = value else {
+        zero_proc_open_pointer_result(ctx);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Void | PhpType::Never) {
+        zero_proc_open_pointer_result(ctx);
+        return Ok(());
+    }
+    ctx.load_value_to_result(value).map(|_| ())
+}
+
+/// Clears the integer result register for an omitted process-array setting.
+fn zero_proc_open_pointer_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, #0"),                 // optional process pointer is null
+        Arch::X86_64 => ctx.emitter.instruction("xor eax, eax"),                // optional process pointer is null
+    }
+}
+
+/// Lowers `proc_close(process)` and marks a boxed resource as explicitly released.
+pub(crate) fn lower_proc_close(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::super::ensure_arg_count(inst, "proc_close", 1)?;
+    let handle = expect_operand(inst, 0)?;
+    let captured = capture_resource_box_for_release(ctx, handle)?;
+    load_stream_fd_to_result(ctx, handle, "proc_close")?;
+    apply_resource_release_sentinel(ctx, captured);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the process descriptor to the SysV-shaped runtime helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_proc_close");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers non-consuming process-status lookup and boxes the returned status record.
+pub(crate) fn lower_proc_get_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "proc_get_status", 1)?;
+    let process = expect_operand(inst, 0)?;
+    load_stream_fd_to_result(ctx, process, "proc_get_status")?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the retained process descriptor to the SysV-shaped status helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_proc_get_status");
+    box_stat_array_or_false_result(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `proc_terminate(process, signal = SIGTERM)` without consuming the resource.
+pub(crate) fn lower_proc_terminate(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "proc_terminate", 1, 2)?;
+    let process = expect_operand(inst, 0)?;
+    load_stream_fd_to_result(ctx, process, "proc_terminate")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            if let Some(signal) = inst.operands.get(1).copied() {
+                load_proc_terminate_signal_as_int(ctx, signal, 16)?;
+            } else {
+                ctx.emitter.instruction("mov x0, #15");                         // PHP's default signal is SIGTERM
+            }
+            ctx.emitter.instruction("mov x1, x0");                              // pass the requested signal as the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // preserve the process descriptor while materializing the signal
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the process descriptor across scalar coercion
+            if let Some(signal) = inst.operands.get(1).copied() {
+                load_proc_terminate_signal_as_int(ctx, signal, 16)?;
+            } else {
+                ctx.emitter.instruction("mov rax, 15");                         // PHP's default signal is SIGTERM
+            }
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the requested signal to the SysV-shaped helper
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // restore the process descriptor as the first runtime argument
+            ctx.emitter.instruction("add rsp, 16");                             // release the aligned process staging slot
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_proc_terminate");
+    store_if_result(ctx, inst)
+}
+
+/// Coerces the weak PHP signal surface into the integer expected by the runtime.
+fn load_proc_terminate_signal_as_int(
+    ctx: &mut FunctionContext<'_>,
+    signal: ValueId,
+    process_staging_bytes: usize,
+) -> Result<()> {
+    match ctx.load_value_to_result(signal)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => Ok(()),
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            Ok(())
+        }
+        PhpType::Float => {
+            abi::emit_float_result_to_int_result(ctx.emitter);
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            Ok(())
+        }
+        PhpType::Str => {
+            let invalid = ctx.next_label("proc_terminate_signal_type_error");
+            let done = ctx.next_label("proc_terminate_signal_coerced");
+            crate::codegen::lower_inst::enums::emit_string_result_to_int_checked(ctx, &invalid);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&invalid);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_release_temporary_stack(ctx.emitter, process_staging_bytes);
+            let (message_label, message_len) = ctx.data.add_string(
+                b"proc_terminate(): Argument #2 ($signal) must be of type int, string given",
+            );
+            crate::codegen::lower_inst::enums::emit_throw_static_type_error(
+                ctx,
+                &message_label,
+                message_len,
+            );
+            ctx.emitter.label(&done);
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "proc_terminate signal for PHP type {:?}",
+            other
+        ))),
+    }
+}
 
 /// Lowers `disk_free_space(path)` through the shared disk-space runtime helper.
 pub(crate) fn lower_disk_free_space(
@@ -374,10 +793,10 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
             load_string_to_result(ctx, path, "file")?;
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    abi::emit_pop_reg(ctx.emitter, "x0"); // restore the resolved $flags bitmask into the first runtime argument
+                    abi::emit_pop_reg(ctx.emitter, "x0");                       // restore the resolved $flags bitmask into the first runtime argument
                 }
                 Arch::X86_64 => {
-                    abi::emit_pop_reg(ctx.emitter, "rdi"); // restore the resolved $flags bitmask into the first runtime argument
+                    abi::emit_pop_reg(ctx.emitter, "rdi");                      // restore the resolved $flags bitmask into the first runtime argument
                 }
             }
         }
@@ -423,4 +842,3 @@ pub(crate) fn lower_realpath_cache_size(
     }
     store_if_result(ctx, inst)
 }
-

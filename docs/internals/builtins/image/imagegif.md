@@ -2,7 +2,7 @@
 title: "imagegif() - internals"
 description: "Compiler internals for imagegif(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 512
+  order: 516
 ---
 
 ## `imagegif()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3607](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3607) (`imagegif`)
+- **Lowering**: [`src/image_prelude.rs`:3678](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3678) (`imagegif`)
 - **Function symbol**: `imagegif()`
 
 

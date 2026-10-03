@@ -47,7 +47,7 @@ pub fn emit_getenv(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr");                                        // convert to C string → x0=null-terminated ptr
 
     // -- call libc getenv --
-    emitter.bl_c("getenv");                                          // getenv(name) → x0=value ptr or NULL
+    emitter.emit_call_c("getenv");                                          // getenv(name) → x0=value ptr or NULL
 
     // -- check for NULL return --
     emitter.instruction("cbz x0, __rt_getenv_unset");                           // libc says NULL only for a name that is not set
@@ -103,7 +103,7 @@ fn emit_getenv_linux_x86_64(emitter: &mut Emitter) {
 
     abi::emit_call_label(emitter, "__rt_cstr");                                 // convert the elephc string result regs into a null-terminated C string in the scratch buffer
     emitter.instruction("mov rdi, rax");                                        // pass the null-terminated environment variable name in the SysV first-argument register
-    emitter.bl_c("getenv");                                                     // getenv(name) → rax=value ptr or NULL
+    emitter.emit_call_c("getenv");                                              // getenv(name) → rax=value ptr or NULL
 
     emitter.instruction("test rax, rax");                                       // did libc return a real environment-value pointer?
     emitter.instruction("je __rt_getenv_unset");                                // a name that is not set is not a name set to ""

@@ -58,7 +58,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("stp x3, x4, [sp, #0]");                                // preserve uid/gid across the cstr call
     emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
     emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore uid/gid into the libc argument registers
-    emitter.bl_c("chown");                                                      // libc chown(path, uid, gid)
+    emitter.emit_call_c("chown");                                                      // libc chown(path, uid, gid)
     emitter.instruction("cmp x0, #0");                                          // success?
     emitter.instruction("cset x0, eq");                                         // x0 = 1 if chown succeeded
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -80,7 +80,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("stp x3, x4, [sp, #0]");                                // preserve uid/gid across the cstr call
     emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
     emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore uid/gid into the libc argument registers
-    emitter.bl_c("lchown");                                                     // libc lchown(path, uid, gid) without following symlinks
+    emitter.emit_call_c("lchown");                                                     // libc lchown(path, uid, gid) without following symlinks
     emitter.instruction("cmp x0, #0");                                          // success?
     emitter.instruction("cset x0, eq");                                         // x0 = 1 if lchown succeeded
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -111,7 +111,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // second chown arg = resolved uid
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer
     emitter.instruction("mov x2, #-1");                                         // gid = -1 (leave group unchanged)
-    emitter.bl_c("chown");                                                      // libc chown(path, uid, -1)
+    emitter.emit_call_c("chown");                                                      // libc chown(path, uid, -1)
     emitter.instruction("cmp x0, #0");                                          // success?
     emitter.instruction("cset x0, eq");                                         // x0 = 1 if chown succeeded
     emitter.instruction("b __rt_chown_user_done");                              // skip failure return
@@ -146,7 +146,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // second lchown arg = resolved uid
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer
     emitter.instruction("mov x2, #-1");                                         // gid = -1 (leave group unchanged)
-    emitter.bl_c("lchown");                                                     // libc lchown(path, uid, -1) without following symlinks
+    emitter.emit_call_c("lchown");                                                     // libc lchown(path, uid, -1) without following symlinks
     emitter.instruction("cmp x0, #0");                                          // success?
     emitter.instruction("cset x0, eq");                                         // x0 = 1 if lchown succeeded
     emitter.instruction("b __rt_lchown_user_done");                             // skip failure return
@@ -181,7 +181,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("mov x2, x0");                                          // third chown arg = resolved gid
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer
     emitter.instruction("mov x1, #-1");                                         // uid = -1 (leave owner unchanged)
-    emitter.bl_c("chown");                                                      // libc chown(path, -1, gid)
+    emitter.emit_call_c("chown");                                                      // libc chown(path, -1, gid)
     emitter.instruction("cmp x0, #0");                                          // success?
     emitter.instruction("cset x0, eq");                                         // x0 = 1 if chown succeeded
     emitter.instruction("b __rt_chgrp_group_done");                             // skip failure return
@@ -216,7 +216,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("mov x2, x0");                                          // third lchown arg = resolved gid
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer
     emitter.instruction("mov x1, #-1");                                         // uid = -1 (leave owner unchanged)
-    emitter.bl_c("lchown");                                                     // libc lchown(path, -1, gid) without following symlinks
+    emitter.emit_call_c("lchown");                                                     // libc lchown(path, -1, gid) without following symlinks
     emitter.instruction("cmp x0, #0");                                          // success?
     emitter.instruction("cset x0, eq");                                         // x0 = 1 if lchown succeeded
     emitter.instruction("b __rt_lchgrp_group_done");                            // skip failure return
@@ -297,7 +297,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
     if emitter.platform == crate::codegen_support::platform::Platform::Linux {
-        emitter.bl_c("fdatasync");                                              // libc fdatasync(fd) on Linux
+        emitter.emit_call_c("fdatasync");                                              // libc fdatasync(fd) on Linux
     } else {
         emitter.bl_c("fsync");                                                  // Darwin fallback: fsync flushes data and metadata, satisfying the fdatasync contract
     }

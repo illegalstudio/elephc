@@ -13,12 +13,16 @@
 //! - Musl test executables select the installed static PCRE2 archives so they
 //!   do not acquire an unavailable glibc program interpreter.
 
-use std::{env, path::Path};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 /// Emits package-local PCRE2 link arguments, selecting static archives on musl.
 fn main() {
+    println!("cargo:rerun-if-env-changed=ELEPHC_MINGW_SYSROOT");
     for path in pcre2_library_search_paths() {
-        println!("cargo:rustc-link-search=native={path}");
+        println!("cargo:rustc-link-search=native={}", path.display());
     }
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     if target_env == "musl" {
@@ -39,9 +43,21 @@ fn main() {
     }
 }
 
-/// Returns common PCRE2 library directories for local macOS/Homebrew builds.
-fn pcre2_library_search_paths() -> Vec<&'static str> {
-    [
+/// Returns target-compatible PCRE2 library directories from the MinGW sysroot
+/// and common local macOS/Homebrew installations.
+fn pcre2_library_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if env::var("TARGET").as_deref() == Ok("x86_64-pc-windows-gnu") {
+        if let Some(sysroot) = env::var_os("ELEPHC_MINGW_SYSROOT") {
+            let sysroot = PathBuf::from(sysroot);
+            for directory in [sysroot.join("lib"), sysroot.join("lib64")] {
+                if directory.is_dir() {
+                    paths.push(directory);
+                }
+            }
+        }
+    }
+    paths.extend([
         "/opt/homebrew/opt/pcre2/lib",
         "/opt/homebrew/lib",
         "/usr/local/opt/pcre2/lib",
@@ -49,5 +65,6 @@ fn pcre2_library_search_paths() -> Vec<&'static str> {
     ]
     .into_iter()
     .filter(|path| Path::new(path).exists())
-    .collect()
+    .map(PathBuf::from));
+    paths
 }

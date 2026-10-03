@@ -35,10 +35,38 @@ pub fn emit_fsockopen(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save the hostname length
     emitter.instruction("str x2, [sp, #16]");                                   // save the port
 
-    // -- copy the "tcp://" scheme prefix into the address buffer --
+    // -- prepend the default "tcp://" transport only when the hostname has none --
+    // php formats fsockopen's address as "%s:%d" and hands it to
+    // php_stream_xport_create, which parses a leading "scheme://" and defaults to
+    // tcp only when the hostname carries no transport of its own
+    // (ext/standard/fsock.c). Prefixing unconditionally turned the documented
+    // fsockopen("tls://host", 443) form into "tcp://tls://host:443", which cannot
+    // resolve, so every prefixed hostname failed to connect.
     abi::emit_symbol_address(emitter, "x3", "_fsockopen_addr");
-    abi::emit_symbol_address(emitter, "x4", "_ftp_tcp_prefix");
     emitter.instruction("mov x5, #0");                                          // address write index
+    emitter.instruction("ldr x4, [sp, #0]");                                    // hostname pointer
+    emitter.instruction("ldr x7, [sp, #8]");                                    // hostname byte length
+    emitter.instruction("mov x6, #0");                                          // scheme scan index
+    emitter.label("__rt_fsockopen_scheme");
+    emitter.instruction("add x8, x6, #2");                                      // index the second '/' would occupy
+    emitter.instruction("cmp x8, x7");                                          // does a "://" marker still fit?
+    emitter.instruction("b.ge __rt_fsockopen_no_scheme");                       // no transport prefix - php defaults to tcp
+    emitter.instruction("ldrb w9, [x4, x6]");                                   // load the candidate ':'
+    emitter.instruction("cmp w9, #58");                                         // is it ':'?
+    emitter.instruction("b.ne __rt_fsockopen_scheme_next");                     // not the marker - keep scanning
+    emitter.instruction("add x8, x6, #1");                                      // index of the first '/'
+    emitter.instruction("ldrb w9, [x4, x8]");                                   // load the candidate first '/'
+    emitter.instruction("cmp w9, #47");                                         // is it '/'?
+    emitter.instruction("b.ne __rt_fsockopen_scheme_next");                     // not the marker - keep scanning
+    emitter.instruction("add x8, x6, #2");                                      // index of the second '/'
+    emitter.instruction("ldrb w9, [x4, x8]");                                   // load the candidate second '/'
+    emitter.instruction("cmp w9, #47");                                         // is it '/'?
+    emitter.instruction("b.eq __rt_fsockopen_pfx_done");                        // hostname has its own transport - copy it verbatim
+    emitter.label("__rt_fsockopen_scheme_next");
+    emitter.instruction("add x6, x6, #1");                                      // advance the scheme scan index
+    emitter.instruction("b __rt_fsockopen_scheme");                             // keep looking for "://"
+    emitter.label("__rt_fsockopen_no_scheme");
+    abi::emit_symbol_address(emitter, "x4", "_ftp_tcp_prefix");
     emitter.label("__rt_fsockopen_pfx");
     emitter.instruction("cmp x5, #6");                                          // copied the whole \"tcp://\" prefix?
     emitter.instruction("b.ge __rt_fsockopen_pfx_done");                        // prefix copied
@@ -108,10 +136,29 @@ fn emit_fsockopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the hostname length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the port
 
-    // -- copy the "tcp://" scheme prefix into the address buffer --
+    // -- prepend the default "tcp://" transport only when the hostname has none --
+    // See the AArch64 arm: php lets fsockopen's hostname carry its own transport
+    // and only falls back to tcp when it does not.
     abi::emit_symbol_address(emitter, "r8", "_fsockopen_addr");                 // address buffer base
-    abi::emit_symbol_address(emitter, "r9", "_ftp_tcp_prefix");                 // \"tcp://\" prefix base
     emitter.instruction("xor rcx, rcx");                                        // address write index
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // hostname pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // hostname byte length
+    emitter.instruction("xor rdx, rdx");                                        // scheme scan index
+    emitter.label("__rt_fsockopen_scheme_x86");
+    emitter.instruction("lea rax, [rdx + 2]");                                  // index the second '/' would occupy
+    emitter.instruction("cmp rax, r10");                                        // does a "://" marker still fit?
+    emitter.instruction("jge __rt_fsockopen_no_scheme_x86");                    // no transport prefix - php defaults to tcp
+    emitter.instruction("cmp BYTE PTR [r9 + rdx], 58");                         // is the candidate byte ':'?
+    emitter.instruction("jne __rt_fsockopen_scheme_next_x86");                  // not the marker - keep scanning
+    emitter.instruction("cmp BYTE PTR [r9 + rdx + 1], 47");                     // is the next byte '/'?
+    emitter.instruction("jne __rt_fsockopen_scheme_next_x86");                  // not the marker - keep scanning
+    emitter.instruction("cmp BYTE PTR [r9 + rdx + 2], 47");                     // is the byte after that '/'?
+    emitter.instruction("je __rt_fsockopen_pfx_done_x86");                      // hostname has its own transport - copy it verbatim
+    emitter.label("__rt_fsockopen_scheme_next_x86");
+    emitter.instruction("inc rdx");                                             // advance the scheme scan index
+    emitter.instruction("jmp __rt_fsockopen_scheme_x86");                       // keep looking for "://"
+    emitter.label("__rt_fsockopen_no_scheme_x86");
+    abi::emit_symbol_address(emitter, "r9", "_ftp_tcp_prefix");                 // \"tcp://\" prefix base
     emitter.label("__rt_fsockopen_pfx_x86");
     emitter.instruction("cmp rcx, 6");                                          // copied the whole \"tcp://\" prefix?
     emitter.instruction("jge __rt_fsockopen_pfx_done_x86");                     // prefix copied

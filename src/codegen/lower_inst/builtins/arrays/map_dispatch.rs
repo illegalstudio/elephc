@@ -83,9 +83,9 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 super::super::super::instruction_strict_php_profile(inst),
                 "array_map",
                 |ctx, wrapper_label, env_bytes| {
-                    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-                    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-                    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+                    let callback_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+                    let array_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
+                    let env_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
@@ -132,9 +132,9 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let callback_elem_ty = array_map_callback_result_element_type(&callback_binding.return_ty)?;
     let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
-    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let callback_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let array_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
+    let env_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
@@ -160,9 +160,9 @@ pub(super) fn lower_array_map_descriptor_callback(
     let wrapper_label =
         emit_descriptor_callback_wrapper(ctx, vec![elem_ty.clone()], callback_elem_ty.clone());
     let env_bytes = reserve_descriptor_callback_env(ctx, callback)?;
-    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let callback_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let array_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
+    let env_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
@@ -192,9 +192,9 @@ pub(super) fn lower_array_map_callable_array_descriptor_callback(
     )?;
     let descriptor_reg = abi::int_result_reg(ctx.emitter);
     let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, descriptor_reg);
-    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let callback_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let array_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
+    let env_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);

@@ -250,6 +250,26 @@ return function_exists("addslashes") && function_exists("stripslashes");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval shell escaping is registry-visible through direct and callable dispatch.
+#[test]
+#[cfg(not(windows))]
+fn execute_program_dispatches_posix_shell_escape_builtins() {
+    let program = parse_fragment(
+        br#"echo escapeshellarg("a'b"); echo ":";
+echo escapeshellcmd("a&b"); echo ":";
+echo call_user_func("escapeshellcmd", "x|y"); echo ":";
+return function_exists("escapeshellarg") && function_exists("escapeshellcmd");"#,
+    )
+    .expect("parse eval shell escaping fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "'a'\\''b':a\\&b:x\\|y:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval `base64_encode()` dispatches through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_base64_encode_builtin() {

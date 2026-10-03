@@ -17,6 +17,7 @@ mod symbols;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name, NameKind};
 use crate::parser::ast::{Expr, ExprKind, Program};
@@ -34,7 +35,6 @@ struct Imports {
 
 /// Internal symbol table for tracking declared functions, classes, interfaces, traits,
 /// constants, and extern symbols within a namespace scope.
-#[derive(Default)]
 struct Symbols {
     functions: HashMap<String, String>,
     conditional_functions: HashSet<String>,
@@ -44,6 +44,7 @@ struct Symbols {
     constants: HashSet<String>,
     extern_functions: HashMap<String, String>,
     extern_classes: HashMap<String, String>,
+    platform: Platform,
 }
 
 /// An impossible PHP namespace used to retain the provenance of symbols seeded only for a
@@ -52,7 +53,19 @@ const PRELUDE_FALLBACK_NAMESPACE: &str = "\0elephc-prelude-fallback";
 
 /// Resolves PHP namespace/use statements and rewrites names to canonical forms across the program.
 pub fn resolve(program: Program) -> Result<Program, CompileError> {
-    resolve_with_additional_global_symbols(program, &[], &[])
+    resolve_for_platform(program, Platform::MacOS)
+}
+
+/// Resolves a program against the PHP builtin surface exposed by `platform`.
+///
+/// The resolver runs before type checking, so this platform-level filter is
+/// deliberately limited to PHP registration capabilities such as `lchown`; the
+/// checker enforces architecture- and SDK-specific backend support afterwards.
+pub(crate) fn resolve_for_platform(
+    program: Program,
+    platform: Platform,
+) -> Result<Program, CompileError> {
+    resolve_with_additional_global_symbols_for_platform(program, &[], &[], platform)
 }
 
 /// Resolves a program while seeding additional global function and class-like symbols as
@@ -67,8 +80,23 @@ pub(crate) fn resolve_with_additional_global_symbols(
     global_functions: &[&str],
     global_classes: &[&str],
 ) -> Result<Program, CompileError> {
+    resolve_with_additional_global_symbols_for_platform(
+        program,
+        global_functions,
+        global_classes,
+        Platform::MacOS,
+    )
+}
+
+/// Resolves a program with injected fallback symbols against one target platform.
+pub(crate) fn resolve_with_additional_global_symbols_for_platform(
+    program: Program,
+    global_functions: &[&str],
+    global_classes: &[&str],
+    platform: Platform,
+) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        resolve_on_compiler_stack(program, global_functions, global_classes)
+        resolve_on_compiler_stack(program, global_functions, global_classes, platform)
     })
 }
 
@@ -77,8 +105,9 @@ fn resolve_on_compiler_stack(
     program: Program,
     global_functions: &[&str],
     global_classes: &[&str],
+    platform: Platform,
 ) -> Result<Program, CompileError> {
-    let mut symbols = Symbols::default();
+    let mut symbols = Symbols::new(platform);
     symbols::collect_symbols(&program, None, &mut symbols);
     for function in global_functions {
         if !symbols.declares_function(function) {
@@ -223,4 +252,36 @@ pub(crate) fn date_procedural_alias_names() -> &'static [&'static str] {
 /// known alias call survives desugaring because its argument count was out of range.
 pub(crate) fn date_procedural_alias_arity(name: &str) -> Option<(usize, usize)> {
     expressions::date_procedural_alias_arity(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Platform;
+    use crate::parser::ast::{CallableTarget, StmtKind};
+
+    /// Verifies namespaced calls only fall back to `lchown` where the target exposes it.
+    #[test]
+    fn namespaced_lchown_fallback_is_target_aware() {
+        let tokens = crate::lexer::tokenize("<?php namespace App; $cb = lchown(...);")
+            .expect("tokenize namespaced callable");
+        let program = crate::parser::parse(&tokens).expect("parse namespaced callable");
+
+        for (platform, expected) in [
+            (Platform::Windows, "App\\lchown"),
+            (Platform::Linux, "lchown"),
+        ] {
+            let resolved =
+                resolve_for_platform(program.clone(), platform).expect("resolve callable");
+            let Some(StmtKind::Assign { value, .. }) =
+                resolved.first().map(|stmt| &stmt.kind)
+            else {
+                panic!("expected resolved assignment");
+            };
+            let ExprKind::FirstClassCallable(CallableTarget::Function(name)) = &value.kind else {
+                panic!("expected resolved function callable");
+            };
+            assert_eq!(name.as_str(), expected);
+        }
+    }
 }

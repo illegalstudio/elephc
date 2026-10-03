@@ -52,6 +52,10 @@ mod process_id;
 // but them.
 #[cfg(target_os = "linux")]
 mod ptrace;
+#[cfg(not(target_os = "windows"))]
+mod channel;
+#[cfg(target_os = "windows")]
+#[path = "channel_windows.rs"]
 mod channel;
 pub(crate) use channel::*;
 mod local;
@@ -69,8 +73,11 @@ pub(crate) use exports::*;
 mod stitch;
 pub(crate) use stitch::*;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "windows")))]
 mod tests;
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests;
 
 /// Names the flags a service target cannot honour, or `None` when none were given.
 ///
@@ -124,6 +131,7 @@ pub(crate) fn unhonoured_service_flags(cmd: &MonitorCommand) -> Option<String> {
 }
 
 /// Runs the full capture-and-render pipeline; returns the process exit code.
+#[cfg_attr(target_os = "windows", allow(unreachable_code))]
 pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     if !cmd.stitch.is_empty() {
         // Offline: read service logs and correlate their slices. Captures
@@ -170,6 +178,11 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
         }
         let target = cmd.target.clone();
         return run_probe_host(&cmd, &target);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        eprintln!("elephc monitor: {}", windows_local_monitor_diagnostic());
+        return 2;
     }
     // Which mechanism answers is decided by what the TARGET can do, never by a
     // flag: asking a user to choose between sampling and instrumentation is
@@ -580,9 +593,11 @@ pub(crate) fn labels(s: &ServiceStats) -> String {
 }
 
 /// Descriptor the child finds its control channel on.
+#[cfg(not(target_os = "windows"))]
 pub(crate) const CONTROL_FD: i32 = 3;
 /// Marker written into the channel before spawning, so it is already buffered
 /// when the child looks and no handshake can race the program's own start.
+#[cfg(not(target_os = "windows"))]
 pub(crate) const CONTROL_MAGIC: &[u8] = b"ELEPHC-MONITOR-1";
 /// The same marker, from a monitor that will POLL the child for snapshots.
 ///
@@ -590,12 +605,15 @@ pub(crate) const CONTROL_MAGIC: &[u8] = b"ELEPHC-MONITOR-1";
 /// and compares, so a second marker costs it nothing. Mirrors
 /// `CONTROL_MAGIC_LIVE` in `elephc-probe`; the two are one protocol and share a
 /// name so a `grep` finds the pair.
+#[cfg(not(target_os = "windows"))]
 pub(crate) const CONTROL_MAGIC_LIVE: &[u8] = b"ELEPHC-MONITOR-L";
 /// Acknowledgement returned after the child consumed the control marker and
 /// activated its embedded monitoring runtime.
+#[cfg(not(target_os = "windows"))]
 pub(crate) const CONTROL_ACK: &[u8] = b"ELEPHC-MONITOR-ACK-1";
 
 /// Holds the parent's end of the control channel open for the child's lifetime.
+#[cfg(not(target_os = "windows"))]
 pub(crate) struct ControlChannel {
     /// This process's end. `request_snapshot` asks over it; nothing else on the
     /// machine can, which is what makes it a credential.
@@ -603,6 +621,7 @@ pub(crate) struct ControlChannel {
     child: i32,
 }
 
+#[cfg(not(target_os = "windows"))]
 impl ControlChannel {
     /// Drops the parent's copy of the CHILD end, once the spawn has handed the
     /// real one to the profiled program.
@@ -630,6 +649,7 @@ impl ControlChannel {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 impl Drop for ControlChannel {
     /// Closes both ends. The child end is inherited across the spawn, so
     /// leaking either would leave the profiled program holding a channel
@@ -645,8 +665,30 @@ impl Drop for ControlChannel {
     }
 }
 
+/// Placeholder for the Unix-only inherited control socket.
+///
+/// Windows does not construct this value: local monitor modes are rejected
+/// before a program is launched. Keeping the type makes the shared rendering
+/// and command plumbing compile without manufacturing a fake process channel.
+#[cfg(target_os = "windows")]
+pub(crate) struct ControlChannel;
+
+#[cfg(target_os = "windows")]
+impl ControlChannel {
+    /// No descriptor exists to release on the explicitly unsupported path.
+    fn release_child(&mut self) {}
+}
+
 /// The marker `--with-monitoring` embeds, searched for in the target's bytes.
 pub(crate) const MONITORING_MARKER: &[u8] = b"elephc-monitoring-v1";
+
+/// A Windows build deliberately does not pretend that its Unix control-channel
+/// or process-attachment paths exist. Remote probe endpoints remain available
+/// because they use TCP/TLS and the same authenticated wire protocol.
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_local_monitor_diagnostic() -> &'static str {
+    "local monitoring, --live, and --attach are unavailable on Windows; use a remote probe endpoint (host:port or http(s) URL) instead"
+}
 
 /// Refuses a target that was not built to be monitored.
 ///
@@ -657,11 +699,19 @@ pub(crate) const MONITORING_MARKER: &[u8] = b"elephc-monitoring-v1";
 /// costs one `stat` and removes a whole class of surprise — a path that does not
 /// exist is not a socket either, so it falls through to the file paths and gets
 /// their error message instead of a connection failure.
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn is_socket_path(target: &str) -> bool {
     use std::os::unix::fs::FileTypeExt as _;
     std::fs::metadata(target)
         .map(|meta| meta.file_type().is_socket())
         .unwrap_or(false)
+}
+
+/// Windows has no Unix-domain socket endpoint in this command. A path is a
+/// local-program target and receives the explicit local-monitoring diagnostic.
+#[cfg(target_os = "windows")]
+pub(crate) fn is_socket_path(_target: &str) -> bool {
+    false
 }
 
 /// Per-service request statistics, the shape an operator pages on.

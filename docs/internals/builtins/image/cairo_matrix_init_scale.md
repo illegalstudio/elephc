@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_scale() - internals"
 description: "Compiler internals for cairo_matrix_init_scale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 415
+  order: 419
 ---
 
 ## `cairo_matrix_init_scale()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13848](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13848) (`cairo_matrix_init_scale`)
+- **Lowering**: [`src/image_prelude.rs`:13919](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13919) (`cairo_matrix_init_scale`)
 - **Function symbol**: `cairo_matrix_init_scale()`
 
 

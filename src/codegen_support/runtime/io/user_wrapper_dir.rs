@@ -271,10 +271,10 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor rcx, rcx");                                        // options = 0
     emitter.instruction(&format!("bt r8, {}", VTABLE_DIR_OPENDIR_SLOT));        // an undeclared return type arrives boxed
     emitter.instruction("jc __rt_uwod_boxed_x86");                              // the mask bit selects the boxed path
-    emitter.instruction("call r11");                                            // invoke dir_opendir on the wrapper object
+    emitter.emit_platform_callback_call("r11", 4);                                // call generated dir_opendir with the target ABI
     emitter.instruction("jmp __rt_uwod_called_x86");                            // the declared shape needs no conversion
     emitter.label("__rt_uwod_boxed_x86");
-    emitter.instruction("call r11");                                            // invoke dir_opendir; rax = owned Mixed cell
+    emitter.emit_platform_callback_call("r11", 4);                                // call generated dir_opendir with the target ABI
     emitter.instruction("call __rt_wrapper_unbox_int");                         // rax = the boolean, reference released
     emitter.label("__rt_uwod_called_x86");
     emitter.instruction("test rax, rax");                                       // did dir_opendir return false?
@@ -411,7 +411,7 @@ fn emit_user_wrapper_dir_readdir_linux_x86_64(emitter: &mut Emitter) {
     // -- call dir_readdir($this); the result shape follows the method's return type --
     emitter.instruction(&format!("bt r8, {}", DIR_READDIR_SLOT));               // does this class return a boxed `string|false`?
     emitter.instruction("jc __rt_uwrd_boxed_x86");                              // convert the boxed result instead of reading the pair
-    emitter.instruction("call r11");                                            // invoke dir_readdir on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);                                // call generated dir_readdir with the target ABI
     emitter.instruction("test rdx, rdx");                                       // empty name (len 0) is the end-of-directory sentinel
     emitter.instruction("jz __rt_uwrd_empty_x86");                              // box end-of-directory as false
     emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
@@ -419,7 +419,7 @@ fn emit_user_wrapper_dir_readdir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the entry name in rax/rdx
 
     emitter.label("__rt_uwrd_boxed_x86");
-    emitter.instruction("call r11");                                            // invoke dir_readdir; rax = owned Mixed cell
+    emitter.emit_platform_callback_call("r11", 1);                                // call generated dir_readdir with the target ABI
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the boxed result across the conversion
     emitter.instruction("mov rdi, rax");                                        // pass the boxed cell to the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = owned string; false unboxes to the (0,0) end sentinel
@@ -523,7 +523,7 @@ fn emit_user_wrapper_dir_closedir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_CLOSEDIR_OFFSET)); // load the dir_closedir method pointer (slot 21)
     emitter.instruction("test r11, r11");                                       // class did not implement dir_closedir?
     emitter.instruction("jz __rt_uwcd_clear_x86");                              // missing dir_closedir → just clear
-    emitter.instruction("call r11");                                            // invoke dir_closedir on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
 
     emitter.label("__rt_uwcd_clear_x86");
     // -- free the handle slot so the synthetic fd cannot be reused stale --
@@ -610,7 +610,7 @@ fn emit_user_wrapper_dir_rewinddir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uwrw_false_x86");                              // missing dir_rewinddir → false
 
     // -- call dir_rewinddir($this) → bool in rax --
-    emitter.instruction("call r11");                                            // invoke dir_rewinddir on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result
 

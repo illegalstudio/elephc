@@ -98,9 +98,10 @@ pub(crate) use output_handlers::eval_ob_handler_callback;
 pub(crate) use output_handlers::release_ob_handler_callbacks;
 use statements::*;
 use throwables::*;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::net::ToSocketAddrs;
+#[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};

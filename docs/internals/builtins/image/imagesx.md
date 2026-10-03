@@ -2,7 +2,7 @@
 title: "imagesx() - internals"
 description: "Compiler internals for imagesx(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 533
+  order: 539
 ---
 
 ## `imagesx()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2267](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2267) (`imagesx`)
+- **Lowering**: [`src/image_prelude.rs`:2338](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2338) (`imagesx`)
 - **Function symbol**: `imagesx()`
 
 

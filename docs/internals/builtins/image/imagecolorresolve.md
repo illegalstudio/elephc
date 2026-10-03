@@ -2,7 +2,7 @@
 title: "imagecolorresolve() - internals"
 description: "Compiler internals for imagecolorresolve(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 474
+  order: 478
 ---
 
 ## `imagecolorresolve()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2447](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2447) (`imagecolorresolve`)
+- **Lowering**: [`src/image_prelude.rs`:2518](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2518) (`imagecolorresolve`)
 - **Function symbol**: `imagecolorresolve()`
 
 

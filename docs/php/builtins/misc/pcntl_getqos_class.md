@@ -2,7 +2,7 @@
 title: "pcntl_getqos_class()"
 description: "Returns the current macOS thread quality-of-service class."
 sidebar:
-  order: 655
+  order: 662
 ---
 
 ## pcntl_getqos_class()

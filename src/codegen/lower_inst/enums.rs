@@ -454,7 +454,7 @@ fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'
 fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction(
+    ctx.emitter.instruction(                                                    // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
         &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
     );                                                                          // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp allocation as a runtime object
@@ -501,10 +501,7 @@ pub(super) fn lower_enum_backing_string_to_int(
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&type_error_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => emit_throw_enum_from_type_error_aarch64(ctx, &message_label, message_len),
-        Arch::X86_64 => emit_throw_enum_from_type_error_x86_64(ctx, &message_label, message_len),
-    }
+    emit_throw_static_type_error(ctx, &message_label, message_len);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -525,7 +522,7 @@ pub(super) fn emit_string_result_to_int_checked(ctx: &mut FunctionContext<'_>, i
     // for an int parameter, 0 otherwise; rejected strings throw `TypeError`.
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // non-numeric string throws TypeError
                 &format!("cbz {}, {}", int_reg, invalid_label)
             );                                                                  // non-numeric string throws TypeError
         }
@@ -713,7 +710,7 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
             );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
@@ -734,8 +731,24 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Throws a catchable `TypeError` whose message is stored in static program data.
+pub(super) fn emit_throw_static_type_error(
+    ctx: &mut FunctionContext<'_>,
+    message_label: &str,
+    message_len: usize,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            emit_throw_static_type_error_aarch64(ctx, message_label, message_len);
+        }
+        Arch::X86_64 => {
+            emit_throw_static_type_error_x86_64(ctx, message_label, message_len);
+        }
+    }
+}
+
 /// Emits the AArch64 `TypeError` allocation, static-message stamping, and unwinder handoff.
-fn emit_throw_enum_from_type_error_aarch64(
+fn emit_throw_static_type_error_aarch64(
     ctx: &mut FunctionContext<'_>,
     message_label: &str,
     message_len: usize,
@@ -759,14 +772,14 @@ fn emit_throw_enum_from_type_error_aarch64(
 }
 
 /// Emits the x86_64 `TypeError` allocation, static-message stamping, and unwinder handoff.
-fn emit_throw_enum_from_type_error_x86_64(
+fn emit_throw_static_type_error_x86_64(
     ctx: &mut FunctionContext<'_>,
     message_label: &str,
     message_len: usize,
 ) {
     abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction(
+    ctx.emitter.instruction(                                                    // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
         &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
     );                                                                          // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp allocation as a runtime object

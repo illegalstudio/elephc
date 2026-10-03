@@ -86,7 +86,7 @@ where
     emitter.instruction("ldr x3, [sp, #8]");                                    // sourceLen (passed as w3 below)
     emitter.instruction("mov w4, #0");                                          // small = 0
     emitter.instruction("mov w5, #0");                                          // verbosity = 0
-    emitter.bl_c("BZ2_bzBuffToBuffDecompress"); // libbz2 one-shot decompress
+    emitter.bl_c("BZ2_bzBuffToBuffDecompress");                                 // libbz2 one-shot decompress
     emitter.instruction("cmp w0, #0");                                          // did libbz2 report an error?
     emitter.instruction(&format!("b.ne {}", decompress_fail));                  // non-zero = error → skip dup2
 
@@ -126,7 +126,7 @@ where
     // dup2(temp_fd, source_fd) so subsequent reads see decompressed bytes.
     emitter.instruction("ldr x0, [sp, #32]");                                   // oldfd = temp fd
     emitter.instruction("ldr x1, [sp, #0]");                                    // newfd = source fd
-    emitter.bl_c("dup2"); // libc dup2
+    emitter.bl_c("dup2");                                                       // libc dup2
     emitter.instruction("ldr x0, [sp, #32]");                                   // close temp fd
     emitter.syscall(6); // close
 
@@ -193,7 +193,7 @@ where
     emitter.instruction("mov ecx, DWORD PTR [rbp - 16]");                       // sourceLen u32 (compressed len)
     emitter.instruction("xor r8d, r8d");                                        // small = 0
     emitter.instruction("xor r9d, r9d");                                        // verbosity = 0
-    emitter.bl_c("BZ2_bzBuffToBuffDecompress"); // libbz2 one-shot decompress
+    emitter.emit_call_c("BZ2_bzBuffToBuffDecompress");                          // libbz2 one-shot decompress
     emitter.instruction("test eax, eax");                                       // did libbz2 report an error?
     emitter.instruction(&format!("jnz {}", decompress_fail));                   // non-zero = error
 
@@ -230,7 +230,7 @@ where
     emitter.instruction("call lseek");                                          // libc lseek
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // oldfd = temp fd
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // newfd = source fd
-    emitter.instruction("call dup2");                                           // replace source fd with temp fd contents
+    emitter.emit_call_c("dup2");                                                // replace source fd with temp fd contents
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // temp fd to close after dup2
     emitter.instruction("call close");                                          // close the temporary descriptor
 

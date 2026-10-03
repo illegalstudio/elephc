@@ -15,8 +15,6 @@
 //!   the arguments libc would refuse before any setter runs.
 
 use super::*;
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
 
 eval_builtin! {
     contract: "putenv",
@@ -68,7 +66,11 @@ pub(in crate::interpreter) fn eval_putenv_result(
 /// - an empty name (the argument starts with NUL): both `putenv(3)` and `unsetenv(3)` refuse;
 /// - a set form whose `=` sits after that NUL, which libc receives as a bare name: glibc and
 ///   musl `putenv(3)` unset it, Apple's refuses it.
+#[cfg(unix)]
 fn eval_putenv_host(assignment: &[u8]) -> bool {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
     let text = assignment.split(|byte| *byte == 0).next().unwrap_or_default();
     if text.is_empty() {
         return false;
@@ -87,6 +89,31 @@ fn eval_putenv_host(assignment: &[u8]) -> bool {
         None if assignment.contains(&b'=') && cfg!(target_vendor = "apple") => false,
         None => {
             std::env::remove_var(OsStr::from_bytes(text));
+            true
+        }
+    }
+}
+
+/// Applies one assignment through Windows' Unicode environment boundary.
+///
+/// PHP strings can contain arbitrary bytes, while Rust's Windows environment API requires
+/// Unicode. Invalid UTF-8 is refused rather than rewritten to a different variable name/value.
+#[cfg(windows)]
+fn eval_putenv_host(assignment: &[u8]) -> bool {
+    let text = assignment.split(|byte| *byte == 0).next().unwrap_or_default();
+    if text.is_empty() {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(text) else {
+        return false;
+    };
+    match text.split_once('=') {
+        Some((name, value)) => {
+            std::env::set_var(name, value);
+            true
+        }
+        None => {
+            std::env::remove_var(text);
             true
         }
     }

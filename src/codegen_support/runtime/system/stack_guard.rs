@@ -18,7 +18,11 @@
 //!   reach it with a plain branch, and cdylibs escape through the active host boundary.
 
 use crate::codegen_support::runtime::data::STACK_OVERFLOW_MSG;
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{
+    abi,
+    emit::Emitter,
+    platform::{Arch, Platform},
+};
 
 /// Symbol holding the low-water stack address for the currently running context.
 /// Zero means "guard disabled"; every prologue check is an unsigned compare against it.
@@ -57,6 +61,9 @@ const STACK_BUDGET_FALLBACK_BYTES: i64 = 8 * 1024 * 1024;
 /// current stack pointer.
 const STACK_BUDGET_MIN_BYTES: i64 = 256 * 1024;
 
+/// x64 TEB offset of the low address of the thread's reserved stack mapping.
+const WINDOWS_X64_TEB_DEALLOCATION_STACK_OFFSET: i32 = 0x1478;
+
 /// Emits `__rt_stack_limit_init`, which measures the running OS stack once at process
 /// start and publishes the resulting floor into `_stack_limit` and `_stack_limit_main`.
 ///
@@ -72,10 +79,34 @@ pub fn emit_stack_limit_init(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stack_limit_init (publish the call-stack floor) ---");
     emitter.label_global("__rt_stack_limit_init");
-    match emitter.target.arch {
-        Arch::AArch64 => emit_stack_limit_init_aarch64(emitter),
-        Arch::X86_64 => emit_stack_limit_init_x86_64(emitter),
+    match (emitter.target.platform, emitter.target.arch) {
+        (Platform::Windows, Arch::X86_64) => emit_stack_limit_init_windows_x86_64(emitter),
+        (_, Arch::AArch64) => emit_stack_limit_init_aarch64(emitter),
+        (_, Arch::X86_64) => emit_stack_limit_init_x86_64(emitter),
     }
+}
+
+/// Windows x86_64 implementation using the current thread's TEB stack reservation.
+///
+/// Windows has no `getrlimit`. `DeallocationStack` is the low address of the reserved
+/// mapping and remains stable while guard pages commit downward; `StackLimit` is used only
+/// as a defensive fallback. Publishing that low address plus the ordinary helper reserve
+/// gives compiled prologues the same controlled-fatal boundary as Unix.
+fn emit_stack_limit_init_windows_x86_64(emitter: &mut Emitter) {
+    emitter.instruction(&format!("mov rax, QWORD PTR gs:[{}]", WINDOWS_X64_TEB_DEALLOCATION_STACK_OFFSET)); // load the stable low address of the thread stack reservation
+    emitter.instruction("test rax, rax");                                       // is DeallocationStack available for this thread?
+    emitter.instruction("jnz __rt_stack_limit_init_windows_base_ready");        // use the reservation base when present
+    emitter.instruction("mov rax, QWORD PTR gs:[16]");                          // otherwise fall back to NT_TIB.StackLimit
+    emitter.label("__rt_stack_limit_init_windows_base_ready");
+    emitter.instruction(&format!("add rax, {}", STACK_GUARD_RESERVE_BYTES));    // retain helper/fatal-path headroom above the reservation base
+    emitter.instruction("mov rcx, QWORD PTR gs:[8]");                           // rcx = NT_TIB.StackBase (high address)
+    emitter.instruction("cmp rax, rcx");                                        // did a malformed TEB value cross the stack top?
+    emitter.instruction("jb __rt_stack_limit_init_windows_store");              // a real low-water address is safe to publish
+    emitter.instruction("xor eax, eax");                                        // zero disables the guard on an unusable TEB tuple
+    emitter.label("__rt_stack_limit_init_windows_store");
+    abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);
+    abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_MAIN_SYMBOL, 0);
+    emitter.instruction("ret");                                                 // no native call or helper frame was needed
 }
 
 /// AArch64 implementation of `__rt_stack_limit_init` (macOS and Linux share it).
@@ -238,6 +269,20 @@ mod tests {
             assert!(asm.contains("_stack_limit_main"), "{target:?}: {asm}");
             assert!(asm.contains("_stack_err_msg"), "{target:?}: {asm}");
         }
+    }
+
+    /// Windows derives its stack reservation from the TEB and never names Unix `getrlimit`.
+    #[test]
+    fn test_windows_stack_guard_uses_teb_reservation_bounds() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        let mut emitter = Emitter::new(target);
+        emit_stack_limit_init(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains("gs:[5240]"), "missing TEB DeallocationStack load: {asm}");
+        assert!(asm.contains("gs:[8]"), "missing TEB StackBase load: {asm}");
+        assert!(!asm.contains("getrlimit"), "Windows must not link getrlimit: {asm}");
+        assert!(asm.contains("_stack_limit"), "{asm}");
+        assert!(asm.contains("_stack_limit_main"), "{asm}");
     }
 
     /// Cdylib stack exhaustion must unwind through the active host boundary while

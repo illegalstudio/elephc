@@ -2,7 +2,7 @@
 title: "cairo_pattern_add_color_stop_rgb() - internals"
 description: "Compiler internals for cairo_pattern_add_color_stop_rgb(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 423
+  order: 427
 ---
 
 ## `cairo_pattern_add_color_stop_rgb()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13795](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13795) (`cairo_pattern_add_color_stop_rgb`)
+- **Lowering**: [`src/image_prelude.rs`:13866](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13866) (`cairo_pattern_add_color_stop_rgb`)
 - **Function symbol**: `cairo_pattern_add_color_stop_rgb()`
 
 

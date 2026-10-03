@@ -18,6 +18,8 @@ sidebar:
 | [`chunk_split()`](./string/chunk_split.md) | `(string $string, int $length = 76, string $separator = "\r\n"): string` | `string` | ✓ | ✓ |
 | [`count_chars()`](./string/count_chars.md) | `(string $string, int $mode = 0): array|string` | `array|string` | ✓ | ✓ |
 | [`crc32()`](./string/crc32.md) | `(string $string): int` | `int` | ✓ | ✓ |
+| [`escapeshellarg()`](./string/escapeshellarg.md) | `(string $arg): string` | `string` | ✓ | ✓ |
+| [`escapeshellcmd()`](./string/escapeshellcmd.md) | `(string $command): string` | `string` | ✓ | ✓ |
 | [`explode()`](./string/explode.md) | `(string $separator, string $string, int $limit = PHP_INT_MAX): array` | `array` | ✓ | ✓ |
 | [`grapheme_strrev()`](./string/grapheme_strrev.md) | `(string $string): mixed` | `mixed` | ✓ | ✓ |
 | [`gzcompress()`](./string/gzcompress.md) | `(string $data, int $level = -1): string` | `string` | ✓ | ✓ |
@@ -59,7 +61,7 @@ sidebar:
 | [`mb_convert_case()`](./string/mb_convert_case.md) | `(string $string, int $mode, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`mb_convert_encoding()`](./string/mb_convert_encoding.md) | `(array|string $string, string $to_encoding, array|string|null $from_encoding = null): array|string|false` | `array|string|false` | ✓ | ✓ |
 | [`mb_convert_kana()`](./string/mb_convert_kana.md) | `(string $string, string $mode = 'KV', ?string $encoding = null): string` | `string` | ✓ | ✓ |
-| [`mb_convert_variables()`](./string/mb_convert_variables.md) | `(string $to_encoding, array|string $from_encoding, mixed $var, ...$vars): string|false` | `string|false` | ✓ | ✓ |
+| [`mb_convert_variables()`](./string/mb_convert_variables.md) | `(string $to_encoding, array|string $from_encoding, mixed &$var, ...$vars): string|false` | `string|false` | ✓ | ✓ |
 | [`mb_decode_mimeheader()`](./string/mb_decode_mimeheader.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`mb_decode_numericentity()`](./string/mb_decode_numericentity.md) | `(string $string, array $map, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`mb_detect_encoding()`](./string/mb_detect_encoding.md) | `(string $string, array|string|null $encodings = null, bool $strict = false): string|false` | `string|false` | ✓ | ✓ |
@@ -67,7 +69,7 @@ sidebar:
 | [`mb_encode_mimeheader()`](./string/mb_encode_mimeheader.md) | `(string $string, ?string $charset = null, ?string $transfer_encoding = null, string $newline = "\r\n", int $indent = 0): string` | `string` | ✓ | ✓ |
 | [`mb_encode_numericentity()`](./string/mb_encode_numericentity.md) | `(string $string, array $map, ?string $encoding = null, bool $hex = false): string` | `string` | ✓ | ✓ |
 | [`mb_encoding_aliases()`](./string/mb_encoding_aliases.md) | `(string $encoding): array` | `array` | ✓ | ✓ |
-| [`mb_ereg()`](./string/mb_ereg.md) | `(string $pattern, string $string, mixed $matches = null): bool` | `bool` | ✓ | ✓ |
+| [`mb_ereg()`](./string/mb_ereg.md) | `(string $pattern, string $string, mixed &$matches = null): bool` | `bool` | ✓ | ✓ |
 | [`mb_ereg_replace()`](./string/mb_ereg_replace.md) | `(string $pattern, string $replacement, string $string, ?string $options = null): string|false|null` | `string|false|null` | ✓ | ✓ |
 | [`mb_ereg_replace_callback()`](./string/mb_ereg_replace_callback.md) | `(string $pattern, callable $callback, string $string, ?string $options = null): string|false|null` | `string|false|null` | ✓ | ✓ |
 | [`mb_ereg_search()`](./string/mb_ereg_search.md) | `(?string $pattern = null, ?string $options = null): bool` | `bool` | ✓ | ✓ |
@@ -77,7 +79,7 @@ sidebar:
 | [`mb_ereg_search_pos()`](./string/mb_ereg_search_pos.md) | `(?string $pattern = null, ?string $options = null): array|false` | `array|false` | ✓ | ✓ |
 | [`mb_ereg_search_regs()`](./string/mb_ereg_search_regs.md) | `(?string $pattern = null, ?string $options = null): array|false` | `array|false` | ✓ | ✓ |
 | [`mb_ereg_search_setpos()`](./string/mb_ereg_search_setpos.md) | `(int $offset): bool` | `bool` | ✓ | ✓ |
-| [`mb_eregi()`](./string/mb_eregi.md) | `(string $pattern, string $string, mixed $matches = null): bool` | `bool` | ✓ | ✓ |
+| [`mb_eregi()`](./string/mb_eregi.md) | `(string $pattern, string $string, mixed &$matches = null): bool` | `bool` | ✓ | ✓ |
 | [`mb_eregi_replace()`](./string/mb_eregi_replace.md) | `(string $pattern, string $replacement, string $string, ?string $options = null): string|false|null` | `string|false|null` | ✓ | ✓ |
 | [`mb_get_info()`](./string/mb_get_info.md) | `(string $type = 'all'): array|string|int|false|null` | `array|string|int|false|null` | ✓ | ✓ |
 | [`mb_http_input()`](./string/mb_http_input.md) | `(?string $type = null): array|string|false` | `array|string|false` | ✓ | ✓ |
@@ -89,7 +91,7 @@ sidebar:
 | [`mb_ltrim()`](./string/mb_ltrim.md) | `(string $string, ?string $characters = null, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`mb_ord()`](./string/mb_ord.md) | `(string $string, ?string $encoding = null): int|false` | `int|false` | ✓ | ✓ |
 | [`mb_output_handler()`](./string/mb_output_handler.md) | `(string $string, int $status): string` | `string` | ✓ | ✓ |
-| [`mb_parse_str()`](./string/mb_parse_str.md) | `(string $string, mixed $result): bool` | `bool` | ✓ | ✓ |
+| [`mb_parse_str()`](./string/mb_parse_str.md) | `(string $string, mixed &$result): bool` | `bool` | ✓ | ✓ |
 | [`mb_preferred_mime_name()`](./string/mb_preferred_mime_name.md) | `(string $encoding): string|false` | `string|false` | ✓ | ✓ |
 | [`mb_regex_encoding()`](./string/mb_regex_encoding.md) | `(?string $encoding = null): string|bool` | `string|bool` | ✓ | ✓ |
 | [`mb_regex_set_options()`](./string/mb_regex_set_options.md) | `(?string $options = null): string` | `string` | ✓ | ✓ |
@@ -123,7 +125,7 @@ sidebar:
 | [`number_format()`](./string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
 | [`openssl_cipher_iv_length()`](./string/openssl_cipher_iv_length.md) | `(string $cipher_algo): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_decrypt()`](./string/openssl_decrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = ''): mixed` | `mixed` | ✓ | ✓ |
-| [`openssl_encrypt()`](./string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
+| [`openssl_encrypt()`](./string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed &$tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_get_cipher_methods()`](./string/openssl_get_cipher_methods.md) | `(bool $aliases = false): array` | `array` | ✓ | ✓ |
 | [`ord()`](./string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
 | [`parse_url()`](./string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |

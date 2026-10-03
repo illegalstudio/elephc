@@ -100,6 +100,11 @@ pub(in crate::interpreter) fn eval_extension_is_loaded_in(
 /// already requires curl gets a magician build where it is `true` in eval too. See
 /// `crate::interpreter::builtins::curl`'s module doc for the full argument.
 pub(in crate::interpreter) fn eval_extension_is_loaded(name: &str) -> bool {
+    if cfg!(target_os = "windows")
+        && (name.eq_ignore_ascii_case("pcntl") || name.eq_ignore_ascii_case("posix"))
+    {
+        return false;
+    }
     if cfg!(feature = "curl") && name.eq_ignore_ascii_case("curl") {
         return true;
     }

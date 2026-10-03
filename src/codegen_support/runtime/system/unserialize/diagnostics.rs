@@ -448,7 +448,7 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
             emitter.instruction("mov r10, QWORD PTR [r10 + r8 * 8]");           // resolve concrete or inherited method symbol
             emitter.instruction("test r10, r10");                               // does the class expose __toString?
             emitter.instruction("jz __rt_unser_allowed_tostring_missing_x");    // no method means PHP conversion Error
-            emitter.instruction("call r10");                                    // call __toString with borrowed receiver in rdi
+            emitter.emit_platform_callback_call("r10", 1);                                // call generated __toString with the target ABI
             emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // preserve returned string pointer while popping boundary
             emitter.instruction("mov QWORD PTR [rbp - 16], rdx");               // preserve returned string length
             emitter.instruction("jmp __rt_unser_allowed_tostring_finish_x");    // share normal boundary teardown

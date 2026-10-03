@@ -2,13 +2,13 @@
 title: "curl_multi_exec()"
 description: "Runs the sub-connections of the current cURL handle."
 sidebar:
-  order: 706
+  order: 720
 ---
 
 ## curl_multi_exec()
 
 ```php
-function curl_multi_exec(CurlMultiHandle $multi_handle, int $still_running): int
+function curl_multi_exec(CurlMultiHandle $multi_handle, int &$still_running): int
 ```
 
 Runs the sub-connections of the current cURL handle.

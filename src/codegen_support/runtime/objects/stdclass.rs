@@ -21,7 +21,7 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::Target;
+    use crate::codegen_support::platform::{Platform, Target};
 
     /// Both property-hash entries preserve stdClass entry points and the runtime hash allocator ABI.
     #[test]
@@ -51,6 +51,20 @@ mod tests {
                 assert_eq!(asm.matches("mov rsi, 7").count(), 2);
             }
         }
+    }
+
+    /// Verifies stdClass seeds hash capacity and value type in the internal SysV argument registers.
+    #[test]
+    fn x86_64_stdclass_new_stages_hash_new_arguments_in_runtime_registers() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_stdclass_new_x86_64(&mut emitter);
+        let asm = emitter.output();
+        let call = asm
+            .find("    call __rt_hash_new\n")
+            .expect("stdClass constructor should allocate its dynamic-property hash");
+        let setup = &asm[..call];
+
+        assert!(setup.ends_with("    mov rdi, 8\n    mov rsi, 7\n"));
     }
 }
 

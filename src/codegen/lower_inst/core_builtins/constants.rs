@@ -214,12 +214,12 @@ fn emit_boxed_array_constant<'a>(
         emit_boxed_constant_value(ctx, &value.kind, &PhpType::Int)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_constant_array_key(ctx, &key)?;
-        let value_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+        let value_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 3);
         abi::emit_pop_reg(ctx.emitter, value_reg);
-        let table_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        let table_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
         abi::emit_pop_reg(ctx.emitter, table_reg);
         for (arg, value) in [(4, 0), (5, 7)] {
-            let reg = abi::int_arg_reg_name(ctx.emitter.target, arg);
+            let reg = abi::runtime_helper_int_arg_reg(ctx.emitter, arg);
             abi::emit_load_int_immediate(ctx.emitter, reg, value);
         }
         abi::emit_call_label(ctx.emitter, "__rt_hash_set");
@@ -230,8 +230,8 @@ fn emit_boxed_array_constant<'a>(
 
 /// Materializes a folded constant array key through the ordinary PHP key normalizer.
 fn emit_constant_array_key(ctx: &mut FunctionContext<'_>, key: &ExprKind) -> Result<()> {
-    let lo = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let hi = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let lo = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
+    let hi = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
     let integer = match key {
         ExprKind::IntLiteral(value) => Some(*value),
         ExprKind::BoolLiteral(value) => Some(i64::from(*value)),
@@ -312,8 +312,8 @@ fn insert_boxed_hash_value(ctx: &mut FunctionContext<'_>, key: &str) {
             abi::emit_load_int_immediate(ctx.emitter, "x5", 7);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed constant value to hash_set
-            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed cells have no high payload word
+            ctx.emitter.instruction("mov rcx, rax");                            // SysV argument 3 receives the boxed Mixed cell
+            ctx.emitter.instruction("xor r8, r8");                              // SysV argument 4 is the empty high payload word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
