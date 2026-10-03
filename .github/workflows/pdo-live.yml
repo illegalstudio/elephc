@@ -480,6 +480,10 @@ jobs:
         if: matrix.suite == 'cubrid-dblib'
         run: cargo build -p elephc-pdo --features dblib
 
+      - name: PDO_DBLIB bridge unit tests
+        if: matrix.suite == 'cubrid-dblib'
+        run: 'cargo test -p elephc-pdo --features dblib dblib::tests::'
+
       - name: Live PDO_DBLIB bridge tests
         if: matrix.suite == 'cubrid-dblib'
         run: 'cargo test -p elephc-pdo --features dblib dblib::tests:: -- --ignored --test-threads=1'

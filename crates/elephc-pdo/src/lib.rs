@@ -383,6 +383,15 @@ fn store_open_failure(dsn: &str, message: &str) {
         {
             (String::new(), 0)
         }
+    } else if dsn.starts_with("dblib:") {
+        #[cfg(feature = "dblib")]
+        {
+            dblib::open_diagnostic()
+        }
+        #[cfg(not(feature = "dblib"))]
+        {
+            (String::new(), 0)
+        }
     } else {
         (String::new(), 0)
     };
