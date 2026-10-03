@@ -178,7 +178,7 @@ fn test_strict_php_extension_call_fails_with_hint() {
     );
 }
 
-/// Keeps a hidden extension builtin from being replaced by the pipe constant folder.
+/// Rejects a hidden extension in a pipe with the disabled-extension diagnostic.
 #[test]
 fn test_strict_php_pipe_rejects_hidden_is_real() {
     let stderr = compile_cli_expect_error(
@@ -186,7 +186,8 @@ fn test_strict_php_pipe_rejects_hidden_is_real() {
         &["--strict-php"],
     );
     assert!(
-        stderr.contains("Undefined function for first-class callable: is_real"),
+        stderr.contains("Undefined function: is_real")
+            && stderr.contains("disabled by --strict-php"),
         "unexpected stderr: {stderr}",
     );
 }

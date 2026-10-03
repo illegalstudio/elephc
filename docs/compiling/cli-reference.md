@@ -485,6 +485,10 @@ physical PHP-mode file:
   `function_exists()` returns `false` for them, calling one is an undefined
   function (the diagnostic names the disabled extension), and user code may
   declare its own functions with those names;
+- first-class callable and pipe targets carry the same disabled-extension hint as direct
+  calls. In PHP-mode source, a user-defined `is_real()` is not treated as the hidden
+  builtin's float type guard; LFC source retains the extension guard. Type narrowing
+  and mixed-storage warnings follow the guarded statement's file mode, not its caller;
 - names prefixed with `__elephc_` are reserved for the compiler and rejected in
   user code.
 

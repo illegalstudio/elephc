@@ -16,6 +16,7 @@ mod null_sentinel;
 mod case_insensitive_symbols;
 mod cli;
 mod strict_php;
+mod strict_php_source_guards;
 mod lfc;
 mod benchmarks;
 mod echo_vars;

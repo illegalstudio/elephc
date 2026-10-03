@@ -58,7 +58,7 @@ impl Checker {
     /// argument count was out of range, so report a precise arity error — matching
     /// `function_exists()`, which already recognizes these names — instead of the misleading
     /// "Undefined function". Non-alias names keep the plain "Undefined function" diagnostic.
-    pub(super) fn unresolved_function_call_error(&self, name: &str, span: crate::span::Span) -> CompileError {
+    pub(in crate::types::checker) fn unresolved_function_call_error(&self, name: &str, span: crate::span::Span) -> CompileError {
         if let Some((min, max)) = crate::name_resolver::date_procedural_alias_arity(name) {
             let bare = name.rsplit('\\').next().unwrap_or(name);
             let message = if min == max {

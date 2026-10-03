@@ -120,6 +120,10 @@ impl Checker {
                             )
                         });
                 }
+                let bare_key = crate::names::php_symbol_key(function_name.rsplit('\\').next().unwrap_or(function_name));
+                if crate::types::checker::builtins::strict_php_hidden_builtin(&bare_key) {
+                    return Err(self.unresolved_function_call_error(function_name, span));
+                }
                 Err(CompileError::new(
                     span,
                     &format!(

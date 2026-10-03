@@ -15,6 +15,22 @@
 
 use super::*;
 
+/// A hidden extension's name is an ordinary user function, not a builtin type guard.
+#[test]
+fn test_strict_user_is_real_does_not_narrow_to_float() {
+    let result = check_source_strict("<?php function is_real($value): bool { return true; } $value = [1, 2]; if (is_real($value)) { echo $value[0]; }");
+    assert!(result.is_ok(), "{result:?}");
+}
+
+/// Callable and pipe lookup explain why hidden extension names are unavailable.
+#[test]
+fn test_strict_hidden_extension_callable_reports_hint() {
+    for source in ["<?php $f = is_real(...);", "<?php $value = 1 |> is_real(...);"] {
+        expect_strict_error(source, "is_real() exists as an elephc extension; it is disabled by --strict-php");
+    }
+    assert!(check_source_strict("<?php function is_real($value): bool { return true; } $f = is_real(...); echo $f(1);").is_ok());
+}
+
 /// Runs [`check_source`] with strict-PHP mode enabled for the duration.
 /// The RAII guard restores the previous state even when the checked pipeline panics.
 fn check_source_strict(src: &str) -> Result<(), String> {

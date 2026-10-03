@@ -424,7 +424,8 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
             // the namespace qualification, so `\is_int($x)` and `Ns\is_int($x)` narrow too.
             let target = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
                 "is_int" | "is_integer" | "is_long" => GuardTarget::Exact(PhpType::Int),
-                "is_float" | "is_double" | "is_real" => GuardTarget::Exact(PhpType::Float),
+                "is_float" | "is_double" => GuardTarget::Exact(PhpType::Float),
+                "is_real" if !crate::strict_php::is_enabled() => GuardTarget::Exact(PhpType::Float),
                 "is_string" => GuardTarget::Exact(PhpType::Str),
                 "is_bool" => GuardTarget::Exact(PhpType::Bool),
                 // `is_null($x)`: same narrowing as `$x === null` — elephc models a `?T` value's
