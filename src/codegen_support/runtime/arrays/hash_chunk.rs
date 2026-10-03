@@ -17,9 +17,10 @@
 //!   by deciding the element width first, which is the 16-byte `{pointer, length}` slot problem
 //!   that makes a string-valued source unrepresentable (issue #675). A hash keyed 0,1,2,… reads
 //!   and prints identically and sidesteps it.
-//! - Each chunk OWNS its payloads, so values are taken the way `__rt_array_slice_to_hash` takes
-//!   them: strings are persisted into independent heap copies, heap-backed values (tags 4..=7)
-//!   are retained, and scalars are copied by value. `__rt_hash_set` persists string KEYS itself.
+//! - Each chunk OWNS its payloads, mirroring `__rt_hash_clone_shallow`: strings are persisted
+//!   into independent heap copies, heap-backed values (tags 4..=7) and callable descriptors
+//!   (tag 10) are retained, PHP reference cells (tag 11) are cloned with singleton separation,
+//!   and scalars are copied by value. `__rt_hash_set` persists string KEYS itself.
 //! - The inner hashes inherit the source's `value_type` header word, so a chunk is stamped the
 //!   same way the container its values came from is.
 
@@ -96,10 +97,20 @@ pub fn emit_hash_chunk(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_chunk_string");                         // strings need an independent heap copy
     emitter.instruction("cmp x9, #4");                                          // is the value below the heap-backed tag range?
     emitter.instruction("b.lt __rt_hash_chunk_insert");                         // scalar values need no retain
+    emitter.instruction("cmp x9, #10");                                         // is this entry's value a callable descriptor?
+    emitter.instruction("b.eq __rt_hash_chunk_value_ref");                      // runtime descriptors need retains; static descriptors are ignored by incref
+    emitter.instruction("cmp x9, #11");                                         // is this entry a member of a PHP reference set?
+    emitter.instruction("b.eq __rt_hash_chunk_reference_cell");                 // singleton cells separate while externally aliased reference sets remain shared
     emitter.instruction("cmp x9, #7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("b.gt __rt_hash_chunk_insert");                         // non-heap tags need no retain
+    emitter.label("__rt_hash_chunk_value_ref");
     emitter.instruction("ldr x0, [sp, #72]");                                   // load the heap-backed value pointer
     emitter.instruction("bl __rt_incref");                                      // retain the heap-backed value for this chunk
+    emitter.instruction("b __rt_hash_chunk_insert");                            // continue to insertion
+    emitter.label("__rt_hash_chunk_reference_cell");
+    emitter.instruction("ldr x0, [sp, #72]");                                   // pass the source managed cell to reference-aware cloning
+    emitter.instruction("bl __rt_reference_cell_clone");                        // copy a singleton cell or retain an externally aliased reference set
+    emitter.instruction("str x0, [sp, #72]");                                   // publish the owned cloned or retained cell
     emitter.instruction("b __rt_hash_chunk_insert");                            // continue to insertion
 
     emitter.label("__rt_hash_chunk_string");
@@ -217,10 +228,20 @@ fn emit_hash_chunk_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_chunk_string");                           // strings need an independent heap copy
     emitter.instruction("cmp r10, 4");                                          // is the value below the heap-backed tag range?
     emitter.instruction("jl __rt_hash_chunk_insert");                           // scalar values need no retain
+    emitter.instruction("cmp r10, 10");                                         // is this entry's value a callable descriptor?
+    emitter.instruction("je __rt_hash_chunk_value_ref");                        // runtime descriptors need retains; static descriptors are ignored by incref
+    emitter.instruction("cmp r10, 11");                                         // is this entry a member of a PHP reference set?
+    emitter.instruction("je __rt_hash_chunk_reference_cell");                   // singleton cells separate while externally aliased reference sets remain shared
     emitter.instruction("cmp r10, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_hash_chunk_insert");                           // non-heap tags need no retain
-    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // load the heap-backed value pointer
+    emitter.label("__rt_hash_chunk_value_ref");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // load the heap-backed value pointer into the incref input register
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for this chunk
+    emitter.instruction("jmp __rt_hash_chunk_insert");                          // continue to insertion
+    emitter.label("__rt_hash_chunk_reference_cell");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // pass the source managed cell to reference-aware cloning
+    emitter.instruction("call __rt_reference_cell_clone");                      // copy a singleton cell or retain an externally aliased reference set
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // publish the owned cloned or retained cell
     emitter.instruction("jmp __rt_hash_chunk_insert");                          // continue to insertion
 
     emitter.label("__rt_hash_chunk_string");
@@ -273,4 +294,51 @@ fn emit_hash_chunk_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 96");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the outer array in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Chunks own their payloads like a shallow clone: callable descriptors (tag 10) are
+    /// retained and PHP reference cells (tag 11) go through singleton-aware cloning, on every
+    /// target (issue #1294).
+    #[test]
+    fn hash_chunk_owns_callable_and_reference_entries_on_every_target() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_hash_chunk(&mut emitter);
+            let assembly = emitter.output();
+            let (tag_branch, reference_path) = assembly
+                .split_once("__rt_hash_chunk_reference_cell:")
+                .unwrap_or_else(|| panic!("{name}: missing reference-cell clone path"));
+            assert!(
+                tag_branch.contains("cmp x9, #10") || tag_branch.contains("cmp r10, 10"),
+                "{name}: tag 10 must select the retain path",
+            );
+            assert!(
+                tag_branch.contains("cmp x9, #11") || tag_branch.contains("cmp r10, 11"),
+                "{name}: tag 11 must select the reference-aware path",
+            );
+            assert!(
+                reference_path.contains("__rt_reference_cell_clone"),
+                "{name}: reference entries must use singleton-aware cell cloning",
+            );
+            let reference_path = reference_path
+                .split("__rt_hash_chunk_insert:")
+                .next()
+                .expect("reference path precedes insertion");
+            assert!(
+                !reference_path.contains("__rt_incref"),
+                "{name}: reference entries must not bypass singleton separation",
+            );
+        }
+    }
 }
