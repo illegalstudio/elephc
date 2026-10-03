@@ -9,6 +9,33 @@
 
 use super::*;
 
+/// Direct and nested trait constants cannot reuse a pure or backed enum case name.
+#[test]
+fn test_error_enum_trait_constant_conflicts_with_case() {
+    for source in [
+        "<?php trait T { const A = 1; } enum E { use T; case A; }",
+        "<?php trait T { const A = 1; } enum E: int { case A = 1; use T; }",
+        "<?php trait Inner { const A = 1; } trait T { use Inner; } enum E { use T; case A; }",
+    ] {
+        expect_error(source, "Enum constant E::A conflicts with enum case");
+    }
+}
+
+/// Enum cases and imported trait constants keep PHP's case-sensitive constant names.
+#[test]
+fn test_enum_trait_constant_case_sensitive_names() {
+    expect_no_error("<?php trait T { const a = 1; } enum E { use T; case A; } echo E::a;");
+}
+
+/// Enum declarations cannot leave abstract instance or static methods unimplemented.
+#[test]
+fn test_error_enum_cannot_declare_abstract_methods() {
+    for declaration in ["abstract public function missing();", "abstract public static function missing();"] {
+        expect_error(&format!("<?php enum Mode {{ case Active; {declaration} }}"), "Enum method Mode::missing cannot be abstract");
+    }
+    expect_error("<?php trait T { abstract public function missing(); } enum Mode { use T; case Active; }", "Enum method Mode::missing cannot be abstract");
+}
+
 /// Verifies that checking multiple classes with conflicting magic method contracts
 /// (private vs public `__toString`) produces at least two distinct errors.
 /// Uses `check_source_full` to collect and flatten all diagnostics.

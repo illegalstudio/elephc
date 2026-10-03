@@ -9,6 +9,35 @@
 
 use super::*;
 
+/// Flattened trait constants remain readable and reflect after the enum's own declarations.
+#[test]
+fn test_enum_trait_constants_preserve_read_and_reflection_order() {
+    let out = compile_and_run(r#"<?php
+trait Values { public const TC = 2; }
+enum Mode { use Values; public const OWN = 1; case Active; }
+echo Mode::TC, "\n";
+echo implode(',', array_keys((new ReflectionClass(Mode::class))->getConstants())), "\n";
+"#);
+    assert_eq!(out, "2\nOWN,Active,TC\n");
+}
+
+/// Reflection retains finality for both instance and static enum methods.
+#[test]
+fn test_enum_final_methods_keep_reflection_flags() {
+    let out = compile_and_run(r#"<?php
+enum Mode {
+    case Active;
+    final public function label(): string { return 'active'; }
+    final public static function code(): int { return 1; }
+    public function ordinary(): int { return 2; }
+}
+echo (new ReflectionMethod(Mode::class, 'label'))->isFinal() ? 'final' : 'open', "\n";
+echo (new ReflectionMethod(Mode::class, 'code'))->isFinal() ? 'final' : 'open', "\n";
+echo (new ReflectionMethod(Mode::class, 'ordinary'))->isFinal() ? 'final' : 'open', "\n";
+"#);
+    assert_eq!(out, "final\nfinal\nopen\n");
+}
+
 /// Verifies `Enum` can name an enum and remain usable in type hints and scoped access.
 #[test]
 fn test_enum_soft_keyword_name_across_runtime_contexts() {
