@@ -566,6 +566,16 @@ fn validate_instance_property_override(
         ));
     }
 
+    let parent_set_visibility = state.property_set_visibilities.get(&prop.name)
+        .unwrap_or(&inherited_visibility);
+    let child_set_visibility = prop.set_visibility.as_ref().unwrap_or(&prop.visibility);
+    if visibility_rank(child_set_visibility) < visibility_rank(parent_set_visibility) {
+        return Err(CompileError::new(
+            prop.span,
+            &format!("Cannot reduce set visibility when overriding property: {}::${}", class.name, prop.name),
+        ));
+    }
+
     let parent_abstract = state.abstract_properties.contains(&prop.name);
     if parent_abstract {
         validate_abstract_property_contract(
