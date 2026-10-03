@@ -762,6 +762,16 @@ fn parse_instanceof_target(
     };
     // An argument list straight after the target is a call of it, which PHP's grammar has no
     // place for (`$x instanceof self::$method()` is a syntax error).
+    if matches!(&target, InstanceOfTarget::Name(_))
+        && matches!(tokens.get(*pos), Some((Token::DoubleColon, _)))
+        && tokens.get(*pos + 1).is_some_and(|(token, metadata)| {
+            crate::parser::keyword_name::bareword_name_from_token(token, metadata).is_some()
+        })
+    {
+        if let Some((Token::LParen, metadata)) = tokens.get(*pos + 2) {
+            return Err(called_instanceof_target_error(metadata.span));
+        }
+    }
     if let Some((Token::LParen, metadata)) = tokens.get(*pos) {
         return Err(called_instanceof_target_error(metadata.span));
     }
@@ -809,7 +819,7 @@ fn instanceof_target_chain_call(expr: &Expr) -> Option<Span> {
 fn called_instanceof_target_error(span: Span) -> CompileError {
     CompileError::new(
         span,
-        "Cannot use an unparenthesized call as an instanceof target",
+        "Cannot use an unparenthesized call as an instanceof target; wrap the call in parentheses",
     )
 }
 

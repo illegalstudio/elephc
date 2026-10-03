@@ -863,6 +863,7 @@ fn parse_constant_declarator_list(
 ) -> Result<(), CompileError> {
     *pos += 1; // consume `const`
     let type_expr = parse_optional_class_const_type(tokens, pos, member_span);
+    let initial_constant_count = constants.len();
     loop {
         let name_span = tokens.get(*pos).map_or(member_span, |(_, meta)| meta.span);
         // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
@@ -884,10 +885,16 @@ fn parse_constant_declarator_list(
                 *pos += 1;
                 n
             }
-            _ => {
+            _ if constants.len() == initial_constant_count => {
                 return Err(CompileError::new(
                     member_span,
                     "Expected class constant name after 'const'",
+                ))
+            }
+            _ => {
+                return Err(CompileError::new(
+                    name_span,
+                    "Expected a constant name after ',' in the declaration list",
                 ))
             }
         };
