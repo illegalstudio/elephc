@@ -182,22 +182,18 @@ fn test_error_bitwise_not_string() {
     );
 }
 
-/// Tests that the spaceship operator `<=>` with *runtime* string operands is rejected with
-/// the "Spaceship operator requires numeric operands" error.
+/// Tests that the spaceship operator `<=>` MIXING a string and a number is still rejected.
 ///
-/// The operands are locals rather than literals on purpose. Constant folding runs before type
-/// checking, and it evaluates a literal `"a" <=> "b"` to PHP's answer (`-1`), so the folded
-/// form never reaches the checker and compiles. That is deliberate — PHP defines string
-/// comparison, so folding it is PHP-correct — but it leaves the checker gate in
-/// `types::checker::inference::ops` as the only thing rejecting the non-constant form.
-/// Lifting that gate (and giving the runtime a string comparison path) is issue #507, which
-/// covers `<`, `<=`, `>`, `>=` and this operator alike. Until then this test pins the live
-/// contract: constant-foldable string comparisons compile, everything else is refused.
+/// Two *runtime* strings used to be refused here as well, which made `"a" <=> "b"` compile
+/// only when the optimizer could fold it — issue #507, now lifted for `<`, `<=`, `>`, `>=`
+/// and `<=>` alike, so the folded and unfolded forms finally agree. A string against a
+/// NUMBER is a different conversion (PHP casts the number to a string when the string is
+/// non-numeric) and stays unsupported, so the diagnostic names both accepted shapes.
 #[test]
-fn test_error_spaceship_string() {
+fn test_error_spaceship_mixing_string_and_number() {
     expect_error(
-        r#"<?php $x = "a"; $y = "b"; echo $x <=> $y;"#,
-        "Spaceship operator requires numeric operands",
+        r#"<?php $x = "a"; $y = 1; echo $x <=> $y;"#,
+        "Spaceship operator requires numeric or string operands",
     );
 }
 
