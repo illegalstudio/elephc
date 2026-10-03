@@ -95,6 +95,12 @@ mod array_splice;
 mod array_splice_insert;
 mod array_splice_refcounted;
 mod array_slice_str;
+mod array_chunk_str;
+mod array_diff_str;
+mod array_merge_str;
+mod array_pad_str;
+mod array_reverse_str;
+mod shuffle_str;
 mod array_splice_str;
 mod array_strict_eq;
 mod array_sum;
@@ -381,6 +387,12 @@ pub use array_splice_insert::{
 /// Emit array splice helper.
 pub use array_splice_refcounted::emit_array_splice_refcounted;
 pub use array_slice_str::emit_array_slice_str;
+pub use array_chunk_str::emit_array_chunk_str;
+pub use array_diff_str::emit_array_diff_str;
+pub use array_merge_str::emit_array_merge_str;
+pub use array_pad_str::emit_array_pad_str;
+pub use array_reverse_str::emit_array_reverse_str;
+pub use shuffle_str::emit_shuffle_str;
 pub use array_splice_str::{emit_array_splice_insert_str, emit_array_splice_str};
 /// Emit deep array strict-equality (`===`) helper.
 pub use array_strict_eq::emit_array_strict_eq;

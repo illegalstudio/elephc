@@ -145,8 +145,8 @@ pub(super) fn compatible_eight_byte_indexed_array_element_type(
     second: PhpType,
     name: &str,
 ) -> Result<PhpType> {
-    let first = eight_byte_indexed_array_element_type(first, name)?;
-    let second = eight_byte_indexed_array_element_type(second, name)?;
+    let first = str_or_eight_byte_indexed_array_element_type(first, name)?;
+    let second = str_or_eight_byte_indexed_array_element_type(second, name)?;
     if first == second
         || matches!(first, PhpType::Never | PhpType::Void)
         || matches!(second, PhpType::Never | PhpType::Void)
