@@ -23,9 +23,14 @@ const STR_TAG: i64 = 1;
 const BOOL_TAG: i64 = 3;
 const ITER_MODE_DELETE: i64 = 1;
 const ITER_MODE_LIFO: i64 = 2;
+/// `SPL_DLLIST_IT_FIX`: the internal flag PHP sets on `SplStack`/`SplQueue`, freezing the
+/// LIFO/FIFO bit and appearing in `getIteratorMode()` (a fresh `SplStack` reports 6).
+const ITER_MODE_FIX: i64 = 4;
 const SPL_DLL_POP_EMPTY_MSG_LEN: usize = "Can't pop from an empty datastructure".len();
 const SPL_DLL_SHIFT_EMPTY_MSG_LEN: usize = "Can't shift from an empty datastructure".len();
 const SPL_DLL_PEEK_EMPTY_MSG_LEN: usize = "Can't peek at an empty datastructure".len();
+const SPL_DLL_FROZEN_MODE_MSG_LEN: usize =
+    "Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen".len();
 const SPL_DLL_ADD_RANGE_MSG_LEN: usize =
     "SplDoublyLinkedList::add(): Argument #1 ($index) is out of range".len();
 const SPL_DLL_OFFSET_EXISTS_TYPE_MSG_LEN: usize =
@@ -87,15 +92,17 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_offset_unset_aarch64(emitter);
 }
 
-/// Emits `__rt_spl_dll_new` on ARM64: allocates an SPL list object, initializes internal Mixed-array
-/// storage with capacity 4, and stores iterator index/mode at their respective offsets. Returns
-/// the initialized object pointer in x0.
+/// Emits `__rt_spl_dll_new` on ARM64: receiver's concrete class id in x0 and the class's
+/// default iterator mode in x1. Allocates an SPL list object, initializes internal Mixed-array
+/// storage with capacity 4, stores the iterator index and seeds the iterator mode from x1
+/// (`SplStack` 6, `SplQueue` 4, plain list 0). Returns the initialized object pointer in x0.
 fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_new");
-    emitter.instruction("sub sp, sp, #32");                                     // reserve constructor spill slots
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // establish a frame for nested allocator calls
+    emitter.instruction("sub sp, sp, #48");                                     // reserve constructor spill slots (class id, object, default mode)
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a frame for nested allocator calls
     emitter.instruction("str x0, [sp, #0]");                                    // save the concrete SPL class id
+    emitter.instruction("str x1, [sp, #16]");                                   // save the requested default iterator mode
     emitter.instruction(&format!("mov x0, #{}", SPL_DLL_OBJECT_SIZE));          // request the fixed SPL list object payload size
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the SPL list object payload
     emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
@@ -114,10 +121,11 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the object pointer
     emitter.instruction(&format!("str x0, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
     emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
-    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode starts FIFO/KEEP
+    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the class default iterator mode
+    emitter.instruction(&format!("str x10, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // seed the class's default mode (FIX/LIFO bits)
     emitter.instruction("mov x0, x9");                                          // return the initialized SPL object
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release constructor spill slots
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release constructor spill slots
     emitter.instruction("ret");                                                 // return the object pointer
 }
 
@@ -349,12 +357,30 @@ fn emit_peek_index_aarch64(emitter: &mut Emitter, null_label: &str, last: bool) 
 }
 
 /// Emits `__rt_spl_dll_set_iterator_mode` and `__rt_spl_dll_get_iterator_mode` on ARM64.
-/// Set: receiver in x0, mode bits in x1; stores x1 at the iterator mode offset and returns void.
-/// Get: receiver in x0; returns iterator mode bits in x0.
+/// Set: receiver in x0, requested mode bits in x1. The request is masked to the low two bits
+/// (LIFO/FIFO/DELETE) and the stored word is `(request & 3) | (current & FIX)`; a fixed-mode list
+/// (`SplStack`/`SplQueue`, FIX bit set) throws RuntimeException when the call would flip the
+/// LIFO/FIFO bit, matching PHP 8.5. Get: receiver in x0; returns the raw mode word in x0.
 fn emit_iterator_mode_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_set_iterator_mode");
-    emitter.instruction(&format!("str x1, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on the receiver
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load the current iterator mode bits
+    emitter.instruction("and x11, x1, #3");                                     // request masked to the LIFO/FIFO/DELETE bits
+    emitter.instruction(&format!("and x10, x9, #{}", ITER_MODE_FIX));           // current FIX bit (set on SplStack/SplQueue)
+    emitter.instruction("orr x11, x11, x10");                                   // stored word = (request & 3) | (current & FIX)
+    emitter.instruction("cbz x10, __rt_spl_dll_set_iterator_mode_store");       // a plain list stores without the freeze check
+    emitter.instruction("eor x10, x9, x1");                                     // which mode bits would this call change?
+    emitter.instruction(&format!("tst x10, #{}", ITER_MODE_LIFO));              // does it flip the frozen LIFO/FIFO bit?
+    emitter.instruction("b.ne __rt_spl_dll_set_iterator_mode_frozen");          // frozen lists reject a LIFO/FIFO change
+    emitter.label("__rt_spl_dll_set_iterator_mode_store");
+    emitter.instruction(&format!("str x11, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store the masked word with the fix bit preserved
     emitter.instruction("ret");                                                 // return void
+    emitter.label("__rt_spl_dll_set_iterator_mode_frozen");
+    emit_throw_exception_aarch64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
     emitter.label_global("__rt_spl_dll_get_iterator_mode");
     emitter.instruction(&format!("ldr x0, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // return iterator mode bits
     emitter.instruction("ret");                                                 // return integer mode
@@ -1304,15 +1330,17 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_offset_unset_x86_64(emitter);
 }
 
-/// Emits `__rt_spl_dll_new` on x86_64: allocates an SPL list object, initializes internal
-/// Mixed-array storage with capacity 4, and stores iterator index/mode at their respective
-/// offsets. Returns the initialized object pointer in rax.
+/// Emits `__rt_spl_dll_new` on x86_64: concrete class id in rdi and the class's default iterator
+/// mode in rsi. Allocates an SPL list object, initializes internal Mixed-array storage with
+/// capacity 4, stores the iterator index and seeds the iterator mode from rsi (`SplStack` 6,
+/// `SplQueue` 4, plain list 0). Returns the initialized object pointer in rax.
 fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_new");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for constructor spills
     emitter.instruction("mov rbp, rsp");                                        // establish constructor frame
-    emitter.instruction("sub rsp, 16");                                         // reserve class-id and object-pointer spill slots
+    emitter.instruction("sub rsp, 32");                                         // reserve class-id, object-pointer, and default-mode spill slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save concrete SPL class id
+    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the requested default iterator mode
     emitter.instruction(&format!("mov rax, {}", SPL_DLL_OBJECT_SIZE));          // request fixed SPL list object payload size
     emitter.instruction("call __rt_heap_alloc");                                // allocate the SPL list object payload
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize object heap kind with x86 marker
@@ -1330,9 +1358,10 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload object pointer
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode starts FIFO/KEEP
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the class default iterator mode
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], r10", SPL_DLL_ITER_MODE_OFFSET)); // seed the class's default mode (FIX/LIFO bits)
     emitter.instruction("mov rax, r11");                                        // return initialized SPL object
-    emitter.instruction("add rsp, 16");                                         // release constructor spills
+    emitter.instruction("add rsp, 32");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return object pointer
 }
@@ -1563,12 +1592,34 @@ fn emit_peek_index_x86_64(emitter: &mut Emitter, null_label: &str, last: bool) {
 }
 
 /// Emits `__rt_spl_dll_set_iterator_mode` and `__rt_spl_dll_get_iterator_mode` on x86_64.
-/// Set: receiver in rdi, mode bits in rsi; stores rsi at the iterator mode offset and returns void.
-/// Get: receiver in rdi; returns iterator mode bits in rax.
+/// Set: receiver in rdi, requested mode bits in rsi. The request is masked to the low two bits
+/// (LIFO/FIFO/DELETE) and the stored word is `(request & 3) | (current & FIX)`; a fixed-mode list
+/// (`SplStack`/`SplQueue`, FIX bit set) throws RuntimeException when the call would flip the
+/// LIFO/FIFO bit, matching PHP 8.5. Get: receiver in rdi; returns the raw mode word in rax.
 fn emit_iterator_mode_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_set_iterator_mode");
-    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rsi", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on receiver
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load the current iterator mode bits
+    emitter.instruction("mov r11, rsi");                                        // copy the requested mode bits
+    emitter.instruction("and r11, 3");                                          // request masked to the LIFO/FIFO/DELETE bits
+    emitter.instruction("mov r8, r10");                                         // copy the current mode bits
+    emitter.instruction(&format!("and r8, {}", ITER_MODE_FIX));                 // current FIX bit (set on SplStack/SplQueue)
+    emitter.instruction("or r11, r8");                                          // stored word = (request & 3) | (current & FIX)
+    emitter.instruction("test r8, r8");                                         // is this a fixed-mode list (SplStack/SplQueue)?
+    emitter.instruction("je __rt_spl_dll_set_iterator_mode_store_x");           // a plain list stores without the freeze check
+    emitter.instruction("mov r9, r10");                                         // copy the current mode bits
+    emitter.instruction("xor r9, rsi");                                         // which mode bits would this call change?
+    emitter.instruction(&format!("test r9, {}", ITER_MODE_LIFO));               // does it flip the frozen LIFO/FIFO bit?
+    emitter.instruction("jne __rt_spl_dll_set_iterator_mode_frozen_x");         // frozen lists reject a LIFO/FIFO change
+    emitter.label("__rt_spl_dll_set_iterator_mode_store_x");
+    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r11", SPL_DLL_ITER_MODE_OFFSET)); // store the masked word with the fix bit preserved
     emitter.instruction("ret");                                                 // return void
+    emitter.label("__rt_spl_dll_set_iterator_mode_frozen_x");
+    emit_throw_exception_x86_64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
     emitter.label_global("__rt_spl_dll_get_iterator_mode");
     emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // return iterator mode bits
     emitter.instruction("ret");                                                 // return integer mode
