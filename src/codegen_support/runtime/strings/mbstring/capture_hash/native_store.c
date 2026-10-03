@@ -65,6 +65,10 @@ void *fixture_allocate(size_t size) {
     ++live;
     return owner + 1;
 }
+/* A freed block is quarantined until the case ends: `is_live` matches by address, and a
+   reused address would make a stale pointer look live again (`!is_live(array)` after an indexed
+   array is promoted and its storage reused by a persisted string). The payload is scribbled so a
+   runtime read of freed memory still shows. fixture_reset releases all blocks between cases. */
 void fixture_free(void *) __asm__("fixture_free");
 void fixture_free(void *value) {
     for (size_t i = 0; i < allocated; ++i) {
@@ -72,11 +76,37 @@ void fixture_free(void *value) {
             allocations[i].live = 0;
             CHECK(live > 0);
             --live;
-            free(header(value));
+            size_t size = header(value)->size;
+            memset(value, 0xdd, size ? size : 8);
+            header(value)->refs = 0;
             return;
         }
     }
     CHECK(0 && "release of an unowned allocation");
+}
+/* Discard quarantine only after a complete case has released every owner and callback guard. */
+static void fixture_reset(void) {
+    CHECK(live == 0 && pending_callback == 0 && hash_write_guard_top == NULL);
+    for (size_t i = 0; i < allocated; ++i) {
+        CHECK(!allocations[i].live);
+        free(header(allocations[i].value));
+        allocations[i] = (struct allocation){0};
+    }
+    allocated = 0;
+}
+/* More cases than allocation records remain bounded without permitting reuse inside a case. */
+static void quarantine_cycles(void) {
+    fixture_reset();
+    for (size_t i = 0; i < 8193; ++i) {
+        void *first = fixture_allocate(8);
+        fixture_free(first);
+        CHECK(!is_live(first) && *(unsigned char *)first == 0xdd);
+        void *second = fixture_allocate(8);
+        CHECK(first != second && !is_live(first));
+        fixture_free(second);
+        fixture_reset();
+        CHECK(allocated == 0 && allocations[0].value == NULL && allocations[1].value == NULL);
+    }
 }
 void *fixture_retain(void *) __asm__("fixture_retain");
 void *fixture_retain(void *value) {
@@ -522,20 +552,29 @@ static void indexed_destinations(void) {
         CHECK(header(terminal)->refs == 1);
         fixture_release(terminal);
         CHECK(live == 0 && pending_callback == 0 && hash_write_guard_top == NULL);
+        fixture_reset();
     }
 }
 
 int main(void) {
+    quarantine_cycles();
     indexed_destinations();
     guards();
     owned_conversion();
+    fixture_reset();
     basic();
+    fixture_reset();
     invalid_reference();
+    fixture_reset();
     for (int by_reference = 0; by_reference < 2; ++by_reference) {
         retarget(RETARGET, by_reference);
+        fixture_reset();
         retarget(RETARGET | THROW, by_reference);
+        fixture_reset();
         retarget(RETARGET | GROW | THROW, by_reference);
+        fixture_reset();
         retarget(RETARGET | GROW | THROW | DROP_ALIAS, by_reference);
+        fixture_reset();
     }
     CHECK(destroyed == 8 && live == 0);
     const unsigned modes[] = {REENTRY_STRING, REENTRY_FALSE, REENTRY_UNSET,
@@ -553,10 +592,13 @@ int main(void) {
         for (int string_key = 0; string_key < 2; ++string_key) {
             for (unsigned box_depth = 0; box_depth < 3; ++box_depth) {
                 reentry(modes[i], string_key, box_depth);
+                fixture_reset();
                 reentry(modes[i] | THROW, string_key, box_depth);
+                fixture_reset();
             }
         }
     }
     CHECK(live == 0 && hash_write_guard_top == NULL);
+    CHECK(allocated == 0);
     return 0;
 }

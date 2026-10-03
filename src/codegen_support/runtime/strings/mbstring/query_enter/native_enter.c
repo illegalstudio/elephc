@@ -36,7 +36,7 @@ static struct hash *source_hash(void) {
 static void array_entry(unsigned depth, unsigned shared_at, int shared_array, int indexed,
                         int persistent, int root_copy, int pinned) {
     CHECK(live == 0 && hash_write_guard_top == NULL);
-    allocated = 0;
+    fixture_reset();
     destructor_override = NULL;
     struct hash *root = hash_new(4, 7);
     struct hash *root_alias = root_copy ? fixture_retain(root) : NULL;
@@ -112,7 +112,7 @@ static void enter_destructor(void *value) {
 /* Cursor protection survives loss of every PHP parent owner, including a pending old destructor. */
 static void replaced_value(unsigned mode, int copied, int boxed) {
     CHECK(live == 0 && hash_write_guard_top == NULL);
-    allocated = 0;
+    fixture_reset();
     current = selected = hash_new(4, 7);
     alias = copied ? fixture_retain(selected) : NULL;
     enter_mode = mode;
@@ -155,7 +155,7 @@ static void enter_from_active_release(void *value) {
 /* The outer replacement retains ownership of its final value after a nested query cursor finishes. */
 static void during_capture(unsigned mode) {
     CHECK(live == 0);
-    allocated = 0;
+    fixture_reset();
     current = selected = hash_new(4, 7);
     alias = fixture_retain(selected);
     enter_mode = mode;
@@ -176,7 +176,7 @@ static void scalar_entries(void) {
     for (int tag = -1; tag <= 8; ++tag) {
         if (tag == 4 || tag == 5 || tag == 6 || tag == 7) { continue; }
         CHECK(live == 0);
-        allocated = 0;
+        fixture_reset();
         struct hash *root = hash_new(4, 7);
         uint64_t low = tag == 1 ? (uintptr_t)fixture_persist("old", 3) : 42;
         if (tag >= 0) { CHECK(insert(root, 8, UINT64_MAX, low, tag == 1 ? 3 : 0, tag) == root); }
@@ -194,7 +194,7 @@ static void scalar_entries(void) {
 /* A protected release owns the old slot even when its array or wrapper still has one physical owner. */
 static void borrowed_array(int boxed, int pinned) {
     CHECK(live == 0 && hash_write_guard_top == NULL);
-    allocated = 0;
+    fixture_reset();
     struct hash *root = hash_new(4, 7);
     struct hash *old = source_hash();
     void *old_owner = boxed ? (void *)box_owned(5, (uintptr_t)old, 0) : (void *)old;
@@ -217,6 +217,7 @@ static void borrowed_array(int boxed, int pinned) {
 }
 
 int main(void) {
+    quarantine_cycles();
     for (unsigned depth = 0; depth < 3; ++depth) {
         for (unsigned shared_at = 0; shared_at <= depth; ++shared_at) {
             for (int shared_array = 0; shared_array < 2; ++shared_array) {
@@ -249,5 +250,7 @@ int main(void) {
     borrowed_array(0, 1);
     borrowed_array(1, 0);
     borrowed_array(1, 1);
+    fixture_reset();
+    CHECK(allocated == 0);
     return 0;
 }
