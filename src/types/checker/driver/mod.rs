@@ -439,6 +439,7 @@ pub(super) fn check_types_impl(
         }
     }
 
+    checker.deduplicate_variant_signature_errors(&mut errors);
     if !errors.is_empty() {
         return Err(CompileError::from_many(errors));
     }

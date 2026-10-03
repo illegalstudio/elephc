@@ -17,6 +17,10 @@ use crate::types::FunctionSig;
 
 use super::super::{Checker, FnDecl};
 
+#[cfg(test)]
+#[path = "function_variant_tests.rs"]
+mod tests;
+
 impl Checker {
     /// Collects top-level function declarations from the program, deduplicating by PHP case-insensitive
     /// symbol key. Emits `DuplicateFunction` for repeats and `CannotRedeclareBuiltin` when a user
@@ -275,7 +279,8 @@ impl Checker {
 
     /// Ensures a unified signature exists for a variant group named `name`. If no unified signature
     /// is cached yet, computes a provisional signature from the first variant and inserts it into
-    /// `functions`. Then resolves each individual variant's signature and verifies all variants
+    /// `functions`, after checking declared contracts before any recursive body uses it.
+    /// Then resolves each individual variant's signature and verifies all variants
     /// share an identical signature. On mismatch, returns an error; on success, inserts the unified
     /// signature and returns `Ok`.
     pub(crate) fn ensure_function_variant_group_signature(
@@ -283,6 +288,9 @@ impl Checker {
         name: &str,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
+        if let Some(error) = self.failed_variant_contracts.get(name) {
+            return Err(error.clone());
+        }
         if self.functions.contains_key(name) {
             return Ok(());
         }
@@ -297,6 +305,21 @@ impl Checker {
             .clone();
 
         if let Some(provisional) = self.provisional_variant_group_sig(&first_variant)? {
+            let declared = self.declared_variant_signature(&first_variant)?;
+            for variant in variants.iter().skip(1) {
+                if let Some(candidate) = self.declared_variant_signature(variant)? {
+                    if Some(candidate) != declared {
+                        let conflict_span = self.fn_decls.get(variant)
+                            .map_or(span, |decl| decl.span);
+                        let error = CompileError::new(
+                            conflict_span,
+                            &format!("Function variants for '{}' must have identical signatures", name),
+                        );
+                        self.failed_variant_contracts.insert(name.to_string(), error.clone());
+                        return Err(error);
+                    }
+                }
+            }
             self.functions.insert(name.to_string(), provisional);
         }
 
@@ -317,6 +340,12 @@ impl Checker {
             self.resolve_function_signature(variant, &decl, param_types)?;
         }
 
+        // Failed body validation may leave a recursive placeholder in `functions`.
+        // Its type is not a resolved signature and must not invent a second diagnosis.
+        if variants.iter().any(|variant| !self.completed_function_signatures.contains(variant)) {
+            return Ok(());
+        }
+
         let mut sigs = variants.iter().map(|variant| {
             self.functions.get(variant).cloned().ok_or_else(|| {
                 CompileError::new(
@@ -332,11 +361,13 @@ impl Checker {
             .next()
             .transpose()?
             .ok_or_else(|| CompileError::new(span, &format!("Function '{}' has no variants", name)))?;
-        for sig in sigs {
+        for (index, sig) in sigs.enumerate() {
             let sig = sig?;
             if sig != first {
+                let conflict_span = self.fn_decls.get(&variants[index + 1])
+                    .map_or(span, |decl| decl.span);
                 return Err(CompileError::new(
-                    span,
+                    conflict_span,
                     &format!(
                         "Function variants for '{}' must have identical signatures",
                         name
@@ -366,6 +397,39 @@ impl Checker {
         };
         let param_types = self.initial_function_param_types(first_variant, &decl)?;
         Ok(Some(self.provisional_function_sig(&decl, param_types)))
+    }
+
+    /// Resolves actual annotations independently of body-driven Generator or Int placeholders.
+    fn declared_variant_signature(&mut self, variant: &str) -> Result<Option<FunctionSig>, CompileError> {
+        let Some(decl) = self.fn_decls.get(variant).cloned() else { return Ok(None); };
+        let params = self.initial_function_param_types(variant, &decl)?;
+        let mut sig = self.provisional_function_sig(&decl, params);
+        sig.return_type = match &decl.return_type {
+            Some(annotation) => self.resolve_declared_return_type_hint(annotation, decl.span, &format!("Function '{}'", variant))?,
+            None => crate::types::PhpType::Mixed,
+        };
+        for (index, (_, ty)) in sig.params.iter_mut().enumerate() {
+            *ty = match sig.param_type_exprs.get(index).and_then(Option::as_ref) {
+                Some(annotation) => {
+                    let resolved = self.resolve_declared_param_type_hint(annotation, decl.span, &format!("Function '{}' parameter", variant))?;
+                    if index == decl.params.len() { crate::types::PhpType::Array(Box::new(resolved)) } else { resolved }
+                }
+                None => crate::types::PhpType::Mixed,
+            };
+        }
+        Ok(Some(sig))
+    }
+
+    /// Emits one copy of each group-signature diagnosis while preserving other error ordering.
+    pub(super) fn deduplicate_variant_signature_errors(&self, errors: &mut Vec<CompileError>) {
+        let messages: HashSet<_> = self.function_variant_groups.keys().map(|name| {
+            format!("Function variants for '{}' must have identical signatures", name)
+        }).collect();
+        let mut seen = HashSet::new();
+        errors.retain(|error| {
+            !messages.contains(&error.message)
+                || seen.insert((error.span, error.file.clone(), error.message.clone()))
+        });
     }
 }
 

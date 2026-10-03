@@ -49,6 +49,8 @@ impl Checker {
             target,
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
+            failed_variant_contracts: HashMap::new(),
+            completed_function_signatures: HashSet::new(),
             functions: HashMap::new(),
             resolving_functions: HashSet::new(),
             functions_called_directly: HashSet::new(),

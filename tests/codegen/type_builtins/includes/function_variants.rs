@@ -333,7 +333,7 @@ echo selected_once();
 /// Verifies conditional includes with mismatched function signatures (different return types) produce a compile error.
 #[test]
 fn test_conditional_include_function_variants_require_matching_signatures() {
-    assert!(compile_files_fails(
+    let error = compile_files_error_message(
         &[
             (
                 "main.php",
@@ -354,7 +354,31 @@ echo selected_mismatch();
             ),
         ],
         "main.php",
-    ));
+    ).expect("conflicting declared signatures must fail compilation");
+    assert_eq!(error.matches("Function variants for 'selected_mismatch' must have identical signatures").count(), 1, "{error}");
+}
+
+/// Conflicting recursive return hints report the group contract before a borrowed placeholder.
+#[test]
+fn test_conditional_include_recursive_variant_signature_mismatch_diagnostic() {
+    let error = compile_files_error_message(
+        &[
+            (
+                "main.php",
+                "<?php\nif ($argc > 1) { include 'left.php'; } else { include 'right.php'; }\necho selected_recursive(1);",
+            ),
+            (
+                "left.php",
+                "<?php\nfunction selected_recursive(int $n): string { if ($n == 0) { return 'left'; } return selected_recursive($n - 1); }",
+            ),
+            (
+                "right.php",
+                "<?php\nfunction selected_recursive(int $n): int { if ($n == 0) { return 1; } return selected_recursive($n - 1); }",
+            ),
+        ],
+        "main.php",
+    ).expect("conflicting recursive signatures must fail compilation");
+    assert_eq!(error.matches("Function variants for 'selected_recursive' must have identical signatures").count(), 1, "{error}");
 }
 
 /// Verifies two regular includes of the same file in the same branch report a duplicate function error.

@@ -34,6 +34,7 @@ impl Checker {
         decl: &FnDecl,
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
+        self.completed_function_signatures.remove(name);
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
@@ -309,6 +310,7 @@ impl Checker {
             self.callable_array_return_sigs.remove(name);
         }
 
+        self.completed_function_signatures.insert(name.to_string());
         Ok(return_type)
     }
 
