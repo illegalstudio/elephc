@@ -21,12 +21,15 @@
 //!   `hash_init_context_consumes_no_handle_divergence`, was retired when `hash_init()`
 //!   grew a real `HashContext` object (`elephc::hash_prelude`) and became
 //!   `hash_context_draws_an_object_handle_in_creation_order`, a parity assertion.
-//! - THE ONE DIVERGENCE PIN LEFT IN THIS FILE is
-//!   `computed_debug_info_is_ignored_and_declared_properties_print_instead`. elephc
-//!   honours `__debugInfo()` only when its body is a static property projection (folded
-//!   into `_class_vd_desc_*` at compile time); a body that computes values falls back to
-//!   the declared-property list. That test asserts elephc's ACTUAL output with PHP's
-//!   spelled out beside it, so it can never be mistaken for parity.
+//! - THE DIVERGENCE PINS IN THIS FILE are
+//!   `computed_debug_info_is_ignored_and_declared_properties_print_instead` and
+//!   `reflection_owner_classes_render_no_properties_because_public_names_are_unmodelled`.
+//!   elephc honours `__debugInfo()` only when its body is a static property projection
+//!   (folded into `_class_vd_desc_*` at compile time); a body that computes values falls
+//!   back to the declared-property list. And elephc models only the private `__*` backing
+//!   slots of PHP's builtin Reflection classes, not their public `name`, so those render
+//!   as zero-property objects. Both tests assert elephc's ACTUAL output with PHP's
+//!   spelled out beside them, so they can never be mistaken for parity.
 //! - ENUM CASES ARE LAZY NOW, AND THAT CELL IS PARITY. Cases used to be created in
 //!   bulk in `main`'s prologue, which burnt one handle per case of every referenced
 //!   enum before user code ran; `enum_cases_are_eager_so_handles_shift_divergence`
@@ -1716,4 +1719,159 @@ fn enum_case_through_a_mixed_local() {
         ),
     );
     assert_eq!(out, "enum(Status::Idle)\n");
+}
+
+/// `var_dump()`, `print_r()` and `var_export()` of a builtin Reflection object render
+/// ONLY its PHP-visible public properties. elephc's Reflection classes keep their state
+/// in private `__*` backing slots (`__name`, `__attrs`, `__position`, ...) that back the
+/// accessor methods; PHP has no such properties, so walking the full declared-property
+/// list leaked compiler storage and could recurse into eagerly-built objects whose
+/// `__toString` vtable entry is null (the SIGSEGV of issue #1251). Expectations are PHP
+/// 8.5.10 byte for byte, `serialize()` refusal included.
+#[test]
+fn reflection_private_backing_slots_are_hidden_from_every_renderer() {
+    let out = run_php(
+        "vd_reflection_backing_slots",
+        concat!(
+            "<?php\n",
+            "function f(int $a = 5) {}\n",
+            "$p = (new ReflectionFunction('f'))->getParameters()[0];\n",
+            "var_dump($p);\n",
+            "print_r($p);\n",
+            "var_export($p);\n",
+            "echo \"\\n--- nested ---\\n\";\n",
+            "var_dump([$p]);\n",
+            "echo \"--- serialize ---\\n\";\n",
+            "try { serialize($p); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(ReflectionParameter)#2 (1) {\n",
+            "  [\"name\"]=>\n",
+            "  string(1) \"a\"\n",
+            "}\n",
+            "ReflectionParameter Object\n",
+            "(\n",
+            "    [name] => a\n",
+            ")\n",
+            "\\ReflectionParameter::__set_state(array(\n",
+            "   'name' => 'a',\n",
+            "))\n",
+            "--- nested ---\n",
+            "array(1) {\n",
+            "  [0]=>\n",
+            "  object(ReflectionParameter)#2 (1) {\n",
+            "    [\"name\"]=>\n",
+            "    string(1) \"a\"\n",
+            "  }\n",
+            "}\n",
+            "--- serialize ---\n",
+            "Exception: Serialization of 'ReflectionParameter' is not allowed\n",
+        )
+    );
+}
+
+/// The same skip for a Reflection object whose backing slots hold eagerly-built
+/// Reflection objects: dumping a `ReflectionParameter` built from a builtin function must
+/// not walk `__type` / `__declaring_function`, the route that reached a null `__toString`
+/// vtable entry in issue #1251.
+#[test]
+fn reflection_parameter_from_builtin_function_hides_backing_objects() {
+    let out = run_php(
+        "vd_reflection_backing_objects",
+        concat!(
+            "<?php\n",
+            "$p = new ReflectionParameter(\"strlen\", \"string\");\n",
+            "var_dump($p);\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(ReflectionParameter)#1 (1) {\n",
+            "  [\"name\"]=>\n",
+            "  string(6) \"string\"\n",
+            "}\n",
+        )
+    );
+}
+
+/// A user subclass of a builtin Reflection class still hides the slots it INHERITS: the
+/// skip is keyed on the property's declaring class, not the instance class, so an
+/// instance of `Mine extends ReflectionClass` must not fall back to rendering
+/// `ReflectionClass`'s private `__*` slots (36 of them before the declaring-class gate).
+///
+/// The `new ReflectionClass('Mine')` line is load-bearing for the fixture only: elephc
+/// currently refuses to allocate a Reflection-subclass instance unless some other
+/// reflection use forces the interface method symbols EIR needs ("object allocation
+/// requiring interface method symbols not emitted by EIR"), a pre-existing, unrelated
+/// limitation. PHP renders the unmodelled public `name` slot here (see the divergence pin
+/// below); what this test guards is that NO `__*` backing slot appears.
+#[test]
+fn reflection_subclass_hides_inherited_backing_slots() {
+    let out = run_php(
+        "vd_reflection_subclass_backing_slots",
+        concat!(
+            "<?php\n",
+            "class Mine extends ReflectionClass {\n",
+            "    public function __serialize(): array { return ['x' => 1]; }\n",
+            "}\n",
+            "$m = new Mine('Mine');\n",
+            "echo (new ReflectionClass('Mine'))->getName(), \"\\n\";\n",
+            "var_dump($m);\n",
+        ),
+    );
+    assert_eq!(out, concat!("Mine\n", "object(Mine)#1 (0) {\n", "}\n",));
+}
+
+/// DIVERGENCE PIN. PHP exposes a public `name` property on `ReflectionFunction`,
+/// `ReflectionClass` and `ReflectionParameter` (and `name` + `class` on
+/// `ReflectionProperty`); elephc models only the private `__*` backing slots. Now that
+/// those are hidden, the renderers print a zero-property object where PHP prints the
+/// public name. elephc's ACTUAL output is asserted here with PHP's spelled out beside it,
+/// so the gap is pinned rather than mistaken for parity; modelling the public properties
+/// is a separate change.
+#[test]
+fn reflection_owner_classes_render_no_properties_because_public_names_are_unmodelled() {
+    let out = run_php(
+        "vd_reflection_unmodelled_public_name",
+        concat!(
+            "<?php\n",
+            "var_dump(new ReflectionFunction('strlen'));\n",
+        ),
+    );
+    assert_eq!(out, concat!("object(ReflectionFunction)#1 (0) {\n", "}\n",));
+    // PHP 8.5.10 prints:
+    // object(ReflectionFunction)#1 (1) {
+    //   ["name"]=>
+    //   string(6) "strlen"
+    // }
+}
+
+/// Guard for the declaring-class gate: a USER class's own private `__`-prefixed property is
+/// not compiler storage, PHP's `var_dump` shows it, and the skip must not fire for it.
+/// Expected output measured on PHP 8.5.10.
+#[test]
+fn user_private_underscore_property_still_renders() {
+    let out = run_php(
+        "vd_user_private_underscore",
+        concat!(
+            "<?php\n",
+            "class U { private string $__secret = \"s\"; public int $ok = 1; }\n",
+            "var_dump(new U());\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(U)#1 (2) {\n",
+            "  [\"__secret\":\"U\":private]=>\n",
+            "  string(1) \"s\"\n",
+            "  [\"ok\"]=>\n",
+            "  int(1)\n",
+            "}\n",
+        )
+    );
 }
