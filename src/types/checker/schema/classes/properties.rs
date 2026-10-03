@@ -277,6 +277,12 @@ fn apply_instance_property(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         infer_untyped_property_default_type(default)
+    } else if prop.is_promoted {
+        // An untyped promoted property holds whatever its constructor parameter binds, so its
+        // storage is Mixed. `Void` made the promoted store fail on the dynamic/reflection path,
+        // which resolves the property by name and refuses a Mixed write into a Void slot
+        // (issue #1309).
+        PhpType::Mixed
     } else {
         PhpType::Void
     };
@@ -386,6 +392,10 @@ fn apply_instance_property_redeclaration(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         infer_untyped_property_default_type(default)
+    } else if prop.is_promoted {
+        // A redeclared untyped promoted property stores Mixed for the same reason as a fresh
+        // one (issue #1309).
+        PhpType::Mixed
     } else {
         PhpType::Void
     };
@@ -466,6 +476,10 @@ fn apply_private_parent_property_shadowing(
     } else if let Some(default) = &prop.default {
         state.declared_properties.remove(&prop.name);
         infer_expr_type_syntactic(default)
+    } else if prop.is_promoted {
+        // A promoted property shadowing a private parent slot stores Mixed (issue #1309).
+        state.declared_properties.remove(&prop.name);
+        PhpType::Mixed
     } else {
         state.declared_properties.remove(&prop.name);
         PhpType::Void

@@ -420,3 +420,54 @@ var_dump((new \ReflectionFunction('App\f'))->getParameters()[0]->getDefaultValue
         )
     );
 }
+
+/// Reflecting an object default whose promoted property is untyped materializes the object:
+/// the untyped promoted property stores Mixed, so the promoted write is not refused, matching
+/// PHP (issue #1309).
+#[test]
+fn reflection_object_default_with_untyped_promoted_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo { public function __construct(public $a = 0) {} }
+function g($o = new Foo(1)) {}
+$p = (new ReflectionFunction("g"))->getParameters()[0];
+var_dump($p->getDefaultValue());
+"#,
+    );
+    assert_eq!(
+        out,
+        "object(Foo)#1 (1) {\n  [\"a\"]=>\n  int(1)\n}\n"
+    );
+}
+
+/// A child that re-promotes a parent's untyped property also materializes through reflection:
+/// the redeclared promoted property stores Mixed too (issue #1309).
+#[test]
+fn reflection_object_default_with_redeclared_untyped_promoted_property() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public function __construct(public $a = 0) {} }
+class B extends A { public function __construct(public $a = 0) {} }
+function g($o = new B(2)) {}
+var_dump((new ReflectionFunction("g"))->getParameters()[0]->getDefaultValue());
+"#,
+    );
+    assert_eq!(out, "object(B)#1 (1) {\n  [\"a\"]=>\n  int(2)\n}\n");
+}
+
+/// A promoted property that shadows a private parent slot also compiles and reads back the
+/// child's value: the shadowing promoted slot stores Mixed too (issue #1309). Only the child
+/// read is asserted — the shadowed parent slot's `var_dump` rendering is a separate, pre-existing
+/// divergence (it reproduces with non-promoted shadowing).
+#[test]
+fn promoted_property_shadowing_a_private_parent_reads_back() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public function __construct(private $a = 0) {} }
+class B extends A { public function __construct(public $a = 1) {} }
+$b = new B(2);
+echo $b->a, "\n";
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
