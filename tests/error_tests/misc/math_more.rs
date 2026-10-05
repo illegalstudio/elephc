@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration or regression tests for diagnostic coverage of misc additional math diagnostics, including compound assignment missing rhs, compound assignment rejects append target, and instanceof missing class name.
+//! Integration tests for missing operands, read-only empty dimensions, and malformed instanceof.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -24,19 +24,30 @@ fn test_error_compound_assignment_missing_rhs() {
     }
 }
 
-/// Compound append targets report PHP's read-of-empty-dimension diagnostic on every receiver.
+/// Empty dimensions are forbidden for real reads, isset/empty probes and null-coalescing writes.
 #[test]
-fn test_error_compound_assignment_rejects_append_target() {
+fn test_error_append_review_read_contexts() {
     for source in [
-        "<?php $items = [1]; $items[] += 2;",
-        "<?php $items = []; $items[]['k'] .= 'x';",
-        "<?php $items = []; echo ($items[] += 2);",
-        "<?php $items = []; echo ($items[]['k'] .= 'x');",
-        "<?php class Box { public array $items = []; } $box = new Box(); $box->items[] += 2;",
-        "<?php class Box { public static array $items = []; } Box::$items[] += 2;",
+        "<?php $items = []; echo $items[];",
+        "<?php $items = []; echo $items[]['k'];",
+        "<?php $items = []; isset($items[]);",
+        "<?php $items = []; empty($items[]);",
+        "<?php $items = []; $items[] ??= 2;",
+        "<?php $items = []; echo ($items[] ??= 2);",
+        "<?php $items = []; echo $items[] ?? 2;",
+        "<?php echo [1][];",
+        "<?php class Box { public array $items = []; } $box = new Box(); $box->items[] ??= 2;",
+        "<?php class Box { public static array $items = []; } Box::$items[] ??= 2;",
     ] {
         expect_error(source, "Cannot use [] for reading");
     }
+}
+
+/// Unsupported null decrement semantics must not silently compile as integer subtraction.
+#[test]
+fn test_error_append_review_post_decrement_unsupported() {
+    expect_error("<?php $items = []; $items[]--;",
+        "Post-decrement on an append dimension is not supported");
 }
 
 /// Tests that `instanceof` with a non-class RHS (integer literal) produces the expected error.

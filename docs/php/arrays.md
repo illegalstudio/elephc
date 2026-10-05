@@ -15,6 +15,16 @@ $arr[1] = 99;          // modify
 $arr[] = 40;           // push
 ```
 
+Empty dimensions are write-only. Assignment expressions such as `($arr[] = 2)`
+return the assigned value; compound appends such as `$arr[] += 2` start from a
+fresh null element, not an existing array value. This also applies to object and
+static array properties. Nested writes such as `$arr[]['key'] = 'value'` and
+`$arr[][] = 1` build new containers. `$arr[]++` appends `1` and evaluates to null.
+
+Bare reads, `isset`, `empty`, and `??=` with an empty dimension report
+`Cannot use [] for reading`, as PHP does. Post-decrement on an append dimension
+is not supported and reports a named compile error.
+
 ## String arrays
 ```php
 <?php

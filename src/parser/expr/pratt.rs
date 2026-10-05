@@ -104,7 +104,8 @@ fn parse_expr_bp_inner(
                 let span = tokens[*pos].1.span;
                 *pos += 1;
                 if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBracket)) {
-                    return Err(CompileError::new(span, "Cannot use [] for reading"));
+                    lhs = super::append_writes::parse_append_write(lhs, tokens, pos, span)?;
+                    continue;
                 }
                 let index = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
@@ -620,7 +621,7 @@ fn parse_object_member(
 
 /// Represents the specific assignment operator encountered during parsing.
 #[derive(Debug, Clone, PartialEq)]
-enum AssignmentOperator {
+pub(super) enum AssignmentOperator {
     Assign,
     Compound(BinOp),
     NullCoalesce,
@@ -652,7 +653,7 @@ pub(in crate::parser) fn reject_named_args_in_dynamic_call(
 /// Returns `None` for non-assignment tokens. For recognized tokens, returns
 /// `(AssignmentOperator, left_bp, right_bp)` with binding powers `(7, 6)`,
 /// enforcing right-associativity (rhs binds tighter than lhs).
-fn assignment_bp(token: &Token) -> Option<(AssignmentOperator, u8, u8)> {
+pub(super) fn assignment_bp(token: &Token) -> Option<(AssignmentOperator, u8, u8)> {
     let op = match token {
         Token::Assign => AssignmentOperator::Assign,
         Token::PlusAssign => AssignmentOperator::Compound(BinOp::Add),

@@ -9,6 +9,32 @@
 
 use super::*;
 
+/// Empty dimensions remain write-only targets until the assignment or update is known.
+#[test]
+fn test_append_review_write_contexts_parse() {
+    for source in [
+        "<?php echo ($items[] = 2);",
+        "<?php echo ($items[] += 2);",
+        "<?php $items[]['k'] = 'x';",
+        "<?php $items[][] = 1;",
+        "<?php $items[]++;",
+        "<?php $items[]['k'] .= 'x';",
+        "<?php $box->items[] += 2;",
+        "<?php Box::$items[] += 2;",
+    ] {
+        assert_eq!(parse_source(source).len(), 1, "{source}");
+    }
+}
+
+/// The parser records an arrow's append receiver even though its write is in a prelude.
+#[test]
+fn test_append_review_arrow_captures_receiver() {
+    let statements = parse_source("<?php $append = fn() => ($items[] += 2);");
+    let StmtKind::Assign { value, .. } = &statements[0].kind else { panic!("expected assignment") };
+    let ExprKind::Closure { captures, .. } = &value.kind else { panic!("expected arrow") };
+    assert_eq!(captures, &vec!["items".to_string()]);
+}
+
 /// Verifies that compound assignment operators `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
 /// parse correctly as `Assign` nodes where the value is a `BinaryOp` on the variable.
 /// Each case checks the operator, lhs variable, and rhs integer literal match the expected AST shape.

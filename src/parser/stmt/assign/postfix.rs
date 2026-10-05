@@ -42,8 +42,11 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     let is_append = lhs.len() >= 3
         && lhs[lhs.len() - 2].0 == Token::LBracket
         && lhs[lhs.len() - 1].0 == Token::RBracket;
-    if is_append && op != AssignmentOperator::Assign {
-        return Err(CompileError::new(span, "Cannot use [] for reading"));
+    if contains_empty_dimension(lhs)
+        && (!is_append || op != AssignmentOperator::Assign
+            || contains_empty_dimension(&lhs[..lhs.len() - 2]))
+    {
+        return parse_append_write_statement(tokens, pos, span).map(Some);
     }
     let contains_postfix = lhs
         .iter()
@@ -188,7 +191,7 @@ fn compound_rhs_can_disturb_index(target: &Expr, rhs: &Expr) -> bool {
 /// synthetic read/append/write-back sequence. The temporary append triggers the
 /// existing copy-on-write split, and the final assignment stores the detached
 /// nested array back into the original slot.
-fn lower_nested_append_assignment(
+pub(crate) fn lower_nested_append_assignment(
     target: Expr,
     value: Expr,
     span: Span,
@@ -286,6 +289,9 @@ pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
     }
 
     let lhs = &tokens[start..incdec_pos];
+    if contains_empty_dimension(lhs) {
+        return parse_append_write_statement(tokens, pos, span).map(Some);
+    }
     let mut lhs_pos = 0;
     let lhs_expr = parse_expr(lhs, &mut lhs_pos)?;
     if lhs_pos != lhs.len() {
@@ -331,6 +337,9 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
     if !contains_complex_target {
         return Ok(None);
     }
+    if contains_empty_dimension(lhs) {
+        return parse_append_write_statement(tokens, pos, span).map(Some);
+    }
 
     let mut lhs_pos = 0;
     let lhs_expr = parse_expr(lhs, &mut lhs_pos)?;
@@ -356,6 +365,20 @@ fn assignment_precedes(tokens: &[SpannedToken], start: usize, incdec_pos: usize)
         .is_some_and(|(assign_pos, _)| assign_pos < incdec_pos)
 }
 
+/// Detects write-only dimensions without substituting an ordinary array index.
+fn contains_empty_dimension(tokens: &[SpannedToken]) -> bool {
+    tokens.windows(2).any(|pair| pair[0].0 == Token::LBracket && pair[1].0 == Token::RBracket)
+}
+
+/// Lets the expression parser choose the fetch context for an append/update statement.
+fn parse_append_write_statement(
+    tokens: &[SpannedToken], pos: &mut usize, span: Span,
+) -> Result<Stmt, CompileError> {
+    let value = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::ExprStmt(value), span))
+}
+
 /// Parses a scoped (static class member) postfix assignment, handling targets like
 /// `$obj::prop`, `$obj::$prop`, and `$obj::prop[]`. Detects `+=` append style via `[]`.
 /// For compound operators on static properties that cannot be replayed safely, lowers
@@ -378,8 +401,11 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     let is_append = lhs.len() >= 3
         && lhs[lhs.len() - 2].0 == Token::LBracket
         && lhs[lhs.len() - 1].0 == Token::RBracket;
-    if is_append && op != AssignmentOperator::Assign {
-        return Err(CompileError::new(span, "Cannot use [] for reading"));
+    if contains_empty_dimension(lhs)
+        && (!is_append || op != AssignmentOperator::Assign
+            || contains_empty_dimension(&lhs[..lhs.len() - 2]))
+    {
+        return parse_append_write_statement(tokens, pos, span).map(Some);
     }
     let mut lhs_pos = 0;
     let lhs_expr_tokens = if is_append {

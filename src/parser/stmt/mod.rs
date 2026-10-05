@@ -33,6 +33,7 @@ pub use blocks::{parse_block, parse_body};
 pub(crate) use oop::parse_anonymous_class;
 pub(crate) use params::{looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::{
+    lower_nested_append_assignment,
     can_replay_assignment_target, lower_postfix_incdec_assignment,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
