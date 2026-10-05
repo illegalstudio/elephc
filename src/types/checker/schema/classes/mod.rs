@@ -23,6 +23,8 @@ mod property_defaults;
 mod state;
 
 pub(crate) use property_defaults::validate_trait_property_defaults;
+pub(crate) use property_defaults::collect_trait_default_origins;
+pub(crate) use constants::normalize_property_default_in_scope;
 
 use super::super::Checker;
 use super::validation::build_constructor_param_map;

@@ -101,6 +101,8 @@ pub(super) fn check_types_impl(
 
     let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
+    (checker.trait_imported_properties, checker.trait_imported_constructors) =
+        super::schema::collect_trait_default_origins(program, &flattened_classes);
     // A prelude parsed from PHP text gives its classes real spans, so the statement's source
     // mode is what tells them apart from the program's own classes (`ClassInfo::is_internal`).
     checker.internal_class_decls = program

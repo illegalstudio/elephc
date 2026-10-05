@@ -22,6 +22,7 @@ use std::rc::Rc;
 mod callables;
 mod destruction;
 mod hierarchy;
+mod property_defaults;
 mod string_conversion;
 mod types;
 
@@ -55,6 +56,8 @@ pub(super) struct ExceptionFlowAnalysis {
     function_object_ref_checks: HashSet<String>,
     static_method_object_ref_checks: HashMap<String, bool>,
     instance_method_object_ref_checks: HashMap<String, bool>,
+    /// Class initialization or an omitted trait constructor default can raise Error before its body.
+    constructor_default_errors: HashSet<String>,
     function_returns: HashMap<String, PhpType>,
     static_method_returns: HashMap<String, PhpType>,
     instance_method_returns: HashMap<String, PhpType>,
@@ -346,6 +349,15 @@ impl ExceptionFlowAnalysis {
             function_object_ref_checks,
             static_method_object_ref_checks,
             instance_method_object_ref_checks,
+            constructor_default_errors: type_metadata.map(|(_, classes, _)| {
+                classes.iter().filter(|(_, class)| {
+                    class.deferred_property_default_error.is_some()
+                        || class.methods.get("__construct").is_some_and(|signature| {
+                            signature.defaults.iter().flatten()
+                                .any(|default| matches!(default.kind, ExprKind::Throw(_)))
+                        })
+                }).map(|(name, _)| php_symbol_key(name)).collect()
+            }).unwrap_or_else(|| property_defaults::imported_default_errors(program)),
             function_returns,
             static_method_returns,
             instance_method_returns,
@@ -517,10 +529,18 @@ impl ExceptionFlowAnalysis {
             // Rebinding retires the target's previous value, and that value's destructor runs
             // in THIS frame, so a same-frame catch can still see it.
             StmtKind::Assign { value, .. }
-            | StmtKind::TypedAssign { value, .. }
-            | StmtKind::StaticPropertyAssign { value, .. } => self
+            | StmtKind::TypedAssign { value, .. } => self
                 .expr_throws(value, bindings, class_context)
                 .combined(self.overwrite_cleanup_throws()),
+            StmtKind::StaticPropertyAssign { receiver, value, .. } => {
+                let initialization = resolve_exception_receiver(receiver, class_context)
+                    .filter(|name| self.constructor_default_errors.contains(&php_symbol_key(name)))
+                    .map(|_| ThrownTypes::exact("Error"))
+                    .unwrap_or_default();
+                self.expr_throws(value, bindings, class_context)
+                    .combined(self.overwrite_cleanup_throws())
+                    .combined(initialization)
+            }
             StmtKind::ArrayPush { value, .. }
             | StmtKind::StaticPropertyArrayPush { value, .. } => self
                 .expr_throws(value, bindings, class_context)
@@ -993,6 +1013,11 @@ impl ExceptionFlowAnalysis {
             ThrownTypes::exact("TypeError")
         } else {
             ThrownTypes::default()
+        };
+        let entry_check = if self.constructor_default_errors.contains(&php_symbol_key(class_name)) {
+            entry_check.combined(ThrownTypes::exact("Error"))
+        } else {
+            entry_check
         };
         if let Some(summary) = self.resolve_method_value(
             class_name,

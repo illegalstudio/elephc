@@ -32,21 +32,22 @@ pub(super) fn resolve_lexical_class_constant_value(
     rewrite_expr(value, &class.name, class.extends.as_deref())
 }
 
-/// Checks nested lexical constant receivers without changing stored property-default expressions.
-pub(super) fn validate_lexical_property_default(
-    value: &Expr,
-    class: &FlattenedClass,
-) -> Result<(), CompileError> {
-    validate_property_default_in_scope(value, &class.name, class.extends.as_deref())
-}
-
 /// Validates a property's lexical scope while retaining PHP's missing-parent diagnostic.
 pub(super) fn validate_property_default_in_scope(
     value: &Expr,
     class_name: &str,
     parent_name: Option<&str>,
 ) -> Result<(), CompileError> {
-    rewrite_expr(value, class_name, parent_name).map(|_| ()).map_err(|mut error| {
+    normalize_property_default_in_scope(value, class_name, parent_name).map(|_| ())
+}
+
+/// Binds the stored default tree before literal initialization or call-site lowering.
+pub(crate) fn normalize_property_default_in_scope(
+    value: &Expr,
+    class_name: &str,
+    parent_name: Option<&str>,
+) -> Result<Expr, CompileError> {
+    rewrite_expr(value, class_name, parent_name).map_err(|mut error| {
         if error.message == format!("Class '{}' has no parent class", class_name) {
             error.message = "Cannot use \"parent\" when current class scope has no parent".to_string();
         }
@@ -335,9 +336,12 @@ fn rewrite_expr(
                 "static::class cannot be used for compile-time class name resolution",
             ));
         }
-        ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant {
-            receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,
-        },
+        ExprKind::ClassConstant { receiver } => {
+            let StaticReceiver::Named(name) =
+                rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?
+            else { unreachable!("constant receiver is bound to a class name") };
+            ExprKind::StringLiteral(name.as_str().trim_start_matches('\\').to_string())
+        }
         ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
             object: Box::new(rewrite_expr(object, class_name, parent_name)?),
         },

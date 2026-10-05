@@ -766,6 +766,9 @@ pub(super) fn lower_initialized_static_property_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, expr.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
     let uninitialized_block = ctx
         .builder
@@ -1157,6 +1160,9 @@ pub(super) fn normalize_union_members(members: Vec<PhpType>) -> Option<PhpType> 
 
 /// Lowers a static property read.
 pub(super) fn lower_static_property_get(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, property: &str, expr: &Expr) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, expr.span) {
+        return error;
+    }
     let name = format!("{}::{}", receiver_name(receiver), property);
     let data = ctx.intern_string(&name);
     let result_type = static_property_result_type(ctx, receiver, property, expr);

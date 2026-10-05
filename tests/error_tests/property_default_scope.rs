@@ -60,7 +60,20 @@ fn test_property_default_scope_parent_without_parent() {
     for source in [
         "<?php class Probe { public string $name = parent::class; }",
         "<?php class Probe { public array $names = [parent::class]; }",
+        "<?php class Probe { public function __construct(public string $name = parent::class) {} }",
     ] {
         expect_error(source, "Cannot use \"parent\" when current class scope has no parent");
+    }
+}
+
+/// Trait imports retain unresolved parent defaults without skipping declaration-time validation.
+#[test]
+fn test_property_default_scope_trait_consumer_accepts_unbound_parent() {
+    for source in [
+        "<?php trait T { public string $name = parent::class; } class Consumer { use T; }",
+        "<?php trait T { public static string $name = parent::class; } class Consumer { use T; }",
+        "<?php trait T { public function __construct(public string $name = parent::class) {} } class Consumer { use T; }",
+    ] {
+        check_source(source).expect("a trait import does not evaluate its unbound parent default");
     }
 }

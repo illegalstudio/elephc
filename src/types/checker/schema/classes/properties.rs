@@ -32,12 +32,30 @@ pub(super) fn apply_properties(
     checker: &Checker,
 ) -> Result<(), CompileError> {
     super::property_defaults::validate_promoted_defaults(
-        &class.properties, &class.methods, &class.name, class.extends.as_deref(),
+        &class.properties, &class.methods, &class.name,
+        class.extends.as_deref().or_else(|| {
+            checker.trait_imported_constructors.contains(&class.name).then_some(class.name.as_str())
+        }),
     )?;
     for prop in &class.properties {
-        if let Some(default) = &prop.default {
-            super::constants::validate_lexical_property_default(default, class)?;
-        }
+        let normalized = prop.default.as_ref().map(|default| {
+            super::constants::normalize_property_default_in_scope(
+                default, &class.name, class.extends.as_deref(),
+            )
+        }).transpose();
+        let normalized = match normalized {
+            Ok(default) => default,
+            Err(error) if class.extends.is_none()
+                && error.message == "Cannot use \"parent\" when current class scope has no parent"
+                && checker.trait_imported_properties.get(&class.name)
+                    .is_some_and(|names| names.contains(&prop.name)) =>
+            {
+                // Preserve the declaration, but no materializer may consume this unresolved tree.
+                state.deferred_property_default_error = Some(error.message);
+                None
+            }
+            Err(error) => return Err(error),
+        };
         if prop.is_static {
             apply_static_property(state, class, checker, prop)?;
         } else {
@@ -57,6 +75,15 @@ pub(super) fn apply_properties(
             }
             apply_instance_property(state, class, checker, prop)?;
             state.property_hooks.insert(prop.name.clone(), hooks);
+        }
+        if prop.default.is_some() {
+            if prop.is_static {
+                let slot = state.static_prop_types.iter().position(|(name, _)| name == &prop.name)
+                    .expect("static property schema slot was just recorded");
+                state.static_defaults[slot] = normalized;
+            } else if let Some(slot) = state.prop_types.iter().rposition(|(name, _)| name == &prop.name) {
+                state.defaults[slot] = normalized;
+            }
         }
     }
     Ok(())

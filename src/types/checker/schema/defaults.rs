@@ -123,6 +123,11 @@ fn normalize_method_default_receivers(checker: &mut Checker) {
             let parent = class_parents.get(owner).and_then(Option::as_deref);
             normalize_signature_default_receivers(signature, owner, parent);
         }
+        for method in &mut class_info.method_decls {
+            for (_, _, default, _) in &mut method.params {
+                normalize_default_tree(default, &class_name, class_info.parent.as_deref());
+            }
+        }
     }
 
     for interface_info in checker.interfaces.values_mut() {
@@ -143,20 +148,34 @@ fn normalize_method_default_receivers(checker: &mut Checker) {
     }
 }
 
-/// Resolves direct `self::`, `static::`, and `parent::` defaults for one stored signature.
+/// Binds nested class-name and constant defaults to one signature's lexical scope.
 fn normalize_signature_default_receivers(
     signature: &mut FunctionSig,
     owner_class: &str,
     parent_class: Option<&str>,
 ) {
     for default in &mut signature.defaults {
-        let Some(Expr {
-            kind: ExprKind::ScopedConstantAccess { receiver, .. },
-            ..
-        }) = default
-        else {
-            continue;
-        };
+        normalize_default_tree(default, owner_class, parent_class);
+    }
+}
+
+/// Keeps unresolved trait parent defaults lazy, independent of the eventual caller scope.
+fn normalize_default_tree(default: &mut Option<Expr>, owner_class: &str, parent_class: Option<&str>) {
+    let Some(value) = default.as_ref() else { return };
+    match super::classes::normalize_property_default_in_scope(value, owner_class, parent_class) {
+        Ok(normalized) => { *default = Some(normalized); return; }
+        Err(error) if error.message == "Cannot use \"parent\" when current class scope has no parent" => {
+            let exception = Expr::new(ExprKind::NewObject {
+                class_name: Name::unqualified("Error"),
+                args: vec![Expr::new(ExprKind::StringLiteral(error.message), value.span)],
+            }, value.span);
+            *default = Some(Expr::new(ExprKind::Throw(Box::new(exception)), value.span));
+            return;
+        }
+        Err(_) => {}
+    }
+    // Retain the existing direct scoped-constant normalization for non-property method defaults.
+    if let Some(Expr { kind: ExprKind::ScopedConstantAccess { receiver, .. }, .. }) = default {
         let resolved = match receiver {
             StaticReceiver::Named(_) => None,
             StaticReceiver::Self_ | StaticReceiver::Static => Some(owner_class),

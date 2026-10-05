@@ -16,6 +16,11 @@ pub(super) fn lower_new_object(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_class(
+        ctx, class_name.as_str(), expr.span,
+    ) {
+        return error;
+    }
     if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionclass" {
         if let Some(operands) = lower_reflection_class_constructor_operands(ctx, args) {
             let php_type = PhpType::Object(class_name.as_str().to_string());
@@ -392,10 +397,15 @@ pub(super) fn lower_new_dynamic(
     expr: &Expr,
 ) -> LoweredValue {
     let args = expand_static_call_spread_args(args);
-    if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_expr, &args, expr) {
+    let name_value = lower_expr(ctx, name_expr);
+    let owns_name = ctx.value_is_owning_temporary(name_value)
+        && !ctx.value_is_owned_unboxed_local_load(name_value.value);
+    if owns_name { guard_descriptor_container(ctx, name_value, expr.span); }
+    crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name_value, expr.span);
+    if owns_name { ctx.unguard_call_argument(name_value.value, expr.span); }
+    if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_expr, name_value, &args, expr) {
         return value;
     }
-    let name_value = lower_expr(ctx, name_expr);
     lower_new_dynamic_generic(ctx, name_value, &args, expr)
 }
 
@@ -460,7 +470,9 @@ pub(super) fn lower_new_dynamic_object(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let mut operands = vec![lower_expr(ctx, class_name).value];
+    let class_name = lower_expr(ctx, class_name);
+    crate::ir_lower::property_default_errors::for_dynamic_class(ctx, class_name, expr.span);
+    let mut operands = vec![class_name.value];
     operands.extend(lower_args(ctx, args));
     let name = format!("{}|{}", fallback_class.as_str(), required_parent.as_str());
     let data = ctx.intern_class_name(&name);

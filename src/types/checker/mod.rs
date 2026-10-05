@@ -166,6 +166,10 @@ pub(crate) struct Checker {
     pub declared_trait_methods: HashMap<String, HashMap<String, FunctionSig>>,
     /// Reflection-visible class constant names declared directly on each trait.
     pub declared_trait_constants: HashMap<String, HashSet<String>>,
+    /// Properties imported from traits, distinguished from directly declared class defaults.
+    pub trait_imported_properties: HashMap<String, HashSet<String>>,
+    /// Classes whose own flattened constructor was imported from a trait.
+    pub trait_imported_constructors: HashSet<String>,
     /// Name of the class currently being type-checked (used for `$this` resolution).
     pub current_class: Option<String>,
     /// Name of the current method being type-checked, when inside a class body.

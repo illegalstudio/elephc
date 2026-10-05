@@ -12,6 +12,40 @@
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, ClassProperty, Program, StmtKind};
+use crate::types::traits::FlattenedClass;
+use std::collections::{HashMap, HashSet};
+
+/// Retains source-member origins that flattening deliberately removes from its public schema.
+pub(crate) fn collect_trait_default_origins(
+    program: &Program,
+    classes: &[FlattenedClass],
+) -> (HashMap<String, HashSet<String>>, HashSet<String>) {
+    let mut properties = HashMap::new();
+    let mut constructors = HashSet::new();
+    for statement in program {
+        match &statement.kind {
+            StmtKind::ClassDecl { name, properties: direct, methods, .. } => {
+                let Some(class) = classes.iter().find(|class| class.name == *name) else { continue };
+                if class.used_traits.is_empty() { continue; }
+                properties.insert(name.clone(), class.properties.iter()
+                    .filter(|property| !direct.iter().any(|local| local.name == property.name))
+                    .map(|property| property.name.clone()).collect());
+                if !methods.iter().any(|method| php_symbol_key(&method.name) == "__construct")
+                    && class.methods.iter().any(|method| php_symbol_key(&method.name) == "__construct")
+                {
+                    constructors.insert(name.clone());
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                let (nested_properties, nested_constructors) = collect_trait_default_origins(body, classes);
+                properties.extend(nested_properties);
+                constructors.extend(nested_constructors);
+            }
+            _ => {}
+        }
+    }
+    (properties, constructors)
+}
 
 /// Validates defaults on every original trait declaration, including unused declarations.
 pub(crate) fn validate_trait_property_defaults(program: &Program) -> Vec<CompileError> {

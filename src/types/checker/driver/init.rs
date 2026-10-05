@@ -80,6 +80,8 @@ impl Checker {
             declared_traits: HashSet::new(),
             declared_trait_methods: HashMap::new(),
             declared_trait_constants: HashMap::new(),
+            trait_imported_properties: HashMap::new(),
+            trait_imported_constructors: HashSet::new(),
             current_class: None,
             current_method: None,
             current_function: None,
