@@ -76,7 +76,8 @@ mod tests {
     /// BUMPED TO 10 WITH THIS VALUE: an included file is one parsed program, and
     /// `ScriptSegment::Output` is gone.
     /// BUMPED TO 11 WITH THIS VALUE: the open-tag separator became a shared function.
-    const RECORDED_FINGERPRINT: u64 = 17666271573136969314;
+    /// BUMPED TO 12: property metadata now computes effective setter access and finality.
+    const RECORDED_FINGERPRINT: u64 = 3078654424804495908;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

@@ -9,6 +9,23 @@
 
 use super::*;
 
+/// A failed global clone override cannot bypass readonly set access or corrupt its source.
+#[test]
+fn test_asymmetric_review_eval_clone_readonly_set_access() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class EvalCloneRestrictedReadonly {
+    public readonly int $id;
+    public function __construct() { $this->id = 1; }
+}
+$source = new EvalCloneRestrictedReadonly();
+try { clone($source, ["id" => 3]); echo "bad"; }
+catch (Error $error) { echo "blocked:", $source->id; }');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "blocked:1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Private(set) contributes implicit finality only when it restricts a wider read visibility.
 #[test]
 fn test_asymmetric_review_private_setter_reflection_finality() {

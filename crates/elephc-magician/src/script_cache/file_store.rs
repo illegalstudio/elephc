@@ -70,7 +70,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// BUMPED TO 11 when the open-tag separator test moved into `is_open_tag_separator`, shared
 /// with the eval lexer. The accepted bytes did not change; the guard counts code lines, not
 /// shapes, and 10 was never released, so the bump orphans no published cache.
-pub(crate) const FORMAT_VERSION: u32 = 11;
+/// BUMPED TO 12 for effective readonly setter visibility and implicit private-set finality.
+pub(crate) const FORMAT_VERSION: u32 = 12;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
