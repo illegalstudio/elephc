@@ -9,6 +9,42 @@
 
 use super::*;
 
+/// A later effectful dimension cannot change an earlier mutable static-property key.
+#[test]
+fn test_static_property_array_prefix_update_nested_effectful_key_order() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedPrefixEffectful {
+    public static array $items = [[1 => 10, 2 => 20]];
+    public static int $key = 0;
+    public static function bump(): int { self::$key = 1; echo "f"; return 1; }
+}
+++NestedPrefixEffectful::$items[NestedPrefixEffectful::$key][NestedPrefixEffectful::bump()];
+echo json_encode(NestedPrefixEffectful::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "f[{\"1\":11,\"2\":20}]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Bare variable dimensions keep PHP's deferred lookup even beside an effectful key.
+#[test]
+fn test_static_property_array_prefix_update_nested_bare_variable_key_is_deferred() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedPrefixVariable {
+    public static array $items = [[1 => 10]];
+    public static function bump(): int { global $key; $key = 1; echo "f"; return 1; }
+}
+$key = 0;
+set_error_handler(function($level, $message) { return true; });
+++NestedPrefixVariable::$items[$key][NestedPrefixVariable::bump()];
+restore_error_handler();
+echo json_encode(NestedPrefixVariable::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "f[{\"1\":10},{\"1\":1}]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Prefix static-array updates preserve scoped receivers and evaluate effectful indices once.
 #[test]
 fn test_static_property_array_prefix_updates() {

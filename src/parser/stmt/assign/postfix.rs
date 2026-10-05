@@ -958,18 +958,23 @@ impl EffectfulTargetLowerer {
     }
 
     /// Stabilizes the base of a nested array access chain. Recursively processes
-    /// `ArrayAccess` and `PropertyAccess` chains; returns `Variable`, `This`,
-    /// and `StaticPropertyAccess` directly; calls `stabilize` for all other expressions.
+    /// `ArrayAccess` and `PropertyAccess` chains; captures index expressions before
+    /// a later effectful dimension can change their inputs. Bare variables retain
+    /// PHP's deferred store-time lookup instead of becoming eager expression reads.
     fn stabilize_array_base(&mut self, expr: Expr) -> Expr {
         let span = expr.span;
         match expr.kind {
-            ExprKind::ArrayAccess { array, index } => Expr::new(
-                ExprKind::ArrayAccess {
-                    array: Box::new(self.stabilize_array_base(*array)),
-                    index: Box::new(self.stabilize(*index)),
-                },
-                span,
-            ),
+            ExprKind::ArrayAccess { array, index } => {
+                let array = Box::new(self.stabilize_array_base(*array));
+                let index = if update_index_needs_snapshot(&index)
+                    && !matches!(index.kind, ExprKind::Variable(_))
+                {
+                    self.stabilize_unconditionally(*index)
+                } else {
+                    self.stabilize(*index)
+                };
+                Expr::new(ExprKind::ArrayAccess { array, index: Box::new(index) }, span)
+            }
             ExprKind::PropertyAccess { object, property } => Expr::new(
                 ExprKind::PropertyAccess {
                     object: Box::new(self.stabilize_array_base(*object)),
