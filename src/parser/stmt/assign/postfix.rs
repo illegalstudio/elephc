@@ -81,8 +81,10 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     // AND before the presence check, so `$a[$slot] ??= ($slot = 0)` would test the slot the
     // right-hand side just selected instead of the one written in the source.
     let mut hoisted = EffectfulTargetLowerer::new(span);
-    let rhs = if matches!(op, AssignmentOperator::Compound(_))
-        && compound_rhs_can_disturb_index(&lhs_expr, &rhs)
+    let rhs = if (matches!(op, AssignmentOperator::Compound(_))
+        && compound_rhs_can_disturb_index(&lhs_expr, &rhs))
+        || (is_append && matches!(&lhs_expr.kind, ExprKind::PropertyAccess { object, .. }
+            if matches!(object.kind, ExprKind::StaticPropertyAccess { .. })))
     {
         hoisted.stabilize_unconditionally(rhs)
     } else {
@@ -114,7 +116,7 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
             }
             _ => return Err(CompileError::new(span, "Invalid assignment target")),
         };
-        return Ok(Some(Stmt::new(stmt, span)));
+        return Ok(Some(hoisted.finish_if_used(stmt, span)));
     }
 
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
@@ -393,8 +395,14 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     // A static property followed by object access is an instance-property target,
-    // so its write must use the ordinary postfix lowering rather than the static store.
+    // not a static store. The shared expression prelude evaluates an effectful RHS before
+    // the delayed static receiver fetch, matching PHP instead of retaining a stale object.
     if is_instance_property_assignment_target(&lhs_expr) {
+        if !is_append {
+            let value = parse_expr(tokens, pos)?;
+            expect_semicolon(tokens, pos)?;
+            return Ok(Some(Stmt::new(StmtKind::ExprStmt(value), span)));
+        }
         return try_parse_postfix_assignment(tokens, pos, span);
     }
 

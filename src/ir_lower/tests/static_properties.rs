@@ -8,7 +8,7 @@
 //! - All five targets must skip uninitialized slots and detach inherited owners once.
 //! - Destructor boundaries must finish remaining slots before propagating exceptions.
 
-/// Every target roots a nullable static receiver before RHS evaluation and retires it after the store.
+/// Every target roots the nullable receiver after the delayed RHS and retires it after the store.
 #[test]
 fn nullable_static_property_write_receiver_is_retained_on_all_targets() {
     let source = r#"<?php
@@ -30,6 +30,9 @@ writeReviewPinnedObject();
             std::path::Path::new("main.php"), std::path::Path::new("."), target);
         let function = module.functions.iter().find(|function| function.name == "writeReviewPinnedObject").unwrap();
         let store = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PropSet).unwrap();
+        let rhs = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
+        let load = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
+        assert!(rhs < load && load < store, "{name}: PHP delays the static receiver fetch");
         let object = function.value(function.instructions[store].operands[0]).unwrap();
         let crate::ir::ValueDef::Instruction { inst, .. } = object.def else {
             panic!("{name}: the property receiver must be an acquired value");

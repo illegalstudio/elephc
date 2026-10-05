@@ -74,6 +74,10 @@ pub(super) fn check_property_array_push(
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    let obj_ty = checker.union_single_object_class(&obj_ty)
+        .filter(|_| matches!(&obj_ty, PhpType::Union(members)
+            if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void))))
+        .map(PhpType::Object).unwrap_or(obj_ty);
     match &obj_ty {
         PhpType::Object(class_name) => {
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
@@ -204,6 +208,10 @@ pub(super) fn check_property_array_assign(
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    let obj_ty = checker.union_single_object_class(&obj_ty)
+        .filter(|_| matches!(&obj_ty, PhpType::Union(members)
+            if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void))))
+        .map(PhpType::Object).unwrap_or(obj_ty);
     if matches!(obj_ty, PhpType::Mixed) {
         if !is_php_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));

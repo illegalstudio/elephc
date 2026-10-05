@@ -826,7 +826,7 @@ pub(super) fn lower_initialized_static_property_value(
 
 /// Returns the class name and nullability if `php_type` is a single object type (optionally
 /// nullable). Heterogeneous unions and non-object types return `None`.
-pub(super) fn singular_object_class(php_type: &PhpType) -> Option<(&str, bool)> {
+pub(crate) fn singular_object_class(php_type: &PhpType) -> Option<(&str, bool)> {
     match php_type {
         PhpType::Object(name) => Some((name.as_str(), false)),
         PhpType::Union(members) => {
@@ -1190,5 +1190,5 @@ pub(crate) fn static_property_result_type(
     else {
         return PhpType::Mixed;
     };
-    normalize_value_php_type(property_ty.codegen_repr())
+    normalize_value_php_type(property_ty.clone())
 }

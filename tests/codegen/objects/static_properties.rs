@@ -42,7 +42,7 @@ ChildHolder::update();
     assert_eq!(out, "9|9|9");
 }
 
-/// Replacing the nullable static slot during the RHS must not retire the original receiver.
+/// A static receiver fetch is delayed until after an RHS that replaces its slot, as in PHP.
 #[test]
 fn test_static_property_object_receiver_survives_rhs_replacement() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -59,7 +59,7 @@ ReviewReceiverHolder::$o->v = replaceReviewReceiver();
 echo $original->v, "|", ReviewReceiverHolder::$o->v;
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "9|7", "{}", out.stderr);
+    assert_eq!(out.stdout, "1|9", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

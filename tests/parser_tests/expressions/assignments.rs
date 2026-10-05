@@ -22,15 +22,18 @@ fn test_parse_static_property_object_receiver_assignments() {
     }
 }
 
-/// Static object receivers keep indexed instance writes on the property-array statement path.
+/// Static object indexed writes retain the instance-property target in expression lowering.
 #[test]
 fn test_parse_static_property_object_receiver_indexed_writes() {
     for receiver in ["Holder", "self", "parent", "static"] {
         for tail in ["->items[0] = 9;", "->items[1] += 3;"] {
             let source = format!("<?php {receiver}::$object{tail}");
             let statements = parse_source(&source);
-            assert!(matches!(&statements[0].kind, StmtKind::PropertyArrayAssign { property, .. }
-                if property == "items"), "{source}: {:?}", statements[0]);
+            let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("{source}") };
+            let ExprKind::Assignment { target, .. } = &expression.kind else { panic!("{source}") };
+            assert!(matches!(&target.kind, ExprKind::ArrayAccess { array, .. }
+                if matches!(&array.kind, ExprKind::PropertyAccess { property, .. }
+                    if property == "items")), "{source}: {:?}", statements[0]);
         }
     }
 }

@@ -420,6 +420,8 @@ pub(super) fn lower_dynamic_property_assign(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+    let object = receiver.value;
     let property = lower_expr(ctx, property);
     let property = crate::ir_lower::expr::property_access::coerce_runtime_property_name(
         ctx, property, span,
@@ -445,20 +447,29 @@ pub(super) fn lower_dynamic_property_assign(
     // exactly once, which is the contract call lowering already applies.
     let pins = crate::ir_lower::expr::pin_in_flight_owners(
         ctx,
-        &[object.value, property.value, value.value],
+        &[property.value, value.value],
         span,
     );
+    // Runtime names can select either a consuming Mixed slot or a scalar slot that only reads
+    // the box. Lend the store an owned temporary, so both choices leave one owner to retire here.
+    let owns_value = ctx.value_is_owning_temporary(value);
+    let store_value = if owns_value {
+        let borrowed = ctx.emit_value(Op::Borrow, vec![value.value], None,
+            ctx.builder.value_php_type(value.value), Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    } else { value };
     ctx.emit_void(
         Op::DynamicPropSet,
-        vec![object.value, property.value, value.value],
+        vec![object.value, property.value, store_value.value],
         None,
         Op::DynamicPropSet.default_effects(),
         Some(span),
     );
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
-    crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
-        ctx, &PhpType::Mixed, value, span,
-    );
+    if owns_value { crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span)); }
+    release_coerced_source_if_owned(ctx, property, Some(span));
+    receiver.finish(ctx, span);
 }
 
 /// Returns whether a runtime-name write needs a boxed value for a reachable fixed slot.

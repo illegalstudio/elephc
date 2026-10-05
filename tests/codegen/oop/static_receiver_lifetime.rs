@@ -1,0 +1,152 @@
+//! Purpose:
+//! Regressions for instance writes through an owning static object slot.
+//!
+//! Called from:
+//! - The codegen integration test harness.
+//!
+//! Key details:
+//! - No local alias masks early destruction when RHS evaluation replaces the static owner.
+//! - Nullable array receivers must mutate the declared slot and retire unwind pins.
+
+use crate::support::compile_and_run_with_heap_debug;
+
+/// Checks output and balanced lifetime state for one static-receiver write fixture.
+fn verify(source: &str, expected: &str) {
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A non-null static receiver is fetched after an RHS that replaces its sole owner, as in PHP.
+#[test]
+fn test_static_receiver_review_non_null_sole_owner() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static O $o; }
+function replace(): int { C::$o = new O(); C::$o->v = 7; return 9; }
+C::$o = new O();
+C::$o->v = replace();
+echo C::$o->v;
+"#, "D19D9");
+}
+
+/// Indexed writes target the replacement installed by the RHS, without accessing the freed object.
+#[test]
+fn test_static_receiver_review_array_sole_owner() {
+    verify(r#"<?php
+class O { public array $items = [1]; public function __destruct() { echo 'D', $this->items[0]; } }
+class C { public static O $o; }
+function replace(): int { C::$o = new O(); return 9; }
+C::$o = new O();
+C::$o->items[0] = replace();
+echo '[', C::$o->items[0], ']';
+"#, "D1[9]D9");
+}
+
+/// Appends also load the receiver after replacing RHS effects and retain its declared array slot.
+#[test]
+fn test_static_receiver_review_append_replacement() {
+    verify(r#"<?php
+class O { public array $items = [1]; public function __destruct() { echo 'D', $this->items[0]; } }
+class C { public static ?O $o = null; }
+function replace(): int { C::$o = new O(); return 9; }
+C::$o = new O();
+C::$o->items[] = replace();
+foreach (C::$o->items as $item) { echo $item, ','; }
+"#, "D11,9,D1");
+}
+
+/// Compound writes read the replacement slot after the RHS rather than updating a freed object.
+#[test]
+fn test_static_receiver_review_compound_replacement() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static O $o; }
+function replace(): int { C::$o = new O(); C::$o->v = 7; return 9; }
+C::$o = new O();
+C::$o->v += replace();
+echo C::$o->v;
+"#, "D116D16");
+}
+
+/// A computed receiver is evaluated eagerly and its independent return owner survives the RHS.
+#[test]
+fn test_static_receiver_review_computed_receiver_owner() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static O $o; }
+function receiver(): O { return C::$o; }
+function replace(): int { C::$o = new O(); C::$o->v = 7; return 9; }
+C::$o = new O();
+receiver()->v = replace();
+echo C::$o->v;
+"#, "D97D7");
+}
+
+/// Runtime-name writes use the same delayed static receiver fetch as literal-name writes.
+#[test]
+fn test_static_receiver_review_dynamic_sole_owner() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static O $o; }
+function replace(): int { C::$o = new O(); return 9; }
+C::$o = new O();
+$name = 'v';
+C::$o->$name = replace();
+echo C::$o->v;
+"#, "D19D9");
+}
+
+/// A runtime property name can select a consuming Mixed slot or stdClass storage without leaks.
+#[test]
+fn test_static_receiver_review_dynamic_mixed_value_ownership() {
+    verify(r#"<?php
+class O { public mixed $value = null; }
+function write(O $object, string $name): void { $object->$name = str_repeat('x', 8); }
+function dynamic(mixed $object, string $name): void { $object->$name = str_repeat('y', 8); }
+$object = new O(); $dynamic = new stdClass();
+for ($i = 0; $i < 12; $i++) { write($object, 'value'); dynamic($dynamic, 'value'); }
+echo $object->value, ':', $dynamic->value;
+"#, "xxxxxxxx:yyyyyyyy");
+}
+
+/// Boxed nullable receivers resolve their one object class for indexed and append writes.
+#[test]
+fn test_static_receiver_review_nullable_array_writes() {
+    verify(r#"<?php
+class O { public array $items = [1]; }
+class C { public static ?O $o = null; }
+C::$o = new O();
+C::$o->items[0] = 9;
+C::$o->items[] = 3;
+foreach (C::$o->items as $item) { echo $item, ','; }
+"#, "9,3,");
+}
+
+/// Throwing RHS expressions unwind the receiver lease for every write surface.
+#[test]
+fn test_static_receiver_review_throwing_rhs() {
+    verify(r#"<?php
+class O { public int $v = 1; public array $items = [1]; public function __destruct() { echo 'D', $this->v; } }
+class C { public static O $o; }
+function fail(): int { C::$o = new O(); throw new Exception('rhs'); }
+$name = 'v';
+C::$o = new O();
+try { C::$o->v = fail(); } catch (Exception $e) { echo 'a'; }
+try { C::$o->items[0] = fail(); } catch (Exception $e) { echo 'b'; }
+try { C::$o->$name = fail(); } catch (Exception $e) { echo 'c'; }
+"#, "D1aD1bD1cD1");
+}
+
+/// A null nullable receiver raises a catchable error instead of dropping a boxed write.
+#[test]
+fn test_static_receiver_review_nullable_null_errors() {
+    verify(r#"<?php
+class O { public array $items = [1]; }
+class C { public static ?O $o = null; }
+function value(): int { echo 'rhs:'; return 9; }
+try { C::$o->items[0] = value(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+try { C::$o->items[] = value(); } catch (Error $e) { echo $e->getMessage(); }
+"#, "rhs:Attempt to modify property \"items\" on null|rhs:Attempt to modify property \"items\" on null");
+}
