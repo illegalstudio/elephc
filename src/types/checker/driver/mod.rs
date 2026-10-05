@@ -41,7 +41,7 @@ use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
     drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
-    validate_deferred_declaration_defaults,
+    validate_deferred_declaration_defaults, validate_enum_trait_requirements,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::{CheckOptions, Checker};
@@ -375,6 +375,14 @@ pub(super) fn check_types_impl(
                 &mut checker,
                 &mut next_class_id,
             ) {
+                errors.extend(error.flatten());
+            }
+        }
+    }
+    // All enum metadata must exist before checking covariant or contravariant enum hints.
+    for enum_unit in flattened_enums.values() {
+        if checker.enums.contains_key(&enum_unit.name) {
+            if let Err(error) = validate_enum_trait_requirements(&checker, program, enum_unit) {
                 errors.extend(error.flatten());
             }
         }

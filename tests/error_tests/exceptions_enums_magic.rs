@@ -551,6 +551,50 @@ fn test_error_enum_trait_with_property() {
     );
 }
 
+/// A local enum method cannot discard an abstract trait's parameter contract.
+#[test]
+fn test_error_enum_review_trait_parameter_requirement() {
+    expect_error(
+        "<?php trait T { abstract public function f(int $n): int; } enum E { case Ready; use T; public function f(string $n): int { return 1; } }",
+        "Cannot narrow parameter",
+    );
+}
+
+/// An abstract requirement survives an intermediate trait's concrete implementation.
+#[test]
+fn test_error_enum_review_nested_trait_return_requirement() {
+    expect_error(
+        "<?php trait T { abstract public function f(): int; } trait Middle { use T; public function f(): int { return 1; } } enum E { case Ready; use Middle; public function f(): string { return 'bad'; } }",
+        "incompatible return type",
+    );
+}
+
+/// An implementation cannot discard an abstract trait's by-reference return contract.
+#[test]
+fn test_error_enum_review_trait_by_reference_return_requirement() {
+    expect_error(
+        "<?php trait T { abstract public function &f(): int; } enum E { case Ready; use T; public function f(): int { return 1; } }",
+        "Cannot remove by-reference return",
+    );
+}
+
+/// A by-value abstract trait requirement permits an implementation returning by reference.
+#[test]
+fn test_enum_review_trait_can_add_by_reference_return() {
+    expect_no_error("<?php trait T { abstract public function f(): int; } enum E { case Ready; use T; public function &f(): int { static $n = 1; return $n; } }");
+}
+
+/// Non-abstract enum methods need bodies even when parsing a semicolon declaration succeeds.
+#[test]
+fn test_error_enum_review_method_without_body() {
+    for declaration in ["public function f();", "public static function f(): int;"] {
+        expect_error(
+            &format!("<?php enum E {{ case Ready; {declaration} }}"),
+            "Non-abstract method must have a body",
+        );
+    }
+}
+
 /// Verifies that an enum method body is type-checked like a class method: a declared return type
 /// that does not match the returned value is rejected. Regression test — enum method bodies
 /// previously bypassed type checking entirely.

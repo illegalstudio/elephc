@@ -9,6 +9,51 @@
 
 use super::*;
 
+/// Trait and direct enum constants bind lexical receivers before reflection and native lowering.
+#[test]
+fn test_enum_trait_constant_lexical_receivers() {
+    let out = compile_and_run(r#"<?php
+trait LexicalEnumValues { const A = 1; const B = self::A + 2; const N = self::class; }
+enum LexicalEnum { case Ready; use LexicalEnumValues; const OWN = self::A + 3; }
+echo LexicalEnum::B, "|", LexicalEnum::N, "|", LexicalEnum::OWN, "|";
+echo (new ReflectionClass(LexicalEnum::class))->getConstant("B");
+"#);
+    assert_eq!(out, "3|LexicalEnum|4|3");
+}
+
+/// A concrete enum method may widen a required parameter without losing a relative return hint.
+#[test]
+fn test_enum_trait_abstract_requirement_accepts_parameter_widening() {
+    let out = compile_and_run(r#"<?php
+trait EnumRequirement {
+    abstract public function accept(int $value): self;
+}
+trait EnumRequirementMiddle { use EnumRequirement; }
+enum EnumImplementation {
+    case Ready;
+    use EnumRequirementMiddle;
+    public function accept(mixed $value): self { return $this; }
+}
+echo EnumImplementation::Ready->accept(7)->name;
+"#);
+    assert_eq!(out, "Ready");
+}
+
+/// A never-returning implementation is a valid covariant narrowing of an abstract return type.
+#[test]
+fn test_enum_trait_abstract_requirement_accepts_never_return() {
+    let out = compile_and_run(r#"<?php
+trait NeverEnumRequirement { abstract public function stop(): int; }
+enum NeverEnumImplementation {
+    case Ready;
+    use NeverEnumRequirement;
+    public function stop(): never { throw new Error("stop"); }
+}
+try { NeverEnumImplementation::Ready->stop(); } catch (Error $error) { echo "caught"; }
+"#);
+    assert_eq!(out, "caught");
+}
+
 /// Class-name constant expressions survive enum schema construction as string backing values.
 #[test]
 fn test_backed_enum_values_accept_named_class_constant_expressions() {

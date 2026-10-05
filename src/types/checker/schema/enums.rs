@@ -16,7 +16,10 @@ use crate::parser::ast::{ClassMethod, ExprKind, Visibility};
 use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, FunctionSig, PhpType};
 
 use super::super::Checker;
-use super::classes::{collect_attribute_args, collect_attribute_names};
+use super::classes::{
+    collect_attribute_args, collect_attribute_names, resolve_lexical_class_value,
+    validate_method_shape,
+};
 use super::validation::build_method_sig;
 
 /// Propagates concrete return types from overrides to their abstract parent declarations.
@@ -153,6 +156,9 @@ pub(crate) fn build_enum_info(
         ));
     }
 
+    for method in user_methods {
+        validate_method_shape(name, method)?;
+    }
     if let Some(method) = user_methods.iter().find(|method| method.is_abstract) {
         return Err(CompileError::new(
             method.span,
@@ -491,8 +497,8 @@ pub(crate) fn insert_enum_metadata(
         method_decls.push(method);
     }
 
-    // User-declared enum constants. Values are kept as their parsed expressions, matching the
-    // class-constant representation.
+    // Bind lexical receivers in both direct and imported constants before their values
+    // are read outside enum scope, using the same normalization as ordinary classes.
     let mut constants = HashMap::new();
     let mut constant_types = HashMap::new();
     let mut constant_visibilities = HashMap::new();
@@ -500,7 +506,10 @@ pub(crate) fn insert_enum_metadata(
     let mut constant_attribute_names = HashMap::new();
     let mut constant_attribute_args = HashMap::new();
     for constant in user_constants {
-        constants.insert(constant.name.clone(), constant.value.clone());
+        constants.insert(
+            constant.name.clone(),
+            resolve_lexical_class_value(&constant.value, name, None)?,
+        );
         if let Some(type_expr) = &constant.type_expr {
             constant_types.insert(
                 constant.name.clone(),
