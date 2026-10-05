@@ -9,6 +9,74 @@
 
 use super::*;
 
+/// Private(set) contributes implicit finality only when it restricts a wider read visibility.
+#[test]
+fn test_asymmetric_review_private_setter_reflection_finality() {
+    let out = compile_and_run(r#"<?php
+class NativePrivateSetter {
+    public private(set) int $public = 1;
+    protected private(set) int $protected = 2;
+    private private(set) int $private = 3;
+    public function __construct(public private(set) int $promoted = 4) {}
+}
+echo (new ReflectionProperty(NativePrivateSetter::class, 'public'))->isFinal() ? '1' : '0';
+echo (new ReflectionProperty(NativePrivateSetter::class, 'protected'))->isFinal() ? '1' : '0';
+echo (new ReflectionProperty(NativePrivateSetter::class, 'private'))->isFinal() ? '1' : '0';
+echo (new ReflectionProperty(NativePrivateSetter::class, 'promoted'))->isFinal() ? '1' : '0';
+eval('class EvalPrivateSetter {
+    public private(set) int $public = 1;
+    protected private(set) int $protected = 2;
+    private private(set) int $private = 3;
+    public function __construct(public private(set) int $promoted = 4) {}
+}
+foreach (["public", "protected", "private", "promoted"] as $name) {
+    $property = new ReflectionProperty("EvalPrivateSetter", $name);
+    echo $property->isFinal() ? "1" : "0";
+}');
+"#);
+    assert_eq!(out, "11011101");
+}
+
+/// An eval child may add a restricted setter to a generated getter-only virtual property.
+#[test]
+fn test_asymmetric_review_eval_child_of_native_virtual_getter() {
+    let out = compile_and_run(r#"<?php
+class NativeGetterOnly { public int $x { get => 1; } }
+$base = new NativeGetterOnly();
+echo $base->x, ':';
+eval('class EvalWritableChild extends NativeGetterOnly {
+    public protected(set) int $x { get => 2; set { } }
+}
+echo (new EvalWritableChild())->x;');
+"#);
+    assert_eq!(out, "1:2");
+}
+
+/// Skipping ordinary accessor-method variance does not bypass the native property's type contract.
+#[test]
+fn test_asymmetric_review_eval_child_rejects_changed_native_virtual_type() {
+    let error = compile_and_run_expect_failure(r#"<?php
+class NativeTypedGetter { public int $x { get => 1; } }
+$base = new NativeTypedGetter();
+echo $base->x;
+eval('class EvalWrongGetter extends NativeTypedGetter {
+    public protected(set) string $x { get => "bad"; set { } }
+}');
+"#);
+    assert!(error.contains("Fatal error: eval() runtime failed"), "{error}");
+}
+
+/// A restricted physical child slot satisfies a virtual abstract getter without a setter contract.
+#[test]
+fn test_asymmetric_review_abstract_getter_normal_storage() {
+    let out = compile_and_run(r#"<?php
+abstract class AbstractGetter { abstract public int $x { get; } }
+class ConcreteStorage extends AbstractGetter { public protected(set) int $x = 2; }
+echo (new ConcreteStorage())->x;
+"#);
+    assert_eq!(out, "2");
+}
+
 /// Explicit public(set) overrides readonly's implicit protected write visibility in reflection.
 #[test]
 fn test_asymmetric_property_readonly_explicit_public_set_reflection() {

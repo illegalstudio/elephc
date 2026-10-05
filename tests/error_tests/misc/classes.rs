@@ -9,6 +9,47 @@
 
 use super::*;
 
+/// An omitted setter on a public readonly declaration is implicitly protected.
+#[test]
+fn test_asymmetric_review_readonly_override_effective_set_visibility() {
+    for source in [
+        "<?php class Base { public readonly int $x; } class Child extends Base { public protected(set) readonly int $x; }",
+        "<?php readonly class Base { public int $x; } readonly class Child extends Base { public protected(set) int $x; }",
+    ] {
+        expect_no_error(source);
+    }
+}
+
+/// A getter-only virtual parent has no setter visibility contract to narrow.
+#[test]
+fn test_asymmetric_review_virtual_getter_can_gain_restricted_setter() {
+    expect_no_error("<?php class Base { public int $x { get => 1; } } class Child extends Base { public protected(set) int $x { get => 2; set { } } }");
+    expect_no_error("<?php abstract class Base { abstract public int $x { get; } } class Child extends Base { public protected(set) int $x = 2; }");
+}
+
+/// Implicit readonly protected(set) cannot narrow an inherited explicit public setter.
+#[test]
+fn test_asymmetric_review_readonly_omitted_setter_cannot_narrow_public() {
+    expect_error(
+        "<?php class Base { public public(set) readonly int $x; } class Child extends Base { public readonly int $x; }",
+        "Cannot reduce set visibility when overriding property: Child::$x",
+    );
+}
+
+/// A restricted private setter makes a publicly readable property implicitly final.
+#[test]
+fn test_asymmetric_review_private_setter_property_cannot_be_overridden() {
+    for source in [
+        "<?php class Base { public private(set) int $x = 1; } class Child extends Base { public int $x = 2; }",
+        "<?php class Base { public private(set) int $x = 1; } class Child extends Base { public protected(set) int $x = 2; }",
+        "<?php class Base { protected private(set) int $x = 1; } class Child extends Base { public int $x = 2; }",
+        "<?php class Base { public function __construct(public private(set) int $x) {} } class Child extends Base { public int $x = 2; }",
+    ] {
+        expect_error(source, "Cannot override final property Base::$x");
+    }
+    expect_no_error("<?php class Base { private private(set) int $x = 1; } class Child extends Base { public int $x = 2; }");
+}
+
 /// A property override cannot narrow inherited write visibility while retaining public reads.
 #[test]
 fn test_error_asymmetric_property_override_reduces_set_visibility() {

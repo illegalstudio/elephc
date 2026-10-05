@@ -330,11 +330,11 @@ Rules:
 A child class may redeclare a property inherited from a non-private parent. The redeclaration is checked at compile time and must follow PHP rules:
 
 - Visibility cannot be reduced (`public` → `protected` is rejected; `protected` → `public` is allowed).
-- An explicit write visibility cannot narrow the inherited write visibility either. Without a `(set)` modifier, this override check uses the read visibility.
+- Effective write visibility cannot narrow the inherited setter access. Without a `(set)` modifier, public readonly properties (including properties of readonly classes) have an implicit `protected(set)`; other properties use their read visibility. A getter-only virtual parent has no setter access contract to narrow.
 - Declared types are invariant. A typed parent property must be redeclared with the same type. A typed parent property cannot become untyped, and an untyped parent property cannot gain a type in the child.
 - `readonly` is monotonic — a `readonly` parent property must stay `readonly` in the child. A non-readonly parent property may become `readonly` in the child.
 - The by-reference qualifier on a property cannot change across inheritance.
-- `final` parent properties cannot be redeclared.
+- `final` parent properties cannot be redeclared. A `private(set)` restriction on a public or protected property makes it implicitly final, including promoted properties. An entirely private property still permits a separate child property with the same name.
 - The child shares the parent's slot, so reads of the property from inherited methods see the child's value.
 
 Private parent properties are different: they are not overridden. A child may

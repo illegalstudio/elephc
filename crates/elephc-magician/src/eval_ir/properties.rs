@@ -225,13 +225,21 @@ impl EvalClassProperty {
 
     /// Returns the PHP asymmetric write visibility, if it differs from read visibility.
     pub const fn set_visibility(&self) -> Option<EvalVisibility> {
-        self.set_visibility
+        match (self.visibility, self.set_visibility) {
+            (EvalVisibility::Private, Some(EvalVisibility::Private))
+            | (EvalVisibility::Protected, Some(EvalVisibility::Protected)) => None,
+            (EvalVisibility::Public, Some(EvalVisibility::Public)) if !self.is_readonly => None,
+            _ => self.set_visibility,
+        }
     }
 
     /// Returns the visibility that applies to writes for this property.
     pub const fn write_visibility(&self) -> EvalVisibility {
         match self.set_visibility {
             Some(visibility) => visibility,
+            None if self.is_readonly && matches!(self.visibility, EvalVisibility::Public) => {
+                EvalVisibility::Protected
+            }
             None => self.visibility,
         }
     }
@@ -241,9 +249,12 @@ impl EvalClassProperty {
         self.is_static
     }
 
-    /// Returns whether this property was declared `final`.
+    /// Returns explicit finality or implicit finality from a restricted private setter.
     pub const fn is_final(&self) -> bool {
-        self.is_final
+        self.is_final || matches!(
+            (self.visibility, self.set_visibility),
+            (EvalVisibility::Public | EvalVisibility::Protected, Some(EvalVisibility::Private))
+        )
     }
 
     /// Returns whether this property was declared `readonly`.

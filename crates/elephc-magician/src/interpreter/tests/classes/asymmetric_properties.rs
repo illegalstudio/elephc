@@ -12,6 +12,32 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Public readonly properties without explicit set access accept protected-set redeclarations.
+#[test]
+fn execute_program_asymmetric_review_readonly_effective_set_visibility() {
+    for source in [
+        &b"class Base { public readonly int $x; } class Child extends Base { public protected(set) readonly int $x; } return 1;"[..],
+        &b"readonly class Base { public int $x; } readonly class Child extends Base { public protected(set) int $x; } return 1;"[..],
+        &b"class Base { public int $x { get => 1; } } class Child extends Base { public protected(set) int $x { get => 2; set { } } } return 1;"[..],
+    ] {
+        let program = parse_fragment(source).expect("parse property redeclaration");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).expect("compatible set access");
+        assert_eq!(values.get(result), FakeValue::Int(1));
+    }
+}
+
+/// Omitting set access on a readonly child cannot reduce an explicitly public parent setter.
+#[test]
+fn execute_program_asymmetric_review_rejects_implicit_set_access_reduction() {
+    let program = parse_fragment(b"class Base { public public(set) readonly int $x; } class Child extends Base { public readonly int $x; }")
+        .expect("parse readonly properties");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    assert_eq!(execute_program(&program, &mut scope, &mut values).expect_err("narrowed setter"), EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval-declared asymmetric properties allow owner and subclass writes as PHP does.
 #[test]
 fn execute_program_allows_asymmetric_property_writes_from_allowed_scopes() {
@@ -243,7 +269,7 @@ class EvalPropertyReadonlyAddBase {
     public int $count = 0;
 }
 class EvalPropertyReadonlyAddChild extends EvalPropertyReadonlyAddBase {
-    public readonly int $count;
+    public public(set) readonly int $count;
     public function __construct() { $this->count = 7; }
 }
 class EvalPropertyReadonlyWidenBase {
