@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// Appends settle their RHS before traversing a static receiver, including nested buckets.
+#[test]
+fn test_parse_static_receiver_review_append_preludes() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for tail in ["->items[0][]", "->child->items[]"] {
+            let source = format!("<?php {receiver}::$object{tail} = replace();");
+            let statements = parse_source(&source);
+            let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("{source}"); };
+            assert!(matches!(&body[0].kind, StmtKind::Assign { value, .. }
+                if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "replace")),
+                "{source}: the RHS must precede receiver traversal: {body:?}");
+        }
+    }
+}
+
 /// Named and lexical static properties remain receivers after a following object postfix.
 #[test]
 fn test_parse_static_property_object_receiver_assignments() {

@@ -1190,5 +1190,15 @@ pub(crate) fn static_property_result_type(
     else {
         return PhpType::Mixed;
     };
-    normalize_value_php_type(property_ty.clone())
+    // Preserve a nullable concrete class for fixed-slot property writes. Interface unions keep
+    // their boxed runtime dispatch: an instanceof guard can expose another interface's method,
+    // which the original declared interface does not own (Store::name, for example).
+    let result_type = if singular_object_class(property_ty).is_some_and(|(name, nullable)| {
+        nullable && ctx.classes.contains_key(name.trim_start_matches('\\'))
+    }) {
+        property_ty.clone()
+    } else {
+        property_ty.codegen_repr()
+    };
+    normalize_value_php_type(result_type)
 }

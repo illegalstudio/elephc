@@ -18,6 +18,82 @@ fn verify(source: &str, expected: &str) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// An indirect array append reads the replacement receiver only after its RHS has run.
+#[test]
+fn test_static_receiver_review_nested_append_replacement() {
+    verify(r#"<?php
+class O { public array $items = [[1]]; public function __destruct() { echo 'D', json_encode($this->items); } }
+class C { public static O $o; }
+function replace(): int { C::$o = new O(); C::$o->items = [[7]]; return 9; }
+C::$o = new O();
+C::$o->items[0][] = replace();
+echo 'S', json_encode(C::$o->items);
+"#, "D[[1]]S[[7,9]]D[[7,9]]");
+}
+
+/// Computed dimensions precede the RHS while the static receiver itself remains delayed.
+#[test]
+fn test_static_receiver_review_nested_append_key_order() {
+    verify(r#"<?php
+class O { public array $items = [[1]]; }
+class C { public static O $o; }
+function pickKey(): int { echo 'key:'; return 0; }
+function replace(): int { echo 'rhs:'; C::$o = new O(); C::$o->items = [[7]]; return 9; }
+C::$o = new O();
+C::$o->items[pickKey()][] = replace();
+echo json_encode(C::$o->items);
+"#, "key:rhs:[[7,9]]");
+}
+
+/// A child-property append traverses the replacement's entire object chain after its RHS.
+#[test]
+fn test_static_receiver_review_child_append_replacement() {
+    verify(r#"<?php
+class Leaf {
+    public array $items = [1];
+    public function __construct(public int $id) {}
+    public function __destruct() { echo 'D', $this->id, json_encode($this->items); }
+}
+class Root {
+    public Leaf $child;
+    public function __construct(public int $id, int $childId) { $this->child = new Leaf($childId); }
+    public function __destruct() { echo 'D', $this->id; }
+}
+class C { public static Root $o; }
+function replace(): int { C::$o = new Root(3, 7); C::$o->child->items = [1, 7]; return 9; }
+C::$o = new Root(1, 2);
+C::$o->child->items[] = replace();
+echo 'S', C::$o->id, ':', json_encode(C::$o->child->items), ':', C::$o->child->id;
+"#, "D1D2[1]S3:[1,7,9]:7D3D7[1,7,9]");
+}
+
+/// A direct write on null throws a catchable Error after evaluating its RHS.
+#[test]
+fn test_static_receiver_review_direct_null_error() {
+    verify(r#"<?php
+class O { public int $v = 1; }
+class C { public static ?O $o = null; }
+function value(): int { echo 'rhs:'; return 9; }
+try { C::$o->v = value(); echo 'bad'; }
+catch (Error $e) { echo $e->getMessage(), '|'; }
+echo 'after';
+"#, "rhs:Attempt to assign property \"v\" on null|after");
+}
+
+/// A rejected null write unwinds its independently owned string RHS without retaining a leak.
+#[test]
+fn test_static_receiver_review_direct_null_string_owner() {
+    verify(r#"<?php
+class O { public string $text = ''; }
+class C { public static ?O $o = null; }
+function value(): string { return str_repeat('x', 24); }
+for ($i = 0; $i < 8; $i++) {
+    try { C::$o->text = value(); } catch (Error $e) { echo 'c'; }
+}
+echo '|after';
+"#, "cccccccc|after");
+}
+
 /// A non-null static receiver is fetched after an RHS that replaces its sole owner, as in PHP.
 #[test]
 fn test_static_receiver_review_non_null_sole_owner() {

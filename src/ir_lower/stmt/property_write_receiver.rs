@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Static loads borrow either a concrete object or a boxed nullable value.
-//! - Nullable array receivers are guarded before extracting an owned object payload.
+//! - Nullable receivers are guarded before extracting an owned object payload.
+//! - Direct writes guard only after RHS evaluation, with its owner visible to unwind.
 
 use super::*;
 
@@ -33,13 +34,36 @@ impl PropertyWriteReceiver {
         ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: &str, span: Span,
     ) -> Self {
         let mut receiver = Self::new(ctx, value, span);
-        let object = narrow_array_write_receiver(ctx, receiver.value, property, span);
-        if object.value != receiver.value.value {
-            receiver.pins.extend(crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span));
-            receiver.owners.push(object);
-            receiver.value = object;
-        }
+        let object = narrow_nullable_write_receiver(ctx, receiver.value, property, "modify", span);
+        receiver.adopt_narrowed(ctx, object, span);
         receiver
+    }
+
+    /// Guards a direct write after its RHS runs and retires that RHS if the null Error unwinds.
+    pub(super) fn narrow_for_assignment(
+        &mut self, ctx: &mut LoweringContext<'_, '_>, property: &str, value: LoweredValue, span: Span,
+    ) {
+        let ty = ctx.builder.value_php_type(self.value.value);
+        if !crate::ir_lower::expr::singular_object_class(&ty).is_some_and(|(_, nullable)| nullable) {
+            return;
+        }
+        let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
+        let object = narrow_nullable_write_receiver(ctx, self.value, property, "assign", span);
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+        // The runtime unwind stack is LIFO. Detach the RHS record before publishing the
+        // narrowed object's lease, which must outlive all subsequent coercion/store work.
+        self.adopt_narrowed(ctx, object, span);
+    }
+
+    /// Retains the narrowed object view while preserving the boxed receiver's unwind lease.
+    fn adopt_narrowed(
+        &mut self, ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span,
+    ) {
+        if object.value != self.value.value {
+            self.pins.extend(crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span));
+            self.owners.push(object);
+            self.value = object;
+        }
     }
 
     /// Retires the unwind record and releases precisely the receiver's independent lease.
@@ -51,9 +75,9 @@ impl PropertyWriteReceiver {
     }
 }
 
-/// Narrows a statically known nullable class for fixed-slot array mutation, with PHP's null Error.
-fn narrow_array_write_receiver(
-    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: &str, span: Span,
+/// Narrows a known nullable class for fixed-slot mutation, with PHP's operation-specific null Error.
+fn narrow_nullable_write_receiver(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: &str, verb: &str, span: Span,
 ) -> LoweredValue {
     let ty = ctx.builder.value_php_type(value.value);
     let Some((class, true)) = crate::ir_lower::expr::singular_object_class(&ty) else {
@@ -69,7 +93,7 @@ fn narrow_array_write_receiver(
         else_target: present, else_args: Vec::new(),
     });
     ctx.builder.position_at_end(null);
-    lower_throw_access_error(ctx, &format!("Attempt to modify property \"{property}\" on null"), span);
+    lower_throw_access_error(ctx, &format!("Attempt to {verb} property \"{property}\" on null"), span);
     ctx.builder.position_at_end(present);
     let target = PhpType::Object(class);
     ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, target.clone(),

@@ -81,14 +81,23 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     // AND before the presence check, so `$a[$slot] ??= ($slot = 0)` would test the slot the
     // right-hand side just selected instead of the one written in the source.
     let mut hoisted = EffectfulTargetLowerer::new(span);
-    let rhs = if (matches!(op, AssignmentOperator::Compound(_))
-        && compound_rhs_can_disturb_index(&lhs_expr, &rhs))
-        || (is_append && matches!(&lhs_expr.kind, ExprKind::PropertyAccess { object, .. }
-            if matches!(object.kind, ExprKind::StaticPropertyAccess { .. })))
+    let (lhs_expr, rhs) = if is_append
+        && matches!(lhs_expr.kind, ExprKind::PropertyAccess { .. })
+        && has_delayed_static_receiver(&lhs_expr)
     {
-        hoisted.stabilize_unconditionally(rhs)
+        // Computed dimensions run before the RHS, but pure property traversal waits until
+        // afterwards. A child-property append must not retain the old static object chain.
+        let target = hoisted.stabilize_array_base(lhs_expr);
+        (target, hoisted.stabilize_unconditionally(rhs))
     } else {
-        rhs
+        let rhs = if matches!(op, AssignmentOperator::Compound(_))
+            && compound_rhs_can_disturb_index(&lhs_expr, &rhs)
+        {
+            hoisted.stabilize_unconditionally(rhs)
+        } else {
+            rhs
+        };
+        (lhs_expr, rhs)
     };
     // A compound operation reads and writes one dimension. Capture a mutable index after
     // any eager RHS evaluation, before a diagnostic handler can change its source variable.
@@ -196,7 +205,13 @@ fn lower_nested_append_assignment(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     let mut lowerer = EffectfulTargetLowerer::new(span);
+    let delayed_receiver = has_delayed_static_receiver(&target);
     let target = lowerer.stabilize_array_target(target);
+    let value = if delayed_receiver {
+        lowerer.stabilize_unconditionally(value)
+    } else {
+        value
+    };
     let temp = lowerer.next_nested_append_temp_name();
     lowerer.stmts.push(Stmt::new(
         StmtKind::Assign {
@@ -478,6 +493,16 @@ fn is_instance_property_assignment_target(target: &Expr) -> bool {
     match &target.kind {
         ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. } => true,
         ExprKind::ArrayAccess { array, .. } => is_instance_property_assignment_target(array),
+        _ => false,
+    }
+}
+
+/// Finds a delayed static receiver through pure property and array-dimension traversal.
+fn has_delayed_static_receiver(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => has_delayed_static_receiver(object),
+        ExprKind::ArrayAccess { array, .. } => has_delayed_static_receiver(array),
         _ => false,
     }
 }

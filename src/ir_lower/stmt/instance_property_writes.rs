@@ -28,8 +28,7 @@ pub(super) fn lower_property_assign(
         }
     });
     let object = lower_expr(ctx, object);
-    let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-    let object = receiver.value;
+    let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
     if let Some(message) = throw_access_message {
@@ -40,6 +39,8 @@ pub(super) fn lower_property_assign(
         lower_throw_access_error(ctx, &message, span);
         return;
     }
+    receiver.narrow_for_assignment(ctx, property, lowered_value, span);
+    let object = receiver.value;
     // A runtime SUBCLASS can declare `__set` where the receiver's STATIC class does not, and php
     // calls the accessor on such an instance. Only the runtime class can answer that, so the guard
     // asks it. Receiver and value are already lowered, once each and in source order, so the
