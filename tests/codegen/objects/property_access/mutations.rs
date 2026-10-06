@@ -475,6 +475,48 @@ echo $box->value;
     assert_eq!(out, "7");
 }
 
+/// An uninitialized readonly fallback runs before the conditional write raises Error.
+#[test]
+fn test_asymmetric_review_readonly_null_coalesce_fallback_still_throws() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { public readonly int $value; }
+function fallback() { echo "fallback:"; return 9; }
+$box = new Box();
+try {
+    $box->value ??= fallback();
+    echo "unexpected";
+} catch (Error $e) {
+    echo "error:", isset($box->value) ? "set" : "unset";
+}
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "fallback:error:unset", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nullable readonly values also keep non-null values and throw only on a fallback write.
+#[test]
+fn test_asymmetric_review_nullable_readonly_coalesce_is_conditional() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public readonly ?int $value;
+    public function __construct(?int $value) { $this->value = $value; }
+}
+function fallback(): int { echo "fallback:"; return 9; }
+$none = new Box(null);
+try { $none->value ??= fallback(); } catch (Error $e) { echo "error:"; }
+echo $none->value === null ? "null|" : "bad|";
+$set = new Box(7);
+$set->value ??= fallback();
+echo $set->value;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "fallback:error:null|7", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies `unset($obj->prop)` on a declared (typed) property.
 ///
 /// PHP leaves the property UNINITIALIZED rather than nulled: `isset()` answers false,

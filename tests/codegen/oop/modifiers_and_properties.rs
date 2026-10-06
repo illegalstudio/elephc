@@ -115,6 +115,40 @@ echo $implicit->isProtectedSet() ? "protected" : "public", ":", $implicit->getMo
     assert_eq!(out, "public:129\nprotected:2177\npublic:129\nprotected:2177\n");
 }
 
+/// Eval reflection of native readonly slots obeys authoritative exported setter flags.
+#[test]
+fn test_asymmetric_review_eval_native_public_set_readonly_metadata() {
+    let out = compile_and_run(r#"<?php
+class NativeSet {
+    public public(set) readonly int $explicit;
+    public readonly int $implicit;
+}
+eval('$explicit = new ReflectionProperty("NativeSet", "explicit");
+$implicit = new ReflectionProperty("NativeSet", "implicit");
+echo $explicit->getModifiers(), ":", ($explicit->isProtectedSet() ? "1" : "0"), ":";
+echo $implicit->getModifiers(), ":", ($implicit->isProtectedSet() ? "1" : "0");');
+"#);
+    assert_eq!(out, "129:0:2177:1");
+}
+
+/// Native property filters distinguish explicit public(set) from implicit readonly setters.
+#[test]
+fn test_asymmetric_review_protected_set_filter_matches_modifiers() {
+    let out = compile_and_run(r#"<?php
+class NativeSet {
+    public public(set) readonly int $explicit;
+    public readonly int $implicit;
+}
+$class = new ReflectionClass(NativeSet::class);
+$properties = $class->getProperties(ReflectionProperty::IS_PROTECTED_SET);
+echo count($properties), ":";
+foreach ($properties as $property) {
+    echo $property->getName(), ":", ($property->getModifiers() & ReflectionProperty::IS_PROTECTED_SET);
+}
+"#);
+    assert_eq!(out, "1:implicit:2048");
+}
+
 /// Verifies that a `readonly` class permits property initialization inside its constructor.
 /// The property is assigned in `__construct` and read back via `$user->id`.
 #[test]

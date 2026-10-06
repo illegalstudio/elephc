@@ -27,6 +27,18 @@ pub(super) fn lower_property_assign(
             None
         }
     });
+    if throw_access_message.is_some() {
+        if let ExprKind::NullCoalesce { value: read, default } = &value.kind {
+            if let ExprKind::PropertyAccess { object: read_object, property: read_property } = &read.kind {
+                if read_object.as_ref() == object && read_property == property {
+                    // The readonly Error belongs only to the fallback write, never to the
+                    // read-only keep branch of an already initialized property.
+                    crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+                    return;
+                }
+            }
+        }
+    }
     let object = lower_expr(ctx, object);
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);

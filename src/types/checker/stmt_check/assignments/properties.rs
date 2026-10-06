@@ -19,7 +19,7 @@ use crate::types::{
 
 use super::super::super::scope_dynamic_storage;
 use super::super::super::Checker;
-use super::properties_null_coalesce::null_coalesce_property_keeps_non_null;
+use super::properties_null_coalesce::null_coalesce_property_targets_same_slot;
 
 /// Type-checks a direct property assignment (`$obj->prop = value`).
 ///
@@ -344,13 +344,17 @@ fn check_object_property_write(
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
-        validate_object_property_access(checker, class_name, property, true, span)?;
         let expected_ty = class_info
             .visible_property(property)
             .map(|(_, (_, ty))| ty.clone())
             .unwrap_or(PhpType::Int);
-        let readonly_non_null_coalesce_keep =
-            null_coalesce_property_keeps_non_null(object, property, value, &expected_ty);
+        let readonly_null_coalesce = class_info.readonly_properties.contains(property)
+            && null_coalesce_property_targets_same_slot(object, property, value);
+        // A conditional readonly write may only read an already initialized value.
+        // Validate that read here; its fallback write still receives the runtime Error below.
+        validate_object_property_access(
+            checker, class_name, property, !readonly_null_coalesce, span,
+        )?;
         let internal_pdo_statement_initializer = checker
             .current_method
             .as_deref()
@@ -367,7 +371,6 @@ fn check_object_property_write(
                     .map(String::as_str)
                 && checker.current_method.as_deref() == Some("__construct"))
             && !internal_pdo_statement_initializer
-            && !readonly_non_null_coalesce_keep
         {
             // PHP raises this as a catchable `Error` at runtime instead of a
             // compile-time rejection. Record the throw site so EIR lowering
