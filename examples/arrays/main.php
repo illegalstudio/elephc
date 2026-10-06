@@ -65,6 +65,12 @@ foreach ($squares as $s) {
 echo "\n";
 
 $range = range(3, 7);
+// An append update starts a fresh counter, not the last element of the list.
+$batchCounts = [];
+$batchCounts[] += 3;
+echo "New batch counter: ", ++$batchCounts[], "\n";
+echo "Batch counts: ", implode(", ", $batchCounts), "\n";
+
 echo "Range 3..7: ";
 foreach ($range as $value) {
     echo $value . " ";

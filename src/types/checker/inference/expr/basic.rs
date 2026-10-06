@@ -249,7 +249,11 @@ impl Checker {
                         Ok(PhpType::Str)
                     }
                     PhpType::Array(elem_ty) => {
-                        if normalized_idx_ty != PhpType::Int {
+                        if **elem_ty == PhpType::Never {
+                            // Never describes the element type of an empty array, not a
+                            // non-returning read. A missing element yields null in PHP.
+                            Ok(PhpType::Void)
+                        } else if normalized_idx_ty != PhpType::Int {
                             // PHP allows string keys on indexed arrays: the array
                             // promotes to hash at runtime. Return the element type
                             // widened to Mixed so ?? / isset / reads type-check.

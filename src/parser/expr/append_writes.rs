@@ -16,9 +16,10 @@ use crate::span::Span;
 use super::assignment_targets::{AssignmentExpressionLowerer, is_assignment_expression_target};
 use super::pratt::{AssignmentOperator, assignment_bp, parse_expr_bp};
 
-/// Consumes an empty dimension, subsequent dimensions and its assignment or postfix update.
+/// Consumes an empty dimension and its assignment, postfix update, or enclosing prefix update.
 pub(super) fn parse_append_write(
     base: Expr, tokens: &[SpannedToken], pos: &mut usize, span: Span,
+    prefix_increment: bool,
 ) -> Result<Expr, CompileError> {
     *pos += 1; // The opening bracket was consumed by Pratt; consume its empty close.
     let mut dimensions = Vec::new();
@@ -34,7 +35,9 @@ pub(super) fn parse_append_write(
         *pos += 1;
         dimensions.push(index);
     }
-    let (update, rhs) = match tokens.get(*pos).map(|(token, _)| token) {
+    let (update, rhs) = if prefix_increment {
+        (AppendUpdate::Compound(BinOp::Add), Expr::new(ExprKind::IntLiteral(1), span))
+    } else { match tokens.get(*pos).map(|(token, _)| token) {
         Some(Token::PlusPlus) => {
             *pos += 1;
             (AppendUpdate::PostIncrement, Expr::new(ExprKind::Null, span))
@@ -57,7 +60,7 @@ pub(super) fn parse_append_write(
             (update, parse_expr_bp(tokens, pos, right_bp)?)
         }
         None => return Err(CompileError::new(span, "Cannot use [] for reading")),
-    };
+    } };
     if !is_assignment_expression_target(&base) {
         return Err(CompileError::new(base.span, "Invalid assignment target"));
     }
@@ -65,7 +68,7 @@ pub(super) fn parse_append_write(
     let mut stabilizer = AssignmentExpressionLowerer::new(span);
     let base = stabilizer.stabilize_non_local_target(base, &rhs);
     for index in dimensions.iter_mut().flatten() {
-        if !matches!(index.kind, ExprKind::Variable(_)) {
+        if !matches!(index.kind, ExprKind::Variable(_) | ExprKind::IntLiteral(_)) {
             *index = stabilizer.bind_result_value(index.clone());
         }
     }
@@ -87,14 +90,21 @@ enum AppendUpdate { Assign, Compound(BinOp), PostIncrement }
 struct AppendLowerer { span: Span, next_temp: usize, prelude: Vec<Stmt>, result: Option<Expr> }
 
 impl AppendLowerer {
-    /// Captures one expression so the write and result never re-evaluate it.
-    fn bind(&mut self, value: Expr) -> Expr {
+    /// Reserves a unique local for one append value or expression result.
+    fn next_temp(&mut self) -> Expr {
         let name = crate::names::generated_local_name(&format!(
             "__elephc_append_{}_{}_{}", self.span.line, self.span.col, self.next_temp,
         ));
         self.next_temp += 1;
-        self.prelude.push(Stmt::new(StmtKind::Assign { name: name.clone(), value }, self.span));
         Expr::new(ExprKind::Variable(name), self.span)
+    }
+
+    /// Captures one expression so the write and result never re-evaluate it.
+    fn bind(&mut self, value: Expr) -> Expr {
+        let target = self.next_temp();
+        let ExprKind::Variable(name) = &target.kind else { unreachable!() };
+        self.prelude.push(Stmt::new(StmtKind::Assign { name: name.clone(), value }, self.span));
+        target
     }
 
     /// Constructs one fresh nested array without converting an append to an indexed read.
@@ -106,7 +116,8 @@ impl AppendLowerer {
         if let Some(index) = dimension {
             // The eager RHS is already bound. Capture the update key now, before a missing-key
             // warning can call user code that changes the variable used to select this entry.
-            let index = if matches!(update, AppendUpdate::Assign) { index.clone() }
+            let index = if matches!(update, AppendUpdate::Assign)
+                || matches!(index.kind, ExprKind::IntLiteral(_)) { index.clone() }
                 else { self.bind(index.clone()) };
             let target = Expr::new(ExprKind::ArrayAccess {
                 array: Box::new(container.clone()), index: Box::new(index.clone()),
@@ -128,9 +139,19 @@ impl AppendLowerer {
     fn leaf(&mut self, current: Expr, rhs: &Expr, update: &AppendUpdate) -> Expr {
         let value = match update {
             AppendUpdate::Assign => rhs.clone(),
-            AppendUpdate::Compound(operator) => Expr::new(ExprKind::BinaryOp {
-                left: Box::new(current), op: operator.clone(), right: Box::new(rhs.clone()),
-            }, self.span),
+            AppendUpdate::Compound(operator) => {
+                let value = Expr::new(ExprKind::BinaryOp {
+                    left: Box::new(current), op: operator.clone(), right: Box::new(rhs.clone()),
+                }, self.span);
+                let result = self.next_temp();
+                self.result = Some(result.clone());
+                // Keep the read-modify-write expression on the store. EIR lowering can then
+                // reuse its diagnosed key, while this inline assignment captures the result.
+                return Expr::new(ExprKind::Assignment {
+                    target: Box::new(result), value: Box::new(value), result_target: None,
+                    prelude: Vec::new(), conditional_value_temp: None,
+                }, self.span);
+            }
             AppendUpdate::PostIncrement => {
                 let current = self.bind(current);
                 let result = self.bind(current.clone());

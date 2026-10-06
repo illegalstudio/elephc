@@ -129,6 +129,14 @@ pub(crate) fn desugared_element_update<'a>(
     if value.span != assignment_span {
         return None;
     }
+    let value = match &value.kind {
+        ExprKind::Assignment { target, value, result_target: None, prelude, .. }
+            if prelude.is_empty() && matches!(target.kind, ExprKind::Variable(_)) => value,
+        _ => value,
+    };
+    if value.span != assignment_span {
+        return None;
+    }
     match &value.kind {
         ExprKind::BinaryOp { left, .. } if reads_target(left) => Some(ElementUpdate::Compound),
         ExprKind::NullCoalesce { value: read, default } if reads_target(read) => {

@@ -21,6 +21,12 @@ fn test_append_review_write_contexts_parse() {
         "<?php $items[]['k'] .= 'x';",
         "<?php $box->items[] += 2;",
         "<?php Box::$items[] += 2;",
+        "<?php ++$items[];",
+        "<?php echo ++$items[]['k'];",
+        "<?php ++$box->items[];",
+        "<?php ++Box::$items[];",
+        "<?php $items[0][] += 5;",
+        "<?php $items[0][]['k'] = 'v';",
     ] {
         assert_eq!(parse_source(source).len(), 1, "{source}");
     }

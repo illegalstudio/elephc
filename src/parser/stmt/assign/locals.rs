@@ -24,6 +24,14 @@ pub(in crate::parser::stmt) fn parse_incdec_stmt(
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    if tokens[*pos..].windows(2)
+        .take_while(|pair| pair[0].0 != Token::Semicolon)
+        .any(|pair| pair[0].0 == Token::LBracket && pair[1].0 == Token::RBracket)
+    {
+        let value = crate::parser::expr::parse_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        return Ok(Stmt::new(StmtKind::ExprStmt(value), span));
+    }
     let is_increment = tokens[*pos].0 == Token::PlusPlus;
     *pos += 1;
 

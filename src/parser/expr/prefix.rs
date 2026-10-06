@@ -456,7 +456,15 @@ fn parse_prefix_inc_dec(
     // original error stands for anything the desugaring declines (a call, for instance,
     // which cannot be read twice).
     let rewind = *pos;
-    if let Ok(target) = parse_expr_bp(tokens, pos, 35) {
+    let operand = if increment {
+        super::pratt::parse_prefix_increment_operand(tokens, pos)
+    } else {
+        parse_expr_bp(tokens, pos, 35).map(|target| (target, false))
+    };
+    if let Ok((target, appended)) = operand {
+        if appended {
+            return Ok(target);
+        }
         if let Some(desugared) =
             super::assignment_targets::desugar_lvalue_incdec(target, increment, true, span)
         {

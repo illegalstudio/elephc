@@ -58,8 +58,19 @@ pub(super) fn parse_expr_bp(
     // linux-aarch64 was thin enough that adding a handful of locals to parser
     // frames tipped it over.
     stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || {
-        parse_expr_bp_inner(tokens, pos, min_bp)
+        parse_expr_bp_inner(tokens, pos, min_bp, None)
     })
+}
+
+/// Parses a prefix increment operand with write context for its outer append dimension.
+pub(super) fn parse_prefix_increment_operand(
+    tokens: &[SpannedToken], pos: &mut usize,
+) -> Result<(Expr, bool), CompileError> {
+    let mut appended = false;
+    let expression = stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || {
+        parse_expr_bp_inner(tokens, pos, 35, Some(&mut appended))
+    })?;
+    Ok((expression, appended))
 }
 
 /// The actual Pratt loop behind the stack-growth guard of [`parse_expr_bp`].
@@ -67,6 +78,7 @@ fn parse_expr_bp_inner(
     tokens: &[SpannedToken],
     pos: &mut usize,
     min_bp: u8,
+    mut prefix_increment: Option<&mut bool>,
 ) -> Result<Expr, CompileError> {
     let mut lhs = parse_prefix(tokens, pos)?;
 
@@ -104,7 +116,13 @@ fn parse_expr_bp_inner(
                 let span = tokens[*pos].1.span;
                 *pos += 1;
                 if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBracket)) {
-                    lhs = super::append_writes::parse_append_write(lhs, tokens, pos, span)?;
+                    lhs = super::append_writes::parse_append_write(
+                        lhs, tokens, pos, span, prefix_increment.is_some(),
+                    )?;
+                    if let Some(appended) = prefix_increment.as_mut() {
+                        **appended = true;
+                        return Ok(lhs);
+                    }
                     continue;
                 }
                 let index = parse_expr(tokens, pos)?;

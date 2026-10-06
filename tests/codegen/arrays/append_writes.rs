@@ -10,6 +10,106 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// Synthetic nested-append preludes must pass through the ordinary statement checker.
+#[test]
+fn test_append_review_existing_index_checker() {
+    for (source, expected) in [
+        ("$items = [[]]; $items[0][] += 5; echo json_encode($items);", "[[5]]"),
+        ("$items = [[]]; $items[0][]['k'] = 'v'; echo json_encode($items);", "[[{\"k\":\"v\"}]]"),
+        ("class Box { public array $items = [[]]; } $box = new Box(); $box->items[0][] += 3; echo json_encode($box->items);", "[[3]]"),
+        ("class Box { public static array $items = [[]]; } Box::$items[0][] += 3; echo json_encode(Box::$items);", "[[3]]"),
+    ] {
+        let out = compile_and_run_with_heap_debug(&format!("<?php {source}"));
+        assert!(out.success, "{source}: {}", out.stderr);
+        assert_eq!(out.stdout, expected, "{source}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{source}: {}", out.stderr);
+    }
+}
+
+/// Separates constructor and nested-array ownership from the new append expression path.
+#[test]
+fn test_append_review_nested_property_ownership_control() {
+    for source in [
+        "class Box { public array $items = [[]]; } $box = new Box(); echo json_encode($box->items);",
+        "class Box { public array $items = [[]]; } $box = new Box(); $box->items[0][] = 3; echo json_encode($box->items);",
+        "class Box { public static array $items = [[]]; } echo json_encode(Box::$items);",
+    ] {
+        let out = compile_and_run_with_heap_debug(&format!("<?php {source}"));
+        assert!(out.success, "{source}: {}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{source}: {}", out.stderr);
+    }
+}
+
+/// Sparse literal integer dimensions must not introduce a missing key zero.
+#[test]
+fn test_append_review_sparse_integer_dimensions() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [];
+$items[][1] = 'x';
+$items[][1] .= 'y';
+echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"1\":\"x\"},{\"1\":\"y\"}]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Prefix increments append a fresh one and return the updated value.
+#[test]
+fn test_append_review_prefix_increment() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [];
+++ $items[];
+echo ++$items[], ':', ++$items[]['k'], ':';
+class Box { public array $items = []; public static array $shared = []; }
+$box = new Box();
+++ $box->items[];
+++ Box::$shared[];
+echo ++$box->items[], ':', ++Box::$shared[], ':';
+echo json_encode($items), ':', json_encode($box->items), ':', json_encode(Box::$shared);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:1:1:1:[1,1,{\"k\":1}]:[1,1]:[1,1]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The read and write of a compound append share one float-key conversion diagnostic.
+#[test]
+fn test_append_review_float_dimension_warns_once() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [];
+$key = 1.5;
+$warnings = 0;
+set_error_handler(function ($code, $message) use (&$warnings) {
+    $warnings++; return true;
+});
+$items[][$key] .= 'x';
+$before = $warnings;
+$numbers = [];
+echo ++$numbers[][$key], ':';
+restore_error_handler();
+echo $before, ':', $warnings - $before, ':', $items[0][1];
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:2:2:x");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Numeric reads from fresh nested containers yield null rather than a Never operand.
+#[test]
+fn test_append_review_numeric_missing_leaf() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [];
+$value = ++$items[][1];
+$compound = [];
+$sum = ($compound[][1] += 2);
+echo $value, ':', $sum, ':', json_encode($items), ':', json_encode($compound);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:2:[{\"1\":1}]:[{\"1\":2}]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Statement and expression compound appends create a fresh element, not an array read.
 #[test]
 fn test_append_review_compound_and_assignment_values() {
