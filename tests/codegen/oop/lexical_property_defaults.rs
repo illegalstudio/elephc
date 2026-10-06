@@ -212,6 +212,113 @@ try { $metadata->newInstanceWithoutConstructor(); } catch (Error $e) { echo 'ref
     assert_eq!(out, "Consumer|new|defaults|statics|reflection");
 }
 
+/// Ordinary missing-parent constants remain lazy and use the access diagnostic.
+#[test]
+fn test_property_default_review_missing_parent_constant_properties() {
+    let out = compile_and_run(r#"<?php
+class InstanceValue { public int $value = parent::A; }
+class StaticValue { public static int $value = parent::A; }
+class ArrayValue { public array $value = ['nested' => parent::A]; }
+trait Values { public int $value = parent::A; }
+class Consumer { use Values; }
+echo 'declared|';
+try { new InstanceValue(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+try { echo StaticValue::$value; } catch (Error $e) { echo $e->getMessage(), '|'; }
+try { new Consumer(); } catch (Error $e) { echo $e->getMessage(); }
+try { new ArrayValue(); } catch (Error $e) { echo '|', $e->getMessage(); }
+"#);
+    let message = "Cannot access \"parent\" when current class scope has no parent";
+    assert_eq!(out, format!("declared|{message}|{message}|{message}|{message}"));
+}
+
+/// Supplying promoted arguments bypasses unresolved ordinary parent constants.
+#[test]
+fn test_property_default_review_missing_parent_constant_promotion() {
+    let out = compile_and_run(r#"<?php
+class Consumer { public function __construct(public int $value = parent::A) {} }
+$first = new Consumer(9);
+echo $first->value, '|';
+try { new Consumer(); } catch (Error $e) { echo $e->getMessage(); }
+"#);
+    assert_eq!(out, "9|Cannot access \"parent\" when current class scope has no parent");
+}
+
+/// Ordinary method arguments use the same lazy access error as promoted arguments.
+#[test]
+fn test_property_default_review_missing_parent_constant_method() {
+    let out = compile_and_run(r#"<?php
+class Consumer { public function value(int $value = parent::A): int { return $value; } }
+$consumer = new Consumer();
+echo $consumer->value(9), '|';
+try { $consumer->value(); } catch (Error $e) { echo $e->getMessage(); }
+"#);
+    assert_eq!(out, "9|Cannot access \"parent\" when current class scope has no parent");
+}
+
+/// Imported ordinary method class-name defaults remain lazy, unlike direct class declarations.
+#[test]
+fn test_property_default_review_trait_method_class_default() {
+    let out = compile_and_run(r#"<?php
+trait Values { public function value(string $value = parent::class): string { return $value; } }
+class Consumer { use Values; }
+$consumer = new Consumer();
+echo $consumer->value('explicit'), '|';
+try { $consumer->value(); } catch (Error $e) { echo $e->getMessage(); }
+"#);
+    assert_eq!(out, "explicit|Cannot use \"parent\" when current class scope has no parent");
+}
+
+/// Property reflection keeps deferred defaults and errors local to the requested slot.
+#[test]
+fn test_property_default_review_reflection_preserves_deferred_defaults() {
+    let out = crate::support::compile_and_run(r#"<?php
+trait Values { public string $bad = parent::class; public static array $names = [parent::class]; }
+class Consumer { use Values; public string $valid = 'ok'; }
+$bad = new ReflectionProperty(Consumer::class, 'bad');
+echo $bad->hasDefaultValue() ? 'default|' : 'missing|';
+try { echo $bad->getDefaultValue(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+$names = (new ReflectionClass(Consumer::class))->getProperty('names');
+echo $names->hasDefaultValue() ? 'default|' : 'missing|';
+try { $names->getDefaultValue(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+echo (new ReflectionProperty(Consumer::class, 'valid'))->getDefaultValue();
+"#);
+    let message = "Cannot use \"parent\" when current class scope has no parent";
+    assert_eq!(out, format!("default|{message}|default|{message}|ok"));
+}
+
+/// Valid inline reflectors survive metadata guards even when another class has invalid defaults.
+#[test]
+fn test_property_default_review_reflection_guard_borrows_receiver() {
+    let out = crate::support::compile_and_run(r#"<?php
+trait Invalid { public string $bad = parent::class; }
+class Consumer { use Invalid; }
+class Valid { public string $value = 'ok'; }
+echo Consumer::class, '|';
+$defaults = (new ReflectionClass(Valid::class))->getDefaultProperties();
+echo $defaults['value'], '|';
+$value = (new ReflectionClass(Valid::class))->newInstanceWithoutConstructor();
+echo $value->value;
+"#);
+    assert_eq!(out, "Consumer|ok|ok");
+}
+
+/// Dynamic eval reflection sees the same native deferred default metadata as AOT callers.
+#[test]
+fn test_property_default_review_native_eval_reflection_defaults() {
+    let out = crate::support::compile_and_run(r#"<?php
+trait Invalid { public string $bad = parent::class; }
+class Consumer { use Invalid; public string $valid = 'ok'; }
+class ConstantValue { public int $bad = parent::A; }
+$source = 'foreach (["Consumer", "ConstantValue"] as $class) {'
+    . '$property = new ReflectionProperty($class, "bad");'
+    . 'echo $property->hasDefaultValue() ? "default|" : "missing|";'
+    . 'try { $property->getDefaultValue(); } catch (Error $e) { echo $e->getMessage(), "|"; }}'
+    . 'echo (new ReflectionProperty("Consumer", "valid"))->getDefaultValue();';
+eval($source);
+"#);
+    assert_eq!(out, "default|Cannot use \"parent\" when current class scope has no parent|default|Cannot access \"parent\" when current class scope has no parent|ok");
+}
+
 /// Runtime class allocation reports a default error before creating or destroying the object.
 #[test]
 fn test_property_default_review_late_static_initialization() {

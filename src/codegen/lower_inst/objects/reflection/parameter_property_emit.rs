@@ -407,6 +407,12 @@ pub(super) fn emit_reflection_owner_default_value_property(
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, default_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, default_offset + 8);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    if class_name == "ReflectionProperty" {
+        let message = match default_value {
+            Some(ReflectionParameterDefaultValue::DeferredError(message)) => message.as_str(),
+            _ => "",
+        };
+        emit_reflection_owner_string_property_by_name(ctx, class_name, "__default_error", message)?;
+    }
     Ok(())
 }
-

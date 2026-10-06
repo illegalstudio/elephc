@@ -1018,7 +1018,11 @@ pub(super) fn eval_reflection_member_object_result(
         member.is_abstract,
         member.is_readonly,
     );
-    if member.default_value.is_some() {
+    if member.default_value.is_some() || (owner_kind == EVAL_REFLECTION_OWNER_PROPERTY
+        && member.declaring_class_name.as_deref().is_some_and(|class| {
+            context.native_property_default_error(class, reflected_name).is_some()
+        }))
+    {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE;
     }
     if member.is_promoted {

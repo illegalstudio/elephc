@@ -1,5 +1,5 @@
 //! Purpose:
-//! Supplies conservative trait-initialization throw facts when checker schemas are unavailable.
+//! Supplies conservative class-initialization throw facts when checker schemas are unavailable.
 //!
 //! Called from:
 //! - `ExceptionFlowAnalysis::from_program`.
@@ -10,7 +10,7 @@
 
 use super::*;
 
-/// Retains trait-import initialization errors through the AST-only compatibility API.
+/// Retains possible property initialization errors through the AST-only compatibility API.
 pub(super) fn imported_default_errors(program: &[Stmt]) -> HashSet<String> {
     let mut errors = HashSet::new();
     let mut parents = Vec::new();
@@ -31,8 +31,13 @@ pub(super) fn imported_default_errors(program: &[Stmt]) -> HashSet<String> {
 fn collect(program: &[Stmt], errors: &mut HashSet<String>, parents: &mut Vec<(String, String)>) {
     for statement in program {
         match &statement.kind {
-            StmtKind::ClassDecl { name, trait_uses, extends, .. } => {
-                if !trait_uses.is_empty() { errors.insert(php_symbol_key(name)); }
+            StmtKind::ClassDecl { name, trait_uses, extends, properties, .. } => {
+                if !trait_uses.is_empty() || (extends.is_none()
+                    && properties.iter().any(|property| property.default.is_some()))
+                {
+                    // Unresolved constant defaults may raise only when the class initializes.
+                    errors.insert(php_symbol_key(name));
+                }
                 if let Some(parent) = extends {
                     parents.push((php_symbol_key(name), php_symbol_key(parent.as_str())));
                 }

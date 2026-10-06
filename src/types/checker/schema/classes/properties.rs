@@ -46,13 +46,14 @@ pub(super) fn apply_properties(
         let normalized = match normalized {
             Ok(default) => default,
             Err(error) if class.extends.is_none()
-                && error.message == "Cannot use \"parent\" when current class scope has no parent"
-                && checker.trait_imported_properties.get(&class.name)
-                    .is_some_and(|names| names.contains(&prop.name)) =>
+                && (error.message == "Cannot access \"parent\" when current class scope has no parent"
+                    || (error.message == "Cannot use \"parent\" when current class scope has no parent"
+                        && checker.trait_imported_properties.get(&class.name)
+                            .is_some_and(|names| names.contains(&prop.name)))) =>
             {
-                // Preserve the declaration, but no materializer may consume this unresolved tree.
-                state.deferred_property_default_error = Some(error.message);
-                None
+                // Class initialization and individual default reflection have distinct boundaries.
+                state.deferred_property_default_error.get_or_insert_with(|| error.message.clone());
+                Some(super::constants::deferred_default_error(error.message, error.span))
             }
             Err(error) => return Err(error),
         };

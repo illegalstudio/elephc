@@ -162,6 +162,7 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
         | ReflectionParameterDefaultValue::Bool(_)
         | ReflectionParameterDefaultValue::Float(_)
         | ReflectionParameterDefaultValue::Str(_)
+        | ReflectionParameterDefaultValue::DeferredError(_)
         | ReflectionParameterDefaultValue::Null => false,
     }
 }

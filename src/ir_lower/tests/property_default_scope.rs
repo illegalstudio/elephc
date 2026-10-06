@@ -11,6 +11,58 @@
 use crate::codegen::platform::Target;
 use std::path::Path;
 
+/// Deferred default presence, scope and reflection guards share one target-independent contract.
+fn deferred_reflection_defaults_on_target(target_name: &str) {
+    let source = r#"<?php
+trait Invalid { public string $bad = parent::class; }
+class Consumer { use Invalid; public static array $names = [parent::A]; }
+class Promoted { public function __construct(public int $value = parent::A) {} }
+class Valid { public string $value = 'ok'; public function run($value = self::LABEL) {} const LABEL = 'value'; }
+echo Consumer::class;
+$bad = new ReflectionProperty(Consumer::class, 'bad');
+echo $bad->hasDefaultValue();
+try { $bad->getDefaultValue(); } catch (Error $error) { echo $error->getMessage(); }
+echo (new ReflectionClass(Valid::class))->getDefaultProperties()['value'];
+$value = (new ReflectionClass(Valid::class))->newInstanceWithoutConstructor();
+echo $value->value;
+$source = $argv[1];
+eval($source);
+"#;
+    let module = super::lower_source_at_for_target(source, Path::new("main.php"), Path::new("."),
+        Target::parse(target_name).unwrap());
+    let consumer = &module.class_infos["Consumer"];
+    let slot = consumer.visible_property_index("bad").unwrap();
+    assert!(matches!(consumer.defaults[slot].as_ref().unwrap().kind,
+        crate::parser::ast::ExprKind::Throw(_)), "{target_name}");
+    let valid = &module.class_infos["Valid"];
+    let run = valid.method_decls.iter().find(|method| method.name == "run").unwrap();
+    assert!(matches!(run.params[0].2.as_ref().unwrap().kind,
+        crate::parser::ast::ExprKind::ScopedConstantAccess {
+            receiver: crate::parser::ast::StaticReceiver::Self_, ..
+        }), "{target_name}: preserve source-visible constant receiver");
+    let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+    assert!(main.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::Borrow),
+        "{target_name}: metadata guards must borrow their receiver");
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target_name}: {error:?}"));
+    assert!(assembly.contains("__elephc_eval_register_native_property_default_error"), "{target_name}");
+}
+
+/// Separates target cases so each keeps CI's normal per-test timeout budget.
+macro_rules! deferred_reflection_target_case {
+    ($name:ident, $target:literal) => {
+        /// Verifies deferred default reflection metadata and assembly for one supported target.
+        #[test]
+        fn $name() { deferred_reflection_defaults_on_target($target); }
+    };
+}
+
+deferred_reflection_target_case!(property_default_review_reflection_macos_aarch64, "macos-aarch64");
+deferred_reflection_target_case!(property_default_review_reflection_ios_arm64, "ios-arm64");
+deferred_reflection_target_case!(property_default_review_reflection_ios_sim_arm64, "ios-sim-arm64");
+deferred_reflection_target_case!(property_default_review_reflection_linux_aarch64, "linux-aarch64");
+deferred_reflection_target_case!(property_default_review_reflection_linux_x86_64, "linux-x86_64");
+
 /// Valid and unbound trait defaults both pass through target-independent EIR.
 #[test]
 fn property_default_review_all_supported_targets() {

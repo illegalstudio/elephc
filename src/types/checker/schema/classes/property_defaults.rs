@@ -90,7 +90,13 @@ pub(super) fn validate_promoted_defaults(
                 continue;
             }
             if let Some(default) = default {
-                super::constants::validate_property_default_in_scope(default, class_name, parent_name)?;
+                if let Err(error) = super::constants::validate_property_default_in_scope(
+                    default, class_name, parent_name,
+                ) {
+                    if error.message != "Cannot access \"parent\" when current class scope has no parent" {
+                        return Err(error);
+                    }
+                }
             }
         }
     }

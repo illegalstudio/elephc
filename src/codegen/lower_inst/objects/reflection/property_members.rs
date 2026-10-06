@@ -292,6 +292,14 @@ pub(super) fn reflection_property_slot_default_value(
     default: Option<&Expr>,
 ) -> Option<ReflectionParameterDefaultValue> {
     match default {
+        Some(Expr { kind: ExprKind::Throw(exception), .. }) => {
+            let ExprKind::NewObject { class_name, args } = &exception.kind else { return None };
+            let [Expr { kind: ExprKind::StringLiteral(message), .. }] = args.as_slice() else {
+                return None;
+            };
+            (class_name.as_str() == "Error")
+                .then(|| ReflectionParameterDefaultValue::DeferredError(message.clone()))
+        }
         Some(default) => reflection_literal_parameter_default_value(default),
         None if !is_declared => Some(ReflectionParameterDefaultValue::Null),
         None => None,
@@ -387,8 +395,8 @@ pub(super) fn reflection_default_value_to_string(
         ReflectionParameterDefaultValue::Str(value) => Some(format!("'{value}'")),
         ReflectionParameterDefaultValue::Null => Some(String::from("NULL")),
         ReflectionParameterDefaultValue::Object { .. }
+        | ReflectionParameterDefaultValue::DeferredError(_)
         | ReflectionParameterDefaultValue::Array(_)
         | ReflectionParameterDefaultValue::AssocArray(_) => None,
     }
 }
-

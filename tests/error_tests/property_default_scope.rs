@@ -61,6 +61,8 @@ fn test_property_default_scope_parent_without_parent() {
         "<?php class Probe { public string $name = parent::class; }",
         "<?php class Probe { public array $names = [parent::class]; }",
         "<?php class Probe { public function __construct(public string $name = parent::class) {} }",
+        "<?php class Probe { public function value($name = parent::class) {} }",
+        "<?php class Probe { public static function value(array $names = [parent::class]) {} }",
     ] {
         expect_error(source, "Cannot use \"parent\" when current class scope has no parent");
     }

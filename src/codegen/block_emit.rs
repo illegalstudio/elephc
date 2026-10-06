@@ -1022,6 +1022,10 @@ pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -
         let Some(class_info) = ctx.module.class_infos.get(&class_name) else {
             continue;
         };
+        if class_info.deferred_property_default_error.is_some() {
+            // Initialization raises through EIR before any of this class's storage is observed.
+            continue;
+        }
         for (index, (property, php_type)) in class_info.static_properties.iter().enumerate() {
             let declaring_class = class_info
                 .static_property_declaring_classes

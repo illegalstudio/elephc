@@ -9,6 +9,23 @@
 
 use super::*;
 
+/// Preserves native default presence and raises per-slot errors only on materialization.
+pub(in crate::interpreter) fn eval_reflection_property_default_error_result(
+    identity: u64, method_name: &str, evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("hasDefaultValue")
+        && !method_name.eq_ignore_ascii_case("getDefaultValue") { return Ok(None); }
+    let Some((class, property)) = context.eval_reflection_property(identity) else { return Ok(None) };
+    let Some(message) = context.native_property_default_error(class, property).map(str::to_string)
+        else { return Ok(None) };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    if method_name.eq_ignore_ascii_case("hasDefaultValue") {
+        return values.bool_value(true).map(Some);
+    }
+    super::super::throwables::eval_throw_error(&message, context, values)
+}
+
 /// Handles eval-backed `ReflectionProperty` hook-inspection calls.
 pub(in crate::interpreter) fn eval_reflection_property_hooks_result(
     identity: u64,

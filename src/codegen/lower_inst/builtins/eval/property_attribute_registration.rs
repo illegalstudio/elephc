@@ -31,7 +31,18 @@ pub(super) fn register_eval_native_property_default(
         abi::int_arg_reg_name(ctx.emitter.target, 2),
         property_key_len as i64,
     );
-    let symbol = match &registration.default {
+    let default = match &registration.default {
+        EvalNativePropertyDefault::Value(default) => default,
+        EvalNativePropertyDefault::DeferredError(message) => {
+            let (label, len) = ctx.data.add_string(message.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &label);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), len as i64);
+            let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_register_native_property_default_error");
+            abi::emit_call_label(ctx.emitter, &symbol);
+            return;
+        }
+    };
+    let symbol = match default {
         EvalNativeCallableDefault::Scalar { kind, payload } => {
             abi::emit_load_int_immediate(
                 ctx.emitter,
@@ -64,7 +75,7 @@ pub(super) fn register_eval_native_property_default(
                 .extern_symbol("__elephc_eval_register_native_property_default_string")
         }
         EvalNativeCallableDefault::Array(_) => {
-            let spec = encode_eval_native_array_default(&registration.default);
+            let spec = encode_eval_native_array_default(default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
             abi::emit_symbol_address(
                 ctx.emitter,

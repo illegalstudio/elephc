@@ -29,7 +29,12 @@ pub(super) fn resolve_lexical_class_constant_value(
     value: &Expr,
     class: &FlattenedClass,
 ) -> Result<Expr, CompileError> {
-    rewrite_expr(value, &class.name, class.extends.as_deref())
+    rewrite_expr(value, &class.name, class.extends.as_deref()).map_err(|mut error| {
+        if is_missing_parent_default_error(&error) {
+            error.message = format!("Class '{}' has no parent class", class.name);
+        }
+        error
+    })
 }
 
 /// Validates a property's lexical scope while retaining PHP's missing-parent diagnostic.
@@ -47,12 +52,23 @@ pub(crate) fn normalize_property_default_in_scope(
     class_name: &str,
     parent_name: Option<&str>,
 ) -> Result<Expr, CompileError> {
-    rewrite_expr(value, class_name, parent_name).map_err(|mut error| {
-        if error.message == format!("Class '{}' has no parent class", class_name) {
-            error.message = "Cannot use \"parent\" when current class scope has no parent".to_string();
-        }
-        error
-    })
+    rewrite_expr(value, class_name, parent_name)
+}
+
+/// Identifies errors that can remain lazy in imported or ordinary constant defaults.
+pub(crate) fn is_missing_parent_default_error(error: &CompileError) -> bool {
+    matches!(error.message.as_str(),
+        "Cannot use \"parent\" when current class scope has no parent"
+        | "Cannot access \"parent\" when current class scope has no parent")
+}
+
+/// Retains a default's presence and lexical error without evaluating it at declaration time.
+pub(crate) fn deferred_default_error(message: String, span: Span) -> Expr {
+    let exception = Expr::new(ExprKind::NewObject {
+        class_name: Name::unqualified("Error"),
+        args: vec![Expr::new(ExprKind::StringLiteral(message), span)],
+    }, span);
+    Expr::new(ExprKind::Throw(Box::new(exception)), span)
 }
 
 /// Recursively rewrites all expressions in a class-constant value, resolving lexical
@@ -338,7 +354,7 @@ fn rewrite_expr(
         }
         ExprKind::ClassConstant { receiver } => {
             let StaticReceiver::Named(name) =
-                rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?
+                rewrite_constant_receiver(receiver, class_name, parent_name, expr.span, true)?
             else { unreachable!("constant receiver is bound to a class name") };
             ExprKind::StringLiteral(name.as_str().trim_start_matches('\\').to_string())
         }
@@ -347,7 +363,7 @@ fn rewrite_expr(
         },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess {
-                receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,
+                receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span, false)?,
                 name: name.clone(),
             }
         }
@@ -444,6 +460,7 @@ fn rewrite_constant_receiver(
     class_name: &str,
     parent_name: Option<&str>,
     span: Span,
+    class_name_resolution: bool,
 ) -> Result<StaticReceiver, CompileError> {
     match receiver {
         StaticReceiver::Named(name) => Ok(StaticReceiver::Named(name.clone())),
@@ -452,7 +469,11 @@ fn rewrite_constant_receiver(
             .map(fqn_name)
             .map(StaticReceiver::Named)
             .ok_or_else(|| {
-                CompileError::new(span, &format!("Class '{}' has no parent class", class_name))
+                CompileError::new(span, if class_name_resolution {
+                    "Cannot use \"parent\" when current class scope has no parent"
+                } else {
+                    "Cannot access \"parent\" when current class scope has no parent"
+                })
             }),
         StaticReceiver::Static => Err(CompileError::new(
             span,

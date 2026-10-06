@@ -43,6 +43,7 @@ pub(super) fn lower_method_call(
     let object_expr = object;
     let object = lower_expr(ctx, object_expr);
     if op == Op::MethodCall && args.is_empty()
+        && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
         && matches!(php_symbol_key(method).as_str(),
             "getdefaultproperties" | "getstaticproperties" | "newinstancewithoutconstructor")
     {
@@ -54,7 +55,11 @@ pub(super) fn lower_method_call(
                 ctx.guard_call_argument(object, 0, expr.span);
                 ctx.end_argument_guard_scope();
             }
-            let name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
+            // Inspect metadata without consuming an inline reflector needed by the real call.
+            let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None,
+                ctx.builder.value_php_type(object.value).clone(), Op::Borrow.default_effects(),
+                Some(expr.span));
+            let name = lower_property_get_from_value(ctx, borrowed, "__name", Op::PropGet, expr);
             crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name, expr.span);
             if owns_receiver { ctx.unguard_call_argument(object.value, expr.span); }
         }

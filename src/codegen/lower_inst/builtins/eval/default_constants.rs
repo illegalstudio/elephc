@@ -31,15 +31,25 @@ pub(super) fn eval_native_property_default(
     is_declared: bool,
     is_abstract: bool,
     default_context: &EvalNativeDefaultContext<'_>,
-) -> Option<EvalNativeCallableDefault> {
+) -> Option<EvalNativePropertyDefault> {
     if let Some(default) = default {
+        if let ExprKind::Throw(exception) = &default.kind {
+            if let ExprKind::NewObject { class_name, args } = &exception.kind {
+                if let [Expr { kind: ExprKind::StringLiteral(message), .. }] = args.as_slice() {
+                    if class_name.as_str() == "Error" {
+                        return Some(EvalNativePropertyDefault::DeferredError(message.clone()));
+                    }
+                }
+            }
+        }
         return eval_native_literal_default(default)
-            .or_else(|| eval_native_array_default(default, default_context, 0));
+            .or_else(|| eval_native_array_default(default, default_context, 0))
+            .map(EvalNativePropertyDefault::Value);
     }
     (!is_declared && !is_abstract).then_some(EvalNativeCallableDefault::Scalar {
         kind: NATIVE_DEFAULT_NULL,
         payload: 0,
-    })
+    }).map(EvalNativePropertyDefault::Value)
 }
 
 /// Encodes an object-valued native callable default for libelephc-magician.

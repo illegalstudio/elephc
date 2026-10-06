@@ -9,6 +9,23 @@
 
 use super::*;
 
+/// Materializes a property's retained default without initializing unrelated class defaults.
+pub(super) fn builtin_reflection_property_get_default_value_method() -> ClassMethod {
+    let span = crate::span::Span::dummy();
+    let mut method = builtin_reflection_class_mixed_method("getDefaultValue", "__default_value");
+    let message = reflection_this_property("__default_error", span);
+    method.body.insert(0, Stmt::new(StmtKind::If {
+        condition: binary_expr(message.clone(), BinOp::NotEq, string_lit("", span), span),
+        then_body: vec![Stmt::new(StmtKind::Throw(Expr::new(ExprKind::NewObject {
+            class_name: Name::unqualified("Error"),
+            args: vec![message],
+        }, span)), span)],
+        elseif_clauses: Vec::new(),
+        else_body: None,
+    }, span));
+    method
+}
+
 /// Returns `ReflectionProperty::getValue()` for dynamic public instance reflectors.
 pub(super) fn builtin_reflection_property_get_value_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
