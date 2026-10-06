@@ -22774,7 +22774,7 @@ EvalPromotedAsymBase::$privateValue from global scope"
     );
 }
 
-/// Verifies eval-declared inherited properties preserve PHP redeclaration invariants.
+/// Compatible eval redeclarations retain inherited setter access, including readonly additions.
 #[test]
 fn test_eval_declared_inherited_property_redeclaration_contracts() {
     let out = compile_and_run(
@@ -22797,7 +22797,7 @@ class EvalPropertyReadonlyAddBase {
     public int $count = 0;
 }
 class EvalPropertyReadonlyAddChild extends EvalPropertyReadonlyAddBase {
-    public readonly int $count;
+    public public(set) readonly int $count;
     public function __construct() { $this->count = 7; }
 }
 class EvalPropertyReadonlyWidenBase {
@@ -22816,7 +22816,11 @@ echo $box->value . ":" . $readonly->count . ":" . $widened->count . ":" . $widen
 "#,
     );
     assert_eq!(out, "ok:7:9:9");
+}
 
+/// A changed inherited property type fails in its own bounded eval compilation.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts_rejects_type() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalPropertyTypeBase {
@@ -22831,7 +22835,11 @@ class EvalPropertyStringChild extends EvalPropertyTypeBase {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Narrowing read visibility retains its declaration-time eval rejection.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts_rejects_read_visibility() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalPropertyPublicBase {
@@ -22846,7 +22854,11 @@ class EvalPropertyProtectedChild extends EvalPropertyPublicBase {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Introducing a declared type on an inherited untyped slot remains incompatible.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts_rejects_declared_type() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalPropertyUntypedBase {
@@ -22861,7 +22873,11 @@ class EvalPropertyTypedChild extends EvalPropertyUntypedBase {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Static storage cannot be redeclared as instance storage by an eval child.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts_rejects_storage() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalPropertyStaticBase {
@@ -22876,7 +22892,11 @@ class EvalPropertyInstanceChild extends EvalPropertyStaticBase {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Removing readonly remains forbidden independently of the property's setter metadata.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts_rejects_readonly_removal() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalPropertyReadonlyBase {

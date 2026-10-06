@@ -475,6 +475,24 @@ echo $box->value;
     assert_eq!(out, "7");
 }
 
+/// Direct readonly overwrites evaluate owned operands and remain catchable with implicit set access.
+#[test]
+fn test_asymmetric_review_readonly_direct_write_is_catchable() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public readonly string $value;
+    public function __construct() { $this->value = 'kept'; }
+}
+function receiver(): Box { echo 'receiver|'; return new Box(); }
+function replacement(): string { echo 'rhs|'; return str_repeat('x', 9); }
+try { receiver()->value = replacement(); }
+catch (Error $error) { echo $error->getMessage(); }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "receiver|rhs|Cannot modify readonly property Box::$value");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// An uninitialized readonly fallback runs before the conditional write raises Error.
 #[test]
 fn test_asymmetric_review_readonly_null_coalesce_fallback_still_throws() {

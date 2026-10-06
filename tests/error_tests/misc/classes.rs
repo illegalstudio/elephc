@@ -30,10 +30,12 @@ fn test_asymmetric_review_virtual_getter_can_gain_restricted_setter() {
 /// Implicit readonly protected(set) cannot narrow an inherited explicit public setter.
 #[test]
 fn test_asymmetric_review_readonly_omitted_setter_cannot_narrow_public() {
-    expect_error(
+    for source in [
         "<?php class Base { public public(set) readonly int $x; } class Child extends Base { public readonly int $x; }",
-        "Cannot reduce set visibility when overriding property: Child::$x",
-    );
+        "<?php class Base { public int $x; } class Child extends Base { public readonly int $x; }",
+    ] {
+        expect_error(source, "Cannot reduce set visibility when overriding property: Child::$x");
+    }
 }
 
 /// A restricted private setter makes a publicly readable property implicitly final.
@@ -1351,19 +1353,23 @@ fn test_error_incompatible_trait_constant_composition() {
 /// writable as a dynamic property must not make this one writable too.
 #[test]
 fn test_error_write_to_own_class_private_property_from_global_scope() {
-    expect_error(
+    for source in [
         "<?php class Base { private $p = 1; } $b = new Base(); $b->p = 2;",
-        "Cannot access private property: Base::p",
-    );
+        "<?php class Base { private readonly int $p; public function __construct() { $this->p = 1; } } $b = new Base(); $b->p = 2;",
+    ] {
+        expect_error(source, "Cannot access private property: Base::p");
+    }
 }
 
 /// Verifies a write to a protected property from an unrelated scope is still refused.
 #[test]
 fn test_error_write_to_protected_property_from_an_unrelated_scope() {
-    expect_error(
+    for source in [
         "<?php class Base { protected $q = 1; } $b = new Base(); $b->q = 2;",
-        "Cannot access protected property: Base::q",
-    );
+        "<?php class Base { protected readonly int $q; public function __construct() { $this->q = 1; } } $b = new Base(); $b->q = 2;",
+    ] {
+        expect_error(source, "Cannot access protected property: Base::q");
+    }
 }
 
 /// Verifies `unset()` on a private property the receiver's own class declares is still refused.

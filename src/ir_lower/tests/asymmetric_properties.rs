@@ -23,6 +23,7 @@ class ConditionalReadonly {
 function fallback(): int { echo "fallback"; return 9; }
 function update(ConditionalReadonly $box): void { $box->implicit ??= fallback(); }
 function updateNullable(ConditionalReadonly $box): void { $box->nullable ??= fallback(); }
+function overwrite(ConditionalReadonly $box): void { $box->implicit = fallback(); }
 $box = new ConditionalReadonly();
 try { update($box); } catch (Error $e) { echo "error"; }
 $properties = (new ReflectionClass(ConditionalReadonly::class))->getProperties(ReflectionProperty::IS_PROTECTED_SET);
@@ -41,6 +42,9 @@ echo count($properties);
         assert!(probe.instructions.iter().any(|id| function.instruction(*id).unwrap().op == Op::UnsetLocal),
             "{target}: the consumed probe cannot remain in its owner slot");
     }
+    let overwrite = module.functions.iter().find(|function| function.name == "overwrite").unwrap();
+    assert!(overwrite.blocks.iter().any(|block| matches!(block.terminator,
+        Some(Terminator::Throw { .. }))), "{target}: direct readonly writes remain catchable");
     crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
 
