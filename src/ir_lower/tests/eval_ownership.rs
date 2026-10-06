@@ -167,9 +167,8 @@ fn first_post_eval_string_store_retires_the_runtime_reloaded_slot_linux_x86_64()
     check_first_post_eval_string_store_retires_the_runtime_reloaded_slot("linux-x86_64");
 }
 
-/// A scalar first store keeps its deferred retirement when later control flow widens the slot.
-#[test]
-fn first_post_eval_scalar_store_retires_a_later_widened_slot_on_all_targets() {
+/// Checks deferred scalar retirement and assembly emission on one independently scheduled target.
+fn check_first_post_eval_scalar_store_retires_a_later_widened_slot(target: &str) {
     let source = r#"<?php
 function opaqueEvalFutureMixed(string $value): mixed { return $value; }
 function widenAfterOpaqueEval(string $source, bool $replace): mixed {
@@ -182,33 +181,61 @@ function widenAfterOpaqueEval(string $source, bool $replace): mixed {
 }
 echo widenAfterOpaqueEval('return null; // ' . $argc, $argc > 1);
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let function = module.functions.iter()
-            .find(|function| function.name == "widenAfterOpaqueEval").unwrap();
-        let eval = function.instructions.iter().position(|inst| {
-            inst.op == Op::LanguageConstructCall
-                && matches!(inst.immediate, Some(Immediate::ProfiledData { .. }))
-        }).expect("opaque eval call");
-        let local = function.locals.iter()
-            .find(|local| local.name.as_deref() == Some("future")).unwrap();
-        assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
-        let slot = Some(Immediate::LocalSlot(local.id));
-        let store = function.instructions.iter().position(|inst| {
-            inst.op == Op::StoreLocal && inst.immediate == slot
-        }).expect("first future-local store");
-        let stored = function.value(function.instructions[store].operands[0]).unwrap();
-        assert_eq!(stored.php_type.codegen_repr(), crate::types::PhpType::Int, "{target}");
-        assert!(eval < store, "{target}: the local is first assigned after eval");
-        assert_eq!(function.instructions[eval + 1..store].iter().filter(|inst| {
-            inst.op == Op::ReleaseLocalSlot && inst.immediate == slot
-        }).count(), 1, "{target}: deferred retirement must survive until final slot typing");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
-    }
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let function = module.functions.iter()
+        .find(|function| function.name == "widenAfterOpaqueEval").unwrap();
+    let eval = function.instructions.iter().position(|inst| {
+        inst.op == Op::LanguageConstructCall
+            && matches!(inst.immediate, Some(Immediate::ProfiledData { .. }))
+    }).expect("opaque eval call");
+    let local = function.locals.iter()
+        .find(|local| local.name.as_deref() == Some("future")).unwrap();
+    assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+    let slot = Some(Immediate::LocalSlot(local.id));
+    let store = function.instructions.iter().position(|inst| {
+        inst.op == Op::StoreLocal && inst.immediate == slot
+    }).expect("first future-local store");
+    let stored = function.value(function.instructions[store].operands[0]).unwrap();
+    assert_eq!(stored.php_type.codegen_repr(), crate::types::PhpType::Int, "{target}");
+    assert!(eval < store, "{target}: the local is first assigned after eval");
+    assert_eq!(function.instructions[eval + 1..store].iter().filter(|inst| {
+        inst.op == Op::ReleaseLocalSlot && inst.immediate == slot
+    }).count(), 1, "{target}: deferred retirement must survive until final slot typing");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+/// The first post-eval scalar store retires a later widened slot on macos-aarch64.
+#[test]
+fn first_post_eval_scalar_store_retires_a_later_widened_slot_macos() {
+    check_first_post_eval_scalar_store_retires_a_later_widened_slot("macos-aarch64");
+}
+
+/// The first post-eval scalar store retires a later widened slot on ios-arm64.
+#[test]
+fn first_post_eval_scalar_store_retires_a_later_widened_slot_ios_device() {
+    check_first_post_eval_scalar_store_retires_a_later_widened_slot("ios-arm64");
+}
+
+/// The first post-eval scalar store retires a later widened slot on ios-sim-arm64.
+#[test]
+fn first_post_eval_scalar_store_retires_a_later_widened_slot_ios_simulator() {
+    check_first_post_eval_scalar_store_retires_a_later_widened_slot("ios-sim-arm64");
+}
+
+/// The first post-eval scalar store retires a later widened slot on linux-aarch64.
+#[test]
+fn first_post_eval_scalar_store_retires_a_later_widened_slot_linux_arm64() {
+    check_first_post_eval_scalar_store_retires_a_later_widened_slot("linux-aarch64");
+}
+
+/// The first post-eval scalar store retires a later widened slot on linux-x86_64.
+#[test]
+fn first_post_eval_scalar_store_retires_a_later_widened_slot_linux_x86_64() {
+    check_first_post_eval_scalar_store_retires_a_later_widened_slot("linux-x86_64");
 }
 
 /// Main's first process-variable write retires its entry owner without inserting a null initializer.
