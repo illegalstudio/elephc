@@ -50,6 +50,7 @@ mod boxed_array_predicates;
 mod boxed_array_set_comparators;
 mod reference_loop_cleanup;
 mod static_callable_string_owners;
+mod static_nested_updates;
 mod reference_cells;
 mod reference_detach;
 mod reference_property_payload;

@@ -9,6 +9,88 @@
 
 use super::*;
 
+/// A throwing warning handler releases the pending nested update's retained parents.
+#[test]
+fn test_static_prefix_review_throwing_handler_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = [[null]]; }
+set_error_handler(function($level, $message) { throw new Error("stop"); });
+try { ++T::$items[0][0][1]; } catch (Error $e) { echo "caught:"; }
+restore_error_handler();
+echo json_encode(T::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "caught:[[[]]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing compound RHS releases the write-context parent without changing the leaf.
+#[test]
+fn test_static_prefix_review_throwing_rhs_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = [[7]]; }
+function fail(): int { throw new Error("stop"); }
+try { T::$items[0][0] += fail(); } catch (Error $e) { echo "caught:"; }
+echo json_encode(T::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "caught:[[7]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A null intermediate becomes an array before the leaf warning handler runs.
+#[test]
+fn test_static_prefix_review_autovivifies_null_before_handler() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = [[null]]; }
+set_error_handler(function($level, $message) {
+    echo json_encode(T::$items), ":", $message, "|";
+    T::$items[0][0]["extra"] = 9;
+    return true;
+});
+++T::$items[0][0][1];
+restore_error_handler();
+echo json_encode(T::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[[]]]:Undefined array key 1|[[{\"extra\":9}]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A handler's replacement of an autovivified parent is not overwritten by the pending update.
+#[test]
+fn test_static_prefix_review_missing_parent_preserves_handler_write() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = [[1 => 10]]; }
+set_error_handler(function($level, $message) {
+    echo json_encode(T::$items), ":", $message, "|";
+    T::$items[1]["seen"] = 1;
+    return true;
+});
+++T::$items[1][1];
+restore_error_handler();
+echo json_encode(T::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"1\":10}]:Undefined array key 1|[{\"1\":10},{\"seen\":1}]:Undefined array key 1|[{\"1\":10},{\"seen\":1}]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A literal string key used by both halves of a nested update leaves no heap owners behind.
+#[test]
+fn test_static_prefix_review_literal_string_key_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $missing = [[]]; }
+set_error_handler(function($level, $message) { return true; });
+++T::$missing[0]["before"];
+restore_error_handler();
+echo json_encode(T::$missing);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"before\":1}]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A later effectful dimension cannot change an earlier mutable static-property key.
 #[test]
 fn test_static_property_array_prefix_update_nested_effectful_key_order() {
