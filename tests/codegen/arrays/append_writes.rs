@@ -26,6 +26,23 @@ fn test_append_review_existing_index_checker() {
     }
 }
 
+/// String-keyed missing buckets retain dynamic array storage through append write-back.
+#[test]
+fn test_append_review_string_bucket_autovivification() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$groups = [];
+$key = $argc > 1 ? 'other' : 'k';
+$groups[$key][] = 1;
+$groups[$key][] = 2;
+$groups['j'][] += 4;
+echo count($groups), ':', count($groups[$key]), ':', $groups[$key][0],
+    $groups[$key][1], ':', count($groups['j']), ':', $groups['j'][0];
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:2:12:1:4");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Separates constructor and nested-array ownership from the new append expression path.
 #[test]
 fn test_append_review_nested_property_ownership_control() {

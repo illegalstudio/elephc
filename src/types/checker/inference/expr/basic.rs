@@ -249,15 +249,16 @@ impl Checker {
                         Ok(PhpType::Str)
                     }
                     PhpType::Array(elem_ty) => {
-                        if **elem_ty == PhpType::Never {
-                            // Never describes the element type of an empty array, not a
-                            // non-returning read. A missing element yields null in PHP.
-                            Ok(PhpType::Void)
-                        } else if normalized_idx_ty != PhpType::Int {
+                        if normalized_idx_ty != PhpType::Int {
                             // PHP allows string keys on indexed arrays: the array
                             // promotes to hash at runtime. Return the element type
                             // widened to Mixed so ?? / isset / reads type-check.
                             Ok(PhpType::Mixed)
+                        } else if **elem_ty == PhpType::Never {
+                            // Never describes the element type of an empty indexed array,
+                            // not a non-returning read. String keys keep the dynamic hash
+                            // shape above so nested append write-back can auto-vivify them.
+                            Ok(PhpType::Void)
                         } else {
                             Ok(*elem_ty.clone())
                         }
