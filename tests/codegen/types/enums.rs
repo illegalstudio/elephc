@@ -9,6 +9,74 @@
 
 use super::*;
 
+/// Trait magic constants retain trait identity while binding class identity to each consumer.
+#[test]
+fn test_enum_review_trait_magic_constant_values() {
+    let out = compile_and_run(r#"<?php
+namespace MagicEnum;
+trait T { const N = __CLASS__; const T = __TRAIT__; const BOTH = [__CLASS__, __TRAIT__]; }
+trait Middle { use T; }
+enum E { use Middle; case A; const OWN = __CLASS__; }
+enum F { use T; case B; }
+echo E::N, ':', E::T, ':', E::BOTH[0], ':', E::BOTH[1], ':', E::OWN, ':', F::N;
+"#);
+    assert_eq!(out, "MagicEnum\\E:MagicEnum\\T:MagicEnum\\E:MagicEnum\\T:MagicEnum\\E:MagicEnum\\F");
+}
+
+/// Enum abstract trait contracts accept final self returns and legal optional parameter widening.
+#[test]
+fn test_enum_review_legal_trait_signatures() {
+    let out = compile_and_run(r#"<?php
+trait StaticReturn { abstract public function f(): static; }
+enum E { use StaticReturn; case A; public function f(): self { return $this; } }
+trait Parameters { abstract public function f(int $x): int; }
+enum Extra { use Parameters; case A; public function f(int $x, int $y = 0): int { return $x + $y; } }
+enum Optional { use Parameters; case A; public function f(int $x = 1): int { return $x; } }
+enum ProtectedBody {
+    use Parameters { f as protected; }
+    case A;
+    protected function f(int $x): int { return $x; }
+    public function call(): int { return $this->f(1); }
+}
+echo E::A->f()->name, ':', Extra::A->f(1), ':', Optional::A->f(), ':', ProtectedBody::A->call();
+"#);
+    assert_eq!(out, "A:1:1:1");
+}
+
+/// Enums validate transitive interface and nested adapted trait contracts without changing dispatch.
+#[test]
+fn test_enum_review_transitive_interface_and_nested_trait_contracts() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+trait Requirement { abstract public function f(int $x): int; }
+trait Adapted { use Requirement { f as protected; } }
+interface ParentContract { public function label(): string; }
+interface Contract extends ParentContract { public static function make(): static; }
+enum E implements Contract {
+    use Adapted;
+    case A;
+    protected function f(int $x = 1, int $extra = 2): int { return $x + $extra; }
+    public function label(): string { return 'value:' . $this->f(); }
+    public static function make(): self { return self::A; }
+}
+
+function describe(ParentContract $value): string { return $value->label(); }
+echo describe(E::make()), ':', E::A instanceof ParentContract ? 'yes' : 'no';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "value:3:yes");
+    // A bare native enum case already retains its singleton at shutdown. Keep this
+    // frontend regression bounded by that control without claiming singleton cleanup.
+    let baseline = compile_and_run_with_heap_debug("<?php enum E { case A; } echo E::A->name;");
+    assert!(baseline.success, "{}", baseline.stderr);
+    for metric in ["live_blocks=", "live_bytes="] {
+        let retained = |stderr: &str| stderr.lines().next().unwrap()
+            .split_whitespace().find_map(|field| field.strip_prefix(metric))
+            .unwrap().parse::<usize>().unwrap();
+        assert!(retained(&out.stderr) <= retained(&baseline.stderr), "{}", out.stderr);
+    }
+}
+
+
 /// Trait and direct enum constants bind lexical receivers before reflection and native lowering.
 #[test]
 fn test_enum_trait_constant_lexical_receivers() {
@@ -747,7 +815,7 @@ fn test_enum_method_uses_self_constant() {
 #[test]
 fn test_example_enum_methods_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enum-methods/main.php"));
-    assert_eq!(out, "red/black\ndiamonds\nblack\n52\nclubs\n");
+    assert_eq!(out, "red/black\ndiamonds\nblack\n52\nclubs\nSuit\n");
 }
 
 /// Verifies a pure (unit) enum case exposes the read-only `->name` property holding the

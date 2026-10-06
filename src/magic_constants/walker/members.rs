@@ -8,11 +8,18 @@
 //! Key details:
 //! - Member traversal preserves declaration metadata while updating only magic-constant-bearing children.
 
-use crate::parser::ast::{ClassMethod, ClassProperty};
+use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty};
 
 use super::exprs::walk_expr;
 use super::stmts::walk_program;
 use super::Pass;
+
+/// Walks a declaration constant's initializer without changing its lexical metadata.
+pub(in crate::magic_constants) fn walk_class_constant<P: Pass>(
+    constant: ClassConst, pass: &mut P,
+) -> ClassConst {
+    ClassConst { value: walk_expr(constant.value, pass), ..constant }
+}
 
 /// Walks a class property, applying `pass` to its default-value expression if present.
 ///

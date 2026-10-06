@@ -9,6 +9,46 @@
 
 use super::*;
 
+/// An alias of an abstract trait method keeps its parameter and return requirements.
+#[test]
+fn test_error_enum_review_abstract_alias_contract() {
+    expect_error("<?php trait T { abstract public function f(int $x): int; } enum E { use T { f as g; } case A; public function f(int $x): int { return $x; } public function g(string $x): string { return $x; } }", "Cannot narrow parameter");
+    expect_error("<?php trait T { abstract public function f(int $x): int; } trait M { use T { f as g; } } enum E { use M; case A; public function f(int $x): int { return $x; } public function g(string $x): string { return $x; } }", "Cannot narrow parameter");
+    expect_error("<?php trait T { abstract public function f(int $x): int; } trait B { public function f(string $x): string { return $x; } } enum E { use T, B { B::f insteadof T; } case A; }", "Cannot narrow parameter");
+}
+
+/// Enums must implement instance and static interface requirements before EIR lowering.
+#[test]
+fn test_error_enum_review_missing_interface_contract() {
+    for declaration in ["public function f(): int;", "public static function f(): int;"] {
+        expect_error(&format!("<?php interface I {{ {declaration} }} enum E implements I {{ case A; }}"), "must implement interface");
+    }
+    expect_error("<?php interface ParentContract { public function f(): int; } interface I extends ParentContract {} enum E implements I { case A; }", "must implement interface");
+}
+
+/// Incorrect parameter, return and visibility contracts are rejected on enum implementations.
+#[test]
+fn test_error_enum_review_incompatible_interface_contract() {
+    expect_error("<?php interface I { public function f(int $x): int; } enum E implements I { case A; public function f(int $x): string { return 'bad'; } }", "incompatible return type");
+    expect_error("<?php interface I { public function f(): int; } enum E implements I { case A; protected function f(): int { return 1; } }", "public");
+    expect_error("<?php interface I { public function f(int $x): int; } enum E implements I { case A; public function f(string $x): int { return 1; } }", "Cannot narrow interface parameter");
+    expect_error("<?php interface I { public static function f(): int; } enum E implements I { case A; public static function f(): string { return 'bad'; } }", "incompatible return type");
+    expect_error("<?php interface I { public function &f(): int; } enum E implements I { case A; public function f(): int { return 1; } }", "Cannot remove by-reference return");
+}
+
+/// Optional trait parameters cannot become required, and extra required parameters narrow calls.
+#[test]
+fn test_error_enum_review_required_trait_parameter_shape() {
+    expect_error("<?php trait T { abstract public function f(int $x = 1): int; } enum E { case A; use T; public function f(int $x): int { return $x; } }", "Incompatible parameter shape");
+    expect_error("<?php trait T { abstract public function f(int $x): int; } enum E { case A; use T; public function f(int $x, int $extra): int { return $x; } }", "Incompatible parameter shape");
+}
+
+/// Compiler-added argument collectors do not constrain the PHP-visible optional trait shape.
+#[test]
+fn test_enum_review_optional_trait_shape_ignores_generated_parameters() {
+    expect_no_error("<?php trait T { abstract public function f(int $x): int; } enum E { case A; use T; public function f(int $x = 1, int $extra = 2): int { return $x + $extra; } } debug_print_backtrace(); echo E::A->f();");
+}
+
 /// Direct and nested trait constants cannot reuse a pure or backed enum case name.
 #[test]
 fn test_error_enum_trait_constant_conflicts_with_case() {

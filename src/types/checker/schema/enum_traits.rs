@@ -12,12 +12,14 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, Program, StmtKind, TraitUse};
+use crate::parser::ast::{ClassMethod, Program, StmtKind, TraitAdaptation, TraitUse};
 use crate::types::{traits::FlattenedClass, PhpType};
 
 use super::super::Checker;
 use super::class_constants::strict_type_accepts;
-use super::validation::{build_method_sig, validate_override_signature, visibility_rank};
+use super::validation::{
+    build_method_sig, late_static_return_compatible, validate_abstract_trait_signature, visibility_rank,
+};
 
 /// Raw requirements remain available even when trait flattening selects a concrete override.
 type TraitMembers<'a> = (&'a [TraitUse], &'a [ClassMethod]);
@@ -33,26 +35,72 @@ pub(crate) fn validate_enum_trait_requirements(
     }
     let mut traits = HashMap::new();
     collect_trait_members(program, &mut traits);
-    let mut pending = enum_unit.used_traits.clone();
-    let mut visited = HashSet::new();
-    while let Some(name) = pending.pop() {
-        let key = php_symbol_key(&name);
-        if !visited.insert(key.clone()) {
-            continue;
-        }
-        let Some((uses, methods)) = traits.get(&key) else { continue; };
-        for usage in *uses {
-            pending.extend(usage.trait_names.iter().map(|name| name.as_str().to_string()));
-        }
-        for required in methods.iter().filter(|method| method.is_abstract) {
+    if let Some(uses) = enum_trait_uses(program, &enum_unit.name) {
+        for required in adapted_requirements(uses, &traits, &mut HashSet::new()) {
             let Some(actual) = enum_unit.methods.iter().find(|method| {
                 !method.is_abstract && method.is_static == required.is_static
                     && php_symbol_key(&method.name) == php_symbol_key(&required.name)
             }) else { continue; };
-            validate_requirement(checker, enum_unit, required, actual)?;
+            validate_requirement(checker, enum_unit, &required, actual)?;
         }
     }
     Ok(())
+}
+
+/// Finds the consuming enum's source adaptations, including namespace-only checker fixtures.
+fn enum_trait_uses<'a>(program: &'a Program, name: &str) -> Option<&'a [TraitUse]> {
+    program.iter().find_map(|stmt| match &stmt.kind {
+        StmtKind::EnumDecl { name: candidate, trait_uses, .. } if candidate == name => {
+            Some(trait_uses.as_slice())
+        }
+        StmtKind::NamespaceBlock { body, .. } => enum_trait_uses(body, name),
+        _ => None,
+    })
+}
+
+/// Preserves abstract requirements through each nested trait alias and visibility adaptation.
+fn adapted_requirements(
+    uses: &[TraitUse], traits: &HashMap<String, TraitMembers<'_>>, visiting: &mut HashSet<String>,
+) -> Vec<ClassMethod> {
+    let mut requirements = Vec::new();
+    for usage in uses {
+        let mut imported = Vec::new();
+        for name in &usage.trait_names {
+            let key = php_symbol_key(name.as_str());
+            if !visiting.insert(key.clone()) { continue; }
+            if let Some((nested, methods)) = traits.get(&key) {
+                let mut members = adapted_requirements(nested, traits, visiting);
+                members.extend(methods.iter().filter(|method| method.is_abstract).cloned());
+                imported.extend(members.into_iter().map(|method| (key.clone(), method)));
+            }
+            visiting.remove(&key);
+        }
+        for adaptation in &usage.adaptations {
+            match adaptation {
+                // Selecting a concrete body does not discard another trait's abstract contract.
+                TraitAdaptation::InsteadOf { .. } => {}
+                TraitAdaptation::Alias { trait_name, method, alias, visibility, .. } => {
+                    let mut aliases = Vec::new();
+                    for (origin, required) in &mut imported {
+                        if php_symbol_key(&required.name) != php_symbol_key(method)
+                            || trait_name.as_ref().is_some_and(|name| php_symbol_key(name.as_str()) != *origin)
+                        { continue; }
+                        if let Some(alias) = alias {
+                            let mut adapted = required.clone();
+                            adapted.name = alias.clone();
+                            if let Some(visibility) = visibility { adapted.visibility = visibility.clone(); }
+                            aliases.push((origin.clone(), adapted));
+                        } else if let Some(visibility) = visibility {
+                            required.visibility = visibility.clone();
+                        }
+                    }
+                    imported.extend(aliases);
+                }
+            }
+        }
+        requirements.extend(imported.into_iter().map(|(_, method)| method));
+    }
+    requirements
 }
 
 /// Collects raw trait declarations, including namespace blocks used by checker-only fixtures.
@@ -79,10 +127,12 @@ fn validate_requirement(
     required.substitute_relative_class_types(&enum_unit.name, None);
     let required_sig = build_method_sig(checker, &required, &enum_unit.name)?;
     let actual_sig = build_method_sig(checker, actual, &enum_unit.name)?;
-    validate_override_signature(
-        checker, enum_unit, actual, &required_sig,
-        required.return_type.as_ref().filter(|hint| hint.contains_late_static()),
-        actual.is_static, true,
+    validate_abstract_trait_signature(
+        checker, actual.span, &enum_unit.name, &actual.name, &actual_sig, &required_sig,
+    )?;
+    let late_static_compatible = late_static_return_compatible(
+        checker, required.return_type.as_ref().filter(|hint| hint.contains_late_static()),
+        actual.return_type.as_ref(), &actual_sig.return_type, &enum_unit.name, actual.span,
     )?;
     if visibility_rank(&actual.visibility) < visibility_rank(&required.visibility) {
         return Err(CompileError::new(actual.span, &format!(
@@ -96,25 +146,12 @@ fn validate_requirement(
             enum_unit.name, actual.name,
         )));
     }
-    for (index, ((name, actual_ty), (_, required_ty))) in actual_sig.params.iter()
-        .zip(&required_sig.params).enumerate()
-    {
-        let actual_ty = if actual_sig.declared_params.get(index).copied().unwrap_or(false) {
-            actual_ty
-        } else { &PhpType::Mixed };
-        let required_ty = if required_sig.declared_params.get(index).copied().unwrap_or(false) {
-            required_ty
-        } else { &PhpType::Mixed };
-        if !strict_type_accepts(checker, actual_ty, required_ty, false) {
-            return Err(CompileError::new(actual.span, &format!(
-                "Cannot narrow parameter ${name} when implementing trait method: {}::{}",
-                enum_unit.name, actual.name,
-            )));
-        }
-    }
     if required_sig.declared_return
         && !matches!(actual_sig.return_type, PhpType::Never)
-        && !strict_type_accepts(checker, &required_sig.return_type, &actual_sig.return_type, false)
+        && (!actual_sig.declared_return
+            || !late_static_compatible.unwrap_or_else(|| {
+                strict_type_accepts(checker, &required_sig.return_type, &actual_sig.return_type, false)
+            }))
     {
         return Err(CompileError::new(actual.span, &format!(
             "Enum method {}::{} has incompatible return type for abstract trait method",

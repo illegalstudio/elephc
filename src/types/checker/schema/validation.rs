@@ -419,6 +419,47 @@ pub(crate) fn declared_return_type_compatible(
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
 }
 
+/// Checks source-call compatibility for an abstract trait contract without requiring equal frames.
+/// Extra optional parameters and optional replacements of required parameters widen the contract.
+pub(crate) fn validate_abstract_trait_signature(
+    checker: &Checker, span: crate::span::Span, owner: &str, method: &str,
+    actual: &FunctionSig, required: &FunctionSig,
+) -> Result<(), CompileError> {
+    let actual = SourceVisibleShape::of(actual);
+    let required = SourceVisibleShape::of(required);
+    let by_ref_compatible = actual.ref_params.iter().take(required.param_count)
+        .eq(required.ref_params.iter());
+    let extra_optional = actual.has_defaults.iter().enumerate().skip(required.param_count)
+        .all(|(index, default)| *default
+            || (actual.variadic.is_some() && index + 1 == actual.param_count));
+    if actual.param_count < required.param_count
+        || actual.required_param_count() > required.required_param_count()
+        || !by_ref_compatible || !extra_optional
+        || (required.variadic.is_some() && actual.variadic.is_none())
+    {
+        return Err(CompileError::new(span, &format!(
+            "Incompatible parameter shape when implementing trait method: {owner}::{method}",
+        )));
+    }
+    for (index, (actual_ty, required_ty)) in actual.param_types.iter()
+        .zip(&required.param_types).enumerate()
+    {
+        let actual_ty = if actual.declared_params.get(index).copied().unwrap_or(false) {
+            actual_ty
+        } else { &PhpType::Mixed };
+        let required_ty = if required.declared_params.get(index).copied().unwrap_or(false) {
+            required_ty
+        } else { &PhpType::Mixed };
+        if !super::class_constants::strict_type_accepts(checker, actual_ty, required_ty, false) {
+            return Err(CompileError::new(span, &format!(
+                "Cannot narrow parameter ${} when implementing trait method: {owner}::{method}",
+                actual.param_names[index],
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Returns true for PDO's internal SQLSTATE-aware widening of `Exception::getCode()`.
 pub(crate) fn is_pdo_exception_get_code_contract(
     class_name: &str,
@@ -453,6 +494,11 @@ pub(crate) fn late_static_return_compatible(
     };
     if matches!(actual_resolved, PhpType::Never) {
         return Ok(Some(true));
+    }
+    if checker.enums.contains_key(receiver_type) {
+        // Enums cannot be subclassed, so their lexical self type is also their late-static type.
+        let expected = checker.resolve_late_static_return_type_hint(expected, receiver_type, span)?;
+        return Ok(Some(declared_return_type_compatible(checker, &expected, actual_resolved)));
     }
     let Some(actual) = actual.filter(|return_type| return_type.contains_late_static()) else {
         return Ok(Some(false));
