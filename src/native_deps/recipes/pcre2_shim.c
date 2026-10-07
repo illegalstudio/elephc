@@ -96,6 +96,37 @@ int32_t elephc_pcre2_v1_exec(
         offset_pairs[index * 2] = -1;
         offset_pairs[index * 2 + 1] = -1;
     }
+    /* PHP's iteration offset must retain the original subject for anchors,
+     * word boundaries and lookbehind. POSIX regexec instead slices at rm_so. */
+    if (use_startend) {
+        uint32_t options = 0;
+        PCRE2_SIZE *vector;
+        size_t returned_slots;
+        if ((eflags & REG_NOTBOL) != 0) options |= PCRE2_NOTBOL;
+        if ((eflags & REG_NOTEOL) != 0) options |= PCRE2_NOTEOL;
+        if ((eflags & REG_NOTEMPTY) != 0) options |= PCRE2_NOTEMPTY;
+        result = pcre2_match((const pcre2_code *)handle->regex.re_pcre2_code,
+            (PCRE2_SPTR)subject_z, (PCRE2_SIZE)end_offset,
+            (PCRE2_SIZE)start_offset, options,
+            (pcre2_match_data *)handle->regex.re_match_data, NULL);
+        if (result < 0) {
+            if (result == PCRE2_ERROR_NOMATCH) return REG_NOMATCH;
+            if (result == PCRE2_ERROR_NOMEMORY || result == PCRE2_ERROR_HEAPLIMIT
+                || result == PCRE2_ERROR_MATCHLIMIT) return REG_ESPACE;
+            return REG_INVARG;
+        }
+        if ((handle->regex.re_cflags & REG_NOSUB) != 0) return 0;
+        vector = pcre2_get_ovector_pointer((pcre2_match_data *)handle->regex.re_match_data);
+        returned_slots = result == 0 ? handle->slot_count : (size_t)result;
+        if (returned_slots > effective_slots) returned_slots = effective_slots;
+        for (index = 0; index < returned_slots; ++index) {
+            offset_pairs[index * 2] = vector[index * 2] == PCRE2_UNSET
+                ? -1 : (int64_t)vector[index * 2];
+            offset_pairs[index * 2 + 1] = vector[index * 2 + 1] == PCRE2_UNSET
+                ? -1 : (int64_t)vector[index * 2 + 1];
+        }
+        return 0;
+    }
     if (effective_slots != 0) {
         matches = (regmatch_t *)malloc(effective_slots * sizeof(*matches));
         if (matches == NULL) {
@@ -104,10 +135,6 @@ int32_t elephc_pcre2_v1_exec(
         for (index = 0; index < effective_slots; ++index) {
             matches[index].rm_so = -1;
             matches[index].rm_eo = -1;
-        }
-        if (use_startend) {
-            matches[0].rm_so = (regoff_t)start_offset;
-            matches[0].rm_eo = (regoff_t)end_offset;
         }
     }
     result = pcre2_regexec(&handle->regex, subject_z, effective_slots, matches, (int)eflags);

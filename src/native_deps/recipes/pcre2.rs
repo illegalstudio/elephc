@@ -2,7 +2,7 @@
 //! Builds static PCRE2 10.47 libraries and the Elephc-owned opaque ABI shim.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for PCRE2 recipe revision 3.
+//! - `crate::native_deps::recipe::CuratedRecipes` for PCRE2 recipe revision 4.
 //!
 //! Key details:
 //! - Uses explicit static/PIC/8-bit/Unicode flags and only the two required Make targets.

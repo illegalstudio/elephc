@@ -6,8 +6,8 @@
 //! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
-//! - `preg_match()` and `preg_match_all()` captures currently support direct local
-//!   `$matches` variables. `preg_match_all()` also accepts `PREG_PATTERN_ORDER`,
+//! - `preg_match()` and `preg_match_all()` captures support raw locals and local
+//!   reference cells. `preg_match_all()` also accepts `PREG_PATTERN_ORDER`,
 //!   `PREG_SET_ORDER`, `PREG_OFFSET_CAPTURE`, and `PREG_UNMATCHED_AS_NULL`.
 //! - Every `preg_replace_callback()` callback uses the descriptor ABI adapter, including
 //!   literal names whose PHP array parameter has boxed storage.
@@ -461,7 +461,7 @@ fn optional_matches_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::LoadLocal {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         return Ok(None);
     }
     let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
@@ -486,7 +486,7 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::LoadLocal {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         return Err(CodegenIrError::unsupported(
             "preg_match matches argument that is not a local variable",
         ));
@@ -501,15 +501,23 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
 
 /// Stores the runtime-built matches array into a local slot without clobbering the match flag.
 fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
-    let offset = ctx.local_offset(slot)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::store_at_offset(ctx.emitter, "x1", offset);
-        }
-        Arch::X86_64 => {
-            abi::store_at_offset(ctx.emitter, "rdx", offset);
-        }
+    let result = abi::int_result_reg(ctx.emitter);
+    let array = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdx",
+    };
+    // Both return values must survive retirement and optional Mixed boxing.
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_push_reg(ctx.emitter, array);
+    ctx.release_local_before_refcounted_writeback(slot)?;
+    abi::emit_pop_reg(ctx.emitter, result);
+    if matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        crate::codegen::emit_box_current_owned_value_as_mixed(
+            ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)),
+        );
     }
+    ctx.store_current_result_to_local(slot)?;
+    abi::emit_pop_reg(ctx.emitter, result);
     Ok(())
 }
 

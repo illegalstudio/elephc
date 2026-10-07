@@ -46,7 +46,7 @@ frameworks = []
 [[package]]
 name = "pcre2"
 version = "10.47"
-recipe = 3
+recipe = 4
 dependencies = []
 provides = ["pcre2"]
 

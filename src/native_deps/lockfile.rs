@@ -259,6 +259,18 @@ mod tests {
         assert_eq!(lock.package[0].target[0].archives[0], "lib/libelephc_pcre2_shim.a");
     }
 
+    /// Verifies every committed regex example uses the current shim identity on all targets.
+    #[test]
+    fn regex_example_locks_match_current_catalog() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for example in ["hello-preg", "eval_regex", "date-json-regex"] {
+            let directory = root.join("examples").join(example);
+            let manifest = ManifestDocument::load(&directory.join("elephc.toml")).unwrap();
+            let lock = NativeLock::load(&directory.join("elephc.lock")).unwrap();
+            lock.validate_current(&manifest).unwrap();
+        }
+    }
+
     /// Verifies the committed curl example lock includes every current catalog target.
     #[test]
     fn curl_example_lock_matches_current_catalog() {

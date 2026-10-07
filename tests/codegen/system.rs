@@ -9,6 +9,9 @@
 
 use crate::support::*;
 
+#[path = "preg_match_all_review.rs"]
+mod preg_match_all_review;
+
 // --- Date/time functions ---
 
 /// Verifies `date("Y", timestamp)` returns the correct 4-digit year for a known UTC timestamp.

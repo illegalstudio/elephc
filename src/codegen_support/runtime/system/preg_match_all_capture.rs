@@ -109,6 +109,8 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr2");                                       // materialize a null-terminated subject copy
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save subject C string
     emitter.instruction(&format!("str x0, [sp, #{}]", current_cstr_off));       // start the search cursor at the subject beginning
+    emitter.bl_c("strlen");                                                      // retain the established C-string subject boundary
+    emitter.instruction(&format!("str x0, [sp, #{}]", subject_len_off));        // save the complete subject length for offset matching
 
     emit_preg_match_all_capture_init_matrix_arm64(
         emitter,
@@ -126,8 +128,14 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one pair for every compiled capture
     emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass the reusable offset-pair buffer
-    emitter.instruction("mov x4, #0");                                          // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", current_cstr_off));       // reload the search cursor
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass the original subject to preserve regex context
+    emitter.instruction("sub x9, x9, x1");                                      // compute the absolute starting offset
+    emitter.instruction("str x9, [x3]");                                        // publish the input range start
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_len_off));        // load the complete C-string subject length
+    emitter.instruction("str x9, [x3, #8]");                                    // publish the input range end
+    emitter.instruction("mov x4, #128");                                        // request context-preserving offset execution
+    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested absolute offset pair
     emitter.instruction("cbnz x0, __rt_pma_cap_done");                          // stop when the shim reports no further match
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", match_count_off));        // reload the running match count
@@ -139,8 +147,6 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
         preg_flags_off,
         nmatch_off,
         regmatches_ptr_off,
-        current_cstr_off,
-        subject_cstr_off,
         subject_ptr_off,
         group_rows_off,
         outer_off,
@@ -155,12 +161,14 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
 
     emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load the full-match pair base
     emitter.instruction("ldr x11, [x14, #8]");                                  // load signed-64-bit full-match end
-    emitter.instruction("cmp x11, #0");                                         // detect a zero-length match
-    emitter.instruction("b.gt __rt_pma_cap_adv");                               // use rm_eo when the match consumed bytes
-    emitter.instruction("mov x11, #1");                                         // force zero-length matches to advance one byte
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", current_cstr_off));      // reload the previous cursor
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_cstr_off));       // reload the original subject base
+    emitter.instruction("sub x10, x10, x9");                                    // compute the previous absolute offset
+    emitter.instruction("cmp x11, x10");                                        // ensure this match moves the cursor forward
+    emitter.instruction("b.gt __rt_pma_cap_adv");                               // use the absolute end when it advances
+    emitter.instruction("add x11, x10, #1");                                    // advance one byte after a match at the current cursor
     emitter.label("__rt_pma_cap_adv");
-    emitter.instruction(&format!("ldr x10, [sp, #{}]", current_cstr_off));      // reload the current C-string cursor
-    emitter.instruction("add x10, x10, x11");                                   // advance past this match
+    emitter.instruction("add x10, x9, x11");                                    // advance from the original subject base
     emitter.instruction(&format!("str x10, [sp, #{}]", current_cstr_off));      // save the advanced cursor
     emitter.instruction("b __rt_pma_cap_loop");                                 // continue searching
 
@@ -281,8 +289,6 @@ fn emit_preg_match_all_capture_append_match_arm64(
     preg_flags_off: usize,
     nmatch_off: usize,
     regmatches_ptr_off: usize,
-    current_cstr_off: usize,
-    subject_cstr_off: usize,
     subject_ptr_off: usize,
     group_rows_off: usize,
     outer_off: usize,
@@ -309,8 +315,6 @@ fn emit_preg_match_all_capture_append_match_arm64(
         preg_flags_off,
         regmatches_ptr_off,
         group_idx_off,
-        current_cstr_off,
-        subject_cstr_off,
         subject_ptr_off,
         piece_ptr_off,
         piece_len_off,
@@ -352,8 +356,6 @@ fn emit_preg_match_all_capture_append_match_arm64(
         preg_flags_off,
         regmatches_ptr_off,
         group_idx_off,
-        current_cstr_off,
-        subject_cstr_off,
         subject_ptr_off,
         piece_ptr_off,
         piece_len_off,
@@ -396,8 +398,6 @@ fn emit_preg_match_all_capture_box_cell_arm64(
     preg_flags_off: usize,
     regmatches_ptr_off: usize,
     group_idx_off: usize,
-    current_cstr_off: usize,
-    subject_cstr_off: usize,
     subject_ptr_off: usize,
     piece_ptr_off: usize,
     piece_len_off: usize,
@@ -417,10 +417,7 @@ fn emit_preg_match_all_capture_box_cell_arm64(
     emitter.instruction("ldr x16, [x14, #8]");                                  // load signed-64-bit capture end
     emitter.instruction("cmp x15, #0");                                         // unmatched captures report a negative start
     emitter.instruction(&format!("b.lt {unmatched}"));                          // emit PHP's unmatched cell
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", current_cstr_off));       // reload the current C-string cursor
-    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_cstr_off));      // reload the original subject C string
-    emitter.instruction("sub x9, x9, x10");                                     // bytes already consumed before this exec
-    emitter.instruction("add x9, x9, x15");                                     // absolute subject offset of this capture
+    emitter.instruction("mov x9, x15");                                         // use the shim's absolute capture offset
     emitter.instruction(&format!("str x9, [sp, #{}]", piece_offset_off));       // save the absolute byte offset
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // reload the original elephc subject payload
     emitter.instruction("add x1, x1, x9");                                      // capture pointer = subject + absolute offset
@@ -624,7 +621,14 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload the elephc subject length
     emitter.instruction("call __rt_cstr2");                                     // materialize a null-terminated subject copy
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // save subject C string
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_cstr_off)); // start the search cursor at the subject beginning
+    emitter.instruction(                                                        // start the search cursor at the subject beginning
+        &format!("mov QWORD PTR [rsp + {}], rax", current_cstr_off)
+    );
+    emitter.instruction("mov rdi, rax");                                        // pass the subject C string to strlen
+    emitter.bl_c("strlen");                                                      // retain the established C-string subject boundary
+    emitter.instruction(                                                        // save the complete subject length for offset matching
+        &format!("mov QWORD PTR [rsp + {}], rax", subject_len_off)
+    );
 
     emit_preg_match_all_capture_init_matrix_linux_x86_64(
         emitter,
@@ -643,8 +647,18 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one pair for every compiled capture
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass the reusable offset-pair buffer
-    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
+    emitter.instruction("mov r9, rsi");                                         // preserve the search cursor
+    emitter.instruction(                                                        // pass the original subject to preserve regex context
+        &format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)
+    );
+    emitter.instruction("sub r9, rsi");                                         // compute the absolute starting offset
+    emitter.instruction("mov QWORD PTR [rcx], r9");                             // publish the input range start
+    emitter.instruction(                                                        // load the complete C-string subject length
+        &format!("mov r9, QWORD PTR [rsp + {}]", subject_len_off)
+    );
+    emitter.instruction("mov QWORD PTR [rcx + 8], r9");                         // publish the input range end
+    emitter.instruction("mov r8d, 128");                                        // request context-preserving offset execution
+    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested absolute offset pair
     emitter.instruction("test eax, eax");                                       // did the shim find another match?
     emitter.instruction("jnz __rt_pma_cap_done_linux_x86_64");                  // stop when the shim reports no further match
 
@@ -657,8 +671,6 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
         preg_flags_off,
         nmatch_off,
         regmatches_ptr_off,
-        current_cstr_off,
-        subject_cstr_off,
         subject_ptr_off,
         group_rows_off,
         outer_off,
@@ -673,12 +685,18 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load the full-match pair base
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load signed-64-bit full-match end
-    emitter.instruction("cmp r11, 0");                                          // detect a zero-length match
-    emitter.instruction("jg __rt_pma_cap_adv_linux_x86_64");                    // use rm_eo when the match consumed bytes
-    emitter.instruction("mov r11, 1");                                          // force zero-length matches to advance one byte
+    emitter.instruction(                                                        // reload the previous cursor
+        &format!("mov r10, QWORD PTR [rsp + {}]", current_cstr_off)
+    );
+    emitter.instruction(                                                        // reload the original subject base
+        &format!("mov r9, QWORD PTR [rsp + {}]", subject_cstr_off)
+    );
+    emitter.instruction("sub r10, r9");                                         // compute the previous absolute offset
+    emitter.instruction("cmp r11, r10");                                        // ensure this match moves the cursor forward
+    emitter.instruction("jg __rt_pma_cap_adv_linux_x86_64");                    // use the absolute end when it advances
+    emitter.instruction("lea r11, [r10 + 1]");                                  // advance one byte after a match at the current cursor
     emitter.label("__rt_pma_cap_adv_linux_x86_64");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_cstr_off)); // reload the current C-string cursor
-    emitter.instruction("add r10, r11");                                        // advance past this match
+    emitter.instruction("lea r10, [r9 + r11]");                                 // advance from the original subject base
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", current_cstr_off)); // save the advanced cursor
     emitter.instruction("jmp __rt_pma_cap_loop_linux_x86_64");                  // continue searching
 
@@ -789,8 +807,6 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     preg_flags_off: usize,
     nmatch_off: usize,
     regmatches_ptr_off: usize,
-    current_cstr_off: usize,
-    subject_cstr_off: usize,
     subject_ptr_off: usize,
     group_rows_off: usize,
     outer_off: usize,
@@ -816,8 +832,6 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
         preg_flags_off,
         regmatches_ptr_off,
         group_idx_off,
-        current_cstr_off,
-        subject_cstr_off,
         subject_ptr_off,
         piece_ptr_off,
         piece_len_off,
@@ -856,8 +870,6 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
         preg_flags_off,
         regmatches_ptr_off,
         group_idx_off,
-        current_cstr_off,
-        subject_cstr_off,
         subject_ptr_off,
         piece_ptr_off,
         piece_len_off,
@@ -900,8 +912,6 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     preg_flags_off: usize,
     regmatches_ptr_off: usize,
     group_idx_off: usize,
-    current_cstr_off: usize,
-    subject_cstr_off: usize,
     subject_ptr_off: usize,
     piece_ptr_off: usize,
     piece_len_off: usize,
@@ -921,9 +931,7 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load signed-64-bit capture end
     emitter.instruction("cmp r11, 0");                                          // unmatched captures report a negative start
     emitter.instruction(&format!("jl {unmatched}"));                            // emit PHP's unmatched cell
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", current_cstr_off)); // reload the current C-string cursor
-    emitter.instruction(&format!("sub r9, QWORD PTR [rsp + {}]", subject_cstr_off)); // bytes already consumed before this exec
-    emitter.instruction("add r9, r11");                                         // absolute subject offset of this capture
+    emitter.instruction("mov r9, r11");                                         // use the shim's absolute capture offset
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", piece_offset_off)); // save the absolute byte offset
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload the original elephc subject payload
     emitter.instruction("add rsi, r9");                                         // capture pointer = subject + absolute offset
