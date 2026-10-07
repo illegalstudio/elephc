@@ -21,6 +21,8 @@ function write(): void { C::$o->v = replace(); }
 function writeNested(): void { C::$o->nested[0][] = replace(); }
 function writeChild(): void { R::$root->child->items[] = replace(); }
 function writeNull(): void { C::$nullable->v = replace(); }
+class StaticBuckets { public static array $items = []; }
+function writeStaticNested(): void { StaticBuckets::$items[0][] = replace(); }
 interface Store { public function get(): string; }
 interface Named { public function name(): string; }
 class Both implements Store, Named {
@@ -47,7 +49,7 @@ C::$nullable->items[] = 3;
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-    for name in ["write", "writeNested", "writeChild", "writeNull"] {
+    for name in ["write", "writeNested", "writeChild", "writeNull", "writeStaticNested"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let rhs = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
         let receiver = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
@@ -60,6 +62,15 @@ C::$nullable->items[] = 3;
             assert!(function.blocks.iter().any(|block|
                 matches!(block.terminator, Some(crate::ir::Terminator::Throw { .. }))));
             assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::MixedUnbox));
+        }
+        if name == "writeStaticNested" {
+            for load in function.instructions.iter().filter(|inst|
+                inst.op == crate::ir::Op::LoadStaticProperty)
+            {
+                assert!(!function.instructions.iter().any(|inst|
+                    inst.op == crate::ir::Op::Release && inst.operands == [load.result.unwrap()]),
+                    "{target}: a static-array probe borrows the published class slot");
+            }
         }
     }
     crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();

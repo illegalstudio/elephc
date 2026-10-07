@@ -37,7 +37,18 @@ writeReviewPinnedObject();
         let crate::ir::ValueDef::Instruction { inst, .. } = object.def else {
             panic!("{name}: the property receiver must be an acquired value");
         };
-        assert_eq!(function.instruction(inst).unwrap().op, crate::ir::Op::Acquire, "{name}");
+        let narrowed = function.instruction(inst).unwrap();
+        assert_eq!(narrowed.op, crate::ir::Op::MixedUnbox, "{name}");
+        assert_eq!(object.ownership, crate::ir::Ownership::Owned, "{name}: the object projection owns its lease");
+        let boxed = function.value(narrowed.operands[0]).unwrap();
+        let crate::ir::ValueDef::Instruction { inst, .. } = boxed.def else {
+            panic!("{name}: the nullable static slot must be retained before narrowing");
+        };
+        let acquired = function.instruction(inst).unwrap();
+        assert_eq!(acquired.op, crate::ir::Op::Acquire, "{name}");
+        assert_eq!(acquired.operands, vec![function.instructions[load].result.unwrap()], "{name}");
+        assert!(function.instructions[store + 1..].iter().any(|inst|
+            inst.op == crate::ir::Op::Release && inst.operands == [function.instructions[store].operands[0]]), "{name}");
         assert!(function.instructions[..store].iter().any(|inst| inst.op == crate::ir::Op::PushCallOperandOwner), "{name}");
         assert!(function.instructions[store + 1..].iter().any(|inst| inst.op == crate::ir::Op::PopCallOperandOwner), "{name}");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();

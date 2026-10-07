@@ -347,8 +347,8 @@ write(new Holder());
 
 /// Tests that assigning a property on a null receiver produces a fatal
 /// error after the RHS has been evaluated. Verifies: receiver function
-/// runs, rhs function runs (but its return is unused), stdout is
-/// "receiver|rhs|", and stderr contains "Attempt to assign property".
+/// runs, rhs function runs (but its return is unused), and the uncaught
+/// Error is reported after those effects through the common throwable path.
 #[test]
 fn test_nullable_object_property_assign_on_null_receiver_fatals_after_rhs() {
     let out = compile_and_run_capture(
@@ -369,10 +369,27 @@ echo "after";
 "#,
     );
     assert!(!out.success, "program unexpectedly succeeded");
-    assert_eq!(out.stdout, "receiver|rhs|");
-    assert!(
-        out.stderr.contains("Attempt to assign property \"msg\" on null"),
-        "{}",
-        out.stderr
-    );
+    assert_eq!(out.stdout.split_once("\nFatal error:").unwrap().0, "receiver|rhs|");
+    assert!(out.stdout.contains("Uncaught Error: Attempt to assign property \"msg\" on null"),
+        "{}", out.stdout);
+    assert!(!out.stdout.contains("after"), "the rejected write must terminate execution");
+    assert_eq!(out.stderr, "");
+}
+
+/// A nullable parameter write raises a catchable Error and retires its unused string RHS.
+#[test]
+fn test_nullable_object_property_assign_on_null_receiver_is_catchable() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Holder { public string $msg = ''; }
+function write(?Holder $holder): void { $holder->msg = str_repeat('x', 24); }
+for ($i = 0; $i < 8; $i++) {
+    try { write(null); echo 'bad'; }
+    catch (Error $error) { echo $error->getMessage(), '|'; }
+}
+echo 'after';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout,
+        format!("{}after", "Attempt to assign property \"msg\" on null|".repeat(8)));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

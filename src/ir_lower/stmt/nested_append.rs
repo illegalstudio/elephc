@@ -215,7 +215,9 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         _ => {
             // Property reads can return an independently owned boxed array. The probe is
             // unused on this fallback, so retire it before replaying the actual statements.
-            crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+            if !matches!(group.base, BaseKind::StaticProperty { .. }) {
+                crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+            }
             super::lower_stmt(ctx, group.read);
             super::lower_stmt(ctx, group.push);
             super::lower_stmt(ctx, group.write_back);
@@ -231,7 +233,11 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         isset_op.default_effects(),
         Some(span),
     );
-    crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+    // Static loads borrow their class slot. Object-property probes can own an independent
+    // boxed result, but releasing a static probe would destroy the array still in that slot.
+    if !matches!(group.base, BaseKind::StaticProperty { .. }) {
+        crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+    }
     crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
 
     // Snapshot the definitely-initialized locals before the split and restore them at the head of

@@ -371,7 +371,16 @@ fn property_stores_retire_temporary_object_sources_on_all_targets() {
                 if inst.op != Op::DynamicPropSet {
                     return None;
                 }
-                let stored = *inst.operands.last()?;
+                let mut stored = *inst.operands.last()?;
+                if let ValueDef::Instruction { inst: producer, .. } = function.value(stored)?.def {
+                    let producer = function.instruction(producer)?;
+                    if producer.op == Op::Borrow {
+                        stored = *producer.operands.first()?;
+                        assert!(function.instructions[index + 1..].iter().any(|inst|
+                            inst.op == Op::Release && inst.operands == [stored]),
+                            "{target}: the runtime-name store must retire its lent owner");
+                    }
+                }
                 let original = match function.value(stored)?.def {
                     ValueDef::Instruction { inst: producer, .. } => {
                         let producer = function.instruction(producer)?;
