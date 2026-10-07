@@ -332,6 +332,20 @@ pub(crate) fn eval_property_set_result(
                 values,
             );
         }
+        storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
+        // An initialized readonly value rejects an overwrite before implicit protected(set)
+        // access is checked. An authorized clone can still consume its one rewrite later.
+        if property.is_readonly()
+            && context.dynamic_property_is_initialized(identity, &storage_property_name)
+            && !context.clone_property_can_be_reinitialized(identity, &storage_property_name)
+        {
+            return eval_throw_readonly_property_modification_error(
+                &declaring_class,
+                property.name(),
+                context,
+                values,
+            );
+        }
         if validate_eval_property_write_access(&declaring_class, &property, context).is_err() {
             return eval_throw_property_write_access_error(
                 &declaring_class,
@@ -340,7 +354,6 @@ pub(crate) fn eval_property_set_result(
                 values,
             );
         }
-        storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if validate_eval_readonly_property_write(
             &declaring_class,
             &property,

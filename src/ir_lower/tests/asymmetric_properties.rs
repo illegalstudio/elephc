@@ -24,6 +24,8 @@ function fallback(): int { echo "fallback"; return 9; }
 function update(ConditionalReadonly $box): void { $box->implicit ??= fallback(); }
 function updateNullable(ConditionalReadonly $box): void { $box->nullable ??= fallback(); }
 function overwrite(ConditionalReadonly $box): void { $box->implicit = fallback(); }
+function receiver(): ConditionalReadonly { echo "receiver"; return new ConditionalReadonly(); }
+function updateTemporary(): void { receiver()->implicit ??= fallback(); }
 $box = new ConditionalReadonly();
 try { update($box); } catch (Error $e) { echo "error"; }
 $properties = (new ReflectionClass(ConditionalReadonly::class))->getProperties(ReflectionProperty::IS_PROTECTED_SET);
@@ -45,6 +47,10 @@ echo count($properties);
     let overwrite = module.functions.iter().find(|function| function.name == "overwrite").unwrap();
     assert!(overwrite.blocks.iter().any(|block| matches!(block.terminator,
         Some(Terminator::Throw { .. }))), "{target}: direct readonly writes remain catchable");
+    let temporary = module.functions.iter().find(|function| function.name == "updateTemporary").unwrap();
+    assert!(temporary.blocks.iter().flat_map(|block| &block.instructions)
+        .any(|id| temporary.instruction(*id).unwrap().op == Op::PushCallOperandOwner),
+        "{target}: a throwing fallback must root the temporary receiver");
     crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
 

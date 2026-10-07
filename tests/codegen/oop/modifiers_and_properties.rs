@@ -9,6 +9,23 @@
 
 use super::*;
 
+/// Eval reports initialized readonly modification before its implicit protected setter.
+#[test]
+fn test_asymmetric_followup_eval_readonly_error_precedence() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class EvalBox {
+    public readonly int $id;
+    public function __construct() { $this->id = 1; }
+}
+$box = new EvalBox();
+try { $box->id = 2; echo "bad"; }
+catch (Error $error) { echo $error->getMessage(), ":", $box->id; }');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Cannot modify readonly property EvalBox::$id:1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A failed global clone override cannot bypass readonly set access or corrupt its source.
 #[test]
 fn test_asymmetric_review_eval_clone_readonly_set_access() {

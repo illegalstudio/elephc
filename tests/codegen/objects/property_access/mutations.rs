@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// A fallback replacing the local receiver still writes through the originally pinned object.
+#[test]
+fn test_asymmetric_followup_readonly_coalesce_replaced_local() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public readonly int $value;
+    public function __destruct() { echo 'D'; }
+}
+function fallback(&$box): int { echo 'F'; $box = new Box(); return 9; }
+$box = new Box();
+try { $box->value ??= fallback($box); echo 'bad'; }
+catch (Error $error) { echo 'E'; }
+unset($box);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "FDED");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Compiles a loop over an array of class instances, reading the `price` field
 /// of each `Item` object via `$items[$i]->price` and accumulating the sum.
 #[test]
@@ -490,6 +509,43 @@ catch (Error $error) { echo $error->getMessage(); }
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "receiver|rhs|Cannot modify readonly property Box::$value");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Readonly coalescing keeps one receiver alive through its lazy fallback and caught Error.
+#[test]
+fn test_asymmetric_followup_readonly_coalesce_receiver_once() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public readonly int $value;
+    public function __destruct() { echo 'D'; }
+}
+function receiver(): Box { echo 'R'; return new Box(); }
+function fallback(): int { echo 'F'; return 9; }
+try { receiver()->value ??= fallback(); echo 'bad'; }
+catch (Error $error) { echo 'E'; }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "RFDE");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The keep branch releases its captured receiver once without executing the fallback.
+#[test]
+fn test_asymmetric_followup_readonly_coalesce_keep_receiver() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public readonly int $value;
+    public function __construct() { $this->value = 7; }
+    public function __destruct() { echo 'D'; }
+}
+function receiver(): Box { echo 'R'; return new Box(); }
+function fallback(): int { echo 'F'; return 9; }
+receiver()->value ??= fallback();
+echo 'K';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "RDK");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

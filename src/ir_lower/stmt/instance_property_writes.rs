@@ -33,7 +33,7 @@ pub(super) fn lower_property_assign(
                 if read_object.as_ref() == object && read_property == property {
                     // The readonly Error belongs only to the fallback write, never to the
                     // read-only keep branch of an already initialized property.
-                    crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+                    lower_readonly_coalesce_update(ctx, object, property, default, span);
                     return;
                 }
             }
@@ -69,6 +69,60 @@ pub(super) fn lower_property_assign(
         );
     }
     lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span)
+}
+
+/// Fuses the parser's readonly coalesce receiver temporary into a scoped EIR owner.
+pub(super) fn lower_synthetic_readonly_coalesce(
+    ctx: &mut LoweringContext<'_, '_>,
+    body: &[Stmt],
+) -> bool {
+    let [capture, write] = body else { return false; };
+    let StmtKind::Assign { name, value: receiver } = &capture.kind else { return false; };
+    if !crate::names::is_generated_local_name(name) { return false; }
+    let StmtKind::PropertyAssign { object, property, value } = &write.kind else { return false; };
+    let ExprKind::Variable(object_name) = &object.kind else { return false; };
+    let ExprKind::NullCoalesce { value: read, default } = &value.kind else { return false; };
+    let ExprKind::PropertyAccess { object: read_object, property: read_property } = &read.kind else {
+        return false;
+    };
+    if object_name != name || read_object != object || read_property != property
+        || !ctx.throw_access_sites.get(&write.span).is_some_and(|info| {
+            matches!(info.kind, ThrowAccessKind::ReadonlyProperty { .. })
+        })
+    {
+        return false;
+    }
+    lower_readonly_coalesce_update(ctx, receiver, property, default, write.span);
+    true
+}
+
+/// Evaluates and pins the receiver once across the probe and the lazy fallback write.
+fn lower_readonly_coalesce_update(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    default: &Expr,
+    span: Span,
+) {
+    let receiver = lower_expr(ctx, object);
+    let ty = ctx.builder.value_php_type(receiver.value);
+    let name = ctx.declare_hidden_temp(ty.clone());
+    let pinned = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+        ctx, receiver, Some(span),
+    );
+    ctx.store_local(&name, pinned, ty, Some(span));
+    crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
+    let slot = ctx.local_slots[&name];
+    ctx.emit_void(
+        Op::PushCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::PushCallOperandOwner.default_effects(), Some(span),
+    );
+    let target = Expr::new(ExprKind::PropertyAccess {
+        object: Box::new(Expr::new(ExprKind::Variable(name), object.span)),
+        property: property.to_string(),
+    }, span);
+    crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, &target, default, span);
+    crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
 }
 
 /// Emits the `instanceof` chain that hands a runtime subclass's `__set` its own call.
