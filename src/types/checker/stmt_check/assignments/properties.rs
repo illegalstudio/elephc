@@ -360,11 +360,16 @@ fn check_object_property_write(
                 .is_some_and(|owner| owner.trim_start_matches('\\').eq_ignore_ascii_case("PDOStatement"));
         let declaring_class = class_info.property_declaring_classes.get(property)
             .map(String::as_str).unwrap_or(class_name).to_string();
+        // Untyped readonly declarations are a legacy extension with implicitly initialized
+        // null slots. Preserve their constructor exemption, not typed one-shot write semantics.
+        let legacy_untyped_slot = class_info.visible_property(property).is_some_and(|(index, _)| {
+            !class_info.property_slot_is_declared(index, property)
+        });
         let readonly_write_guard = class_info.readonly_properties.contains(property)
             && !(checker.current_class.as_deref()
                 == Some(declaring_class.as_str())
                 && checker.current_method.as_deref() == Some("__construct")
-                && !span.identifies_a_node())
+                && (!span.identifies_a_node() || legacy_untyped_slot))
             && !internal_pdo_statement_initializer;
         // Public readonly overwrites raise their catchable Error before setter access matters.
         // Keep read visibility checks, and preserve the read-only branch of conditional writes.

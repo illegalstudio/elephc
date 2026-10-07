@@ -255,7 +255,9 @@ final class InvoiceNumber {
 
 Statically-known access violations, such as calling a `private`/`protected` method from an inaccessible scope, raise a catchable `Error` exception at runtime. Without a `try`/`catch` handler the exception is a fatal uncaught exit.
 
-A readonly property without an explicit setter has an implicit `protected(set)` setter. Its declaring class or a subclass can initialize it once, including outside a constructor. An explicit `public(set)` setter also permits a first assignment from global scope. A denied first assignment reports the setter-access error; an assignment to an initialized readonly property instead reports `Cannot modify readonly property Class::$property` when read visibility permits access. The same rules apply to eval-declared classes and native objects accessed from `eval()`. A `??=` write keeps a non-null initialized value without evaluating its fallback; an initialized `null` value still rejects the fallback overwrite.
+A typed readonly property without an explicit setter has an implicit `protected(set)` setter. Its declaring class or a subclass can initialize it once, including outside a constructor. An explicit `public(set)` setter also permits a first assignment from global scope. A denied first assignment reports the setter-access error; an assignment to an initialized readonly property instead reports `Cannot modify readonly property Class::$property` when read visibility permits access. The same rules apply to eval-declared classes and native objects accessed from `eval()`, including writes through factory-style object unions before narrowing. A `??=` write keeps a non-null initialized value without evaluating its fallback; an initialized `null` value still rejects the fallback overwrite.
+
+elephc also accepts untyped readonly declarations as a legacy extension that PHP rejects. Their implicitly initialized `null` slots retain the declaring constructor's write exemption, rather than the typed one-shot initialization rules above.
 
 ```php
 <?php

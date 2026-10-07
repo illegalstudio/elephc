@@ -25,11 +25,18 @@ function update(ConditionalReadonly $box): void { $box->implicit ??= fallback();
 function updateNullable(ConditionalReadonly $box): void { $box->nullable ??= fallback(); }
 function overwrite(ConditionalReadonly $box): void { $box->implicit = fallback(); }
 function initializePublic(ConditionalReadonly $box): void { $box->explicit = fallback(); }
+function initializeUnion(ConditionalReadonly|false $box): void { $box->explicit = fallback(); }
+readonly class LegacyReadonly {
+    public $id;
+    public function __construct(int $id) { $this->id = $id; }
+}
 class ReadonlyBase { public readonly int $id; }
 class ReadonlyChild extends ReadonlyBase { public function __construct() { $this->id = 7; } }
 function receiver(): ConditionalReadonly { echo "receiver"; return new ConditionalReadonly(); }
 function updateTemporary(): void { receiver()->implicit ??= fallback(); }
 $box = new ConditionalReadonly();
+$legacy = new LegacyReadonly(7);
+echo $legacy->id;
 try { update($box); } catch (Error $e) { echo "error"; }
 $properties = (new ReflectionClass(ConditionalReadonly::class))->getProperties(ReflectionProperty::IS_PROTECTED_SET);
 echo count($properties);
@@ -61,6 +68,7 @@ echo count($properties);
         Some(Terminator::Throw { .. }))), "{target}: direct readonly writes remain catchable");
     for function in [
         module.functions.iter().find(|function| function.name == "initializePublic").unwrap(),
+        module.functions.iter().find(|function| function.name == "initializeUnion").unwrap(),
         module.class_methods.iter().find(|function| function.name == "ReadonlyChild::__construct").unwrap(),
     ] {
         assert!(function.instructions.iter().any(|inst| inst.op == Op::PropInitialized), "{target}");
@@ -71,6 +79,9 @@ echo count($properties);
         assert!(matches!(overwrite.terminator, Some(Terminator::Throw { .. })),
             "{target}: authorized setters still reject an initialized readonly slot");
     }
+    let legacy = module.class_methods.iter().find(|function| function.name == "LegacyReadonly::__construct").unwrap();
+    assert!(!legacy.instructions.iter().any(|inst| inst.op == Op::PropInitialized),
+        "{target}: the legacy untyped constructor initializes an implicitly null slot");
     let temporary = module.functions.iter().find(|function| function.name == "updateTemporary").unwrap();
     assert!(temporary.blocks.iter().flat_map(|block| &block.instructions)
         .any(|id| temporary.instruction(*id).unwrap().op == Op::PushCallOperandOwner),

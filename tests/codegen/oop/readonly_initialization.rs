@@ -18,6 +18,46 @@ fn verify(source: &str, expected: &str) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Legacy untyped readonly extensions retain constructor initialization and reject external writes.
+#[test]
+fn test_readonly_initialization_legacy_untyped_constructor() {
+    verify(r#"<?php
+class LegacyBox {
+    public readonly $id;
+    public function __construct($id) {
+        $this->id = $id;
+    }
+}
+readonly class LegacyReadonly {
+    public $id;
+    public function __construct($id) { $this->id = $id; }
+}
+$box = new LegacyBox(7);
+$readonly = new LegacyReadonly(42);
+echo $box->id, ':', $readonly->id, '|';
+try { $box->id = 8; } catch (Error $error) { echo $error->getMessage(); }
+"#, "7:42|Cannot modify readonly property LegacyBox::$id");
+}
+
+/// Boxed factory unions probe the object's state before rejecting an overwrite or allowing initialization.
+#[test]
+fn test_readonly_initialization_union_receiver_state() {
+    verify(r#"<?php
+class Box {
+    public readonly int $id;
+    public function __construct(int $id) { $this->id = $id; }
+}
+class PublicBox { public public(set) readonly int $id; }
+function box(bool $found): Box|false { if ($found) { return new Box(7); } return false; }
+function publicBox(bool $found): PublicBox|false { if ($found) { return new PublicBox(); } return false; }
+$box = box($argc > 0);
+try { $box->id = 8; } catch (Error $error) { echo $error->getMessage(), ':', $box->id, '|'; }
+$public = publicBox($argc > 0);
+$public->id = 9;
+try { $public->id = 8; } catch (Error $error) { echo $error->getMessage(), ':', $public->id; }
+"#, "Cannot modify readonly property Box::$id:7|Cannot modify readonly property PublicBox::$id:9");
+}
+
 /// An implicit setter rejects first global writes only after evaluating their RHS.
 #[test]
 fn test_readonly_initialization_global_direct_and_coalesce() {
