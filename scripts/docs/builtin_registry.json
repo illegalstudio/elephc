@@ -33758,8 +33758,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "ctype_alnum"
       },
       "effects": {
         "kind": "static",
@@ -33882,8 +33882,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "ctype_alpha"
       },
       "effects": {
         "kind": "static",
@@ -34006,8 +34006,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "ctype_digit"
       },
       "effects": {
         "kind": "static",
@@ -34130,8 +34130,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "ctype_space"
       },
       "effects": {
         "kind": "static",
@@ -73313,8 +73313,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "is_numeric"
       },
       "effects": {
         "kind": "static",

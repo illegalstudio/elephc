@@ -1851,3 +1851,39 @@ echo array_reduce($w, fn($c, $v) => $c + strlen($v) + 1, 0);
     );
     assert_eq!(out, "1");
 }
+
+/// The `mixed`-parameter predicates are reachable by a name chosen at run time.
+///
+/// `array_filter($rows, $name)` with `$name` read from `$argc` died with "array_filter():
+/// Argument #2 ($callback) must be a valid callback or null" for `is_numeric` and the `ctype_*`
+/// family, which are exactly what a filter is written with: the runtime-name table only carried
+/// the builtins on `runtime_callable_supported`'s allowlist. A variable call, `call_user_func` and
+/// `array_map` go through the same table, so they are checked alongside.
+#[test]
+fn test_runtime_named_predicate_builtins_are_callbacks() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function pick(int $i): string { return ["is_numeric", "ctype_digit", "ctype_alpha", "ctype_alnum", "ctype_space"][$i % 5]; }
+$values = ["12", "ab", "1.5", " ", "a1", "", "7"];
+for ($i = 0; $i < 5; $i++) {
+    $f = pick($i + $argc - 1);
+    echo $f, ":", json_encode(array_filter($values, $f)), ":", $f("12") ? "y" : "n";
+    echo ":", call_user_func($f, "ab") ? "y" : "n", ":", json_encode(array_map($f, [" ", "9"])), "\n";
+}
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "is_numeric:{\"0\":\"12\",\"2\":\"1.5\",\"6\":\"7\"}:y:n:[false,true]\n",
+            "ctype_digit:{\"0\":\"12\",\"6\":\"7\"}:y:n:[false,true]\n",
+            "ctype_alpha:{\"1\":\"ab\"}:n:y:[false,false]\n",
+            "ctype_alnum:{\"0\":\"12\",\"1\":\"ab\",\"4\":\"a1\",\"6\":\"7\"}:y:y:[false,true]\n",
+            "ctype_space:{\"3\":\" \"}:n:n:[true,false]\n",
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

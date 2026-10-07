@@ -2070,6 +2070,11 @@ impl RuntimeFnId {
     ///
     /// `Getmypid` qualifies because its wrapper has no parameters to adapt and returns a plain
     /// integer: `$name = "getmypid"; $name()` and `call_user_func($name)` must reach it like PHP.
+    ///
+    /// The `mixed`-parameter predicates qualify for the same reason: the wrapper hands the value
+    /// through untouched and returns a bool. They are what a program filters with —
+    /// `array_filter($rows, $pick ? 'is_numeric' : 'ctype_digit')` — and outside this list the
+    /// runtime-name table had no case for them, so the call died with "must be a valid callback".
     pub const fn runtime_callable_supported(self) -> bool {
         if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr) { return false; }
         if self.uses_mbstring_runtime() { return true; }
@@ -2080,9 +2085,14 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
+                | RuntimeFnId::CtypeAlnum
+                | RuntimeFnId::CtypeAlpha
+                | RuntimeFnId::CtypeDigit
+                | RuntimeFnId::CtypeSpace
                 | RuntimeFnId::Getmypid
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
+                | RuntimeFnId::IsNumeric
                 | RuntimeFnId::Trim
         )
     }
@@ -2111,6 +2121,9 @@ impl RuntimeFnId {
             }),
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
             | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
+            // Each takes `mixed`, so every source the wrapper can receive is a valid argument.
+            RuntimeFnId::IsNumeric | RuntimeFnId::CtypeAlnum | RuntimeFnId::CtypeAlpha
+            | RuntimeFnId::CtypeDigit | RuntimeFnId::CtypeSpace => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
