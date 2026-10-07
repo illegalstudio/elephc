@@ -36,6 +36,7 @@ mod scalar;
 mod search;
 mod simple;
 mod split;
+mod strip_tags;
 
 #[allow(unused_imports)]
 use common::*;
@@ -84,8 +85,9 @@ pub(crate) use search::{
 };
 pub(crate) use simple::{
     lower_binary_string_runtime, lower_grapheme_strrev, lower_html_escape, lower_lcfirst,
-    lower_strip_tags, lower_trim_like, lower_ucfirst,
+    lower_trim_like, lower_ucfirst,
 };
+pub(crate) use strip_tags::lower_strip_tags;
 pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_split};
 
 #[allow(unused_imports)]

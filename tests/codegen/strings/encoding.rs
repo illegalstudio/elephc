@@ -9,6 +9,9 @@
 
 use super::*;
 
+#[path = "strip_tags_review.rs"]
+mod strip_tags_review;
+
 /// Verifies `ord()` returns the ASCII code 65 for a single uppercase "A".
 #[test]
 fn test_ord() {
