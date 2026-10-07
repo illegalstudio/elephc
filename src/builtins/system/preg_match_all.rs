@@ -14,6 +14,7 @@
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
+use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -29,11 +30,17 @@ builtin! {
 /// Validates optional `$matches` / `$flags` and returns the match-count type.
 ///
 /// Infers the pattern, subject, and flags arguments. `$matches` is write-only and
-/// is not inferred here; passing a non-variable for that parameter is rejected by
-/// the shared by-reference lvalue check before this hook runs.
+/// is not inferred here. Shared by-reference validation rejects non-lvalues;
+/// unsupported non-local destinations receive an explicit diagnostic instead of count-only execution.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
+    if let Some(matches) = cx.args.get(2) {
+        if !cx.argument_was_omitted(2) && !matches!(matches.kind, ExprKind::Variable(_)) {
+            return Err(CompileError::new(matches.span,
+                "preg_match_all(): non-local $matches destinations are not supported"));
+        }
+    }
     if cx.args.len() >= 4 {
         cx.checker.infer_type(&cx.args[3], cx.env)?;
     }

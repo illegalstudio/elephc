@@ -10,6 +10,22 @@
 use super::super::*;
 use super::support::*;
 
+/// Global regex iteration retains UTF-8 progress, terminal empty matches and prefix context.
+#[test]
+fn execute_program_preg_review_empty_match_progression() {
+    let program = parse_fragment(r#"
+echo preg_match_all('//u', 'éé', $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE), ':', $matches[2][0][1], '|';
+echo preg_match_all('/^/', ''), '|', preg_match_all('/(?:|a)/', 'a'), '|';
+echo preg_match_all('/(?=b)/', 'ab'), '|', preg_match_all('/a|^b/', 'ab'), '|';
+echo preg_match_all('/a|(?<=a)b/', 'ab');
+return true;"#.as_bytes()).expect("parse global matching fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute global matches");
+    assert_eq!(values.output, "3:4|1|3|1|1|2");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Keeps invalid UTF-8 literal bytes intact through ASCII case conversion and retained function defaults.
 #[test]
 fn string_literal_bytes_survive_case_conversion_and_defaults() {

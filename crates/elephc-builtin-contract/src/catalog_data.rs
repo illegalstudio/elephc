@@ -26710,7 +26710,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "Performs a global regular expression match, optionally filling `$matches`, and returns the number of matches.",
+        summary: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed.",
         examples: &[
         ],
         php_manual: None,

@@ -92,6 +92,8 @@ mod test_provider {
     const REG_BADPAT: i32 = 3;
     const REG_ESPACE: i32 = 12;
     const REG_STARTEND: u32 = 0x0080;
+    const ELEPHC_PCRE2_GLOBAL_NEXT: u32 = 1 << 16;
+    const PCRE2_NOTEMPTY_ATSTART: u32 = 0x00000008;
 
     /// PCRE2 POSIX `regex_t` layout for the supported host wrapper ABI.
     #[repr(C)]
@@ -131,6 +133,13 @@ mod test_provider {
         ) -> c_int;
         /// Releases host PCRE2 resources.
         fn pcre2_regfree(regex: *mut Pcre2Regex);
+        /// Executes against the original subject instead of the POSIX wrapper's sliced range.
+        fn pcre2_match_8(
+            code: *const c_void, subject: *const u8, length: usize, start: usize,
+            options: u32, data: *mut c_void, context: *mut c_void,
+        ) -> c_int;
+        /// Returns native absolute capture pairs from the retained match data.
+        fn pcre2_get_ovector_pointer_8(data: *mut c_void) -> *mut usize;
     }
 
     /// Returns the test-only provider callback table.
@@ -218,6 +227,36 @@ mod test_provider {
         };
         for index in 0..requested_slots.saturating_mul(2) {
             unsafe { *offset_pairs.add(index) = -1 };
+        }
+        if let Some((start, end)) = input_range {
+            let (Ok(mut start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {
+                return REG_BADPAT;
+            };
+            if start > end { return REG_BADPAT; }
+            let mut options = 0;
+            if flags & ELEPHC_PCRE2_GLOBAL_NEXT != 0 {
+                let vector = unsafe { pcre2_get_ovector_pointer_8(handle.regex.re_match_data) };
+                let (previous_start, previous_end) = unsafe { (*vector, *vector.add(1)) };
+                start = previous_end;
+                if previous_start == previous_end {
+                    if start >= end { return 17; }
+                    options = PCRE2_NOTEMPTY_ATSTART;
+                }
+            }
+            let result = unsafe { pcre2_match_8(handle.regex.re_pcre2_code, subject.cast(), end,
+                start, options, handle.regex.re_match_data, std::ptr::null_mut()) };
+            if result < 0 { return if result == -1 { 17 } else { REG_BADPAT }; }
+            let vector = unsafe { pcre2_get_ovector_pointer_8(handle.regex.re_match_data) };
+            let returned = if result == 0 { handle.slots } else { result as usize };
+            for index in 0..returned.min(effective_slots) {
+                unsafe {
+                    let start = *vector.add(index * 2);
+                    let end = *vector.add(index * 2 + 1);
+                    *offset_pairs.add(index * 2) = if start == usize::MAX { -1 } else { start as i64 };
+                    *offset_pairs.add(index * 2 + 1) = if end == usize::MAX { -1 } else { end as i64 };
+                }
+            }
+            return 0;
         }
         let mut matches = vec![
             Pcre2Regmatch {

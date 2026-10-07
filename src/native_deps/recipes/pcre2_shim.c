@@ -6,6 +6,9 @@
 #include <pcre2.h>
 #include <pcre2posix.h>
 
+/* Private continuation flag; PCRE2 10.47 handles UTF-8, CRLF and empty retries. */
+#define ELEPHC_PCRE2_GLOBAL_NEXT (1u << 16)
+
 typedef struct elephc_pcre2_v1_handle {
     regex_t regex;
     size_t slot_count;
@@ -84,6 +87,9 @@ int32_t elephc_pcre2_v1_exec(
     slots = (size_t)requested_slots;
     effective_slots = slots < handle->slot_count ? slots : handle->slot_count;
     use_startend = (eflags & REG_STARTEND) != 0 && effective_slots != 0;
+    if ((eflags & ELEPHC_PCRE2_GLOBAL_NEXT) != 0 && !use_startend) {
+        return (int32_t)REG_INVARG;
+    }
     if (use_startend) {
         start_offset = offset_pairs[0];
         end_offset = offset_pairs[1];
@@ -100,14 +106,34 @@ int32_t elephc_pcre2_v1_exec(
      * word boundaries and lookbehind. POSIX regexec instead slices at rm_so. */
     if (use_startend) {
         uint32_t options = 0;
+        uint32_t next_options = 0;
+        PCRE2_SIZE next_offset = (PCRE2_SIZE)start_offset;
         PCRE2_SIZE *vector;
         size_t returned_slots;
         if ((eflags & REG_NOTBOL) != 0) options |= PCRE2_NOTBOL;
         if ((eflags & REG_NOTEOL) != 0) options |= PCRE2_NOTEOL;
         if ((eflags & REG_NOTEMPTY) != 0) options |= PCRE2_NOTEMPTY;
+        if ((eflags & ELEPHC_PCRE2_GLOBAL_NEXT) != 0) {
+#if PCRE2_MAJOR > 10 || (PCRE2_MAJOR == 10 && PCRE2_MINOR >= 47)
+            if (!pcre2_next_match((pcre2_match_data *)handle->regex.re_match_data,
+                    &next_offset, &next_options)) {
+                return REG_NOMATCH;
+            }
+#else
+            /* Host-only test providers can use older PCRE2. Managed production
+             * pins 10.47; no lookaround-BSK extension is enabled in either path. */
+            vector = pcre2_get_ovector_pointer((pcre2_match_data *)handle->regex.re_match_data);
+            next_offset = vector[1];
+            if (vector[0] == vector[1]) {
+                if (next_offset >= (PCRE2_SIZE)end_offset) return REG_NOMATCH;
+                next_options = PCRE2_NOTEMPTY_ATSTART;
+            }
+#endif
+            options |= next_options;
+        }
         result = pcre2_match((const pcre2_code *)handle->regex.re_pcre2_code,
             (PCRE2_SPTR)subject_z, (PCRE2_SIZE)end_offset,
-            (PCRE2_SIZE)start_offset, options,
+            next_offset, options,
             (pcre2_match_data *)handle->regex.re_match_data, NULL);
         if (result < 0) {
             if (result == PCRE2_ERROR_NOMATCH) return REG_NOMATCH;

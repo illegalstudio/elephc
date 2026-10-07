@@ -691,6 +691,19 @@ fn test_error_preg_match_all_matches_must_be_variable() {
     );
 }
 
+/// Unsupported non-local output lvalues fail explicitly after named-argument normalization.
+#[test]
+fn test_error_preg_match_all_nonlocal_captures() {
+    for source in [
+        r#"<?php $rows = []; preg_match_all('/a/', 'a', $rows[0]);"#,
+        r#"<?php class Box { public array $matches = []; } $box = new Box(); preg_match_all('/a/', 'a', $box->matches);"#,
+        r#"<?php class Box { public static array $matches = []; } preg_match_all('/a/', 'a', Box::$matches);"#,
+        r#"<?php $rows = []; \PrEg_MaTcH_AlL(matches: $rows[0], subject: 'a', pattern: '/a/');"#,
+    ] {
+        expect_error(source, "preg_match_all(): non-local $matches destinations are not supported");
+    }
+}
+
 /// Verifies that `preg_replace()` with only two arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_preg_replace_wrong_args() {

@@ -444,8 +444,8 @@ fn load_pattern_and_subject(
 /// Returns the local slot represented by a `preg_match_all()` `$matches` operand.
 ///
 /// Named-argument lowering may materialize the default empty array when `$matches`
-/// was omitted. That non-local operand is treated as count-only rather than a
-/// capture destination.
+/// was omitted. Only that empty allocation is count-only; unsupported global,
+/// static or other non-local storage must never silently discard capture output.
 fn optional_matches_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
@@ -455,14 +455,21 @@ fn optional_matches_local_slot(
         .value(value)
         .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
     let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(None);
+        return Err(CodegenIrError::unsupported(
+            "preg_match_all(): non-local $matches destinations are not supported",
+        ));
     };
     let inst_ref = ctx
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
-        return Ok(None);
+        if inst_ref.op == Op::ArrayNew && inst_ref.immediate == Some(Immediate::Capacity(0)) {
+            return Ok(None);
+        }
+        return Err(CodegenIrError::unsupported(
+            "preg_match_all(): non-local $matches destinations are not supported",
+        ));
     }
     let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
         return Err(CodegenIrError::invalid_module(

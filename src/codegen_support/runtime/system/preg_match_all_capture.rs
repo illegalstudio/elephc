@@ -123,8 +123,6 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
 
     emitter.label("__rt_pma_cap_loop");
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_cstr_off));       // reload the current subject C-string cursor
-    emitter.instruction("ldrb w9, [x1]");                                       // inspect the byte at the current cursor
-    emitter.instruction("cbz w9, __rt_pma_cap_done");                           // the trailing NUL ends the search
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one pair for every compiled capture
     emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass the reusable offset-pair buffer
@@ -134,7 +132,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x3]");                                        // publish the input range start
     emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_len_off));        // load the complete C-string subject length
     emitter.instruction("str x9, [x3, #8]");                                    // publish the input range end
-    emitter.instruction("mov x4, #128");                                        // request context-preserving offset execution
+    super::preg_match_all::emit_global_iteration_flags(emitter, match_count_off);
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested absolute offset pair
     emitter.instruction("cbnz x0, __rt_pma_cap_done");                          // stop when the shim reports no further match
 
@@ -159,17 +157,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
         row_off,
     );
 
-    emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load the full-match pair base
-    emitter.instruction("ldr x11, [x14, #8]");                                  // load signed-64-bit full-match end
-    emitter.instruction(&format!("ldr x10, [sp, #{}]", current_cstr_off));      // reload the previous cursor
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_cstr_off));       // reload the original subject base
-    emitter.instruction("sub x10, x10, x9");                                    // compute the previous absolute offset
-    emitter.instruction("cmp x11, x10");                                        // ensure this match moves the cursor forward
-    emitter.instruction("b.gt __rt_pma_cap_adv");                               // use the absolute end when it advances
-    emitter.instruction("add x11, x10, #1");                                    // advance one byte after a match at the current cursor
-    emitter.label("__rt_pma_cap_adv");
-    emitter.instruction("add x10, x9, x11");                                    // advance from the original subject base
-    emitter.instruction(&format!("str x10, [sp, #{}]", current_cstr_off));      // save the advanced cursor
+    // PCRE2 derives continuation offsets/options from its retained match data.
     emitter.instruction("b __rt_pma_cap_loop");                                 // continue searching
 
     emitter.label("__rt_pma_cap_done");
@@ -641,9 +629,6 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_pma_cap_loop_linux_x86_64");
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_cstr_off)); // reload the current subject C-string cursor
-    emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // inspect the byte at the current cursor
-    emitter.instruction("test r9d, r9d");                                       // the trailing NUL ends the search
-    emitter.instruction("jz __rt_pma_cap_done_linux_x86_64");                   // stop when the subject has been consumed
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one pair for every compiled capture
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass the reusable offset-pair buffer
@@ -657,7 +642,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
         &format!("mov r9, QWORD PTR [rsp + {}]", subject_len_off)
     );
     emitter.instruction("mov QWORD PTR [rcx + 8], r9");                         // publish the input range end
-    emitter.instruction("mov r8d, 128");                                        // request context-preserving offset execution
+    super::preg_match_all::emit_global_iteration_flags(emitter, match_count_off);
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested absolute offset pair
     emitter.instruction("test eax, eax");                                       // did the shim find another match?
     emitter.instruction("jnz __rt_pma_cap_done_linux_x86_64");                  // stop when the shim reports no further match
@@ -683,21 +668,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
         row_off,
     );
 
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load the full-match pair base
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load signed-64-bit full-match end
-    emitter.instruction(                                                        // reload the previous cursor
-        &format!("mov r10, QWORD PTR [rsp + {}]", current_cstr_off)
-    );
-    emitter.instruction(                                                        // reload the original subject base
-        &format!("mov r9, QWORD PTR [rsp + {}]", subject_cstr_off)
-    );
-    emitter.instruction("sub r10, r9");                                         // compute the previous absolute offset
-    emitter.instruction("cmp r11, r10");                                        // ensure this match moves the cursor forward
-    emitter.instruction("jg __rt_pma_cap_adv_linux_x86_64");                    // use the absolute end when it advances
-    emitter.instruction("lea r11, [r10 + 1]");                                  // advance one byte after a match at the current cursor
-    emitter.label("__rt_pma_cap_adv_linux_x86_64");
-    emitter.instruction("lea r10, [r9 + r11]");                                 // advance from the original subject base
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", current_cstr_off)); // save the advanced cursor
+    // PCRE2 derives continuation offsets/options from its retained match data.
     emitter.instruction("jmp __rt_pma_cap_loop_linux_x86_64");                  // continue searching
 
     emitter.label("__rt_pma_cap_done_linux_x86_64");

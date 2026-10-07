@@ -135,6 +135,17 @@ A successful compile with zero matches still materializes one empty row per
 compiled numbered group under `PREG_PATTERN_ORDER`. Named capture keys are not
 populated.
 
+Global matching includes empty matches at the end of the subject and on an
+empty subject. After an empty match, PCRE2 retries nonempty alternatives at that
+position before advancing with the pattern's UTF-8 and newline rules. Offsets
+remain byte offsets in the original subject, including with the `/u` modifier.
+
+In compiled calls, `$matches` must be a local variable or a local reference
+(including a by-reference parameter). Array elements, properties, global-bound
+variables and static locals are currently rejected with a diagnostic rather
+than silently discarding captures. Omitting `$matches` performs count-only
+matching, also when named arguments supply `$flags`.
+
 `preg_replace()` expands `$0`..`$99` and `\0`..`\99` to captured groups.
 Unmatched optional groups and missing groups expand to an empty string.
 

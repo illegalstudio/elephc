@@ -108,3 +108,75 @@ eval($source);
 "#);
     assert_eq!(out, "1:1|2:b@1");
 }
+
+/// Global iteration includes terminal empty matches and advances on UTF-8 or CRLF boundaries.
+#[test]
+fn preg_match_all_review_empty_match_progression() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function collect_case(string $pattern, string $subject, array &$matches): void {
+    echo preg_match_all($pattern, $subject), ':',
+        preg_match_all($pattern, $subject, $matches, PREG_OFFSET_CAPTURE), ':';
+    foreach ($matches[0] as $match) { echo $match[1], ',', strlen($match[0]), ';'; }
+    echo '|';
+}
+$matches = [str_repeat('x', 24), 1];
+collect_case('/\b/', 'a', $matches); collect_case('//', 'ab', $matches); collect_case('/^/', '', $matches);
+collect_case('/(?=b)/', 'ab', $matches); collect_case('/(?:|a)/', 'a', $matches);
+collect_case('//u', 'éé', $matches); collect_case('/(*UTF)/', 'éé', $matches); collect_case('/(*CRLF)/', "\r\n", $matches);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:2:0,0;1,0;|3:3:0,0;1,0;2,0;|1:1:0,0;|1:1:1,0;|3:3:0,0;0,1;1,0;|3:3:0,0;2,0;4,0;|3:3:0,0;2,0;4,0;|2:2:0,0;2,0;|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Set-order capture rows preserve terminal UTF-8 offsets across repeated reference writes.
+#[test]
+fn preg_match_all_review_empty_set_order_reference() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function collect(array &$matches): int {
+    return preg_match_all('//u', 'éé', $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+}
+$matches = [];
+for ($i = 0; $i < 8; $i++) {
+    echo collect($matches), ':', count($matches), ':';
+    foreach ($matches as $row) { echo $row[0][1], ','; }
+    echo '|';
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3:3:0,2,4,|".repeat(8));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Only omitted matches, including named omissions before flags, select count-only execution.
+#[test]
+fn preg_match_all_review_omitted_named_matches() {
+    let out = compile_and_run(r#"<?php
+echo \PrEg_MaTcH_AlL(subject: 'ab', flags: PREG_SET_ORDER, pattern: '//'), '|';
+echo preg_match_all(subject: 'ab', pattern: '//');
+"#);
+    assert_eq!(out, "3|3");
+}
+
+/// Variable syntax backed by global or static storage cannot discard capture output.
+#[test]
+fn preg_match_all_review_rejects_global_and_static_destinations() {
+    for source in [
+        r#"<?php $matches = []; function collect(): void { global $matches; echo preg_match_all('/a/', 'a', $matches); } collect();"#,
+        r#"<?php function collect(): void { static $matches = []; echo preg_match_all('/a/', 'a', $matches); } collect();"#,
+    ] {
+        let error = compile_cli_file_with_flags_expect_failure(source, &[]);
+        assert!(error.contains("preg_match_all(): non-local $matches destinations are not supported"), "{error}");
+    }
+}
+
+/// Native-backed dynamic eval uses the same terminal-empty and UTF-8 progression rules.
+#[test]
+fn preg_match_all_review_eval_empty_match_progression() {
+    let out = compile_and_run_with_regex(r#"<?php
+$source = 'echo preg_match_all("//u", "éé", $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE), ":", $matches[2][0][1], "|"; echo preg_match_all("/^/", "");'
+    . ' // ' . $argc;
+eval($source);
+"#);
+    assert_eq!(out, "3:4|1");
+}
