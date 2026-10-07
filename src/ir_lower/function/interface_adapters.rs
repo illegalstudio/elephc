@@ -7,6 +7,7 @@
 //! Key details:
 //! - Default expressions and reference arguments use ordinary method-call lowering.
 //! - The adapter has the interface ABI and returns through ordinary ownership cleanup.
+//! - Reference results are forwarded through a managed local cell, never as payload values.
 
 use super::*;
 use crate::codegen_support::source_method_adapters::{plan_method_abi, MethodAbiPlan};
@@ -55,8 +56,14 @@ fn lower_interface_adapter(
         method: method.to_string(),
         args: caller.params.iter().map(|(name, _)| Expr::new(ExprKind::Variable(name.clone()), span)).collect(),
     }, span);
-    let body = if caller.return_type == PhpType::Void {
+    let body = if matches!(caller.return_type, PhpType::Void | PhpType::Never) {
         vec![Stmt::new(StmtKind::ExprStmt(call), span)]
+    } else if caller.by_ref_return {
+        let result = crate::names::generated_local_name("__elephc_interface_result");
+        vec![
+            Stmt::new(StmtKind::RefAssign { target: result.clone(), source: call }, span),
+            Stmt::new(StmtKind::Return(Some(Expr::new(ExprKind::Variable(result), span))), span),
+        ]
     } else { vec![Stmt::new(StmtKind::Return(Some(call)), span)] };
     let return_type = signature.return_type.clone();
     let mut function = Function::new(name.to_string(), return_ir_type(&return_type), return_type.clone());

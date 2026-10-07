@@ -41,6 +41,25 @@ enum OptionalValue implements OptionalContract {
 }
 function render(OptionalContract $value): string { return $value->f(2); }
 echo render(OptionalValue::A);
+interface RefContract { public function &f(int &$value): int; }
+enum RefValue implements RefContract {
+    case A;
+    public function &f(int &$value, int $extra = 2): int { $value += $extra; return $value; }
+}
+function update(RefContract $enum, int &$value): int {
+    $r = &$enum->f($value); $r += 10; return $r;
+}
+$value = 3;
+echo update(RefValue::A, $value), $value;
+interface ArrayRefContract { public function &data(): array; }
+enum ArrayRefValue implements ArrayRefContract {
+    case A;
+    public function &data(array $extra = [2]): array { $value = [1]; $value[0] += $extra[0]; return $value; }
+}
+function update_array(ArrayRefContract $enum): int {
+    $r = &$enum->data(); $r[0] += 10; return $r[0];
+}
+echo update_array(ArrayRefValue::A);
 "#;
     let module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),

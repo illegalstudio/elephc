@@ -9,6 +9,85 @@
 
 use super::*;
 
+/// Optional interface adapters preserve a returned reference and its caller mutation.
+#[test]
+fn test_enum_followup_interface_reference_return() {
+    let out = compile_and_run(r#"<?php
+interface I { public function &f(): array; }
+enum E implements I {
+    case A;
+    public function &f(int $extra = 1): array {
+        $a = [1]; $a[0] += $extra; return $a;
+    }
+}
+function update(I $value): int {
+    $r = &$value->f(); $r[0] += 10; return $r[0];
+}
+echo E::A->name, ':', update(E::A);
+"#);
+    assert_eq!(out, "A:12");
+}
+
+/// Reference returns and reference parameters share the original managed caller cell.
+#[test]
+fn test_enum_followup_interface_reference_return_alias() {
+    let out = compile_and_run(r#"<?php
+namespace Adapter;
+interface I { public function &f(int &$value): int; }
+enum E implements I {
+    case A;
+    public function &f(int &$value, int $extra = 2): int {
+        $value += $extra; return $value;
+    }
+}
+function update(I $enum, int &$value): int {
+    $r = &$enum->f($value); $r += 10; return $r;
+}
+$value = 3;
+$root = &$value;
+echo update(E::A, $value), ':', $value;
+"#);
+    assert_eq!(out, "15:15");
+}
+
+/// Repeated adapters retain no more storage than the same direct interface reference return.
+#[test]
+fn test_enum_followup_interface_reference_return_ownership() {
+    let run = |iterations, optional| {
+        let parameters = if optional { "array $extra = [2]" } else { "" };
+        let setup = if optional { "" } else { "$extra = [2];" };
+        compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function &f(): array; }}
+enum E implements I {{
+    case A;
+    public function &f({parameters}): array {{
+        {setup} $value = [1]; $value[0] += $extra[0]; return $value;
+    }}
+}}
+function update(I $enum): int {{
+    $r = &$enum->f(); $r[0] += 10; return $r[0];
+}}
+for ($i = 0; $i < {iterations}; $i++) {{ echo update(E::A), ':'; }}
+"#))
+    };
+    // The non-adapted interface path already retains returned storage at shutdown.
+    // This regression bounds added adapter/default retention, not that separate lifetime gap.
+    for iterations in [1, 40] {
+        let baseline = run(iterations, false);
+        let adapted = run(iterations, true);
+        assert!(baseline.success && adapted.success, "{}\n{}", baseline.stderr, adapted.stderr);
+        assert_eq!(adapted.stdout, "13:".repeat(iterations));
+        assert_eq!(baseline.stdout, adapted.stdout);
+        for metric in ["live_blocks=", "live_bytes="] {
+            let retained = |stderr: &str| stderr.lines().next().unwrap()
+                .split_whitespace().find_map(|field| field.strip_prefix(metric))
+                .unwrap().parse::<usize>().unwrap();
+            assert_eq!(retained(&baseline.stderr), retained(&adapted.stderr),
+                "baseline: {}\nadapter: {}", baseline.stderr, adapted.stderr);
+        }
+    }
+}
+
 /// Repeated interface calls retire structured default owners instead of accumulating them.
 #[test]
 fn test_enum_followup_interface_default_ownership() {
