@@ -56,6 +56,9 @@ pub mod transcribe;
 #[cfg(test)]
 pub mod print;
 
+#[cfg(test)]
+pub(crate) mod oracle;
+
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{
     Attribute, AttributeGroup, BinOp, CType, CastType, CatchClause, ClassConst, ClassMethod,
@@ -389,16 +392,7 @@ pub fn e_dyn_prop(object: Expr, property: Expr) -> Expr {
 /// `StmtKind` (`s_assign`, `s_prop_assign`); this is the general form the parser falls back to
 /// for targets those do not cover, such as a dynamic property.
 pub fn e_assign(target: Expr, value: Expr) -> Expr {
-    Expr::new(
-        ExprKind::Assignment {
-            target: Box::new(target),
-            value: Box::new(value),
-            result_target: None,
-            prelude: Vec::new(),
-            conditional_value_temp: None,
-        },
-        Span::dummy(),
-    )
+    crate::parser::expr::plain_assignment_expression(target, value, Span::synthetic())
 }
 
 /// A reference to a global constant (`PHP_INT_MIN`, `STDERR`, …).

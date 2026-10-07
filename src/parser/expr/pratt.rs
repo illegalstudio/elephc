@@ -398,6 +398,10 @@ fn parse_expr_bp_inner(
             // Widen only the END so the span covers through the value expression;
             // the start stays on the operator token, keeping diagnostics anchored.
             let span = span.merge(rhs.span);
+            if op == AssignmentOperator::Assign {
+                lhs = super::plain_assignment_expression(lhs, rhs, span);
+                continue;
+            }
             if is_non_local_assignment_target(&lhs) {
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
 

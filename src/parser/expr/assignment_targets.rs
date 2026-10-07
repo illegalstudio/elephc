@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::parser::expr::pratt` when parsing assignment expressions.
+//! - `crate::synthetic_class::e_assign()` when building equivalent internal expressions.
 //!
 //! Key details:
 //! - Target dependencies are tracked so PHP evaluation order is preserved during lowering.
@@ -16,6 +17,35 @@ use crate::parser::stmt::{
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 use crate::span::Span;
+
+/// Builds a plain assignment with the same capture and result rules for parsed and built ASTs.
+pub(crate) fn plain_assignment_expression(target: Expr, value: Expr, span: Span) -> Expr {
+    if !is_non_local_assignment_target(&target) {
+        return Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(target),
+                value: Box::new(value),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        );
+    }
+    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    let target = lowerer.stabilize_non_local_target(target, &value);
+    let value = lowerer.bind_value(&target, value);
+    Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(target),
+            value: Box::new(value.clone()),
+            result_target: Some(Box::new(value)),
+            prelude: lowerer.finish(),
+            conditional_value_temp: None,
+        },
+        span,
+    )
+}
 
 /// Desugars `++$place` / `$place++` into a read-modify-write an expression can carry.
 ///

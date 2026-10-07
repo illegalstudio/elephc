@@ -340,7 +340,7 @@ fn static_property_stores_preserve_concrete_and_retyped_local_owners_on_all_targ
     }
 }
 
-/// Property stores retire concrete object temporaries when their stored owner becomes independent.
+/// Property stores retire SSA sources or borrow a captured owner covered by frame cleanup.
 #[test]
 fn property_stores_retire_temporary_object_sources_on_all_targets() {
     let source = r#"<?php
@@ -363,46 +363,35 @@ fn property_stores_retire_temporary_object_sources_on_all_targets() {
             inst.op == Op::Release && inst.operands == [direct_source]
         }), "{target}: PropSet must retire the retained object's original owner");
 
-        let (dynamic_index, stored_source, original_source) = function
-            .instructions
-            .iter()
-            .enumerate()
-            .find_map(|(index, inst)| {
-                if inst.op != Op::DynamicPropSet {
-                    return None;
-                }
-                let mut stored = *inst.operands.last()?;
-                if let ValueDef::Instruction { inst: producer, .. } = function.value(stored)?.def {
-                    let producer = function.instruction(producer)?;
-                    if producer.op == Op::Borrow {
-                        stored = *producer.operands.first()?;
-                        assert!(function.instructions[index + 1..].iter().any(|inst|
-                            inst.op == Op::Release && inst.operands == [stored]),
-                            "{target}: the runtime-name store must retire its lent owner");
-                    }
-                }
-                let original = match function.value(stored)?.def {
-                    ValueDef::Instruction { inst: producer, .. } => {
-                        let producer = function.instruction(producer)?;
-                        if producer.op == Op::MixedBox {
-                            *producer.operands.first()?
-                        } else {
-                            stored
-                        }
-                    }
-                    _ => stored,
-                };
-                Some((index, stored, original))
-            })
-            .expect("runtime-name property store");
-        let release_range = if stored_source == original_source {
-            &function.instructions[dynamic_index + 1..]
-        } else {
-            &function.instructions[..dynamic_index]
+        let dynamic_index = function.instructions.iter()
+            .position(|inst| inst.op == Op::DynamicPropSet).expect("runtime-name property store");
+        let stored_source = *function.instructions[dynamic_index].operands.last().unwrap();
+        let ValueDef::Instruction { inst: producer, .. } = function.value(stored_source).unwrap().def else {
+            panic!("{target}: runtime-name publication needs a borrowed capture");
         };
-        assert!(release_range.iter().any(|inst| {
-            inst.op == Op::Release && inst.operands == [original_source]
-        }), "{target}: DynamicPropSet must retire the concrete object's original owner");
+        let borrow = function.instruction(producer).unwrap();
+        assert_eq!(borrow.op, Op::Borrow, "{target}");
+        assert_eq!(function.value(stored_source).unwrap().ownership, Ownership::Borrowed, "{target}");
+        let loaded_source = borrow.operands[0];
+        let ValueDef::Instruction { inst: producer, .. } = function.value(loaded_source).unwrap().def else {
+            panic!("{target}: captured source must come from a frame local");
+        };
+        let load = function.instruction(producer).unwrap();
+        assert_eq!(load.op, Op::LoadLocal, "{target}");
+        let Some(crate::ir::Immediate::LocalSlot(slot)) = load.immediate else {
+            panic!("{target}: capture load must identify its owner slot");
+        };
+        let local = &function.locals[slot.as_raw() as usize];
+        assert_eq!(local.kind, crate::ir::LocalKind::PhpLocal, "{target}: frame cleanup owns the capture");
+        assert!(local.name.as_deref().is_some_and(crate::names::is_generated_local_name), "{target}");
+        assert!(matches!(local.php_type, crate::types::PhpType::Object(_)), "{target}");
+        let capture = function.instructions[..dynamic_index].iter().rev().find(|inst|
+            inst.op == Op::StoreLocal && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot)))
+            .expect("captured RHS publication");
+        assert_eq!(function.value(capture.operands[0]).unwrap().ownership, Ownership::Owned, "{target}");
+        assert!(!function.instructions[dynamic_index + 1..].iter().any(|inst|
+            inst.op == Op::Release && (inst.operands == [loaded_source] || inst.operands == [stored_source])),
+            "{target}: the property store must not consume the capture's borrowed view");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
