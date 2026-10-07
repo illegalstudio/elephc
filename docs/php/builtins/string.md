@@ -138,10 +138,10 @@ sidebar:
 | [`sscanf()`](./string/sscanf.md) | `(string $string, string $format, ...$vars): array` | `array` | ✓ | ✓ |
 | [`str_contains()`](./string/str_contains.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
 | [`str_ends_with()`](./string/str_ends_with.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
-| [`str_ireplace()`](./string/str_ireplace.md) | `(string $search, string $replace, string $subject, int $count = null): string` | `string` | ✓ | ✓ |
+| [`str_ireplace()`](./string/str_ireplace.md) | `(array|string $search, array|string $replace, array|string $subject, int $count = null): array|string` | `array|string` | ✓ | ✓ |
 | [`str_pad()`](./string/str_pad.md) | `(string $string, int $length, string $pad_string = ' ', int $pad_type = 1): string` | `string` | ✓ | ✓ |
 | [`str_repeat()`](./string/str_repeat.md) | `(string $string, int $times): string` | `string` | ✓ | ✓ |
-| [`str_replace()`](./string/str_replace.md) | `(string $search, string $replace, string $subject, int $count = null): string` | `string` | ✓ | ✓ |
+| [`str_replace()`](./string/str_replace.md) | `(array|string $search, array|string $replace, array|string $subject, int $count = null): array|string` | `array|string` | ✓ | ✓ |
 | [`str_split()`](./string/str_split.md) | `(string $string, int $length = 1): array` | `array` | ✓ | ✓ |
 | [`str_starts_with()`](./string/str_starts_with.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
 | [`str_word_count()`](./string/str_word_count.md) | `(string $string, int $format = 0, ?string $characters = null): array|int` | `array|int` | ✓ | ✓ |

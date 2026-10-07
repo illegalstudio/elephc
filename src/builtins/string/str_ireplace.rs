@@ -6,13 +6,16 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The declared signature includes an optional `count` param, but `max_args: 3`
-//!   caps arity so only three arguments are accepted, matching PHP's practical use.
-
+//! - Three scalar operands lower to the `__rt_str_ireplace` runtime helper; array operands
+//!   and the by-reference `$count` lower to the `crate::str_replace_prelude` helpers. The
+//!   shared contract lives in `super::str_replace_support`.
 
 builtin! {
     contract: "str_ireplace",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    check: super::str_replace_support::check,
+    lazy_check: true,
+    semantics: super::str_replace_support::semantics(
         crate::ir::RuntimeFnId::StrIreplace,
+        super::str_replace_support::lower_str_ireplace,
     ),
 }

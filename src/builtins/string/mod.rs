@@ -155,6 +155,7 @@ pub mod str_ireplace;
 pub mod str_pad;
 pub mod str_repeat;
 pub mod str_replace;
+pub mod str_replace_support;
 pub mod str_split;
 pub mod str_starts_with;
 pub mod str_word_count;

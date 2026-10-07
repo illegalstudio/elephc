@@ -24,7 +24,7 @@ mod curl;
 mod io;
 pub(crate) mod mbstring;
 mod mbstring_callback;
-mod string;
+pub(crate) mod string;
 mod math;
 mod spl;
 mod pointers;

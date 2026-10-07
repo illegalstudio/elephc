@@ -1055,6 +1055,15 @@ impl RuntimeFnId {
                 }
                 sig.return_type = PhpType::Int;
             }
+            RuntimeFnId::StrReplace | RuntimeFnId::StrIreplace => {
+                // The array forms and `$count` compose prelude helpers, which a callable
+                // wrapper cannot call; the wrapper stays on the three-string runtime ABI.
+                truncate_callable_params(sig, 3);
+                for index in 0..3 {
+                    set_callable_param_type(sig, index, PhpType::Str);
+                }
+                sig.return_type = PhpType::Str;
+            }
             _ => {}
         }
     }

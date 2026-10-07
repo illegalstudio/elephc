@@ -79,6 +79,9 @@ pub struct CheckResult {
     pub extern_classes: HashMap<String, ExternClassInfo>,
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
+    /// Whether some `str_replace()`/`str_ireplace()` call needs the str_replace prelude
+    /// helpers; declaration reachability keeps them only then.
+    pub string_replace_helpers: bool,
     pub warnings: Vec<CompileWarning>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.

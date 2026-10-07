@@ -30,17 +30,26 @@ fn test_error_first_class_builtin_non_literal_arguments() {
     );
 }
 
-/// An unsupported fourth replacement argument stays rejected through callable syntax.
+/// The by-reference `$count` refuses a literal in a direct call, as in PHP, and the callable
+/// wrapper (which keeps the three-string runtime ABI) still rejects a fourth argument.
 #[test]
-fn test_error_capped_string_replace_callable_rejects_fourth_argument() {
+fn test_error_string_replace_count_argument_shapes() {
     for name in ["str_replace", "str_ireplace"] {
         expect_error(
             &format!("<?php {name}('a', 'b', 'aAa', 0);"),
-            "3 arguments",
+            &format!("{name}(): Argument #4 ($count) could not be passed by reference"),
         );
         expect_error(
             &format!("<?php $callback = {name}(...); $callback('a', 'b', 'aAa', 0);"),
             "3 arguments",
+        );
+        expect_error(
+            &format!("<?php $o = new stdClass(); {name}('a', 'b', 'aAa', $o->count);"),
+            &format!("{name}(): Argument #4 ($count) must be a plain variable"),
+        );
+        expect_error(
+            &format!("<?php {name}('a', 'b', 'c', $n, 5);"),
+            &format!("{name}() takes 3 or 4 arguments"),
         );
     }
 }

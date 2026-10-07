@@ -99,6 +99,15 @@ pub fn compute(
         state.reach.functions.insert(name.clone());
         state.behavioral.functions.insert(name);
     }
+    // `str_replace()`/`str_ireplace()` lower their array forms and `$count` to the
+    // str_replace prelude's helpers. Which calls need them depends on operand types, so the
+    // checker decides, and a program whose calls all stay on the runtime fast path drops them.
+    if check_result.string_replace_helpers {
+        for helper in crate::str_replace_prelude::HELPERS {
+            state.reach.functions.insert(helper.to_string());
+            state.behavioral.functions.insert(helper.to_string());
+        }
+    }
     for group in options
         .inventory
         .groups

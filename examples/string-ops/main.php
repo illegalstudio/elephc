@@ -64,6 +64,10 @@ echo "str_repeat: " . str_repeat("ha", 3) . "\n";
 echo "strrev: " . strrev("desserts") . "\n";
 echo "grapheme_strrev: " . grapheme_strrev("A\u{0065}\u{0301}\u{1F469}\u{1F3FD}\u{200D}\u{1F4BB}") . "\n";
 echo "str_replace: " . str_replace("World", "PHP", $str) . "\n";
+// Array search/replace pairs apply in order; $count receives the total number of replacements
+echo "str_replace (pairs): " . str_replace(["Hello", "World"], ["Bye", "PHP"], $str, $count) . " ($count replaced)\n";
+// An array subject returns an array with every element replaced
+echo "str_ireplace (array subject): " . implode(", ", str_ireplace("o", "0", ["Foo", "bOOk"])) . "\n";
 
 // Wrapping (word-aware; cut_long_words breaks over-long words)
 echo "\n--- Wrap ---\n";

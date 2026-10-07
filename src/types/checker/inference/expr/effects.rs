@@ -303,6 +303,11 @@ impl Checker {
                         if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
                             || pcntl_output_type(builtin_name, arg, idx).is_some()
                             || xml_struct_output_type(builtin_name, arg, idx).is_some()
+                            || crate::builtins::string::str_replace_support::is_count_output_argument(
+                                builtin_name,
+                                arg,
+                                idx,
+                            )
                             || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
                                 && is_openssl_encrypt_tag_arg(arg, idx))
                         {
@@ -350,6 +355,16 @@ impl Checker {
                     if let Some(output_ty) = xml_struct_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), output_ty);
+                        }
+                    }
+                    // `str_replace()`/`str_ireplace()` write the replacement total into `$count`.
+                    if crate::builtins::string::str_replace_support::is_count_output_argument(
+                        builtin_name,
+                        arg,
+                        idx,
+                    ) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Int);
                         }
                     }
                 }

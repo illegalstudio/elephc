@@ -351,6 +351,21 @@ pub trait BuiltinLoweringContext {
         span: Option<Span>,
     ) -> LoweredBuiltinValue;
 
+    /// Returns whether the program being lowered declares the PHP function `name` (canonical
+    /// lowercase), after declaration reachability. A composed lowering consults it before
+    /// [`Self::emit_user_call`] on a prelude helper that may have been pruned. Contexts that
+    /// cannot call user functions at all answer `false`.
+    fn declares_function(&self, _name: &str) -> bool {
+        false
+    }
+
+    /// Returns whether `operand` was loaded from a PHP variable, i.e. whether
+    /// [`Self::store_operand_local`] can write through it. Contexts without PHP variables
+    /// answer `false`.
+    fn operand_is_variable(&self, _operand: ValueId) -> bool {
+        false
+    }
+
     /// Assigns `value` (typed `php_type`) to the PHP variable that `operand` was loaded
     /// from, with ordinary assignment ownership — PHP's write-only by-reference output
     /// semantics. Every variable storage kind is recognized (frame local, `static`,

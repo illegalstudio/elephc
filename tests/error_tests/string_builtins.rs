@@ -263,7 +263,7 @@ function pos(): int {
 fn test_error_str_replace_wrong_args() {
     expect_error(
         "<?php str_replace(\"a\", \"b\");",
-        "str_replace() takes exactly 3 arguments",
+        "str_replace() takes 3 or 4 arguments",
     );
 }
 

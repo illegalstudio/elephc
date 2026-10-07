@@ -78,6 +78,8 @@ fn check_source_with_defines_and_options(
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::str_replace_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     types::check_with_options(&ast, options).map_err(|e| e.message.clone())?;
     Ok(())
@@ -95,6 +97,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
+    let ast = elephc::str_replace_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::optimize::fold_constants(ast);
     types::check(&ast)
 }

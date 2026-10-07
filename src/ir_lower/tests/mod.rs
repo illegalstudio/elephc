@@ -166,6 +166,9 @@ fn try_lower_source_at_for_target(
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
     let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
+    // Mirrors `pipeline::compile`: the str_replace prelude is injected after the desugar.
+    let ast = crate::str_replace_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .expect("str_replace prelude injection failed");
     let ast = crate::optimize::fold_constants_for_target(ast, target);
     let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());

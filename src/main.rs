@@ -70,6 +70,7 @@ mod source_map;
 mod span;
 mod strict_php;
 mod string_bytes;
+mod str_replace_prelude;
 mod superglobals;
 #[allow(dead_code)]
 mod synthetic_class;

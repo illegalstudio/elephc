@@ -4711,6 +4711,17 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         }
     }
 
+    /// Answers from the checker's function table, which declaration reachability has
+    /// already reconciled with the pruned program.
+    fn declares_function(&self, name: &str) -> bool {
+        self.functions.contains_key(name)
+    }
+
+    /// Answers through the same load-shape resolution `store_operand_local` uses.
+    fn operand_is_variable(&self, operand: ValueId) -> bool {
+        self.operand_local_name(operand).is_some()
+    }
+
     /// Resolves the operand back to the variable it was loaded from and stores through
     /// `store_local`, which routes by storage kind (frame slot, `static`, `global`,
     /// reference cell, extern global, eval scope), so the variable is (re)declared at the

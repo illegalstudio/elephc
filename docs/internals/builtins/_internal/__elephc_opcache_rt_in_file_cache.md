@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_opcache_rt_in_file_cache.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_in_file_cache.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

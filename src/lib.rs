@@ -97,6 +97,8 @@ pub mod span;
 /// `--strict-php` mode state and PHP-compatibility audit pass.
 pub mod strict_php;
 mod string_bytes;
+/// Conditionally-injected elephc-PHP helpers behind the array forms of `str_replace()`.
+pub mod str_replace_prelude;
 /// Canonical HTTP-request superglobal set and shared type helper.
 pub mod superglobals;
 /// Rust builder for the synthetic PHP class surfaces the compiler injects itself.

@@ -228,7 +228,7 @@ impl Scanner<'_> {
 
     /// Scans a direct call, distinguishing literal introspection from dynamic hazards.
     pub(super) fn scan_function_call(&mut self, name: &str, args: &[Expr]) {
-        let key = self.record_callable(name);
+        let key = self.record_function(name);
         self.record_builtin_requirements(name, args);
         self.scan_builtin_callback_arguments(&key, args);
         self.scan_declaration_arguments(&key, args);
@@ -1061,7 +1061,24 @@ impl Scanner<'_> {
     }
 
     /// Records a free-function/extern callable key.
+    ///
+    /// A callable reference to `str_replace()`/`str_ireplace()` (`call_user_func`, a callable
+    /// string held in a variable, a callback argument) reaches the builtin's lowering with
+    /// operand types the checker never examined at a call of its own, so it also keeps the
+    /// str_replace prelude helpers that lowering may call. A direct call goes through
+    /// [`Self::record_function`] instead: the checker decides those.
     pub(super) fn record_callable(&mut self, name: &str) -> String {
+        let key = self.record_function(name);
+        if crate::str_replace_prelude::CALLERS.contains(&key.as_str()) {
+            for helper in crate::str_replace_prelude::HELPERS {
+                self.record_function(helper);
+            }
+        }
+        key
+    }
+
+    /// Records the free-function/extern key a direct call names.
+    pub(super) fn record_function(&mut self, name: &str) -> String {
         let key = php_symbol_key(name.trim_start_matches('\\'));
         self.usage.functions.insert(key.clone()); self.usage.externs.insert(key.clone()); key
     }

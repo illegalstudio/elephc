@@ -1,6 +1,6 @@
 ---
 title: "str_ireplace()"
-description: "Case-insensitive version of str_replace()."
+description: "Case-insensitive version of str_replace(): replaces every occurrence of each search string, in a string or in every element of an array."
 sidebar:
   order: 913
 ---
@@ -8,18 +8,18 @@ sidebar:
 ## str_ireplace()
 
 ```php
-function str_ireplace(string $search, string $replace, string $subject, int $count = null): string
+function str_ireplace(array|string $search, array|string $replace, array|string $subject, int $count = null): array|string
 ```
 
-Case-insensitive version of str_replace().
+Case-insensitive version of str_replace(): replaces every occurrence of each search string, in a string or in every element of an array.
 
 **Parameters**:
-- `$search` (`string`)
-- `$replace` (`string`)
-- `$subject` (`string`)
-- `$count` (`int`), default `null`, optional
+- `$search` (`array|string`)
+- `$replace` (`array|string`)
+- `$subject` (`array|string`)
+- `$count` (`int`), passed by reference, default `null`, optional
 
-**Returns**: `string`
+**Returns**: `array|string`
 
 ## Availability
 

@@ -7024,6 +7024,27 @@ echo ":"; echo function_exists("substr_replace");');
     assert_eq!(out, "hello PHP:aXf:abcdX:abcdefX:Xcdef:1");
 }
 
+/// Verifies eval `str_replace()`/`str_ireplace()` accept PHP's array forms, named arguments,
+/// the by-reference `$count`, callable dispatch, and raise php-src's `TypeError`.
+#[test]
+fn test_eval_dispatches_str_replace_array_forms() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo str_replace(["a", "b"], ["1", "2"], "aabb"), ":";
+echo json_encode(str_replace("a", "X", ["k" => "aa", 3 => "ba"], $n)), $n, ":";
+echo str_ireplace("A", "y", "aA", $m), $m, ":";
+echo implode(",", str_replace(subject: ["ab", "b"], search: ["a", "b"], replace: ["b", "c"], count: $named)), $named, ":";
+echo call_user_func("str_replace", ["a"], "z", "aa"), ":";
+try { str_replace("a", ["x"], "aa"); } catch (TypeError $e) { echo $e->getMessage(); }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1122:{\"k\":\"XX\",\"3\":\"bX\"}3:yy2:cc,c4:zz:\
+str_replace(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string"
+    );
+}
+
 /// Verifies eval `nl2br()` preserves newline bytes while inserting HTML breaks.
 #[test]
 fn test_eval_dispatches_nl2br_builtin_call() {

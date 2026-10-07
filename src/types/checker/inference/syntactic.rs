@@ -305,8 +305,18 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         } => PhpType::Bool,
         ExprKind::FunctionCall { name, args } => match name.as_str() {
             "eval" => PhpType::Mixed,
+            // An array `$subject` makes the result an array (boxed `mixed`); only a literal
+            // array is recognizable here.
+            "str_replace" | "str_ireplace" => match args.get(2).map(|subject| &subject.kind) {
+                Some(
+                    ExprKind::ArrayLiteral(_)
+                    | ExprKind::ArrayLiteralAssoc(_)
+                    | ExprKind::ArrayLiteralMixed(_),
+                ) => PhpType::Mixed,
+                _ => PhpType::Str,
+            },
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"
-            | "strrev" | "chr" | "str_replace" | "str_ireplace" | "ucfirst" | "lcfirst"
+            | "strrev" | "chr" | "ucfirst" | "lcfirst"
             | "ucwords" | "str_pad" | "implode" | "sprintf" | "vsprintf" | "nl2br" | "wordwrap" | "md5"
             | "sha1" | "hash" | "substr_replace" | "addslashes" | "stripslashes"
             | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode" | "urldecode"

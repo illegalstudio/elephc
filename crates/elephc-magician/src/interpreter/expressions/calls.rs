@@ -52,6 +52,11 @@ pub(in crate::interpreter) fn eval_call(
     if name == "preg_match" {
         return eval_builtin_preg_match_call(args, context, scope, values);
     }
+    // `str_replace()`/`str_ireplace()` keep the `$count` reference target and named
+    // arguments, which the positional-expression direct hook has already lost.
+    if matches!(name, "str_replace" | "str_ireplace") {
+        return eval_builtin_str_replace_call(name, args, context, scope, values);
+    }
     if name == "preg_match_all" {
         return eval_builtin_preg_match_all_call(args, context, scope, values);
     }

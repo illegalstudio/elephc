@@ -1,6 +1,6 @@
 ---
 title: "str_replace()"
-description: "Replaces all occurrences of a search string with a replacement string."
+description: "Replaces all occurrences of each search string with its replacement, in a string or in every element of an array."
 sidebar:
   order: 916
 ---
@@ -8,18 +8,18 @@ sidebar:
 ## str_replace()
 
 ```php
-function str_replace(string $search, string $replace, string $subject, int $count = null): string
+function str_replace(array|string $search, array|string $replace, array|string $subject, int $count = null): array|string
 ```
 
-Replaces all occurrences of a search string with a replacement string.
+Replaces all occurrences of each search string with its replacement, in a string or in every element of an array.
 
 **Parameters**:
-- `$search` (`string`)
-- `$replace` (`string`)
-- `$subject` (`string`)
-- `$count` (`int`), default `null`, optional
+- `$search` (`array|string`)
+- `$replace` (`array|string`)
+- `$subject` (`array|string`)
+- `$count` (`int`), passed by reference, default `null`, optional
 
-**Returns**: `string`
+**Returns**: `array|string`
 
 ## Availability
 

@@ -334,6 +334,10 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    // Mirrors `pipeline::compile`: the str_replace prelude is injected after the func_args
+    // desugar, so its helpers never gain the hidden argument collector.
+    let resolved = elephc::str_replace_prelude::inject_if_used(resolved, &mut prelude_inventory)
+        .expect("str_replace prelude injection failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let error = match elephc::types::check_with_target(&resolved, target()) {
         Ok(_) => panic!("source unexpectedly passed type checking"),
@@ -510,6 +514,10 @@ fn compile_and_run_files_with_defines_per_argv(
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    // Mirrors `pipeline::compile`: the str_replace prelude is injected after the func_args
+    // desugar, so its helpers never gain the hidden argument collector.
+    let resolved = elephc::str_replace_prelude::inject_if_used(resolved, &mut prelude_inventory)
+        .expect("str_replace prelude injection failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");

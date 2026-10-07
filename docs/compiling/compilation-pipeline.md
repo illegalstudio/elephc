@@ -39,6 +39,7 @@ Physical source (.php or .lfc)
   -> autoload-run       run autoload insertion
   -> object-cast-prelude inject stdClass declarations when object casts need them
   -> func-args          desugar func_num_args/get_args/get_arg to a hidden variadic
+  -> str-replace-prelude inject the helpers behind str_replace()/str_ireplace() array forms
   -> opcache-manifest-bake complete and bake the post-autoload OPcache script manifest
   -> opt-fold           seed CLI superglobals + AST constant folding
   -> typecheck          Type checker / warnings

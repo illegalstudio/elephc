@@ -345,6 +345,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    // Mirrors `pipeline::compile`: the str_replace prelude is injected after the func_args
+    // desugar, so its helpers never gain the hidden argument collector.
+    let resolved = elephc::str_replace_prelude::inject_if_used(resolved, &mut prelude_inventory)
+        .expect("str_replace prelude injection failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");

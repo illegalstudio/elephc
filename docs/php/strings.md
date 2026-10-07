@@ -228,8 +228,8 @@ routing and web transport verification remain open.
 | `stripos()` | `stripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strpos()`. Folding is ASCII-only (`A`-`Z`), so non-ASCII bytes are matched verbatim. `$offset` behaves exactly as in `strpos()` |
 | `strripos()` | `strripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strrpos()`. Folding is ASCII-only (`A`-`Z`). `$offset` behaves exactly as in `strrpos()` |
 | `strstr()` | `strstr($hay, $needle, $before_needle = false): string\|false` | Find first occurrence and return the rest, or the part before it when `$before_needle` is truthy. Returns `false` if not found |
-| `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
-| `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
+| `str_replace()` | `str_replace($search, $replace, $subject [, &$count]): string\|array` | Replace all occurrences. An array `$search` applies its entries in order, each to the previous result, with a `$replace` array paired by position (missing entries are `""`) or one `$replace` string for all. An array `$subject` returns an array with the same keys, every element string-converted and replaced. `$count` receives the total number of replacements and must be a plain variable (not a property or array element). A string `$search` with an array `$replace` throws `\TypeError`. Three string operands keep the direct runtime path; first-class callables (`str_replace(...)`) accept the three-string form only |
+| `str_ireplace()` | `str_ireplace($search, $replace, $subject [, &$count]): string\|array` | ASCII case-insensitive `str_replace()`, with the same array forms and `$count` |
 | `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace a substring. Negative `$start` counts from the end; a negative `$len` preserves that many trailing bytes after the replacement, matching PHP |
 | `strtolower()` | `strtolower($str): string` | Convert to lowercase |
 | `strtoupper()` | `strtoupper($str): string` | Convert to uppercase |

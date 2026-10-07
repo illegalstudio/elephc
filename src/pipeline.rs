@@ -535,6 +535,25 @@ pub(crate) fn compile(config: CliConfig) {
     };
     timings.record_since("func-args", phase_started);
 
+    // Inject the str_replace prelude (the elephc-PHP helpers the array forms and `$count` of
+    // `str_replace()`/`str_ireplace()` lower to) only when the program calls either builtin.
+    // Runs after `autoload::run` for the same reason as the object-cast prelude: a call that
+    // only appears in an autoloaded class file must still find the helpers declared. Runs
+    // after `func_args::desugar` too: the lowering calls the helpers with exactly their
+    // declared operands, so they must not gain the hidden `...$__elephc_func_args`
+    // collector a program with `eval()` gives every other function.
+    crate::progress::phase("str-replace-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::str_replace_prelude::inject_if_used(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("str-replace-prelude", phase_started);
+
     // Complete the OPcache script manifest now that all three groups exist, and re-render the
     // manifest-dependent functions injected above against it. This is a pure substitution of
     // already-declared, already-name-resolved top-level functions, so it cannot disturb the

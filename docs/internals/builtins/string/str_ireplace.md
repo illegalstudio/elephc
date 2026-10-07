@@ -10,48 +10,48 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_ireplace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_ireplace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L695) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.str_ireplace` through `BuiltinLoweringContext`.
-- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
+- Uses the `eir_graph` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
 ## Semantic descriptor
 
-- **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
+- **Target strategy**: `eir_graph`
+- **Validation**: `checker_hook`
+- **Result type source**: `shared`
 - **Result ownership**: `independent`
-- **Effects**: `static (0 declared effects)`
+- **Effects**: `shared`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.str_ireplace`
-- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 
 ```php
-function str_ireplace(string $search, string $replace, string $subject, int $count = null): string
+function str_ireplace(array|string $search, array|string $replace, array|string $subject, int $count = null): array|string
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 3–4 arguments (1 optional).
+- **By-reference parameters**: `$count`.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/str_ireplace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_ireplace.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$count`.
 
 ## Cross-references
 

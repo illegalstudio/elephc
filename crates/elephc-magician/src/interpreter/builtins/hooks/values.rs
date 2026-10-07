@@ -678,19 +678,15 @@ impl EvalValuesHook {
                 }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::StrReplace => {
-                three_args(evaluated_args, values, |search, replace, subject, values| {
-                    match name {
-                        "str_ireplace" => {
-                            eval_str_ireplace_result(search, replace, subject, values)
-                        }
-                        "str_replace" => {
-                            eval_str_replace_result(name, search, replace, subject, values)
-                        }
-                        _ => Err(EvalStatus::RuntimeFatal),
-                    }
-                })
-            }
+            Self::StrReplace => match (name, evaluated_args) {
+                ("str_ireplace", [search, replace, subject]) => {
+                    eval_str_ireplace_result(*search, *replace, *subject, context, values)
+                }
+                ("str_replace", [search, replace, subject]) => {
+                    eval_str_replace_result(name, *search, *replace, *subject, context, values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::StrSplit => match evaluated_args {
                 [value] => eval_str_split_result(*value, None, values),
                 [value, length] => eval_str_split_result(*value, Some(*length), values),

@@ -89,6 +89,7 @@ impl Checker {
             packed_classes: HashMap::new(),
             extern_globals: HashMap::new(),
             required_libraries: Vec::new(),
+            string_replace_helpers: false,
             top_level_env: HashMap::new(),
             active_ref_params: HashSet::new(),
             active_external_ref_bindings: HashSet::new(),

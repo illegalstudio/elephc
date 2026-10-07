@@ -31,7 +31,15 @@ pub(in crate::interpreter) fn eval_str_ireplace_result(
     search: RuntimeCellHandle,
     replace: RuntimeCellHandle,
     subject: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::str_replace::eval_str_replace_result("str_ireplace", search, replace, subject, values)
+    super::str_replace::eval_str_replace_result(
+        "str_ireplace",
+        search,
+        replace,
+        subject,
+        context,
+        values,
+    )
 }

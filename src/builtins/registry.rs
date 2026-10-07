@@ -345,12 +345,11 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
 
 /// Drops declared parameters the builtin's enforced arity contract refuses to accept.
 ///
-/// A contract may declare PHP's full parameter list while capping `max_args` below it; how
-/// `str_replace()`/`str_ireplace()` document `$count` without supporting it. A direct call is
-/// rejected by that cap, but a callable wrapper materializes one operand per signature
-/// parameter, so the uncapped signature hands the typed backend an operand it has no lowering
-/// for (`str_replace expected 3 args, got 4`). Keeping the callable ABI at the accepted prefix
-/// makes the descriptor signature, the wrapper body and the direct call describe one arity.
+/// A contract may declare PHP's full parameter list while capping `max_args` below it. A
+/// direct call is rejected by that cap, but a callable wrapper materializes one operand per
+/// signature parameter, so the uncapped signature would hand the typed backend an operand it
+/// has no lowering for. Keeping the callable ABI at the accepted prefix makes the descriptor
+/// signature, the wrapper body and the direct call describe one arity.
 ///
 /// Variadic builtins are left alone: their cap counts ARGUMENTS, not parameters, and truncating
 /// would delete the variadic tail the wrapper collects (`array_map`, `array_diff`, …).
@@ -383,11 +382,20 @@ pub fn first_class_callable_rejection(name: &str) -> Option<&'static str> {
 
 /// Applies first-class-callable refinements that are broader in the direct builtin spec.
 fn refine_first_class_callable_sig(def: &BuiltinDef, sig: &mut FunctionSig) {
-    if let crate::builtins::semantics::BuiltinLowering::Runtime(
-        crate::ir::RuntimeCallTarget::Function(target),
-    ) = def.spec.semantics.lowering
-    {
-        target.refine_first_class_callable_sig(sig);
+    match (def.spec.semantics.lowering, def.spec.semantics.runtime_functions) {
+        (
+            crate::builtins::semantics::BuiltinLowering::Runtime(
+                crate::ir::RuntimeCallTarget::Function(target),
+            ),
+            _,
+        )
+        // A composed EIR lowering whose callable wrapper reaches its single typed runtime
+        // function takes that function's wrapper ABI (`str_replace()`'s three strings).
+        | (
+            crate::builtins::semantics::BuiltinLowering::Eir(_),
+            crate::builtins::semantics::BuiltinRuntimeFunctions::One(target),
+        ) => target.refine_first_class_callable_sig(sig),
+        _ => {}
     }
 }
 
@@ -878,12 +886,16 @@ mod tests {
         assert!(function_sig("__nonexistent_builtin_xyz").is_none());
     }
 
-    /// Callable wrappers expose only the accepted prefix of a capped builtin declaration.
+    /// `str_replace()`/`str_ireplace()` accept PHP's by-reference `$count` in a direct call,
+    /// while their callable wrappers stay on the three-string runtime ABI: the array forms
+    /// and `$count` compose prelude helpers, which a wrapper body cannot call.
     #[test]
-    fn first_class_callable_sig_stops_at_the_enforced_arity_cap() {
+    fn string_replace_callable_sig_keeps_the_three_string_runtime_abi() {
         for name in ["str_replace", "str_ireplace"] {
-            assert_eq!(function_sig(name).unwrap().params.len(), 4, "{name} declaration");
-            assert_eq!(enforced_arity_bounds(name), Some((3, Some(3))), "{name} cap");
+            let declared = function_sig(name).unwrap();
+            assert_eq!(declared.params.len(), 4, "{name} declaration");
+            assert_eq!(declared.ref_params, vec![false, false, false, true], "{name} $count");
+            assert_eq!(enforced_arity_bounds(name), Some((3, Some(4))), "{name} arity");
             let sig = first_class_callable_sig(name).expect("callable signature");
             assert_eq!(sig.params.len(), 3, "{name} callable arity");
             assert!(sig.variadic.is_none());
@@ -894,6 +906,8 @@ mod tests {
                 assert_eq!(field, 3, "{name} parameter metadata stays aligned");
             }
             assert!(sig.defaults.iter().all(Option::is_none), "{name} prefix is required");
+            assert!(sig.params.iter().all(|(_, ty)| *ty == PhpType::Str), "{name} params");
+            assert_eq!(sig.return_type, PhpType::Str, "{name} return");
         }
     }
 

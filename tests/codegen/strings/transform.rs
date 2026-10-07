@@ -939,3 +939,195 @@ echo (int)$finite, ",";
         "0,0,0,0,0,9223372036854775807,"
     );
 }
+
+/// Verifies an array `$search` applies each entry in order to the previous result, pairs a
+/// `$replace` array by position (running out to `""`), skips an empty search entry, and
+/// string-converts non-string entries, for both `str_replace()` and `str_ireplace()`.
+#[test]
+fn test_str_replace_array_search_applies_entries_in_order() {
+    let out = compile_and_run(
+        r#"<?php
+echo str_replace(["a", "b"], ["b", "c"], "ab"), "|";
+echo str_replace(["a", "b"], ["1", "2"], "aabbc"), "|";
+echo str_replace(["a", "b", "c"], ["1"], "abcabc"), "|";
+echo str_replace(["a", "b"], "X", "abcab"), "|";
+echo str_replace(["", "a"], ["Q", "Z"], "aa"), "|";
+echo str_replace([1, 2.5], [true, null], "1 2.5 3"), "|";
+echo str_ireplace(["HELLO", "world"], ["bye", "all"], "Hello WORLD hello"), "\n";
+"#,
+    );
+    assert_eq!(out, "cc|1122c|11|XXcXX|ZZ|1  3|bye all bye\n");
+}
+
+/// Verifies an array `$subject` returns an array with the same keys whose elements are each
+/// string-converted and replaced, with `$count` summing every replacement.
+#[test]
+fn test_str_replace_array_subject_keeps_keys_and_counts() {
+    let out = compile_and_run(
+        r#"<?php
+$out = str_replace("a", "X", ["k" => "aa", 3 => 5, "f" => 1.5, "t" => true, "z" => null, 4 => "banana"], $count);
+foreach ($out as $key => $value) {
+    echo $key, "=", $value, ";";
+}
+echo " count=", $count, " n=", count($out), "\n";
+$list = str_ireplace(["A", "b"], ["x", "Y"], ["AaBb", "ab"], $c2);
+echo implode(",", $list), " ", $list[1], " ", $c2, "\n";
+echo json_encode(str_replace(["a", "n"], ["4", "N"], ["a" => "apple", "b" => "banana"])), "\n";
+var_dump(str_replace("x", "y", []));
+"#,
+    );
+    assert_eq!(
+        out,
+        "k=XX;3=5;f=1.5;t=1;z=;4=bXnXnX; count=5 n=6\n\
+xxYY,xY xY 6\n\
+{\"a\":\"4pple\",\"b\":\"b4N4N4\"}\n\
+array(0) {\n}\n"
+    );
+}
+
+/// Verifies a nested array subject element is converted to `"Array"` with PHP's warning,
+/// rather than copied through unchanged.
+#[test]
+fn test_str_replace_nested_array_subject_element_becomes_array_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$r = str_replace("a", "X", ["n" => [1, "a"], "s" => "aa"]);
+echo $r["n"], "|", $r["s"], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ArrXy|XX\n");
+    assert!(out.stderr.contains("Array to string conversion"), "stderr: {}", out.stderr);
+}
+
+/// Verifies the by-reference `$count` reaches every variable storage kind (a fresh local, an
+/// overwritten local, a by-reference parameter, a `static`, a `global`), named arguments, and
+/// a case-insensitive builtin name.
+#[test]
+fn test_str_replace_count_writes_back_to_every_variable_kind() {
+    let out = compile_and_run(
+        r#"<?php
+function by_ref(&$out) { return str_replace(["a", "b"], "", "aabbcc", $out); }
+function in_static() { static $total = 0; str_replace("x", "y", "xxx", $total); return $total; }
+function in_global() { global $seen; str_ireplace("A", "b", "aAa", $seen); }
+echo str_replace("a", "b", "banana", $fresh), " ", $fresh, "\n";
+$preset = 99;
+str_replace("z", "y", "abc", $preset);
+echo $preset, "\n";
+$o = 0;
+echo by_ref($o), " ", $o, "\n";
+echo in_static(), "\n";
+$seen = 0;
+in_global();
+echo $seen, "\n";
+echo str_replace(search: ["x", "y"], replace: "_", subject: "xyz", count: $named), " ", $named, "\n";
+echo str_replace(subject: "aaa", search: "a", replace: "b"), "\n";
+echo STR_REPLACE(["q"], ["Q"], "qq", $upper), $upper, "\n";
+"#,
+    );
+    assert_eq!(out, "bbnbnb 3\n0\ncc 4\n3\n3\n__z 2\nbbb\nQQ2\n");
+}
+
+/// Verifies operands whose types are only known at run time (untyped parameters, objects
+/// with `__toString()`, a `call_user_func()` callable string), and php-src's `TypeError` for
+/// a string `$search` with an array `$replace`, whether the shapes are static or dynamic.
+#[test]
+fn test_str_replace_dynamic_operands_and_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+class Label {
+    public function __construct(private string $text) {}
+    public function __toString(): string { return $this->text; }
+}
+function replace_any($search, $replace, $subject) { return str_replace($search, $replace, $subject); }
+echo replace_any("a", "b", "aaa"), "|";
+echo implode(",", replace_any(["a"], ["b"], ["x" => "aa", "y" => "ba"])), "|";
+echo replace_any(["o"], [new Label("0")], new Label("foo")), "|";
+echo implode(",", str_replace([new Label("f")], "F", ["a" => new Label("ff")])), "|";
+echo call_user_func("str_replace", ["a", "b"], "-", "abc"), "\n";
+try {
+    str_replace("a", ["x"], "aa");
+} catch (TypeError $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+try {
+    replace_any("a", ["x"], "aa");
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    str_ireplace("a", ["x"], ["aa"]);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "bbb|bb,bb|f00|FF|--c\n\
+TypeError: str_replace(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string\n\
+str_replace(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string\n\
+str_ireplace(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string\n"
+    );
+}
+
+/// Verifies the array forms in a program that also calls `eval()`: such a program gives
+/// every desugared function a hidden argument collector, which the helpers the lowering
+/// calls with exactly their declared operands must not carry.
+#[test]
+fn test_str_replace_array_forms_beside_eval() {
+    let out = compile_and_run(
+        r#"<?php
+$c = $argc > 5 ? "zz" : ["k" => "aa"];
+$r = str_replace("a", "b", $c, $n);
+echo json_encode($r), $n, "|", str_ireplace(["A"], ["x"], "aA"), "\n";
+eval('echo str_replace(["e"], ["E"], "eve"), "\n";');
+"#,
+    );
+    assert_eq!(out, "{\"k\":\"bb\"}2|xx\nEvE\n");
+}
+
+/// Verifies the array forms, `$count`, dynamic operands and the `TypeError` path release
+/// everything they allocate: 25 iterations inside a function end with a clean heap.
+#[test]
+fn test_str_replace_array_forms_release_everything() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Label {
+    public function __construct(private string $text) {}
+    public function __toString(): string { return $this->text; }
+}
+function replace_any($search, $replace, $subject) { return str_replace($search, $replace, $subject); }
+function round_trip(int $i): string {
+    $tag = "t" . $i;
+    $a = str_replace(["a", "b"], ["1", "2"], "aabbc" . $tag, $c1);
+    $b = str_ireplace("A", "x", ["k" => "Aa" . $tag, 7 => 5, "f" => 1.5, "n" => null], $c2);
+    $c = replace_any(["o"], [new Label("0")], new Label("foo" . $tag));
+    $d = replace_any("a", "b", ["x" => "aa", "y" => $tag]);
+    $e = str_replace([$tag, "c"], "", "c" . $tag . "c", $c3);
+    try {
+        replace_any("a", ["x"], $tag);
+        $f = "no";
+    } catch (TypeError $error) {
+        $f = "TypeError";
+    }
+    return $a . $c1 . "|" . implode(",", $b) . $c2 . "|" . $c . "|" . implode(",", $d) . "|" . $e . $c3 . "|" . $f;
+}
+function run(): string {
+    $last = "";
+    for ($i = 0; $i < 25; $i++) {
+        $last = round_trip($i);
+    }
+    return $last;
+}
+echo run(), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1122ct244|xxt24,5,1.5,2|f00t24|bb,t24|3|TypeError\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "heap debug reported a leak: {}",
+        out.stderr
+    );
+}

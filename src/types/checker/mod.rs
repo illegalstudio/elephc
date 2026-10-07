@@ -192,6 +192,9 @@ pub(crate) struct Checker {
     pub extern_globals: HashMap<String, PhpType>,
     /// Libraries required by `#[link]` attributes on extern blocks, in link order.
     pub required_libraries: Vec<String>,
+    /// Whether some `str_replace()`/`str_ireplace()` call needs the str_replace prelude
+    /// helpers (an array-capable or object operand, or a `$count` argument).
+    pub string_replace_helpers: bool,
     /// Best-known top-level variable types visible to `global` statements in the
     /// current file scope.
     pub top_level_env: TypeEnv,
@@ -1160,6 +1163,7 @@ fn check_types_on_compiler_stack(
         extern_classes: checker.extern_classes,
         extern_globals: checker.extern_globals,
         required_libraries: checker.required_libraries,
+        string_replace_helpers: checker.string_replace_helpers,
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
