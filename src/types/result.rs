@@ -46,12 +46,14 @@ pub enum ThrowAccessKind {
         /// Method name without the trailing parentheses (e.g. `secret`).
         method: String,
     },
-    /// A write to a readonly property outside its declaring constructor.
+    /// A readonly write requiring a runtime initialization check.
     ReadonlyProperty {
         /// Class holding the property (e.g. `Box`).
         class_name: String,
         /// Property name without the leading `$` (e.g. `x`).
         property: String,
+        /// The setter-access Error for first initialization, or `None` when it is allowed.
+        initialization_error: Option<String>,
     },
 }
 

@@ -52,7 +52,7 @@ fn execute_program_readonly_followup_uninitialized_write_error_precedence() {
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     let result = execute_program(&program, &mut scope, &mut values).expect("catch setter Error");
-    assert_eq!(values.output, "Cannot access protected property Box::$id");
+    assert_eq!(values.output, "Cannot modify protected(set) readonly property Box::$id from global scope");
     assert_eq!(values.get(result), FakeValue::Bool(false));
 }
 

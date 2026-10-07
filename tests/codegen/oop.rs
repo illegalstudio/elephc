@@ -19,6 +19,8 @@ mod inheritance;
 mod interfaces;
 #[path = "oop/modifiers_and_properties.rs"]
 mod modifiers_and_properties;
+#[path = "oop/readonly_initialization.rs"]
+mod readonly_initialization;
 #[path = "oop/callables/mod.rs"]
 mod callables;
 #[path = "oop/union_types.rs"]

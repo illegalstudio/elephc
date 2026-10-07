@@ -247,13 +247,15 @@ final class InvoiceNumber {
 - `public`, `protected`, `private` visibility
 - Optional default values
 - Optional type declarations, for example `public int $id` or `public ?string $email = null`
-- `readonly` properties (only assigned in `__construct`)
+- `readonly` properties (initialized once from a scope allowed by their setter visibility)
 - `final` properties, which can be read normally but cannot be redeclared by subclasses
 - Static properties with `public static`, `protected static`, or `private static`, including typed static properties
 - `readonly class` makes all instance properties readonly; static properties stay mutable
 - Several properties in one declaration, separated by commas: `public int $w = 40, $h = 22;`. The type and every modifier are shared by the whole list, and each name carries its own optional default. A property with a **hook block** needs a declaration of its own, as in PHP.
 
-Statically-known access violations — calling a `private`/`protected` method from an inaccessible scope, or writing a `readonly` property outside its declaring constructor — raise a catchable `Error` exception at runtime, matching PHP. Without a `try`/`catch` handler the exception is a fatal uncaught exit.
+Statically-known access violations, such as calling a `private`/`protected` method from an inaccessible scope, raise a catchable `Error` exception at runtime. Without a `try`/`catch` handler the exception is a fatal uncaught exit.
+
+A readonly property without an explicit setter has an implicit `protected(set)` setter. Its declaring class or a subclass can initialize it once, including outside a constructor. An explicit `public(set)` setter also permits a first assignment from global scope. A denied first assignment reports the setter-access error; an assignment to an initialized readonly property instead reports `Cannot modify readonly property Class::$property` when read visibility permits access. The same rules apply to eval-declared classes and native objects accessed from `eval()`. A `??=` write keeps a non-null initialized value without evaluating its fallback; an initialized `null` value still rejects the fallback overwrite.
 
 ```php
 <?php

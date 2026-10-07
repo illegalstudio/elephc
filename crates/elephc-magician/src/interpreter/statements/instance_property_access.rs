@@ -189,7 +189,7 @@ pub(crate) fn eval_property_set_result(
     };
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
-        if let Some((declaring_class, _, write_visibility, is_static)) =
+        if let Some((declaring_class, visibility, write_visibility, is_static)) =
             eval_native_instance_property_metadata_for_access(
                 &class_name,
                 &class_name,
@@ -198,6 +198,11 @@ pub(crate) fn eval_property_set_result(
                 values,
             )?
         {
+            if !is_static && validate_eval_member_access(&declaring_class, visibility, context).is_ok() {
+                validate_native_readonly_property_access(
+                    object, identity, &declaring_class, property_name, write_visibility, context, values,
+                )?;
+            }
             if !is_static
                 && validate_eval_member_access(&declaring_class, write_visibility, context).is_err()
             {
@@ -408,7 +413,7 @@ pub(crate) fn eval_property_set_result(
         }
     }
     if !declared_property_found {
-        if let Some((declaring_class, _, write_visibility, is_static)) =
+        if let Some((declaring_class, visibility, write_visibility, is_static)) =
             eval_dynamic_class_native_property_metadata(
                 &object_class_name,
                 property_name,
@@ -417,6 +422,11 @@ pub(crate) fn eval_property_set_result(
             )?
         {
             if !is_static {
+                if validate_eval_member_access(&declaring_class, visibility, context).is_ok() {
+                    validate_native_readonly_property_access(
+                        object, identity, &declaring_class, property_name, write_visibility, context, values,
+                    )?;
+                }
                 if validate_eval_member_access(&declaring_class, write_visibility, context)
                     .is_err()
                 {
@@ -577,36 +587,6 @@ fn eval_write_public_dynamic_property(
     Ok(())
 }
 
-/// Enforces readonly one-shot initialization for properties owned by generated classes.
-fn validate_native_readonly_property_write(
-    object: RuntimeCellHandle,
-    identity: u64,
-    declaring_class: &str,
-    property_name: &str,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let flags = values
-        .reflection_property_flags(declaring_class, property_name)?
-        .unwrap_or_default();
-    if flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY == 0 {
-        return Ok(());
-    }
-    if context.clone_initialization_is_active(identity) {
-        if context.consume_clone_reinitialization(identity, property_name) {
-            return Ok(());
-        }
-    } else if !values.property_is_initialized(object, property_name)? {
-        return Ok(());
-    }
-    eval_throw_readonly_property_modification_error(
-        declaring_class,
-        property_name,
-        context,
-        values,
-    )
-}
-
 /// Binds one eval object property to a by-reference source parameter.
 /// Checks an AOT array property before forwarding a write to its native setter.
 pub(super) fn validate_eval_native_array_property_assignment(
@@ -633,6 +613,7 @@ pub(super) fn validate_eval_native_array_property_assignment(
     )
 }
 
+/// Binds an accessible mutable eval property to the source's persistent reference cell.
 pub(super) fn eval_property_reference_bind_result(
     object: RuntimeCellHandle,
     property_name: &str,

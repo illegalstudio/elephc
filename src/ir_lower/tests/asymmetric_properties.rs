@@ -24,6 +24,9 @@ function fallback(): int { echo "fallback"; return 9; }
 function update(ConditionalReadonly $box): void { $box->implicit ??= fallback(); }
 function updateNullable(ConditionalReadonly $box): void { $box->nullable ??= fallback(); }
 function overwrite(ConditionalReadonly $box): void { $box->implicit = fallback(); }
+function initializePublic(ConditionalReadonly $box): void { $box->explicit = fallback(); }
+class ReadonlyBase { public readonly int $id; }
+class ReadonlyChild extends ReadonlyBase { public function __construct() { $this->id = 7; } }
 function receiver(): ConditionalReadonly { echo "receiver"; return new ConditionalReadonly(); }
 function updateTemporary(): void { receiver()->implicit ??= fallback(); }
 $box = new ConditionalReadonly();
@@ -37,7 +40,16 @@ echo count($properties);
     for name in ["update", "updateNullable"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let insert = function.blocks.iter().find(|block| block.name == "coalesce_assign.default").unwrap();
-        assert!(matches!(insert.terminator, Some(Terminator::Throw { .. })), "{target}: fallback throws");
+        let Some(Terminator::CondBr { then_target, else_target, .. }) = &insert.terminator else {
+            panic!("{target}: fallback checks initialization before choosing its Error");
+        };
+        for destination in [then_target, else_target] {
+            let arm = function.blocks.iter().find(|block| block.id == *destination).unwrap();
+            assert!(matches!(arm.terminator, Some(Terminator::Throw { .. })),
+                "{target}: initialized overwrite and inaccessible initialization both throw");
+        }
+        assert!(insert.instructions.iter().any(|id| function.instruction(*id).unwrap().op == Op::PropInitialized),
+            "{target}: a fallback may target an initialized null readonly slot");
         let merge = function.blocks.iter().find(|block| block.name == "coalesce_assign.merge").unwrap();
         assert!(!matches!(merge.terminator, Some(Terminator::Throw { .. })), "{target}: keep does not throw");
         let probe = function.blocks.iter().find(|block| block.name == "coalesce.property.merge").unwrap();
@@ -47,6 +59,18 @@ echo count($properties);
     let overwrite = module.functions.iter().find(|function| function.name == "overwrite").unwrap();
     assert!(overwrite.blocks.iter().any(|block| matches!(block.terminator,
         Some(Terminator::Throw { .. }))), "{target}: direct readonly writes remain catchable");
+    for function in [
+        module.functions.iter().find(|function| function.name == "initializePublic").unwrap(),
+        module.class_methods.iter().find(|function| function.name == "ReadonlyChild::__construct").unwrap(),
+    ] {
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::PropInitialized), "{target}");
+        let initialize = function.blocks.iter().find(|block| block.name == "readonly.write.uninitialized").unwrap();
+        assert!(initialize.instructions.iter().any(|id| function.instruction(*id).unwrap().op == Op::PropSet),
+            "{target}: authorized first initialization publishes the property");
+        let overwrite = function.blocks.iter().find(|block| block.name == "readonly.write.initialized").unwrap();
+        assert!(matches!(overwrite.terminator, Some(Terminator::Throw { .. })),
+            "{target}: authorized setters still reject an initialized readonly slot");
+    }
     let temporary = module.functions.iter().find(|function| function.name == "updateTemporary").unwrap();
     assert!(temporary.blocks.iter().flat_map(|block| &block.instructions)
         .any(|id| temporary.instruction(*id).unwrap().op == Op::PushCallOperandOwner),
