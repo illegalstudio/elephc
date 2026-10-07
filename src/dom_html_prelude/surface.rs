@@ -237,8 +237,11 @@ function __elephc_dom_tokenize(string $html, int $flags): mixed {
 }
 
 function __elephc_dom_text_of(mixed $node): string {
-    if ($node["kind"] === "text" || $node["kind"] === "comment") {
+    if ($node["kind"] === "text") {
         return (string) $node["value"];
+    }
+    if ($node["kind"] === "comment") {
+        return "";
     }
     $_out = "";
     foreach ($node["children"] as $_child) {
@@ -297,14 +300,23 @@ function __elephc_dom_build_forest(mixed $tokens): mixed {
                 $_stack[] = $_node;
             }
         } else {
-            if (count($_stack) === 0) {
+            $_match = -1;
+            for ($_pos = count($_stack) - 1; $_pos >= 0; $_pos--) {
+                if ($_stack[$_pos]["name"] === $_tok["n"]) {
+                    $_match = $_pos;
+                    break;
+                }
+            }
+            if ($_match < 0) {
                 continue;
             }
-            $_done = array_pop($_stack);
-            if (count($_stack) === 0) {
-                $_roots[] = $_done;
-            } else {
-                $_stack = __elephc_dom_append_child($_stack, $_done);
+            while (count($_stack) > $_match) {
+                $_done = array_pop($_stack);
+                if (count($_stack) === 0) {
+                    $_roots[] = $_done;
+                } else {
+                    $_stack = __elephc_dom_append_child($_stack, $_done);
+                }
             }
         }
     }

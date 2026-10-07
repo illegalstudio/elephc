@@ -8,10 +8,9 @@
 //! - `crate::dom_html_prelude::inject_if_used`.
 //!
 //! Key details:
-//! - Runs before name resolution, so `Name`s are raw source text and PHP class
-//!   names are case-insensitive. A reference may be written `DOMDocument`,
-//!   `\DOMDocument`, or `\Termwind\DOMDocument`. The walk matches the
-//!   unqualified last segment case-insensitively.
+//! - A detector-only name-resolution pass seeds distinguishable global fallback
+//!   symbols. User declarations and imports retain their ownership, so only
+//!   references bound to the fallback DOM surface trigger injection.
 //! - Class-name positions trigger injection: `new`, static receivers,
 //!   `instanceof`, `catch`, `extends`/`implements`, type hints, trait uses, and
 //!   `use` imports. There is no user-facing procedural `dom_*` function set.
@@ -21,7 +20,7 @@
 //! - Soundness over precision: a missed reference would drop the prelude and
 //!   turn a valid program into an "undefined class" error, so the `match`es are
 //!   exhaustive (no wildcard arm). Adding an AST node forces this file to be
-//!   updated. False positives only inject declarations, which is harmless.
+//!   updated. Namespaced and user-owned DOM classes do not opt into this surface.
 
 use crate::names::Name;
 use crate::parser::ast::{
@@ -30,8 +29,7 @@ use crate::parser::ast::{
     TypeExpr,
 };
 
-/// The OOP classes the Termwind HTML prelude declares. Last-segment,
-/// case-insensitive match so `\DOMDocument` and `domdocument` both inject.
+/// Global class fallbacks offered by the prelude, behind user-owned declarations.
 const DOM_HTML_CLASSES: &[&str] = &[
     "DOMDocument",
     "DOMNode",
@@ -45,17 +43,16 @@ const DOM_HTML_CLASSES: &[&str] = &[
 /// Returns whether any top-level statement references the Termwind DOM HTML
 /// surface, so the prelude must be injected ahead of user code.
 pub(super) fn program_uses_dom_html(program: &[Stmt]) -> bool {
-    program.iter().any(stmt_refs_dom)
+    crate::name_resolver::resolve_with_additional_global_symbols(
+        program.to_vec(), &[], DOM_HTML_CLASSES,
+    )
+    .is_ok_and(|resolved| resolved.iter().any(stmt_refs_dom))
 }
 
-/// Returns whether `name`'s unqualified last segment is a Termwind DOM class,
-/// compared case-insensitively and tolerant of any namespace/leading-backslash
-/// form (`DOMDocument`, `\DOMDocument`, `\Termwind\DOMElement`).
+/// Returns whether resolution bound this name to a seeded global DOM class.
 fn name_is_dom_class(name: &Name) -> bool {
-    name.last_segment().is_some_and(|segment| {
-        DOM_HTML_CLASSES
-            .iter()
-            .any(|candidate| segment.eq_ignore_ascii_case(candidate))
+    DOM_HTML_CLASSES.iter().any(|candidate| {
+        crate::name_resolver::is_additional_global_symbol(name, candidate)
     })
 }
 
@@ -622,6 +619,31 @@ mod tests {
         assert!(!program_uses_dom_html(&parse(
             r#"<?php $note = "new DOMDocument first"; echo $note;"#
         )));
+    }
+
+    /// Every user-owned global DOM class keeps ownership under case-folded references and hints.
+    #[test]
+    fn ignores_user_owned_global_dom_classes() {
+        for name in DOM_HTML_CLASSES {
+            let source = format!(
+                "<?php class {name} {{}} function f({name} $x): {name} {{ return $x; }} $x = new \\{}();",
+                name.to_ascii_lowercase(),
+            );
+            assert!(!program_uses_dom_html(&parse(&source)), "{name}");
+        }
+    }
+
+    /// Namespace and import binding must not confuse user classes with global fallbacks.
+    #[test]
+    fn preserves_user_namespace_and_import_ownership() {
+        for source in [
+            "<?php namespace App; class DOMDocument {} $x = new DOMDocument();",
+            "<?php namespace App { class DOMDocument {} } namespace Client { use App\\DOMDocument as Doc; $x = new Doc(); }",
+            "<?php namespace { class DOMDocument {} } namespace Client { use DOMDocument as Doc; $x = new Doc(); }",
+            "<?php $x = new \\App\\DOMDocument();",
+        ] {
+            assert!(!program_uses_dom_html(&parse(source)), "{source}");
+        }
     }
 
     /// A program with no DOM mention at all is not detected.

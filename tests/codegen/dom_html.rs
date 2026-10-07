@@ -13,6 +13,9 @@
 
 use crate::support::*;
 
+#[path = "dom_html_review.rs"]
+mod review;
+
 /// Verifies Termwind's `LIBXML_*` flag integers match php-src / libxml2.
 #[test]
 fn test_libxml_termwind_flag_values() {

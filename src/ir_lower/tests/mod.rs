@@ -30,6 +30,7 @@ mod debug_info;
 mod descriptor_ownership;
 mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
+mod dom_html_review;
 mod dynamic_spreads;
 mod effects;
 mod eval_ownership;

@@ -7,7 +7,9 @@ sidebar:
 
 elephc injects a small **HTML-only DOM subset** when a program names `DOMDocument`,
 `DOMNode`, `DOMElement`, `DOMText`, `DOMComment`, `DOMCharacterData`, or
-`DOMNodeList`. The surface is enough for Termwind's `HtmlRenderer::parse` to
+`DOMNodeList` through the global prelude surface. References bound to user-defined
+classes, including namespace and import aliases, keep their own definitions and
+do not trigger conflicting prelude declarations. The surface is enough for Termwind's `HtmlRenderer::parse` to
 walk a fragment such as `<div class="text-green-500">Hi</div>`: load the HTML,
 take `body`, and read tag names, attributes, text, comments, and siblings.
 
@@ -36,10 +38,10 @@ foreach ($body->childNodes as $node) {
 | Piece | Behavior |
 |---|---|
 | `new DOMDocument()` | Empty document. Optional constructor args are accepted and ignored. |
-| `loadHTML(string $source, int $options = 0): bool` | Forgiving HTML fragment parse. Wraps content in `html`/`body` the way PHP's HTML parser does. |
+| `loadHTML(string $source, int $options = 0): bool` | Forgiving HTML fragment parse. Wraps content in `html`/`body`; unmatched closing tags are ignored, and a matching ancestor closes its open descendants. This is not full HTML tree-repair semantics. |
 | `getElementsByTagName(string $name): DOMNodeList` | Document-order descendant elements. `*` matches every element. |
 | `DOMNodeList::item(int $index)` / `$length` / `foreach` | Indexed access and `Iterator` traversal. |
-| `nodeName`, `nodeValue` | HTML tag names are lowercased. Element `nodeValue` is concatenated descendant text. |
+| `nodeName`, `nodeValue` | HTML tag names are lowercased. Element `nodeValue` is concatenated descendant text, excluding comments. A `DOMComment` retains its own comment body and serializes normally. |
 | `childNodes`, `previousSibling`, `nextSibling`, `parentNode`, `ownerDocument` | Wired after parse. The tree is treated as immutable. |
 | `DOMElement::getAttribute(string $name): string` | Attribute names are lowercased on parse. Missing attributes return `""`. |
 | `instanceof DOMElement` / `DOMText` / `DOMComment` / `DOMDocument` | Class hierarchy matches PHP (`DOMText`/`DOMComment` extend `DOMCharacterData` extend `DOMNode`). |
