@@ -473,7 +473,7 @@ fn parse_prefix_inc_dec(
             return Ok(target);
         }
         if matches!(append_kind, super::pratt::PrefixIncrementTarget::AppendProperty) {
-            if let Some(error) = super::append_writes::lower_null_property_increment(&target, span) {
+            if let Some(error) = super::append_writes::lower_null_property_write(&target, None, span) {
                 return Ok(error);
             }
         }

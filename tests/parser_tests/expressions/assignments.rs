@@ -34,6 +34,10 @@ fn test_append_review_write_contexts_parse() {
         "<?php ++Box::$items[];",
         "<?php $items[0][] += 5;",
         "<?php $items[0][]['k'] = 'v';",
+        "<?php $items[]->x = 1;",
+        "<?php $items[]->x++;",
+        "<?php ++$items[]->x->y;",
+        "<?php $items[]->{name()}->y = rhs();",
     ] {
         assert_eq!(parse_source(source).len(), 1, "{source}");
     }

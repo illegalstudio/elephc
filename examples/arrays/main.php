@@ -71,6 +71,17 @@ $batchCounts[] += 3;
 echo "New batch counter: ", ++$batchCounts[], "\n";
 echo "Batch counts: ", implode(", ", $batchCounts), "\n";
 
+// An alias of variadic reference arguments still updates the caller's original labels.
+function mark_reviewed(&...$labels): void
+{
+    $reviewLabels =& $labels;
+    $reviewLabels[1] .= " (reviewed)";
+}
+$firstLabel = "first";
+$secondLabel = "second";
+mark_reviewed($firstLabel, $secondLabel);
+echo "Labels: ", $firstLabel, ", ", $secondLabel, "\n";
+
 echo "Range 3..7: ";
 foreach ($range as $value) {
     echo $value . " ";

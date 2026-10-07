@@ -38,6 +38,12 @@ fn test_error_append_review_read_contexts() {
         "<?php echo [1][];",
         "<?php class Box { public array $items = []; } $box = new Box(); $box->items[] ??= 2;",
         "<?php class Box { public static array $items = []; } Box::$items[] ??= 2;",
+        "<?php $items = []; echo $items[]->x;",
+        "<?php $items = []; echo $items[]->x + 1;",
+        "<?php $items = []; isset($items[]->x);",
+        "<?php $items = []; $items[]->x();",
+        "<?php $items = []; $items[]->{name()}();",
+        "<?php $items = []; $items[]->x ??= 1;",
     ] {
         expect_error(source, "Cannot use [] for reading");
     }

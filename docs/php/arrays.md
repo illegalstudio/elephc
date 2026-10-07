@@ -24,8 +24,21 @@ whereas `$arr[]++` appends `1` and evaluates to null. Explicit nested integer
 keys remain sparse: `$arr[][1] = 'x'` creates only key `1`, not an extra key `0`.
 
 Bare reads, `isset`, `empty`, and `??=` with an empty dimension report
-`Cannot use [] for reading`, as PHP does. Post-decrement on an append dimension
-is not supported and reports a named compile error.
+`Cannot use [] for reading`, as PHP does. Decrement on an append dimension is
+not supported: `$arr[]--` reports
+`Post-decrement on an append dimension is not supported`, and `--$arr[]` reports
+`Pre-decrement on an append dimension is not supported`.
+
+Property writes on a fresh append, such as `$arr[]->x = 1`, `$arr[]->x++`, or
+`++$arr[]->x->y`, append null and then throw a catchable `Error`, as PHP does.
+Computed property selectors and an assignment's right-hand side run before
+the null is appended. Nested property chains name the first property in the
+`Attempt to modify property` error.
+
+Arrays of variadic reference arguments keep the caller's storage when reached
+through a local reference alias. Negative and sparse integer writes add only
+the requested key, preserving the other references without inserting null gaps.
+Reads and JSON encoding observe each referenced argument's current value.
 
 ## String arrays
 ```php

@@ -10,6 +10,144 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// JSON reads scalar, heap and boxed caller values without consuming their variadic references.
+#[test]
+fn test_append_latest_variadic_json_value_types() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function dump(&...$items): void {
+    $alias =& $items;
+    echo json_encode($alias), '|';
+    $alias[9] = true;
+    echo json_encode($items);
+}
+function boxed(): mixed { return str_repeat('m', 24); }
+$a = 123; $b = str_repeat('b', 4); $c = 2.5; $d = true;
+$e = [1, 2]; $f = (object)['x' => 1]; $g = boxed();
+dump($a, $b, $c, $d, $e, $f, $g);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("[123,\"bbbb\",2.5,true,[1,2],{{\"x\":1}},\"{}\"]|{{\"0\":123,\"1\":\"bbbb\",\"2\":2.5,\"3\":true,\"4\":[1,2],\"5\":{{\"x\":1}},\"6\":\"{}\",\"9\":true}}", "m".repeat(24), "m".repeat(24)));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Failed property writes retire a heap RHS after the append and before entering the catch.
+#[test]
+fn test_append_latest_property_rhs_destructor() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function size(): int { global $items; return count($items); }
+class DropValue { public function __destruct() { echo 'd', size(), ':'; } }
+$items = [];
+try { $items[]->x = new DropValue(); }
+catch (Error $error) { echo 'caught', count($items); }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "d1:caught1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Effectful base indices precede property selectors and RHS while nonnull assignment results stay valid.
+#[test]
+fn test_append_latest_property_receiver_order_control() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+namespace AppendControl;
+function key(): int { echo 'k'; return 0; }
+function name(): string { echo 'n'; return 'x'; }
+function rhs(): int { echo 'r'; return 1; }
+$items = [[]];
+try { $items[key()][]->{name()} += rhs(); }
+catch (\Error $error) { echo ':', $error->getMessage(), '|'; }
+echo json_encode($items), '|';
+class Box { public int $x = 0; }
+$objects = [];
+($objects[] = new Box())->x = 7;
+echo $objects[0]->x;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "knr:Attempt to assign property \"x\" on null|[[null]]|7");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The new write-through and null-property failure paths do not rely on EIR optimization.
+#[test]
+fn test_append_latest_without_ir_opt() {
+    let out = without_ir_opt(|| compile_and_run_with_heap_debug(r#"<?php
+function update(&...$items): void { $alias =& $items; $alias[1] .= '-g'; $alias[-1] = [7]; echo count($alias), '|'; }
+$a = 'A'; $b = 'B'; update($a, $b); echo $a, ':', $b, '|';
+$items = [];
+try { $items[]->x++; } catch (Error $error) { echo $error->getMessage(), '|'; }
+echo json_encode($items);
+"#));
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3|A:B-g|Attempt to increment/decrement property \"x\" on null|[null]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Aliases of variadic reference arrays still write through the original caller slots.
+#[test]
+fn test_append_latest_variadic_reference_alias() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function update(&...$items): void { $alias =& $items; $alias[1] .= '-g'; echo $alias[1], '|'; }
+$a = 'A'; $b = 'B'; update($a, $b); echo $a, ':', $b, '|';
+$call = update(...); $call($a, $b); echo $a, ':', $b;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "B-g|A:B-g|B-g-g|A:B-g-g");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Negative and sparse variadic keys add only their own entries without detaching caller references.
+#[test]
+fn test_append_latest_variadic_sparse_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function negative(&...$items): void {
+    $items[-1] = 'x'; echo json_encode($items), ':', json_encode(array_keys($items)), ':', count($items), ':', $items[0], $items[1], ':', $items[-1], '|';
+    $items[1] .= '-n';
+}
+function sparse(&...$items): void {
+    $items[5] = [7]; echo json_encode($items), ':', json_encode(array_keys($items)), ':', count($items), ':', $items[0], $items[1], ':', json_encode($items[5]), '|';
+    $items[1] .= '-s';
+}
+$a = 'A'; $b = 'B'; negative($a, $b); sparse($a, $b); echo $a, ':', $b;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"0\":\"A\",\"1\":\"B\",\"-1\":\"x\"}:[0,1,-1]:3:AB:x|{\"0\":\"A\",\"1\":\"B-n\",\"5\":[7]}:[0,1,5]:3:AB-n:[7]|A:B-n-s");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Assignments, postfix updates and nested prefixes append null before catchable property failures.
+#[test]
+fn test_append_latest_property_write_forms() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [];
+try { $items[]->x = 1; } catch (Error $error) { echo $error->getMessage(), '|'; }
+try { $items[]->x++; } catch (Error $error) { echo $error->getMessage(), '|'; }
+try { ++$items[]->x->y; } catch (Error $error) { echo $error->getMessage(), '|'; }
+try { $items[]->x->y = 1; } catch (Error $error) { echo $error->getMessage(), '|'; }
+echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Attempt to assign property \"x\" on null|Attempt to increment/decrement property \"x\" on null|Attempt to modify property \"x\" on null|Attempt to modify property \"x\" on null|[null,null,null,null]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Computed selectors and assignment RHS observe the pre-append array and run exactly once.
+#[test]
+fn test_append_latest_property_effect_order() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function selector(array $items, string $name): string { echo $name, count($items); return $name; }
+function rhs(array $items): int { echo 'r', count($items); return 1; }
+$items = [];
+try { $items[]->{selector($items, 'x')} = rhs($items); }
+catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { ++$items[]->{selector($items, 'x')}->{selector($items, 'y')}; }
+catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "x0r0:Attempt to assign property \"x\" on null|x1y1:Attempt to modify property \"x\" on null|[null,null]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Sparse heap keys and catchable append-property errors also work without EIR optimization.
 #[test]
 fn test_append_followup_without_ir_optimization() {

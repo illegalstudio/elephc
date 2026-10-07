@@ -98,6 +98,11 @@ fn parse_expr_bp_inner(
             Token::PlusPlus | Token::MinusMinus => {
                 let span = tokens[*pos].1.span;
                 let increment = tokens[*pos].0 == Token::PlusPlus;
+                if let Some(error) = super::append_writes::lower_null_property_write(&lhs, None, span) {
+                    *pos += 1;
+                    lhs = error;
+                    continue;
+                }
                 match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
                     lhs.clone(),
                     increment,
@@ -218,6 +223,10 @@ fn parse_expr_bp_inner(
                     ObjectMember::Named(member_name) => member_name,
                     ObjectMember::Dynamic(property) => {
                         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                            if super::append_writes::is_null_append_receiver(&lhs)
+                                || super::append_writes::is_null_append_property(&lhs) {
+                                return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
+                            }
                             *pos += 1; // consume '('
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
@@ -269,6 +278,10 @@ fn parse_expr_bp_inner(
                 };
                 let member_name = member;
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                    if super::append_writes::is_null_append_receiver(&lhs)
+                        || super::append_writes::is_null_append_property(&lhs) {
+                        return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
+                    }
                     *pos += 1;
                     if parse_first_class_callable_parens(tokens, pos)? {
                         if nullsafe {
@@ -393,6 +406,10 @@ fn parse_expr_bp_inner(
             continue;
         }
 
+        if prefix_increment.is_none() && super::append_writes::is_null_append_property(&lhs)
+            && assignment_bp(&tokens[*pos].0).is_none() {
+            return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
+        }
         if tokens[*pos].0 == Token::InstanceOf {
             let instanceof_bp = 35;
             if instanceof_bp < min_bp {
@@ -427,6 +444,14 @@ fn parse_expr_bp_inner(
             // Widen only the END so the span covers through the value expression;
             // the start stays on the operator token, keeping diagnostics anchored.
             let span = span.merge(rhs.span);
+            if super::append_writes::is_null_append_property(&lhs) {
+                if matches!(op, AssignmentOperator::NullCoalesce) {
+                    return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
+                }
+                lhs = super::append_writes::lower_null_property_write(&lhs, Some(&rhs), span)
+                    .expect("recognized null append property chain");
+                continue;
+            }
             if is_non_local_assignment_target(&lhs) {
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
 
@@ -561,6 +586,9 @@ fn parse_expr_bp_inner(
         }
     }
 
+    if prefix_increment.is_none() && super::append_writes::is_null_append_property(&lhs) {
+        return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
+    }
     Ok(lhs)
 }
 

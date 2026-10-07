@@ -35,8 +35,8 @@ pub(super) fn parse_append_write(
         *pos += 1;
         dimensions.push(index);
     }
-    let property_suffix = prefix_increment && matches!(
-        tokens.get(*pos).map(|(token, _)| token), Some(Token::Arrow | Token::QuestionArrow),
+    let property_suffix = matches!(
+        tokens.get(*pos).map(|(token, _)| token), Some(Token::Arrow),
     );
     let (update, rhs) = if property_suffix {
         (AppendUpdate::Assign, Expr::new(ExprKind::Null, span))
@@ -81,11 +81,21 @@ pub(super) fn parse_append_write(
             *index = stabilizer.bind_result_value(index.clone());
         }
     }
-    let rhs = stabilizer.bind_result_value(rhs);
-    let mut lowerer = AppendLowerer { span, next_temp: 0, prelude: stabilizer.finish(), result: None };
+    let marker = property_suffix.then(|| Expr::new(ExprKind::Variable(
+        crate::names::generated_local_name(&format!("__elephc_append_property_null_{}_{}", span.line, span.col)),
+    ), span));
+    let rhs = if property_suffix { rhs } else { stabilizer.bind_result_value(rhs) };
+    let mut prelude = stabilizer.finish();
+    if let Some(Expr { kind: ExprKind::Variable(name), .. }) = &marker {
+        // This boundary separates receiver/key capture from the delayed null append.
+        prelude.push(Stmt::new(StmtKind::Assign {
+            name: name.clone(), value: Expr::new(ExprKind::Null, span),
+        }, span));
+    }
+    let mut lowerer = AppendLowerer { span, next_temp: 0, prelude, result: None };
     let value = lowerer.nested_value(&dimensions, &rhs, &update);
     lowerer.push(base, value)?;
-    let result = lowerer.result.expect("append leaf binds its result");
+    let result = marker.unwrap_or_else(|| lowerer.result.expect("append leaf binds its result"));
     Ok(Expr::new(ExprKind::Assignment {
         target: Box::new(result.clone()), value: Box::new(result), result_target: None,
         prelude: lowerer.prelude, conditional_value_temp: None,
@@ -95,38 +105,98 @@ pub(super) fn parse_append_write(
 /// The operation that writes a newly appended element, never an existing array value.
 enum AppendUpdate { Assign, Compound(BinOp), PostIncrement }
 
-/// Evaluates the fresh null append before raising PHP's property-increment Error.
-/// The null receiver is certain here, unlike an ordinary nullable object property.
-pub(super) fn lower_null_property_increment(target: &Expr, span: Span) -> Option<Expr> {
-    let (object, property) = match &target.kind {
-        ExprKind::PropertyAccess { object, property } => (
-            object, Expr::new(ExprKind::StringLiteral(property.clone()), span),
-        ),
-        ExprKind::DynamicPropertyAccess { object, property } => (object, *property.clone()),
-        _ => return None,
-    };
-    if !matches!(object.kind, ExprKind::Assignment { .. }) { return None; }
+/// Finds a property chain rooted in an implicit null append, never an ordinary assignment result.
+fn null_append_property_chain(target: &Expr) -> Option<(&Expr, Vec<Expr>)> {
+    let mut receiver = target;
+    let mut properties = Vec::new();
+    loop {
+        match &receiver.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                properties.push(Expr::new(ExprKind::StringLiteral(property.clone()), receiver.span));
+                receiver = object;
+            }
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                properties.push(*property.clone());
+                receiver = object;
+            }
+            ExprKind::Assignment { target, .. } if matches!(&target.kind,
+                ExprKind::Variable(name) if name.starts_with("__elephc_append_property_null_")) => {
+                properties.reverse();
+                return (!properties.is_empty()).then_some((receiver, properties));
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Identifies a dangling append-property read so only genuine write contexts accept it.
+pub(super) fn is_null_append_property(target: &Expr) -> bool {
+    null_append_property_chain(target).is_some()
+}
+
+/// Recognizes the implicit null receiver before a property suffix has been attached.
+pub(super) fn is_null_append_receiver(target: &Expr) -> bool {
+    matches!(&target.kind, ExprKind::Assignment { target, .. } if matches!(&target.kind,
+        ExprKind::Variable(name) if name.starts_with("__elephc_append_property_null_")))
+}
+
+/// Preserves receiver, selector and RHS effects before appending null and throwing PHP's Error.
+/// A deeper property chain fails while modifying its first property, not at its final member.
+pub(super) fn lower_null_property_write(target: &Expr, rhs: Option<&Expr>, span: Span) -> Option<Expr> {
+    let (root, properties) = null_append_property_chain(target)?;
+    let ExprKind::Assignment { target: marker, prelude: append, .. } = &root.kind else { return None; };
+    let ExprKind::Variable(marker_name) = &marker.kind else { return None; };
+    let boundary = append.iter().position(|statement| matches!(&statement.kind,
+        StmtKind::Assign { name, .. } if name == marker_name))?;
+    let mut prelude = append[..boundary].to_vec();
+    let nested = properties.len() > 1;
+    // Use a distinct namespace from the append's own reserved locals.
+    let mut first_property = None;
+    for (index, property) in properties.into_iter().enumerate() {
+        let name = crate::names::generated_local_name(&format!(
+            "__elephc_append_property_selector_{}_{}_{}", span.line, span.col, index,
+        ));
+        prelude.push(Stmt::new(StmtKind::Assign { name: name.clone(), value: property }, span));
+        if index == 0 { first_property = Some(Expr::new(ExprKind::Variable(name), span)); }
+    }
+    let rhs_temp = rhs.map(|rhs| {
+        let name = crate::names::generated_local_name(&format!(
+            "__elephc_append_property_rhs_{}_{}", span.line, span.col,
+        ));
+        prelude.push(Stmt::new(StmtKind::Assign { name: name.clone(), value: rhs.clone() }, span));
+        Expr::new(ExprKind::Variable(name), span)
+    });
+    prelude.extend_from_slice(&append[boundary..]);
+    let action = if nested { "modify" } else if rhs.is_some() { "assign" } else { "increment/decrement" };
     let message = Expr::new(ExprKind::BinaryOp {
         left: Box::new(Expr::new(ExprKind::BinaryOp {
             left: Box::new(Expr::new(ExprKind::StringLiteral(
-                "Attempt to increment/decrement property \"".to_string(),
+                format!("Attempt to {action} property \""),
             ), span)),
             op: BinOp::Concat,
-            right: Box::new(property),
+            right: Box::new(first_property?),
         }, span)),
         op: BinOp::Concat,
         right: Box::new(Expr::new(ExprKind::StringLiteral("\" on null".to_string()), span)),
     }, span);
-    let message = Expr::new(ExprKind::Assignment {
-        target: Box::new(Expr::new(ExprKind::Variable(crate::names::generated_local_name(
-            &format!("__elephc_append_inc_error_{}_{}", span.line, span.col),
-        )), span)),
-        value: Box::new(message), result_target: None,
-        prelude: vec![Stmt::new(StmtKind::ExprStmt(*object.clone()), span)],
-        conditional_value_temp: None,
-    }, span);
     let error = Expr::new(ExprKind::NewObject {
-        class_name: crate::names::Name::from("\\Error"), args: vec![message],
+        class_name: crate::names::Name::from_parts(
+            crate::names::NameKind::FullyQualified, vec!["Error".to_string()],
+        ), args: vec![message],
+    }, span);
+    let error_name = crate::names::generated_local_name(&format!(
+        "__elephc_append_property_error_{}_{}", span.line, span.col,
+    ));
+    prelude.push(Stmt::new(StmtKind::Assign { name: error_name.clone(), value: error }, span));
+    if let Some(rhs_temp) = rhs_temp {
+        prelude.push(Stmt::new(StmtKind::ExprStmt(Expr::new(ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("unset"), args: vec![rhs_temp],
+        }, span)), span));
+    }
+    let error = Expr::new(ExprKind::Variable(error_name), span);
+    let error = Expr::new(ExprKind::Assignment {
+        target: Box::new(error.clone()), value: Box::new(error), result_target: None,
+        prelude, conditional_value_temp: None,
     }, span);
     Some(Expr::new(ExprKind::Throw(Box::new(error)), span))
 }
