@@ -168,10 +168,15 @@ fn normalize_method_default_receivers(checker: &mut Checker) {
             normalize_signature_default_receivers(signature, owner, None);
         }
     }
+    for (owner, methods) in &mut checker.declared_trait_methods {
+        for signature in methods.values_mut() {
+            normalize_signature_default_receivers(signature, owner, None);
+        }
+    }
 }
 
 /// Binds nested class-name and constant defaults to one signature's lexical scope.
-fn normalize_signature_default_receivers(
+pub(crate) fn normalize_signature_default_receivers(
     signature: &mut FunctionSig,
     owner_class: &str,
     parent_class: Option<&str>,

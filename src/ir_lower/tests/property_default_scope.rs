@@ -14,7 +14,10 @@ use std::path::Path;
 /// Deferred default presence, scope and reflection guards share one target-independent contract.
 fn deferred_reflection_defaults_on_target(target_name: &str) {
     let source = r#"<?php
-trait Invalid { public string $bad = parent::class; }
+trait Invalid {
+    public string $bad = parent::class;
+    public function labeled(string $value = parent::class): string { return $value; }
+}
 class Consumer { use Invalid; public static array $names = [parent::A]; }
 class Promoted { public function __construct(public int $value = parent::A) {} }
 class Valid { public string $value = 'ok'; public function run($value = self::LABEL) {} const LABEL = 'value'; }
@@ -22,6 +25,12 @@ echo Consumer::class;
 $bad = new ReflectionProperty(Consumer::class, 'bad');
 echo $bad->hasDefaultValue();
 try { $bad->getDefaultValue(); } catch (Error $error) { echo $error->getMessage(); }
+$parameter = new ReflectionParameter([Promoted::class, '__construct'], 'value');
+echo $parameter->isDefaultValueAvailable(), $parameter->getDefaultValueConstantName();
+try { $parameter->getDefaultValue(); } catch (Error $error) { echo $error->getMessage(); }
+$traitParameter = new ReflectionParameter([Invalid::class, 'labeled'], 'value');
+echo $traitParameter->isDefaultValueAvailable();
+try { $traitParameter->getDefaultValue(); } catch (Error $error) { echo $error->getMessage(); }
 echo (new ReflectionClass(Valid::class))->getDefaultProperties()['value'];
 $value = (new ReflectionClass(Valid::class))->newInstanceWithoutConstructor();
 echo $value->value;
@@ -35,6 +44,13 @@ eval($source);
     assert!(matches!(consumer.defaults[slot].as_ref().unwrap().kind,
         crate::parser::ast::ExprKind::Throw(_)), "{target_name}");
     let valid = &module.class_infos["Valid"];
+    let trait_method = &module.declared_trait_methods["Invalid"]["labeled"];
+    assert!(matches!(trait_method.signature.defaults[0].as_ref().unwrap().kind,
+        crate::parser::ast::ExprKind::Throw(_)), "{target_name}: deferred trait default");
+    assert!(!matches!(trait_method.source_defaults[0].as_ref().unwrap().kind,
+        crate::parser::ast::ExprKind::Throw(_)), "{target_name}: retain trait source default");
+    assert!(module.class_infos["ReflectionParameter"].visible_property_index("__default_error").is_some(),
+        "{target_name}: retained parameter Error slot");
     let run = valid.method_decls.iter().find(|method| method.name == "run").unwrap();
     assert!(matches!(run.params[0].2.as_ref().unwrap().kind,
         crate::parser::ast::ExprKind::ScopedConstantAccess {

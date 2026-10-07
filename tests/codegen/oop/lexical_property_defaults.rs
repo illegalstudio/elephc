@@ -10,6 +10,84 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Deferred method and promoted defaults remain available with their source constant name.
+#[test]
+fn test_property_default_followup_reflection_parameter_deferred_constant() {
+    let out = crate::support::compile_and_run(r#"<?php
+class Consumer {
+    public function value(int $value = parent::A): int { return $value; }
+    public function __construct(public int $promoted = parent::A) {}
+}
+$value = new ReflectionParameter([Consumer::class, 'value'], 'value');
+echo $value->isDefaultValueAvailable() ? 'available' : 'missing';
+echo ':', $value->isDefaultValueConstant() ? 'constant' : 'literal';
+echo ':', $value->getDefaultValueConstantName();
+try { $value->getDefaultValue(); } catch (Error $error) { echo ':', $error->getMessage(); }
+echo '|';
+$promoted = new ReflectionParameter([Consumer::class, '__construct'], 'promoted');
+echo $promoted->isPromoted() ? 'promoted' : 'bad';
+echo ':', $promoted->isDefaultValueAvailable() ? 'available' : 'missing';
+echo ':', $promoted->isDefaultValueConstant() ? 'constant' : 'literal';
+echo ':', $promoted->getDefaultValueConstantName();
+try { $promoted->getDefaultValue(); } catch (Error $error) { echo ':', $error->getMessage(); }
+unset($value, $promoted);
+"#);
+    assert_eq!(out, "available:constant:parent::A:Cannot access \"parent\" when current class scope has no parent|promoted:available:constant:parent::A:Cannot access \"parent\" when current class scope has no parent");
+}
+
+/// Trait signatures with unresolved parent names are reflected without aborting metadata emission.
+#[test]
+fn test_property_default_followup_reflection_trait_parameter() {
+    let out = crate::support::compile_and_run(r#"<?php
+trait Values {
+    public function labeled(string $value = parent::class): string { return $value; }
+    public function other(): string { return 'ok'; }
+}
+
+class TraitConsumer { use Values; }
+$method = new ReflectionMethod(TraitConsumer::class, 'labeled');
+$parameters = $method->getParameters();
+$parameter = $parameters[0];
+echo $parameter->isDefaultValueAvailable() ? 'available' : 'missing';
+echo ':', $parameter->isDefaultValueConstant() ? 'constant' : 'literal';
+try { $parameter->getDefaultValue(); } catch (Error $error) { echo ':', $error->getMessage(); }
+echo '|';
+$direct = new ReflectionParameter([TraitConsumer::class, 'labeled'], 'value');
+echo $direct->isDefaultValueAvailable() ? 'available' : 'missing';
+echo ':', (new ReflectionMethod(TraitConsumer::class, 'other'))->getName();
+echo ':', (new ReflectionClass(TraitConsumer::class))->getName();
+$trait = new ReflectionParameter([Values::class, 'labeled'], 'value');
+echo ':', $trait->isDefaultValueAvailable() ? 'available' : 'missing';
+try { $trait->getDefaultValue(); } catch (Error $error) { echo ':', $error->getMessage(); }
+unset($method, $parameters, $parameter, $direct, $trait);
+"#);
+    assert_eq!(out, "available:literal:Cannot use \"parent\" when current class scope has no parent|available:other:TraitConsumer:available:Cannot use \"parent\" when current class scope has no parent");
+}
+
+/// Repeated deferred-default Errors add no retained owners to the known reflection metadata graph.
+#[test]
+fn test_property_default_followup_repeated_reflection_errors_are_bounded() {
+    let retained = |count: usize| {
+        let source = format!(r#"<?php
+class Consumer {{ public function value(int $value = parent::A): int {{ return $value; }} }}
+$parameter = new ReflectionParameter([Consumer::class, 'value'], 'value');
+for ($i = 0; $i < {count}; $i++) {{
+    try {{ $parameter->getDefaultValue(); echo 'bad'; }} catch (Error $error) {{}}
+}}
+unset($parameter, $error);
+echo 'done';
+"#);
+        let output = compile_and_run_with_heap_debug(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "done");
+        let summary = output.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: allocs="))
+            .expect("heap totals");
+        summary.split_once("live_blocks=").unwrap().1
+            .split_once(" peak_live_bytes=").unwrap().0.to_string()
+    };
+    assert_eq!(retained(1), retained(40));
+}
+
 /// Runs each regression with native ownership diagnostics enabled.
 fn compile_and_run(source: &str) -> String {
     let output = compile_and_run_with_heap_debug(source);
