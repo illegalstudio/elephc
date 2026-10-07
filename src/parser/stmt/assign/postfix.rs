@@ -717,13 +717,15 @@ fn lower_effectful_postfix_assignment(
 /// Lowers discarded post-increment/decrement to the existing assignment statement forms.
 ///
 /// Statement position discards the operator's value, so prefix `++$obj->n;` lowers through
-/// here too: with the result unused, `++X` and `X++` are both `X += 1`.
+/// here too. Static array places retain the shared PHP incdec kernel instead of numeric `+= 1`.
 pub(crate) fn lower_postfix_incdec_assignment(
     lhs_expr: Expr,
     is_increment: bool,
     span: Span,
 ) -> Result<Stmt, CompileError> {
-    let op = if is_increment {
+    let op = if is_static_array_element_target(&lhs_expr) {
+        AssignmentOperator::IncDec(is_increment)
+    } else if is_increment {
         AssignmentOperator::Compound(BinOp::Add)
     } else {
         AssignmentOperator::Compound(BinOp::Sub)
@@ -784,6 +786,13 @@ pub(crate) fn lower_postfix_incdec_assignment(
     };
 
     Ok(lowerer.finish_if_used(kind, span))
+}
+
+/// Recognizes a static array place without changing unrelated property or local updates.
+fn is_static_array_element_target(target: &Expr) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &target.kind else { return false; };
+    matches!(array.kind, ExprKind::StaticPropertyAccess { .. })
+        || is_static_array_element_target(array)
 }
 
 /// Lowers a compound static property assignment where the target cannot be replayed safely.

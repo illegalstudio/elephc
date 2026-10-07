@@ -4,7 +4,7 @@
 //! PHP's numeric-string / perl-style-alphanumeric rules, and returns the new value already
 //! boxed into a Mixed cell (the operator can change the value's type, so the result is
 //! always dynamically tagged). `__rt_mixed_inc_dec` is the boxed entry point: it routes a
-//! string payload here and everything else to the existing numeric helper.
+//! string payload here, preserves null decrements, and routes numeric updates to the shared helper.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
@@ -517,7 +517,7 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
 /// Emits `__rt_mixed_inc_dec`, the boxed entry point for PHP's `++` / `--`.
 ///
 /// A string payload is routed to [`emit_str_inc_dec`]'s helper so PHP's string rules apply;
-/// every other payload keeps the pre-existing numeric behavior by boxing the delta and
+/// a null decrement returns a fresh null cell. Other payloads use numeric behavior by boxing the delta and
 /// reusing `__rt_mixed_numeric_add` (adding `-1` is `- 1` for both the integer and the
 /// float paths, so one helper covers `++` and `--`).
 ///
@@ -540,6 +540,16 @@ pub fn emit_mixed_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the borrowed operand cell for the numeric path
     emitter.instruction("str x1, [sp, #8]");                                    // save the +1/-1 delta for both result paths
     emitter.instruction("bl __rt_mixed_unbox");                                 // read the operand's runtime tag and payload words
+    emitter.instruction("cmp x0, #8");                                          // recognize PHP null before numeric decrement coercion
+    emitter.instruction("b.ne __rt_mid_dispatch");                              // non-null values keep their ordinary runtime dispatch
+    emitter.instruction("ldr x9, [sp, #8]");                                    // inspect the saved delta without disturbing the unboxed payload
+    emitter.instruction("cmp x9, #0");                                          // only decrement preserves null rather than incrementing to one
+    emitter.instruction("b.ge __rt_mid_dispatch");                              // null increment continues through numeric addition
+    emitter.instruction("mov x1, xzr");                                         // a fresh null cell has no low payload
+    emitter.instruction("mov x2, xzr");                                         // a fresh null cell has no high payload
+    emitter.instruction("bl __rt_mixed_from_value");                            // return an independent null owner without consuming the operand
+    emitter.instruction("b __rt_mid_return");                                   // retire the helper frame through the common epilogue
+    emitter.label("__rt_mid_dispatch");
     emitter.instruction("cmp x0, #1");                                          // does the boxed operand hold a string payload?
     emitter.instruction("b.ne __rt_mid_numeric");                               // every other payload keeps the existing numeric behavior
     emitter.instruction("ldr x3, [sp, #8]");                                    // reload the delta as the string helper's third argument
@@ -581,6 +591,15 @@ fn emit_mixed_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the borrowed operand cell for the numeric path
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the +1/-1 delta for both result paths
     emitter.instruction("call __rt_mixed_unbox");                               // read the operand's runtime tag and payload words
+    emitter.instruction("cmp rax, 8");                                          // recognize PHP null before numeric decrement coercion
+    emitter.instruction("jne __rt_mid_dispatch_x86");                           // non-null values keep their ordinary runtime dispatch
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // inspect the saved delta without disturbing the unboxed payload
+    emitter.instruction("jge __rt_mid_dispatch_x86");                           // null increment continues through numeric addition
+    emitter.instruction("xor edi, edi");                                        // a fresh null cell has no low payload
+    emitter.instruction("xor esi, esi");                                        // a fresh null cell has no high payload
+    emitter.instruction("call __rt_mixed_from_value");                          // return an independent null owner without consuming the operand
+    emitter.instruction("jmp __rt_mid_return_x86");                             // retire the helper frame through the common epilogue
+    emitter.label("__rt_mid_dispatch_x86");
     emitter.instruction("cmp rax, 1");                                          // does the boxed operand hold a string payload?
     emitter.instruction("jne __rt_mid_numeric_x86");                            // every other payload keeps the existing numeric behavior
     emitter.instruction("mov rax, rdi");                                        // the unboxed payload low word is the string pointer the helper expects in rax

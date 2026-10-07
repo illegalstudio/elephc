@@ -9,7 +9,6 @@
 
 use super::*;
 use crate::ir::IrHeapKind;
-use crate::parser::ast::BinOp;
 
 /// Lowers a nested array assignment that already carries an expression target.
 pub(super) fn lower_nested_array_assign(
@@ -18,18 +17,23 @@ pub(super) fn lower_nested_array_assign(
     value: &Expr,
     span: Span,
 ) {
-    if matches!(desugared_element_update(value, span, |read| read == target), Some(ElementUpdate::Compound))
+    let update = desugared_element_update(value, span, |read| read == target);
+    if matches!(update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
         && nested_target_has_static_array_root(ctx, target)
     {
         let mut snapshots = Vec::new();
         let (read, write) = snapshot_nested_update_keys(ctx, target, &mut snapshots);
-        let ExprKind::BinaryOp { op, right, .. } = &value.kind else { unreachable!() };
         if nested_static_root_is_boxed(ctx, target) {
-            lower_boxed_static_nested_update(ctx, &read, &write, op, right, value.span);
+            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), value, value.span);
         } else {
-            let value = Expr::new(ExprKind::BinaryOp {
-                left: Box::new(read), op: op.clone(), right: right.clone(),
-            }, value.span);
+            let mut value = value.clone();
+            match &mut value.kind {
+                ExprKind::BinaryOp { left, .. } => *left = Box::new(read),
+                ExprKind::Assignment { prelude, .. } => {
+                    if let StmtKind::Assign { value, .. } = &mut prelude[0].kind { *value = read; }
+                }
+                _ => unreachable!("classified element updates have a captured read"),
+            }
             lower_nested_array_assign_inner(ctx, &write, &value, span, true);
         }
         let null = LoweredValue { value: ctx.builder.emit_const_null(), ir_type: IrType::I64 };
@@ -92,15 +96,16 @@ fn lower_boxed_static_nested_update(
     ctx: &mut LoweringContext<'_, '_>,
     read: &Expr,
     write: &Expr,
-    op: &BinOp,
-    right: &Expr,
+    update: ElementUpdate<'_>,
+    source_value: &Expr,
     span: Span,
 ) {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else { unreachable!() };
     let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
     let parent = lower_static_update_parent(ctx, read_array, write_array, span);
     let (pinned, owner) = root_static_update_receiver(ctx, parent, span);
-    let current = lower_array_access_from_lowered_receiver(ctx, pinned, read_key, read);
+    lower_static_update_key_and_guard(ctx, pinned, read_key, span);
+    let current = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
     let current_ty = ctx.builder.value_php_type(current.value);
     let temp = ctx.declare_synthetic_php_local(current_ty.clone());
     let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, current, Some(span));
@@ -108,10 +113,19 @@ fn lower_boxed_static_nested_update(
     if stored.value != current.value && ctx.value_is_owning_temporary(current) {
         crate::ir_lower::ownership::release_if_owned(ctx, current, Some(span));
     }
-    let value = Expr::new(ExprKind::BinaryOp {
-        left: Box::new(Expr::new(ExprKind::Variable(temp.clone()), span)),
-        op: op.clone(), right: Box::new(right.clone()),
-    }, span);
+    let value = match update {
+        ElementUpdate::IncDec { increment } => Expr::new(if increment {
+            ExprKind::PreIncrement(temp.clone())
+        } else { ExprKind::PreDecrement(temp.clone()) }, span),
+        ElementUpdate::Compound => {
+            let ExprKind::BinaryOp { op, right, .. } = &source_value.kind else { unreachable!() };
+            Expr::new(ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::Variable(temp.clone()), span)),
+                op: op.clone(), right: right.clone(),
+            }, span)
+        }
+        ElementUpdate::NullCoalesce { .. } => unreachable!(),
+    };
     let value = lower_expr(ctx, &value);
     let key = lower_expr(ctx, write_key);
     // A warning handler may replace the stored parent. The pending update still
@@ -142,7 +156,8 @@ fn lower_static_update_parent(
     let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
     let receiver = lower_static_update_parent(ctx, read_array, write_array, span);
     let (pinned, owner) = root_static_update_receiver(ctx, receiver, span);
-    let probe = lower_array_access_from_lowered_receiver(ctx, pinned, read_key, read);
+    lower_static_update_key_and_guard(ctx, pinned, read_key, span);
+    let probe = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
     if ctx.value_is_owning_temporary(probe) {
         crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
     }
@@ -155,6 +170,35 @@ fn lower_static_update_parent(
         crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
     }
     parent
+}
+
+/// Runs each captured dimension before rejecting a scalar parent with a catchable Error.
+fn lower_static_update_key_and_guard(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, read_key: &Expr, span: Span,
+) {
+    if !matches!(read_key.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
+        let key = lower_expr(ctx, read_key);
+        if ctx.value_is_owning_temporary(key) {
+            crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+        }
+    }
+    let array = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let object = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let valid = ctx.emit_value(Op::IBitOr, vec![array.value, object.value], None, PhpType::Bool,
+        Op::IBitOr.default_effects(), Some(span));
+    let present = ctx.builder.create_named_block("static.update.array", Vec::new());
+    let scalar = ctx.builder.create_named_block("static.update.scalar", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: valid.value, then_target: present, then_args: Vec::new(),
+        else_target: scalar, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(scalar);
+    lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
+    ctx.builder.position_at_end(present);
 }
 
 /// Transfers a pending receiver into an unwind-visible owner and returns its borrowed view.

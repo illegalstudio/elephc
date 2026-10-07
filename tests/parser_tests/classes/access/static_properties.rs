@@ -23,6 +23,14 @@ fn test_parse_static_property_array_prefix_updates() {
             };
             assert!(matches!(kind, StmtKind::StaticPropertyArrayAssign { .. }),
                 "{source}: {kind:?}");
+            let StmtKind::StaticPropertyArrayAssign { value, .. } = kind else { unreachable!() };
+            let ExprKind::Assignment { value, prelude, .. } = &value.kind else {
+                panic!("{source}: incdec must not become numeric compound arithmetic");
+            };
+            assert_eq!(prelude.len(), 1, "{source}: read the element once");
+            assert!(matches!(&value.kind, ExprKind::PreIncrement(_) if operator == "++")
+                || matches!(&value.kind, ExprKind::PreDecrement(_) if operator == "--"),
+                "{source}: share ordinary PHP incdec semantics");
         }
     }
 }

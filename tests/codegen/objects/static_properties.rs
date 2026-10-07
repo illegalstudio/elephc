@@ -9,6 +9,106 @@
 
 use super::*;
 
+/// Inferred concrete and homogeneous static roots keep nested mutations attached with COW.
+#[test]
+fn test_static_prefix_followup_concrete_nested_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static $items = [1, [5]]; }
+class N { public static $items = [[5], [6]]; }
+$alias = H::$items;
+++H::$items[1][0];
+++N::$items[0][0];
+--N::$items[1][0];
+echo json_encode(H::$items), '|', json_encode(N::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[1,[6]]|[[6],[5]]|[1,[5]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Direct static elements use PHP string, null, float and numeric-string incdec semantics.
+#[test]
+fn test_static_prefix_followup_string_null() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = ['az', 'az', null, '9', 1.5]; }
+++H::$items[0];
+--H::$items[1];
+--H::$items[2];
+++H::$items[3];
+++H::$items[4];
+echo json_encode(H::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[\"ba\",\"az\",null,10,2.5]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested static element updates share the same non-numeric incdec kernel.
+#[test]
+fn test_static_prefix_followup_nested_string_null() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = [['az', null]]; }
+++H::$items[0][0];
+--H::$items[0][1];
+echo json_encode(H::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[\"ba\",null]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A scalar parent throws only after the final computed key runs, without a spurious warning.
+#[test]
+fn test_static_prefix_followup_scalar_parent_error_order() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H {
+    public static array $items = [[1 => 10, 2 => 20]];
+    public static function bump(): int { echo 'b'; return 1; }
+    public static function last(): int { echo 'f'; return 1; }
+}
+set_error_handler(function($level, $message) { echo 'warning:', $message; return true; });
+$key = 0;
+try { ++H::$items[$key][H::bump()][H::last()]; echo 'bad'; }
+catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+restore_error_handler();
+echo json_encode(H::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "bf:Cannot use a scalar value as an array|[{\"1\":10,\"2\":20}]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing final key takes precedence over the scalar-parent Error and unwinds the parent.
+#[test]
+fn test_static_prefix_followup_scalar_parent_throwing_key() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = [[10]]; }
+function fail(): int { echo 'f'; throw new Error('key'); }
+try { ++H::$items[0][0][fail()]; echo 'bad'; }
+catch (Error $error) { echo ':', $error->getMessage(); }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "f:key", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Captured incdec reads resolve namespace imports before matching their stored target.
+#[test]
+fn test_static_prefix_followup_namespaced_capture() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+namespace Storage { class H { public static $items = [[5]]; } }
+namespace Consumer {
+    use Storage\H as Box;
+    function key(): int { echo 'k'; return 0; }
+    ++Box::$items[key()][0];
+    echo json_encode(Box::$items);
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "k[[6]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A throwing warning handler releases the pending nested update's retained parents.
 #[test]
 fn test_static_prefix_review_throwing_handler_is_heap_clean() {
