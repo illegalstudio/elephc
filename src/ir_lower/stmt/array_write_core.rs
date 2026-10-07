@@ -202,6 +202,7 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
             PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed)
         && !index_is_boxed_mixed_key(index_value.ir_type)
         && !index_is_foreach_int_key(ctx, index)
+        && !is_reference_variadic_array(ctx, array)
         && crate::types::empty_array_key_requires_hash_storage(index)
     {
         let key = ctx.box_value_as_mixed(index_value, PhpType::Mixed, Some(index.span));
@@ -263,6 +264,16 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+}
+
+/// Keeps known scalar variadic slots on the backend's invoker-marker write-through path.
+fn is_reference_variadic_array(ctx: &LoweringContext<'_, '_>, array: &str) -> bool {
+    ctx.builder.function().signature.as_ref().is_some_and(|signature| {
+        signature.variadic.as_deref() == Some(array)
+            && signature.params.iter().position(|(name, _)| name == array)
+                .and_then(|index| signature.ref_params.get(index))
+                .copied().unwrap_or(false)
+    })
 }
 
 /// Roots and retires operands borrowed by the boxed writer, including on same-frame catches.
