@@ -3003,11 +3003,9 @@ fn lower_mixed_array_set_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     ctx.load_value_to_reg(index, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
-    if fresh_boxed_value {
-        emit_mixed_array_set_ref_marker_writeback_aarch64(ctx);
-        return Ok(());
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
+    // Every store routes through the marker write-back: a `Mixed`/union right-hand side reaches
+    // the boxed-handle arm and keeps the by-ref alias, where `__rt_array_set_mixed` would sever it.
+    emit_mixed_array_set_ref_marker_writeback_aarch64(ctx, fresh_boxed_value);
     Ok(())
 }
 
@@ -3031,16 +3029,20 @@ fn lower_mixed_array_set_x86_64(
     ctx.load_value_to_reg(array, "rdi")?;
     ctx.load_value_to_reg(index, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
-    if fresh_boxed_value {
-        emit_mixed_array_set_ref_marker_writeback_x86_64(ctx);
-        return Ok(());
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
+    // See the AArch64 variant: a `Mixed`/union right-hand side must also reach the marker
+    // write-back so the by-ref alias survives.
+    emit_mixed_array_set_ref_marker_writeback_x86_64(ctx, fresh_boxed_value);
     Ok(())
 }
 
-/// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on AArch64.
-fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'_>) {
+/// Stores a boxed-Mixed value through an invoker ref-cell marker on AArch64.
+///
+/// `value_is_fresh_box` is true when `x2` is a box this store allocated and may consume; a
+/// retained boxed handle must not use the payload-transfer arm (see the guard there).
+fn emit_mixed_array_set_ref_marker_writeback_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    value_is_fresh_box: bool,
+) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
     let done_label = ctx.next_label("mixed_array_set_done");
@@ -3063,6 +3065,14 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
         &format!("cmp x12, #{}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));             // transfer boxed Mixed replacements as handles rather than payload words
+    if !value_is_fresh_box {
+        // A retained boxed handle cannot use the payload-transfer arm below: freeing it with a
+        // raw heap_free would strand the read's owner. Delegate to the runtime setter instead
+        // (it severs the alias but stays memory-safe). AOT-lowered write-backs never reach a
+        // concrete-source marker, but the eval bridge's raw ref cells do, so the guard earns its
+        // keep there.
+        ctx.emitter.instruction(&format!("b {}", runtime_label));               // retained handle: keep the memory-safe runtime setter
+    }
     ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement Mixed low payload word
     ctx.emitter.instruction("str x12, [x10]");                                  // write the replacement low word through the caller ref-cell
     ctx.emitter.instruction("ldr x12, [x2, #16]");                              // load the replacement Mixed high payload word
@@ -3079,12 +3089,11 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
     // Without this the caller's previous box — and the payload it pins — is orphaned at
     // refcount 1 on every write-back, which is the leak reported in issue #1062.
     //
-    // Safe to release AFTER the store and not before: this whole emitter runs only when the
-    // incoming value was freshly boxed here (`fresh_boxed_value`), so the handle in `x2` is a
-    // refcount-1 cell allocated at this store and can never be the occupant being released,
-    // not even for `$items[0] = $items[0]`.
+    // Store the new handle BEFORE releasing the old so the replaced box is never freed while
+    // the cell still points at it. A read through the marker clones the referenced cell, so the
+    // incoming handle is a distinct box; the read's incref and this release balance.
     ctx.emitter.instruction("ldr x11, [x10]");                                  // load the boxed Mixed the caller ref-cell currently owns
-    ctx.emitter.instruction("str x2, [x10]");                                   // transfer the fresh boxed Mixed handle into the caller ref-cell
+    ctx.emitter.instruction("str x2, [x10]");                                   // transfer the boxed Mixed handle into the caller ref-cell
     ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result across the replaced-box release
     ctx.emitter.instruction("mov x0, x11");                                     // pass the replaced boxed Mixed to the release helper
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
@@ -3096,8 +3105,14 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
     ctx.emitter.label(&done_label);
 }
 
-/// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on x86_64.
-fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_>) {
+/// Stores a boxed-Mixed value through an invoker ref-cell marker on x86_64.
+///
+/// `value_is_fresh_box` is true when `rdx` is a box this store allocated and may consume; a
+/// retained boxed handle must not use the payload-transfer arm (see the guard there).
+fn emit_mixed_array_set_ref_marker_writeback_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    value_is_fresh_box: bool,
+) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
     let done_label = ctx.next_label("mixed_array_set_done");
@@ -3120,6 +3135,10 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
         &format!("cmp r11, {}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("je {}", mixed_cell_label));               // transfer boxed Mixed replacements as handles rather than payload words
+    if !value_is_fresh_box {
+        // See the AArch64 guard: a retained handle cannot use the payload-transfer arm below.
+        ctx.emitter.instruction(&format!("jmp {}", runtime_label));             // retained handle: keep the memory-safe runtime setter
+    }
     ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement Mixed low payload word
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // write the replacement low word through the caller ref-cell
     ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 16]");                   // load the replacement Mixed high payload word
@@ -3134,7 +3153,7 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
     // See the AArch64 arm: the cell owns the box it holds, so the replaced one is released
     // here rather than orphaned (issue #1062), after the store rather than before it.
     ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the boxed Mixed the caller ref-cell currently owns
-    ctx.emitter.instruction("mov QWORD PTR [r10], rdx");                        // transfer the fresh boxed Mixed handle into the caller ref-cell
+    ctx.emitter.instruction("mov QWORD PTR [r10], rdx");                        // transfer the boxed Mixed handle into the caller ref-cell
     abi::emit_push_reg(ctx.emitter, "rdi");
     ctx.emitter.instruction("mov rax, r11");                                    // pass the replaced boxed Mixed to the release helper
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
