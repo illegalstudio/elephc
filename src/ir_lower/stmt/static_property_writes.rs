@@ -159,8 +159,8 @@ pub(super) fn lower_static_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    let value = lower_expr(ctx, value);
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
-        let value = lower_expr(ctx, value);
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![array.value, value.value],
@@ -177,7 +177,6 @@ pub(super) fn lower_static_property_array_push(
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
-        let value = lower_expr(ctx, value);
         ctx.emit_void(
             Op::ArrayPush,
             vec![property_value.value, value.value],
@@ -190,7 +189,6 @@ pub(super) fn lower_static_property_array_push(
     }
 
     let property_value = load_static_property(ctx, receiver, property, span);
-    let value = lower_expr(ctx, value);
     if static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::MixedArrayAppend,

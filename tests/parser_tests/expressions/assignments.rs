@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// Runtime-name statements use the captured expression plan rather than replaying their RHS.
+#[test]
+fn test_parse_static_receiver_followup_dynamic_capture() {
+    for source in ["<?php $object->$name = (print 'rhs');", "<?php $object->$name ??= value();"] {
+        let statements = parse_source(source);
+        let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("{source}"); };
+        let ExprKind::Assignment { result_target, prelude, conditional_value_temp, .. } = &expression.kind
+            else { panic!("{source}"); };
+        assert!(result_target.is_some(), "{source}: preserve the expression result plan");
+        if source.contains("??=") {
+            assert!(conditional_value_temp.is_some(), "{source}: lazy RHS");
+        } else {
+            assert!(prelude.iter().any(|statement|
+                matches!(statement.kind, StmtKind::Assign { .. })), "{source}: capture effectful RHS once");
+        }
+    }
+}
+
 /// Appends settle their RHS before traversing a static receiver, including nested buckets.
 #[test]
 fn test_parse_static_receiver_review_append_preludes() {

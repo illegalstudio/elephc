@@ -31,6 +31,7 @@ pub(super) fn lower_property_assign(
     let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
+    let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
     if let Some(message) = throw_access_message {
         receiver.finish(ctx, span);
         if ctx.value_is_owning_temporary(lowered_value) {

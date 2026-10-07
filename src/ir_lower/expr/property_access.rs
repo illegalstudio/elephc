@@ -643,7 +643,7 @@ pub(super) fn lower_initialized_property_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let uninitialized_block = ctx
         .builder
         .create_named_block("coalesce.property.uninitialized", Vec::new());
@@ -766,7 +766,7 @@ pub(super) fn lower_initialized_static_property_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let uninitialized_block = ctx
         .builder
         .create_named_block("coalesce.static_property.uninitialized", Vec::new());

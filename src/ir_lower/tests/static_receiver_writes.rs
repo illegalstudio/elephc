@@ -21,8 +21,14 @@ function write(): void { C::$o->v = replace(); }
 function writeNested(): void { C::$o->nested[0][] = replace(); }
 function writeChild(): void { R::$root->child->items[] = replace(); }
 function writeNull(): void { C::$nullable->v = replace(); }
+function writeLocalAppend(?O $object): void { $object->items[] = (print 'rhs'); }
+function writeLocalIndexed(?O $object): void { $object->items[(print 'i')] = (print 'v'); }
+function writeDynamicLocal(?O $object, string $name): void { $object->$name = (print 'rhs'); }
+function writeDynamicStatic(string $name): void { C::$nullable->$name = (print 'rhs'); }
+function writeCoalesce(): void { C::$nullable->v ??= replace(); }
 class StaticBuckets { public static array $items = []; }
 function writeStaticNested(): void { StaticBuckets::$items[0][] = replace(); }
+function writeStaticAppend(): void { StaticBuckets::$items[] = replace(); }
 interface Store { public function get(): string; }
 interface Named { public function name(): string; }
 class Both implements Store, Named {
@@ -49,7 +55,7 @@ C::$nullable->items[] = 3;
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-    for name in ["write", "writeNested", "writeChild", "writeNull", "writeStaticNested"] {
+    for name in ["write", "writeNested", "writeChild", "writeNull", "writeStaticNested", "writeStaticAppend"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let rhs = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
         let receiver = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
@@ -72,6 +78,28 @@ C::$nullable->items[] = 3;
                     "{target}: a static-array probe borrows the published class slot");
             }
         }
+    }
+    for name in ["writeLocalAppend", "writeLocalIndexed", "writeDynamicLocal", "writeDynamicStatic"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let last_print = function.instructions.iter().rposition(|inst|
+            inst.op == crate::ir::Op::PrintValue).unwrap();
+        let guard = function.instructions.iter().position(|inst|
+            inst.op == crate::ir::Op::IsNull).unwrap();
+        assert!(last_print < guard, "{target}: {name} operands precede the null guard");
+        assert!(function.blocks.iter().any(|block|
+            block.name == "property.write.null" && matches!(block.terminator,
+                Some(crate::ir::Terminator::Throw { .. }))), "{target}: {name} catchable Error");
+    }
+    let coalesce = module.functions.iter().find(|function| function.name == "writeCoalesce").unwrap();
+    assert!(coalesce.instructions.iter().any(|inst|
+        inst.op == crate::ir::Op::Acquire && inst.immediate == Some(crate::ir::Immediate::Bool(true))),
+        "{target}: coalesce acquires an independent receiver pin");
+    for acquire in coalesce.instructions.iter().filter(|inst|
+        inst.op == crate::ir::Op::Acquire && inst.immediate == Some(crate::ir::Immediate::Bool(true)))
+    {
+        assert!(coalesce.instructions.iter().any(|inst|
+            inst.op == crate::ir::Op::Release && inst.operands == [acquire.result.unwrap()]),
+            "{target}: borrowed RHS does not hide the receiver release");
     }
     crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }

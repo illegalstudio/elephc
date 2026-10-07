@@ -21,34 +21,49 @@ pub(crate) struct PropertyWriteReceiver {
 impl PropertyWriteReceiver {
     /// Acquires borrowed static storage and parks any independently owned receiver for unwind.
     pub(crate) fn new(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> Self {
-        let value = if ctx.builder.value_defining_op(value.value) == Some(Op::LoadStaticProperty) {
-            crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span))
-        } else { value };
-        let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
-        let owners = if ctx.value_is_owning_temporary(value) { vec![value] } else { Vec::new() };
-        Self { value, pins, owners }
+        ctx.with_independent_write_receiver(|ctx| {
+            let value = if ctx.builder.value_defining_op(value.value) == Some(Op::LoadStaticProperty) {
+                crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span))
+            } else { value };
+            let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
+            let owners = if ctx.value_is_owning_temporary(value) { vec![value] } else { Vec::new() };
+            Self { value, pins, owners }
+        })
     }
 
-    /// Guards and extracts a nullable object while both owner forms remain unwind-visible.
-    pub(super) fn for_array(
-        ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: &str, span: Span,
-    ) -> Self {
-        let mut receiver = Self::new(ctx, value, span);
-        let object = narrow_nullable_write_receiver(ctx, receiver.value, property, "modify", span);
-        receiver.adopt_narrowed(ctx, object, span);
-        receiver
+    /// Guards an array mutation after its keys and RHS have run, rooting their owners on Error.
+    pub(super) fn narrow_for_array(
+        &mut self, ctx: &mut LoweringContext<'_, '_>, property: &str, operands: &[crate::ir::ValueId], span: Span,
+    ) {
+        self.narrow_for_write(ctx, WritePropertyName::Literal(property), "modify", operands, span);
     }
 
     /// Guards a direct write after its RHS runs and retires that RHS if the null Error unwinds.
     pub(super) fn narrow_for_assignment(
         &mut self, ctx: &mut LoweringContext<'_, '_>, property: &str, value: LoweredValue, span: Span,
     ) {
+        self.narrow_for_write(ctx, WritePropertyName::Literal(property), "assign", &[value.value], span);
+    }
+
+    /// Narrows a runtime-name write after its name and RHS are evaluated exactly once.
+    pub(crate) fn narrow_for_dynamic_assignment(
+        &mut self, ctx: &mut LoweringContext<'_, '_>, property: LoweredValue, value: LoweredValue, span: Span,
+    ) {
+        self.narrow_for_write(ctx, WritePropertyName::Runtime(property), "assign", &[property.value, value.value], span);
+    }
+
+    /// Keeps write operands above the receiver on the LIFO unwind stack only over the null guard.
+    fn narrow_for_write(
+        &mut self, ctx: &mut LoweringContext<'_, '_>, property: WritePropertyName<'_>, verb: &str,
+        operands: &[crate::ir::ValueId], span: Span,
+    ) {
         let ty = ctx.builder.value_php_type(self.value.value);
         if !crate::ir_lower::expr::singular_object_class(&ty).is_some_and(|(_, nullable)| nullable) {
             return;
         }
-        let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
-        let object = narrow_nullable_write_receiver(ctx, self.value, property, "assign", span);
+        let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, operands, span);
+        let object = ctx.with_independent_write_receiver(|ctx|
+            narrow_nullable_write_receiver(ctx, self.value, property, verb, span));
         crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
         // The runtime unwind stack is LIFO. Detach the RHS record before publishing the
         // narrowed object's lease, which must outlive all subsequent coercion/store work.
@@ -60,7 +75,8 @@ impl PropertyWriteReceiver {
         &mut self, ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span,
     ) {
         if object.value != self.value.value {
-            self.pins.extend(crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span));
+            self.pins.extend(ctx.with_independent_write_receiver(|ctx|
+                crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span)));
             self.owners.push(object);
             self.value = object;
         }
@@ -75,9 +91,15 @@ impl PropertyWriteReceiver {
     }
 }
 
+/// Supplies a literal or already evaluated runtime property name to the null Error branch.
+enum WritePropertyName<'a> {
+    Literal(&'a str),
+    Runtime(LoweredValue),
+}
+
 /// Narrows a known nullable class for fixed-slot mutation, with PHP's operation-specific null Error.
 fn narrow_nullable_write_receiver(
-    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: &str, verb: &str, span: Span,
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: WritePropertyName<'_>, verb: &str, span: Span,
 ) -> LoweredValue {
     let ty = ctx.builder.value_php_type(value.value);
     let Some((class, true)) = crate::ir_lower::expr::singular_object_class(&ty) else {
@@ -93,9 +115,39 @@ fn narrow_nullable_write_receiver(
         else_target: present, else_args: Vec::new(),
     });
     ctx.builder.position_at_end(null);
-    lower_throw_access_error(ctx, &format!("Attempt to {verb} property \"{property}\" on null"), span);
+    match property {
+        WritePropertyName::Literal(property) =>
+            lower_throw_access_error(ctx, &format!("Attempt to {verb} property \"{property}\" on null"), span),
+        WritePropertyName::Runtime(property) => lower_dynamic_null_error(ctx, property, verb, span),
+    }
     ctx.builder.position_at_end(present);
     let target = PhpType::Object(class);
     ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, target.clone(),
         Op::mixed_unbox_effects(&target), Some(span))
+}
+
+/// Builds the runtime-name Error through ordinary constructor lowering without replaying the name.
+fn lower_dynamic_null_error(
+    ctx: &mut LoweringContext<'_, '_>, property: LoweredValue, verb: &str, span: Span,
+) {
+    // The surrounding in-flight pin owns the name. This scratch alias must not create a
+    // second consuming read when ordinary concat lowering uses it in the Error message.
+    let temp = ctx.declare_hidden_temp(PhpType::Str);
+    let name = ctx.emit_value(Op::Borrow, vec![property.value], None, PhpType::Str,
+        Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(name.value, Ownership::Borrowed);
+    ctx.store_local(&temp, name, PhpType::Str, Some(span));
+    let concat = |left, right| Expr::new(ExprKind::BinaryOp {
+        left: Box::new(left), op: crate::parser::ast::BinOp::Concat, right: Box::new(right),
+    }, span);
+    let message = concat(concat(
+        Expr::new(ExprKind::StringLiteral(format!("Attempt to {verb} property \"")), span),
+        Expr::new(ExprKind::Variable(temp.clone()), span),
+    ), Expr::new(ExprKind::StringLiteral("\" on null".to_string()), span));
+    let error = lower_expr(ctx, &Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::unqualified("Error"), args: vec![message],
+    }, span));
+    ctx.emit_void(Op::UnsetLocal, Vec::new(), Some(Immediate::LocalSlot(ctx.local_slots[&temp])),
+        Op::UnsetLocal.default_effects(), Some(span));
+    terminate_throw(ctx, error.value);
 }

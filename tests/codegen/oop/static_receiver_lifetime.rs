@@ -18,6 +18,96 @@ fn verify(source: &str, expected: &str) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Nullable local array writes evaluate computed keys and values before the null Error.
+#[test]
+fn test_static_receiver_followup_local_null_array_order() {
+    verify(r#"<?php
+class O { public array $items = []; }
+function append(?O $object): void { $object->items[] = (print 'rhs'); }
+function indexed(?O $object): void { $object->items[(print 'i')] = (print 'v'); }
+try { append(null); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { indexed(null); } catch (Error $error) { echo ':', $error->getMessage(); }
+"#, "rhs:Attempt to modify property \"items\" on null|iv:Attempt to modify property \"items\" on null");
+}
+
+/// Owned keys and values are retired when a nullable local array write is refused.
+#[test]
+fn test_static_receiver_followup_local_null_array_owners() {
+    verify(r#"<?php
+class O { public array $items = []; }
+function write(?O $object): void { $object->items[str_repeat('k', 8)] = str_repeat('v', 8); }
+for ($i = 0; $i < 8; $i++) {
+    try { write(null); } catch (Error $error) { echo 'c'; }
+}
+"#, "cccccccc");
+}
+
+/// Both static and local runtime-name writes throw after evaluating the RHS.
+#[test]
+fn test_static_receiver_followup_dynamic_null_error() {
+    verify(r#"<?php
+class O { public int $v = 1; }
+class C { public static ?O $o = null; }
+function write(?O $object, string $name): void { $object->$name = (print 'rhs'); echo 'bad'; }
+$name = 'v';
+try { C::$o->$name = (print 'rhs'); echo 'bad'; }
+catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { write(null, $name); } catch (Error $error) { echo ':', $error->getMessage(); }
+"#, "rhs:Attempt to assign property \"v\" on null|rhs:Attempt to assign property \"v\" on null");
+}
+
+/// Dynamic-null guards unwind computed property names and fresh string values.
+#[test]
+fn test_static_receiver_followup_dynamic_null_owners() {
+    verify(r#"<?php
+class O { public string $value = ''; }
+class C { public static ?O $o = null; }
+function write(?O $object): void { $object->{str_repeat('v', 8)} = str_repeat('x', 16); }
+for ($i = 0; $i < 8; $i++) {
+    try { C::$o->{str_repeat('v', 8)} = str_repeat('x', 16); } catch (Error $error) { echo 's'; }
+    try { write(null); } catch (Error $error) { echo 'l'; }
+}
+"#, "slslslslslslslsl");
+}
+
+/// A coalescing write releases the independent nullable static receiver acquire.
+#[test]
+fn test_static_receiver_followup_coalesce_nullable_pin() {
+    verify(r#"<?php
+class O { public mixed $v = null; public function __destruct() { echo 'D', $this->v ?? 0; } }
+class C { public static ?O $o = null; }
+function replace(): int { echo 'R'; C::$o = new O(); return 9; }
+C::$o = new O();
+C::$o->v ??= replace();
+echo 'X', C::$o->v;
+echo '|S', C::$o->v, '|END';
+"#, "RD0X9|S9|ENDD9");
+}
+
+/// Tagged scalar property writes preserve the nullable receiver's final destructor as well.
+#[test]
+fn test_static_receiver_followup_coalesce_tagged_scalar_pin() {
+    verify(r#"<?php
+class O { public ?int $v = null; public function __destruct() { echo 'D'; } }
+class C { public static ?O $o = null; }
+function replace(): int { echo 'R'; C::$o = new O(); return 9; }
+C::$o = new O();
+C::$o->v ??= replace();
+echo 'X', C::$o->v, '|END';
+"#, "RDX9|ENDD");
+}
+
+/// A plain static array append fetches the slot only after an RHS replaces it.
+#[test]
+fn test_static_receiver_followup_direct_static_append() {
+    verify(r#"<?php
+class C { public static array $items = [1]; }
+function replace(): int { echo 'R'; C::$items = [7]; return 9; }
+C::$items[] = replace();
+echo json_encode(C::$items);
+"#, "R[7,9]");
+}
+
 /// An indirect array append reads the replacement receiver only after its RHS has run.
 #[test]
 fn test_static_receiver_review_nested_append_replacement() {
