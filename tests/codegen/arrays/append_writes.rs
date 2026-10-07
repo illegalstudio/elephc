@@ -10,6 +10,124 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// Sparse heap keys and catchable append-property errors also work without EIR optimization.
+#[test]
+fn test_append_followup_without_ir_optimization() {
+    let out = without_ir_opt(|| compile_and_run_with_heap_debug(r#"<?php
+$index = $argc;
+$items = []; $items[][$index] = [7];
+echo json_encode($items), ':';
+$properties = [];
+try { ++$properties[]->x; echo 'bad'; }
+catch (Error $error) { echo $error->getMessage(), ':'; }
+echo json_encode($properties);
+"#));
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"1\":[7]}]:Attempt to increment/decrement property \"x\" on null:[null]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A sparse variable key stores a heap value without manufacturing an invalid hole.
+#[test]
+fn test_append_followup_variable_heap_dimension() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$index = $argc;
+$items = [];
+$items[][$index] = [7];
+echo 'Z', json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Z[{\"1\":[7]}]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Direct empty-array writes share the safe sparse storage used by nested append preludes.
+#[test]
+fn test_append_followup_direct_variable_heap_key() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$index = $argc;
+$items = [];
+$items[$index] = [7];
+echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"1\":[7]}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Literal non-integer syntax retains sparse and null-key normalization inside new buckets.
+#[test]
+fn test_append_followup_static_dimension_shapes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [];
+$items[][-1] = 'n';
+$items[][1.5] = 'f';
+$items[][true] = 'b';
+$items[][null] = 'z';
+echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"-1\":\"n\"},{\"1\":\"f\"},{\"1\":\"b\"},{\"\":\"z\"}]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A suffix belongs to the increment target, not to an already incremented append value.
+#[test]
+fn test_append_followup_increment_property_suffix() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [];
+try { ++$items[]->x; echo 'bad'; }
+catch (Error $error) { echo $error->getMessage(), ':'; }
+echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Attempt to increment/decrement property \"x\" on null:[null]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Unknown zero and negative keys preserve JSON shape without unsafe typed holes.
+#[test]
+fn test_append_followup_dynamic_key_shapes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$zero = $argc - 1;
+$negative = -$argc;
+$a = []; $a[$zero] = [7];
+$b = []; $b[$negative] = [8];
+echo json_encode($a), '|', json_encode($b);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[7]]|{\"-1\":[8]}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A computed property name runs once after the fresh append and before its Error.
+#[test]
+fn test_append_followup_increment_dynamic_property_suffix() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function property_name(): string { echo 'p'; return 'x'; }
+$items = [];
+try { ++$items[]->{property_name()}; echo 'bad'; }
+catch (Error $error) { echo $error->getMessage(), ':'; }
+echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "pAttempt to increment/decrement property \"x\" on null:[null]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Appending the first null creates materializable boxed storage and keeps value aliases intact.
+#[test]
+fn test_append_followup_first_null_preserves_alias() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = []; $copy = $items;
+$items[] = null;
+echo json_encode($items), '|', json_encode($copy);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[null]|[]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Synthetic nested-append preludes must pass through the ordinary statement checker.
 #[test]
 fn test_append_review_existing_index_checker() {

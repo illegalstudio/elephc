@@ -50,6 +50,14 @@ fn test_error_append_review_post_decrement_unsupported() {
         "Post-decrement on an append dimension is not supported");
 }
 
+/// Prefix append decrement reports the unsupported operation rather than a missing variable.
+#[test]
+fn test_error_append_followup_prefix_decrement_unsupported() {
+    for source in ["<?php $items = []; --$items[];", "<?php $items = []; --$items[]['k'];"] {
+        expect_error(source, "Pre-decrement on an append dimension is not supported");
+    }
+}
+
 /// Tests that `instanceof` with a non-class RHS (integer literal) produces the expected error.
 #[test]
 fn test_error_instanceof_missing_class_name() {

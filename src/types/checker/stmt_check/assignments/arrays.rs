@@ -12,7 +12,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{
-    merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
+    empty_array_key_requires_hash_storage, merge_array_key_types, normalized_array_key_type,
     PhpType, TypeEnv,
 };
 
@@ -67,7 +67,8 @@ pub(super) fn check_array_assign(
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
             || (matches!(elem_ty.as_ref(), PhpType::Never)
-                && static_array_key_forces_hash_storage(index));
+                && !index_is_foreach_key && !matches!(idx_ty, PhpType::Mixed | PhpType::Union(_))
+                && empty_array_key_requires_hash_storage(index));
         if forces_hash {
             let merged_key = if matches!(elem_ty.as_ref(), PhpType::Never) {
                 normalized_idx_ty

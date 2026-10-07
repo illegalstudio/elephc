@@ -20,6 +20,15 @@ $items[]++;
 echo ++$items[];
 $items[][1] = 'sparse';
 $items[][1] .= 'compound';
+$items[][$argc] = [7];
+$items[][-1] = 'negative';
+$items[][1.5] = 'float';
+$items[][true] = 'boolean';
+$items[][null] = 'null';
+$negative = -$argc;
+$sparse = []; $sparse[$negative] = [8];
+echo json_encode($sparse);
+try { ++$items[]->x; } catch (Error $error) { echo $error->getMessage(); }
 $nested = [[]];
 $nested[0][] += $argc;
 $nested[0][]['k'] = 'v';

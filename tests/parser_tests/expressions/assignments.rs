@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// A property suffix extends the increment target and lowers the known fresh-null Error.
+#[test]
+fn test_append_followup_prefix_property_target() {
+    let statements = parse_source("<?php ++$items[]->x;");
+    assert!(matches!(&statements[0].kind, StmtKind::ExprStmt(Expr { kind: ExprKind::Throw(_), .. })));
+}
+
 /// Empty dimensions remain write-only targets until the assignment or update is known.
 #[test]
 fn test_append_review_write_contexts_parse() {

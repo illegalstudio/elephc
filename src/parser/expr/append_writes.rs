@@ -35,7 +35,12 @@ pub(super) fn parse_append_write(
         *pos += 1;
         dimensions.push(index);
     }
-    let (update, rhs) = if prefix_increment {
+    let property_suffix = prefix_increment && matches!(
+        tokens.get(*pos).map(|(token, _)| token), Some(Token::Arrow | Token::QuestionArrow),
+    );
+    let (update, rhs) = if property_suffix {
+        (AppendUpdate::Assign, Expr::new(ExprKind::Null, span))
+    } else if prefix_increment {
         (AppendUpdate::Compound(BinOp::Add), Expr::new(ExprKind::IntLiteral(1), span))
     } else { match tokens.get(*pos).map(|(token, _)| token) {
         Some(Token::PlusPlus) => {
@@ -68,7 +73,11 @@ pub(super) fn parse_append_write(
     let mut stabilizer = AssignmentExpressionLowerer::new(span);
     let base = stabilizer.stabilize_non_local_target(base, &rhs);
     for index in dimensions.iter_mut().flatten() {
-        if !matches!(index.kind, ExprKind::Variable(_) | ExprKind::IntLiteral(_)) {
+        let literal = matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::Null)
+            || matches!(&index.kind, ExprKind::Negate(inner)
+                if matches!(inner.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)));
+        if !literal && !matches!(index.kind, ExprKind::Variable(_)) {
             *index = stabilizer.bind_result_value(index.clone());
         }
     }
@@ -85,6 +94,42 @@ pub(super) fn parse_append_write(
 
 /// The operation that writes a newly appended element, never an existing array value.
 enum AppendUpdate { Assign, Compound(BinOp), PostIncrement }
+
+/// Evaluates the fresh null append before raising PHP's property-increment Error.
+/// The null receiver is certain here, unlike an ordinary nullable object property.
+pub(super) fn lower_null_property_increment(target: &Expr, span: Span) -> Option<Expr> {
+    let (object, property) = match &target.kind {
+        ExprKind::PropertyAccess { object, property } => (
+            object, Expr::new(ExprKind::StringLiteral(property.clone()), span),
+        ),
+        ExprKind::DynamicPropertyAccess { object, property } => (object, *property.clone()),
+        _ => return None,
+    };
+    if !matches!(object.kind, ExprKind::Assignment { .. }) { return None; }
+    let message = Expr::new(ExprKind::BinaryOp {
+        left: Box::new(Expr::new(ExprKind::BinaryOp {
+            left: Box::new(Expr::new(ExprKind::StringLiteral(
+                "Attempt to increment/decrement property \"".to_string(),
+            ), span)),
+            op: BinOp::Concat,
+            right: Box::new(property),
+        }, span)),
+        op: BinOp::Concat,
+        right: Box::new(Expr::new(ExprKind::StringLiteral("\" on null".to_string()), span)),
+    }, span);
+    let message = Expr::new(ExprKind::Assignment {
+        target: Box::new(Expr::new(ExprKind::Variable(crate::names::generated_local_name(
+            &format!("__elephc_append_inc_error_{}_{}", span.line, span.col),
+        )), span)),
+        value: Box::new(message), result_target: None,
+        prelude: vec![Stmt::new(StmtKind::ExprStmt(*object.clone()), span)],
+        conditional_value_temp: None,
+    }, span);
+    let error = Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::from("\\Error"), args: vec![message],
+    }, span);
+    Some(Expr::new(ExprKind::Throw(Box::new(error)), span))
+}
 
 /// Builds nested containers and the expression result using reserved compiler locals.
 struct AppendLowerer { span: Span, next_temp: usize, prelude: Vec<Stmt>, result: Option<Expr> }

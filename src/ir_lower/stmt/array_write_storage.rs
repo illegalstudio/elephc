@@ -242,5 +242,8 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 
 /// Preserves the first concrete value type written into an empty indexed array.
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
-    normalize_materialized_element_type(item_type)
+    match normalize_materialized_element_type(item_type) {
+        PhpType::Void => PhpType::Mixed,
+        other => other,
+    }
 }
