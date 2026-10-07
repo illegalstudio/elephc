@@ -2,7 +2,7 @@
 title: "iptcparse() - internals"
 description: "Compiler internals for iptcparse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 539
+  order: 545
 ---
 
 ## `iptcparse()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:4013](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4013) (`iptcparse`)
+- **Lowering**: [`src/image_prelude.rs`:4084](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4084) (`iptcparse`)
 - **Function symbol**: `iptcparse()`
 
 

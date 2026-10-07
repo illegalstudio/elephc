@@ -14,6 +14,9 @@ use crate::support::*;
 /// through the real compile/control-channel/monitor pipeline.
 #[test]
 fn test_cli_monitor_profiles_a_top_level_only_program() {
+    if skip_windows_local_monitor() {
+        return;
+    }
     let dir = make_cli_test_dir("elephc_cli_monitor_main_only");
     fs::write(
         dir.join("top.php"),
@@ -80,6 +83,9 @@ fn test_cli_monitor_profiles_a_top_level_only_program() {
 /// it back. A test that only read the table would not have noticed.
 #[test]
 fn test_cli_monitor_writes_php_level_speedscope_profile() {
+    if skip_windows_local_monitor() {
+        return;
+    }
     let dir = make_cli_test_dir("elephc_cli_monitor");
     // The hot function is RECURSIVE on purpose: a self-recursive body cannot be
     // fully inlined away, so its frame is guaranteed in the samples — the test
@@ -177,6 +183,9 @@ fn test_cli_monitor_writes_php_level_speedscope_profile() {
 /// exact `{main}` frame instead of becoming disconnected graph roots.
 #[test]
 fn test_cli_monitor_keeps_shutdown_callbacks_under_main() {
+    if skip_windows_local_monitor() {
+        return;
+    }
     let dir = make_cli_test_dir("elephc_cli_monitor_shutdown_callbacks");
     fs::write(
         dir.join("shutdown.php"),
@@ -253,6 +262,9 @@ echo "profiled\n";
 /// Runs one clean language-level termination fixture and verifies that monitor
 /// receives the complete exact graph despite bypassed generated epilogues.
 fn assert_clean_language_exit_profile(tag: &str, source: &str) {
+    if skip_windows_local_monitor() {
+        return;
+    }
     let dir = make_cli_test_dir(tag);
     fs::write(
         dir.join("exit.php"),
@@ -341,6 +353,9 @@ die();
 /// `exit()`, so it must still close and publish the exact root and live callee.
 #[test]
 fn test_cli_monitor_profiles_an_uncaught_codegen_error() {
+    if skip_windows_local_monitor() {
+        return;
+    }
     let dir = make_cli_test_dir("elephc_cli_monitor_uncaught_codegen_error");
     // The negative-value recursive branch keeps the failing function out of the
     // inliner while `$argc` still takes the direct uncaught path at runtime.
@@ -1306,7 +1321,10 @@ fn test_cli_timings_reports_assemble_and_link() {
         "missing link timing: {stderr}"
     );
     assert!(stderr.contains("Total"), "missing total timing: {stderr}");
-    assert!(dir.join("main").exists(), "expected compiled binary to exist");
+    assert!(
+        target_binary_path(&dir.join("main")).exists(),
+        "expected compiled binary to exist"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -1831,6 +1849,9 @@ fn exact_incl_percent(report: &str, name: &str) -> f64 {
 /// lands far above it.
 #[test]
 fn test_cli_monitor_does_not_charge_a_coroutine_for_its_consumer() {
+    if skip_windows_local_monitor() {
+        return;
+    }
     let dir = make_cli_test_dir("elephc_cli_monitor_coroutine");
     fs::write(
         dir.join("coro.php"),
@@ -1928,6 +1949,9 @@ fn test_cli_monitor_does_not_charge_a_coroutine_for_its_consumer() {
 /// paths that reach the same helper and are covered by the same hook.
 #[test]
 fn test_cli_monitor_restores_a_coroutine_resumed_into_a_throw() {
+    if skip_windows_local_monitor() {
+        return;
+    }
     let dir = make_cli_test_dir("elephc_cli_monitor_fiber_throw");
     fs::write(
         dir.join("ft.php"),
@@ -2022,6 +2046,9 @@ fn test_cli_monitor_restores_a_coroutine_resumed_into_a_throw() {
 /// view as if the program had written it.
 #[test]
 fn test_cli_monitor_live_needs_no_external_sampler() {
+    if skip_windows_local_monitor() {
+        return;
+    }
     let dir = make_cli_test_dir("elephc_cli_monitor_live");
     fs::write(
         dir.join("hot.php"),
@@ -2093,6 +2120,9 @@ fn test_cli_monitor_live_needs_no_external_sampler() {
 /// uncovered. This runs `monitor hot.php --live` and nothing else.
 #[test]
 fn test_cli_monitor_live_compiles_the_source_with_the_probe() {
+    if skip_windows_local_monitor() {
+        return;
+    }
     let dir = make_cli_test_dir("elephc_cli_monitor_live_source");
     fs::write(
         dir.join("hot.php"),

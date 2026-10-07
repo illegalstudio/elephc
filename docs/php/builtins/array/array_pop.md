@@ -8,7 +8,7 @@ sidebar:
 ## array_pop()
 
 ```php
-function array_pop(array $array): mixed
+function array_pop(array &$array): mixed
 ```
 
 Pops the element off the end of array.

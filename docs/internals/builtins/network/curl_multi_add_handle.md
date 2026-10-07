@@ -2,7 +2,7 @@
 title: "curl_multi_add_handle() - internals"
 description: "Compiler internals for curl_multi_add_handle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 703
+  order: 717
 ---
 
 ## `curl_multi_add_handle()` - internals

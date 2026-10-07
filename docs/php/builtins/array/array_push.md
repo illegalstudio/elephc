@@ -8,7 +8,7 @@ sidebar:
 ## array_push()
 
 ```php
-function array_push(array $array, ...$values): int
+function array_push(array &$array, ...$values): int
 ```
 
 Pushes one or more elements onto the end of array.

@@ -2,7 +2,7 @@
 title: "opcache_is_script_cached()"
 description: "Reports whether a script is in the opcode cache."
 sidebar:
-  order: 641
+  order: 648
 ---
 
 ## opcache_is_script_cached()

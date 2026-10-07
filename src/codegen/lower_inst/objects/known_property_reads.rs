@@ -683,12 +683,12 @@ pub(super) fn emit_scope_dynamic_property_hash_probe(
     let done_label = ctx.next_label("scope_dynamic_prop_done");
     abi::emit_load_from_address(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         object_reg,
         hash_offset,
     );
-    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &label);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
+    abi::emit_symbol_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), &label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2), key_len as i64);
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &miss_label);
     match target.arch {
@@ -881,14 +881,14 @@ pub(super) fn lower_runtime_allow_dynamic_prop_get(
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, receiver_offset);
     abi::emit_load_from_address(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         object_reg,
         hash_offset,
     );
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), name_offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), name_offset);
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         name_offset + 8,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");

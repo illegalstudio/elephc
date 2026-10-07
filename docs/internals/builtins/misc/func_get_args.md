@@ -2,7 +2,7 @@
 title: "func_get_args() - internals"
 description: "Compiler internals for func_get_args(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 613
+  order: 620
 ---
 
 ## `func_get_args()` - internals

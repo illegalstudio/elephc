@@ -321,7 +321,7 @@ fn load_dynamic_optional_scale(
     let null_case = ctx.next_label("bcmath_scale_null");
     let done = ctx.next_label("bcmath_scale_done");
     crate::codegen::lower_inst::load_value_to_first_int_arg(ctx, value)?;
-    let source_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let source_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     abi::emit_push_reg(ctx.emitter, source_reg);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {

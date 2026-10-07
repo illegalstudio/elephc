@@ -46,6 +46,7 @@ from registry import (  # noqa: E402  (sys.path tweak above)
     Builtin,
     BuiltinSig,
     DESCRIPTION_OVERRIDES,
+    DOCUMENTATION_OVERRIDES,
     INTERNAL_NOTES,
     LoweringInfo,
     PARAM_TYPES,
@@ -792,6 +793,7 @@ def build_registry(repo: Path) -> list[Builtin]:
             lowering.notes = INTERNAL_NOTES[canonical] + lowering.notes
 
         area = resolve_registry_area(canonical, entry["area"])
+        documentation = DOCUMENTATION_OVERRIDES.get(canonical, {})
 
         builtins.append(
             Builtin(
@@ -808,7 +810,9 @@ def build_registry(repo: Path) -> list[Builtin]:
                 ),
                 lowering=lowering,
                 description=description,
-                examples=list(entry.get("examples") or []),
+                examples=list(documentation.get("examples") or entry.get("examples") or []),
+                see_also=list(documentation.get("see_also") or []),
+                notes=list(documentation.get("notes") or []),
                 eval_support=entry.get("eval"),
                 aot_support=aot_support,
                 eval_only=not bool(aot_support.get("supported")) and bool((entry.get("eval") or {}).get("supported")),
@@ -884,6 +888,8 @@ def _builtin_to_dict(b: Builtin) -> dict:
         "since": b.since,
         "description": b.description,
         "examples": b.examples,
+        "see_also": b.see_also,
+        "notes": b.notes,
         "sig": {
             "params": [
                 {

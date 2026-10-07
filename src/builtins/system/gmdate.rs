@@ -16,4 +16,5 @@ builtin! {
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Gmdate,
     ),
+    requirements: crate::builtins::semantics::windows_timezone_requirements,
 }

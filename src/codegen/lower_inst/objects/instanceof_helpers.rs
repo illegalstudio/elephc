@@ -172,9 +172,9 @@ pub(super) fn emit_dynamic_match_call(ctx: &mut FunctionContext<'_>) {
             abi::emit_push_reg(ctx.emitter, "rdx");
         }
     }
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2));
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0));
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2));
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1));
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0));
     abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
 }
 
@@ -187,12 +187,12 @@ pub(super) fn emit_invalid_dynamic_target_fatal(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_match_call(ctx: &mut FunctionContext<'_>, target_id: u64, target_kind: i64, helper: &str) {
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
         target_id as i64,
     );
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         target_kind,
     );
     abi::emit_call_label(ctx.emitter, helper);

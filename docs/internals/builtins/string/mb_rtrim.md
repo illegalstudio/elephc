@@ -2,7 +2,7 @@
 title: "mb_rtrim() - internals"
 description: "Compiler internals for mb_rtrim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 868
+  order: 884
 ---
 
 ## `mb_rtrim()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_rtrim.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_rtrim.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:699](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L699) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

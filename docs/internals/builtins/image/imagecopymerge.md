@@ -2,7 +2,7 @@
 title: "imagecopymerge() - internals"
 description: "Compiler internals for imagecopymerge(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 482
+  order: 486
 ---
 
 ## `imagecopymerge()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3009](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3009) (`imagecopymerge`)
+- **Lowering**: [`src/image_prelude.rs`:3080](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3080) (`imagecopymerge`)
 - **Function symbol**: `imagecopymerge()`
 
 

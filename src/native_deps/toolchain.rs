@@ -25,6 +25,8 @@ pub struct NativeToolchain {
     pub cc: PathBuf,
     pub ar: PathBuf,
     pub ranlib: PathBuf,
+    /// Canonical optional MinGW sysroot used for Windows C headers and archives.
+    pub mingw_sysroot: Option<PathBuf>,
     pub target_tuple: String,
     pub abi: String,
     pub fingerprint: String,
@@ -56,9 +58,15 @@ impl NativeToolchain {
     /// `arm64-apple-ios13.0-simulator`; those are valid compiler targets but invalid
     /// `config.sub` inputs. The normalized ABI deliberately removes the deployment
     /// version and simulator suffix, while the selected compiler wrapper still controls
-    /// which Apple platform the emitted objects target.
+    /// which Apple platform the emitted objects target. MinGW is the converse: Elephc's
+    /// cache ABI is `x86_64-pc-windows-gnu`, but GNU `config.sub` requires the compiler's
+    /// canonical `x86_64-w64-mingw32` tuple.
     pub(crate) fn autoconf_host(&self) -> &str {
-        &self.abi
+        if self.abi == "x86_64-pc-windows-gnu" {
+            &self.target_tuple
+        } else {
+            &self.abi
+        }
     }
 
     /// Returns the minimal deterministic environment used by configure, Make, and C compilation.
@@ -74,8 +82,25 @@ impl NativeToolchain {
         environment.insert(OsString::from("CC"), self.cc.as_os_str().to_os_string());
         environment.insert(OsString::from("AR"), self.ar.as_os_str().to_os_string());
         environment.insert(OsString::from("RANLIB"), self.ranlib.as_os_str().to_os_string());
-        environment.insert(OsString::from("CFLAGS"), OsString::from("-fPIC"));
+        let mut cflags = OsString::from("-fPIC");
+        if let Some(sysroot) = &self.mingw_sysroot {
+            cflags.push(" --sysroot=");
+            cflags.push(sysroot.as_os_str());
+        }
+        environment.insert(OsString::from("CFLAGS"), cflags);
         environment
+    }
+
+    /// Appends the target-independent PIC flag and the validated optional MinGW sysroot.
+    ///
+    /// Direct compiler invocations (the compatibility probe and PCRE2 shim) do not consume the
+    /// `CFLAGS` environment variable themselves, so they must use this helper as well as the
+    /// configure-driven upstream builds.
+    pub fn append_compiler_flags(&self, command: &mut Command) {
+        command.arg("-fPIC");
+        if let Some(sysroot) = &self.mingw_sysroot {
+            command.arg(format!("--sysroot={}", sysroot.display()));
+        }
     }
 
     /// Proves before download that compiler objects are accepted by the selected archiver and ranlib.
@@ -89,7 +114,14 @@ impl NativeToolchain {
             let archive = probe.join("libprobe.a");
             fs::write(&source, b"int elephc_native_toolchain_probe(void) { return 0; }\n")
                 .map_err(|error| NativeError::io("write toolchain probe", &source, error))?;
-            run_checked(self.command(&self.cc).args([OsStr::new("-fPIC"), OsStr::new("-c")]).arg(&source).arg("-o").arg(&object), "compile native toolchain probe")?;
+            let mut compile = self.command(&self.cc);
+            self.append_compiler_flags(&mut compile);
+            compile
+                .arg(OsStr::new("-c"))
+                .arg(&source)
+                .arg("-o")
+                .arg(&object);
+            run_checked(&mut compile, "compile native toolchain probe")?;
             require_nonempty_regular(&object, "compiler did not produce a regular object")?;
             run_checked(self.command(&self.ar).arg("crs").arg(&archive).arg(&object), "archive native toolchain probe")?;
             run_checked(self.command(&self.ranlib).arg(&archive), "index native toolchain probe")?;
@@ -116,10 +148,14 @@ pub fn resolve_toolchain(target: Target) -> Result<NativeToolchain, NativeError>
     }
     let host = Target::detect_host();
     let suffix = target.as_str().replace('-', "_").to_ascii_uppercase();
-    let (cc, cc_overridden) = select_command("CC", &suffix, target == host)?;
-    let (ar, ar_overridden) = select_command("AR", &suffix, target == host)?;
-    let (ranlib, ranlib_overridden) = select_command("RANLIB", &suffix, target == host)?;
-    if target != host && !(cc_overridden && ar_overridden && ranlib_overridden) {
+    let (cc, cc_overridden) = select_command_for_target("CC", &suffix, target, target == host)?;
+    let (ar, ar_overridden) = select_command_for_target("AR", &suffix, target, target == host)?;
+    let (ranlib, ranlib_overridden) =
+        select_command_for_target("RANLIB", &suffix, target, target == host)?;
+    if target != host
+        && target.platform != Platform::Windows
+        && !(cc_overridden && ar_overridden && ranlib_overridden)
+    {
         return Err(NativeError::new(NativeErrorKind::Toolchain, format!("cross target '{}' requires explicit ELEPHC_NATIVE_CC/AR/RANLIB overrides", target.as_str())));
     }
     let tuple = normalized_output(run_output(Command::new(&cc).arg("-dumpmachine"), "query target C compiler tuple")?);
@@ -138,11 +174,16 @@ pub fn resolve_toolchain(target: Target) -> Result<NativeToolchain, NativeError>
     let cc_name = cc.to_string_lossy().into_owned();
     let ar_name = ar.to_string_lossy().into_owned();
     let ranlib_name = ranlib.to_string_lossy().into_owned();
+    let mingw_sysroot = resolve_mingw_sysroot(target)?;
+    let sysroot_fingerprint = mingw_sysroot
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let environment = fingerprinted_environment();
-    let fingerprint_payload = format!("target={}\nabi={}\ntuple={}\ncc={}\ncc-version={}\nar={}\nar-version={}\nranlib={}\nranlib-version={}\nsdk={}\nCFLAGS=-fPIC\n{}", target.as_str(), abi, tuple, cc_name, cc_version, ar_name, ar_version, ranlib_name, ranlib_version, sdk, environment);
+    let fingerprint_payload = format!("target={}\nabi={}\ntuple={}\ncc={}\ncc-version={}\nar={}\nar-version={}\nranlib={}\nranlib-version={}\nsdk={}\nmingw-sysroot={}\nCFLAGS=-fPIC\n{}", target.as_str(), abi, tuple, cc_name, cc_version, ar_name, ar_version, ranlib_name, ranlib_version, sdk, sysroot_fingerprint, environment);
     let fingerprint = sha256_bytes(fingerprint_payload.as_bytes());
     Ok(NativeToolchain {
-        cc, ar, ranlib, target_tuple: tuple, abi, fingerprint,
+        cc, ar, ranlib, mingw_sysroot, target_tuple: tuple, abi, fingerprint,
         compiler: ToolIdentity { command: cc_name, version: cc_version },
         archiver: ToolIdentity { command: ar_name, version: ar_version },
         ranlib_identity: ToolIdentity { command: ranlib_name, version: ranlib_version },
@@ -169,20 +210,76 @@ fn require_nonempty_regular(path: &Path, message: &str) -> Result<(), NativeErro
     Ok(())
 }
 
-/// Selects target-specific then unsuffixed override, or a host-only conventional tool name.
-fn select_command(tool: &str, suffix: &str, host: bool) -> Result<(PathBuf, bool), NativeError> {
+/// Selects a target-specific or shared override, with validated MinGW defaults for Windows.
+///
+/// Non-Windows cross targets still require an explicit override. Windows gets the conventional
+/// prefixed MinGW command as a candidate, but the subsequent tuple and archive probes remain
+/// mandatory before a cache key can be published.
+fn select_command_for_target(
+    tool: &str,
+    suffix: &str,
+    target: Target,
+    host: bool,
+) -> Result<(PathBuf, bool), NativeError> {
     let targeted = format!("ELEPHC_NATIVE_{tool}_{suffix}");
     if let Some(value) = nonempty_env(&targeted)? {
         return Ok((PathBuf::from(value), true));
+    }
+    if target.platform == Platform::Windows {
+        let windows_name = match tool {
+            "CC" => "ELEPHC_WINDOWS_GCC",
+            "AR" => "ELEPHC_WINDOWS_AR",
+            "RANLIB" => "ELEPHC_WINDOWS_RANLIB",
+            _ => unreachable!("native tools are fixed to CC/AR/RANLIB"),
+        };
+        if let Some(value) = nonempty_env(windows_name)? {
+            return Ok((PathBuf::from(value), true));
+        }
     }
     let generic = format!("ELEPHC_NATIVE_{tool}");
     if let Some(value) = nonempty_env(&generic)? {
         return Ok((PathBuf::from(value), true));
     }
+    if target.platform == Platform::Windows {
+        let command = match tool {
+            "CC" => "x86_64-w64-mingw32-gcc",
+            "AR" => "x86_64-w64-mingw32-ar",
+            "RANLIB" => "x86_64-w64-mingw32-ranlib",
+            _ => unreachable!("native tools are fixed to CC/AR/RANLIB"),
+        };
+        return Ok((PathBuf::from(command), false));
+    }
     if host {
         return Ok((PathBuf::from(tool.to_ascii_lowercase()), false));
     }
     Err(NativeError::new(NativeErrorKind::Toolchain, format!("missing {targeted} or {generic} for cross target")))
+}
+
+/// Reads and canonicalizes the optional shared MinGW sysroot for a Windows recipe.
+///
+/// The same `ELEPHC_MINGW_SYSROOT` convention is used by bridge and final-link support. An
+/// invalid explicit value is rejected before download so it cannot publish a host-contaminated
+/// archive under a Windows cache key.
+fn resolve_mingw_sysroot(target: Target) -> Result<Option<PathBuf>, NativeError> {
+    if target.platform != Platform::Windows {
+        return Ok(None);
+    }
+    let Some(value) = nonempty_env("ELEPHC_MINGW_SYSROOT")? else {
+        return Ok(None);
+    };
+    canonical_mingw_sysroot(Path::new(&value)).map(Some)
+}
+
+/// Rejects a non-directory MinGW root and returns its canonical cache-identity path.
+fn canonical_mingw_sysroot(path: &Path) -> Result<PathBuf, NativeError> {
+    if !path.is_dir() {
+        return Err(NativeError::new(
+            NativeErrorKind::Toolchain,
+            format!("ELEPHC_MINGW_SYSROOT='{}' is not a directory", path.display()),
+        ));
+    }
+    fs::canonicalize(&path)
+        .map_err(|error| NativeError::io("canonicalize ELEPHC_MINGW_SYSROOT", &path, error))
 }
 
 /// Reads an override and rejects a present empty command.
@@ -215,7 +312,9 @@ fn validate_tuple(target: Target, tuple: &str, host: bool) -> Result<String, Nat
                 && compiler_targets_simulator == want_simulator
         }
         Platform::Linux => lower.contains("linux"),
-        Platform::Windows => false,
+        Platform::Windows => {
+            lower == "x86_64-w64-mingw32" || lower == "x86_64-pc-windows-gnu"
+        }
     };
     if !arch_ok || !os_ok {
         return Err(NativeError::new(NativeErrorKind::Toolchain, format!("compiler tuple '{tuple}' does not match target '{}'", target.as_str())));
@@ -235,7 +334,7 @@ fn validate_tuple(target: Target, tuple: &str, host: bool) -> Result<String, Nat
             };
             Ok(format!("{arch}-unknown-linux-{environment}"))
         }
-        Platform::Windows => Err(NativeError::new(NativeErrorKind::Toolchain, "Windows native packages are unsupported")),
+        Platform::Windows => Ok("x86_64-pc-windows-gnu".to_string()),
     }
 }
 
@@ -392,17 +491,38 @@ mod tests {
                 command: "ranlib".into(),
                 version: "v".into(),
             },
+            mingw_sysroot: None,
         };
 
         assert_eq!(toolchain.autoconf_host(), "aarch64-apple-ios");
         assert_ne!(toolchain.autoconf_host(), toolchain.target_tuple);
     }
 
+    /// MinGW's config.sub identity differs from the stable Elephc cache ABI.
+    #[test]
+    fn autoconf_host_uses_mingw_compiler_tuple_for_windows() {
+        let toolchain = NativeToolchain {
+            cc: "x86_64-w64-mingw32-gcc".into(),
+            ar: "x86_64-w64-mingw32-ar".into(),
+            ranlib: "x86_64-w64-mingw32-ranlib".into(),
+            mingw_sysroot: None,
+            target_tuple: "x86_64-w64-mingw32".into(),
+            abi: "x86_64-pc-windows-gnu".into(),
+            fingerprint: "fp".into(),
+            compiler: ToolIdentity { command: "cc".into(), version: "v".into() },
+            archiver: ToolIdentity { command: "ar".into(), version: "v".into() },
+            ranlib_identity: ToolIdentity { command: "ranlib".into(), version: "v".into() },
+        };
+
+        assert_eq!(toolchain.autoconf_host(), "x86_64-w64-mingw32");
+        assert_ne!(toolchain.autoconf_host(), toolchain.abi);
+    }
+
     /// Verifies recipe environment excludes inherited compiler and linker flags.
     #[test]
     fn build_environment_is_allowlisted() {
         let toolchain = NativeToolchain {
-            cc: "cc".into(), ar: "ar".into(), ranlib: "ranlib".into(), target_tuple: "aarch64-apple-darwin".into(), abi: "aarch64-apple-darwin".into(), fingerprint: "fp".into(),
+            cc: "cc".into(), ar: "ar".into(), ranlib: "ranlib".into(), mingw_sysroot: None, target_tuple: "aarch64-apple-darwin".into(), abi: "aarch64-apple-darwin".into(), fingerprint: "fp".into(),
             compiler: ToolIdentity { command: "cc".into(), version: "v".into() }, archiver: ToolIdentity { command: "ar".into(), version: "v".into() }, ranlib_identity: ToolIdentity { command: "ranlib".into(), version: "v".into() },
         };
         let environment = toolchain.build_environment();
@@ -410,5 +530,16 @@ mod tests {
         assert!(!environment.contains_key(OsStr::new("LDFLAGS")));
         assert!(!environment.contains_key(OsStr::new("MAKEFLAGS")));
         assert!(fingerprinted_environment().contains("PATH="));
+    }
+
+    /// Verifies an explicit MinGW sysroot is canonicalized and rejects a file or missing path.
+    #[test]
+    fn mingw_sysroot_requires_a_directory() {
+        let root = unique_sibling(&std::env::temp_dir().join("elephc-native-mingw-sysroot"), "test");
+        fs::create_dir(&root).unwrap();
+        let canonical = canonical_mingw_sysroot(&root).unwrap();
+        assert_eq!(canonical, fs::canonicalize(&root).unwrap());
+        fs::remove_dir_all(&root).unwrap();
+        assert!(canonical_mingw_sysroot(&root).is_err());
     }
 }

@@ -2,7 +2,7 @@
 title: "imagejpeg() - internals"
 description: "Compiler internals for imagejpeg(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 515
+  order: 521
 ---
 
 ## `imagejpeg()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3594](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3594) (`imagejpeg`)
+- **Lowering**: [`src/image_prelude.rs`:3665](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3665) (`imagejpeg`)
 - **Function symbol**: `imagejpeg()`
 
 

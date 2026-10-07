@@ -15,74 +15,49 @@ pub(super) fn register_eval_native_property_default(
     context_offset: usize,
     registration: &EvalNativePropertyDefaultRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let property_key = format!(
         "{}::{}",
         registration.class_name, registration.property_name
     );
     let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &property_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        property_key_len as i64,
-    );
     let symbol = match &registration.default {
         EvalNativeCallableDefault::Scalar { kind, payload } => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 3),
-                *kind,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                *payload,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_property_default_scalar")
+            stage_eval_native_local_word(ctx, context_offset, PhpType::Pointer(None));
+            stage_eval_native_label(ctx, &property_key_label);
+            stage_eval_native_int(ctx, property_key_len as i64);
+            stage_eval_native_int(ctx, *kind);
+            stage_eval_native_int(ctx, *payload);
+            "__elephc_eval_register_native_property_default_scalar"
         }
         EvalNativeCallableDefault::String(value) => {
             let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 3),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                default_len as i64,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_property_default_string")
+            stage_eval_native_local_word(ctx, context_offset, PhpType::Pointer(None));
+            stage_eval_native_label(ctx, &property_key_label);
+            stage_eval_native_int(ctx, property_key_len as i64);
+            stage_eval_native_label(ctx, &default_label);
+            stage_eval_native_int(ctx, default_len as i64);
+            "__elephc_eval_register_native_property_default_string"
         }
         EvalNativeCallableDefault::Array(_) => {
             let spec = encode_eval_native_array_default(&registration.default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 3),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                default_len as i64,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_property_default_array")
+            stage_eval_native_local_word(ctx, context_offset, PhpType::Pointer(None));
+            stage_eval_native_label(ctx, &property_key_label);
+            stage_eval_native_int(ctx, property_key_len as i64);
+            stage_eval_native_label(ctx, &default_label);
+            stage_eval_native_int(ctx, default_len as i64);
+            "__elephc_eval_register_native_property_default_array"
         }
         EvalNativeCallableDefault::Object { .. } => return,
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_native_c_abi_call(
+        ctx,
+        symbol,
+        &[
+            PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int,
+            PhpType::Int, PhpType::Int,
+        ],
+    );
 }
 
 /// Emits one native member-attribute metadata registration call into the eval context.
@@ -91,24 +66,16 @@ pub(super) fn register_eval_native_member_attribute(
     context_offset: usize,
     registration: &EvalNativeMemberAttributeRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let record = eval_native_member_attribute_record(registration);
     let (record_label, record_len) = ctx.data.add_string(&record);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &record_label,
+    stage_eval_native_local_word(ctx, context_offset, PhpType::Pointer(None));
+    stage_eval_native_label(ctx, &record_label);
+    stage_eval_native_int(ctx, record_len as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_member_attribute",
+        &[PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        record_len as i64,
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_member_attribute");
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Encodes one member-attribute registration record for the eval bridge ABI.

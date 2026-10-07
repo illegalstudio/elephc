@@ -20,7 +20,7 @@ use elephc_monitoring_contract::{
     IoKind, MonitoringPolicy, TraceContextPolicy, WaitPolicy,
 };
 
-use crate::codegen::platform::Platform;
+use crate::codegen::platform::{Arch, Platform, Target};
 use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan};
 
 use super::LinkError;
@@ -44,6 +44,8 @@ pub(super) struct BridgeStaticlib {
     /// `iconv` for the libxml2-backed xml bridge, is part of glibc there, while every
     /// Apple SDK (macOS, iOS device, iOS Simulator) ships it as a separate `libiconv.tbd`.
     pub(super) apple_libraries: &'static [&'static str],
+    /// GNU-ABI Windows libraries supplied by the MinGW sysroot.
+    pub(super) windows_libraries: &'static [&'static str],
     /// Whether the Linux link needs the dynamic loader library.
     pub(super) needs_libdl: bool,
     /// Canonical PHP extensions reported when this bridge alone identifies their surfaces.
@@ -62,6 +64,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // The TLS bridge implements PHP's OpenSSL-backed stream crypto surface.
         php_extensions: &["openssl"],
@@ -75,6 +78,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &["CoreFoundation", "SystemConfiguration"],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // The archive backs MORE THAN ONE PHP surface (PDO and mysqli), so the
         // linked staticlib alone cannot identify a PHP extension. Reporting comes
@@ -95,6 +99,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // The crypto bridge implements PHP's digest/HMAC `hash` extension.
         php_extensions: &["hash"],
@@ -108,6 +113,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extensions: &["bcmath"],
@@ -121,6 +127,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         php_extensions: &["mbstring"],
         // This bridge-level capability covers MbSendMail; individual text operations
@@ -139,6 +146,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &["iconv"],
         needs_libdl: true,
         // The charset bridge implements PHP's procedural `iconv` extension.
         php_extensions: &["iconv"],
@@ -152,6 +160,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // The archive reader/writer is exposed by PHP as `Phar`.
         php_extensions: &["Phar"],
@@ -165,6 +174,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // Timezone support folds into the always-present `date` extension.
         php_extensions: &[],
@@ -178,6 +188,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // The image codec/drawing surface maps to PHP's `gd` extension.
         php_extensions: &["gd"],
@@ -191,6 +202,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // The sampling probe is an elephc-native diagnostic, not a PHP extension.
         php_extensions: &[],
@@ -206,6 +218,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // Exact per-function instrumentation is an elephc-native diagnostic.
         php_extensions: &[],
@@ -221,6 +234,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: true,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // The web bridge owns the PHP `session` extension surface.
         php_extensions: &["session"],
@@ -236,6 +250,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // The process-control bridge implements PHP's `pcntl` and `posix` extensions.
         php_extensions: &["pcntl", "posix"],
@@ -255,6 +270,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         // libc but every Apple SDK ships as a separate `libiconv.tbd`, so Apple links
         // add `-liconv` right after the managed archives.
         apple_libraries: &["iconv"],
+        windows_libraries: &[],
         needs_libdl: true,
         // The libxml2-backed XML bridge implements PHP's `xml` (SAX parser) and
         // `xmlwriter` extensions; both surfaces are declared by the same injected prelude.
@@ -275,6 +291,10 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         // links the interpreter for the runtime script cache alone has no such path, and
         // failed at the linker with `_iconv` undefined.
         apple_libraries: &["iconv"],
+        // Magician embeds the shared `elephc-iconv` rlib. Its MinGW objects retain
+        // GNU libiconv imports even for an eval-only program, whose link plan does
+        // not otherwise name the standalone `elephc_iconv` bridge.
+        windows_libraries: &["iconv"],
         needs_libdl: true,
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extensions: &[],
@@ -293,6 +313,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
             "SystemConfiguration",
         ],
         apple_libraries: &[],
+        windows_libraries: &[],
         needs_libdl: true,
         // The curl bridge implements PHP's libcurl-backed `curl` extension surface.
         php_extensions: &["curl"],
@@ -362,12 +383,13 @@ pub(super) fn php_extensions_for_lib(lib_name: &str) -> &'static [&'static str] 
 
 /// Replaces located named bridge libraries with exact archive items and adds metadata.
 ///
-/// `platform` decides whether the table's `apple_libraries` are appended: they are Apple
-/// SDK libraries (`-liconv` for the xml bridge) that a Linux link must never see.
+/// `platform` decides whether the table's platform-specific system libraries are appended:
+/// Apple SDK libraries (`-liconv` for the xml bridge) and MinGW sysroot libraries (`-liconv`
+/// for the iconv bridge) must never leak into another target's link.
 pub(super) fn resolve(
     plan: &LinkPlan,
+    target: Target,
     forced_whole_archive: &[String],
-    platform: Platform,
 ) -> Result<BridgeResolution, LinkError> {
     // Computed ONCE, ahead of the per-bridge loop below: whether THIS program's link plan
     // needs `elephc_curl` at all, regardless of which bridge in the plan is being resolved
@@ -375,11 +397,11 @@ pub(super) fn resolve(
     // `BridgeStaticlib::magician_curl_archive_path`'s own doc for why linking `eval()`
     // together with curl needs a build of that bridge distinct from the plain one.
     let needs_curl = plan_requires_library(plan, "elephc_curl");
-    resolve_with(plan, forced_whole_archive, platform, |bridge| {
+    resolve_with(plan, forced_whole_archive, target, |bridge| {
         if bridge.lib_name == "elephc_magician" && needs_curl {
-            bridge.magician_curl_archive_path()
+            bridge.magician_curl_archive_path(target)
         } else {
-            bridge.archive_path()
+            bridge.archive_path(target)
         }
     })
 }
@@ -402,7 +424,7 @@ fn plan_requires_library(plan: &LinkPlan, library: &str) -> bool {
 fn resolve_with<F>(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
-    platform: Platform,
+    target: Target,
     mut locate: F,
 ) -> Result<BridgeResolution, LinkError>
 where
@@ -412,7 +434,7 @@ where
     let mut located: HashMap<&'static str, PathBuf> = HashMap::new();
     let mut bridge_paths = Vec::new();
     let mut seen_paths = HashSet::new();
-    let mut metadata = BridgeLinkMetadata::new(platform);
+    let mut metadata = BridgeLinkMetadata::new(target.platform);
     let mut ordered = Vec::with_capacity(plan.items().len());
 
     for item in plan.items() {
@@ -423,10 +445,10 @@ where
         } = item
         {
             if let Some(bridge) = bridge_for_library(name) {
-                validate_archive_path(name, path.clone())?;
+                validate_archive_path(name, path.clone(), target)?;
                 metadata.record(bridge);
             } else {
-                validate_archive_path(name, path.clone())?;
+                validate_archive_path(name, path.clone(), target)?;
             }
             ordered.push(item.clone());
             continue;
@@ -462,11 +484,11 @@ where
         ordered.push(LinkItem::bridge_archive(
             archive,
             bridge.lib_name,
-            bridge.whole_archive || forced,
+            bridge.requires_whole_archive(target.platform, forced),
         ));
     }
 
-    // Apple system libraries first, then frameworks: both trail every archive in the
+    // Platform system libraries first, then frameworks: both trail every archive in the
     // plan (bridge and managed alike) so a static `libxml2.a` member pulled in above
     // still finds `-liconv` to its right under a single left-to-right scan. A library the
     // plan already names (the checker requires `iconv` for `mb_*` and for `eval()`) is
@@ -477,6 +499,7 @@ where
             if metadata.seen_apple_libraries.contains(name.as_str()))
     });
     ordered.extend(metadata.apple_libraries);
+    ordered.extend(metadata.windows_libraries);
     ordered.extend(metadata.frameworks);
     let mut plan = LinkPlan::from_items(ordered);
     plan.prepend(bridge_paths);
@@ -489,7 +512,7 @@ where
 /// Table-driven runtime, framework and Apple-library metadata accumulated across every
 /// requested bridge while one plan is resolved.
 struct BridgeLinkMetadata {
-    /// Platform being linked; decides whether `apple_libraries` are emitted at all.
+    /// Platform being linked; decides which platform-specific libraries are emitted.
     platform: Platform,
     /// Whether any requested bridge needs `libdl` on Linux.
     needs_libdl: bool,
@@ -501,6 +524,10 @@ struct BridgeLinkMetadata {
     apple_libraries: Vec<LinkItem>,
     /// Apple-only system libraries already recorded.
     seen_apple_libraries: HashSet<&'static str>,
+    /// GNU-ABI Windows system libraries, in first-seen table order, without duplicates.
+    windows_libraries: Vec<LinkItem>,
+    /// Windows system libraries already recorded.
+    seen_windows_libraries: HashSet<&'static str>,
 }
 
 impl BridgeLinkMetadata {
@@ -513,14 +540,16 @@ impl BridgeLinkMetadata {
             seen_frameworks: HashSet::new(),
             apple_libraries: Vec::new(),
             seen_apple_libraries: HashSet::new(),
+            windows_libraries: Vec::new(),
+            seen_windows_libraries: HashSet::new(),
         }
     }
 
     /// Accumulates one requested bridge's table metadata.
     ///
     /// Frameworks are recorded regardless of platform (the Linux renderer ignores
-    /// `LinkItem::Framework`), but `apple_libraries` become `NamedLibrary` items — which
-    /// every renderer emits as `-l<name>` — so they are recorded on Apple targets only.
+    /// `LinkItem::Framework`), but platform libraries become `NamedLibrary` items — which
+    /// every renderer emits as `-l<name>` — so they are recorded only on their target.
     fn record(&mut self, bridge: &BridgeStaticlib) {
         self.needs_libdl |= bridge.needs_libdl;
         for framework in bridge.apple_frameworks {
@@ -529,12 +558,18 @@ impl BridgeLinkMetadata {
                     .push(LinkItem::Framework((*framework).to_string()));
             }
         }
-        if self.platform != Platform::MacOS {
-            return;
+        if self.platform == Platform::MacOS {
+            for library in bridge.apple_libraries {
+                if self.seen_apple_libraries.insert(*library) {
+                    self.apple_libraries.push(LinkItem::named_runtime(*library));
+                }
+            }
         }
-        for library in bridge.apple_libraries {
-            if self.seen_apple_libraries.insert(*library) {
-                self.apple_libraries.push(LinkItem::named_runtime(*library));
+        if self.platform == Platform::Windows {
+            for library in bridge.windows_libraries {
+                if self.seen_windows_libraries.insert(*library) {
+                    self.windows_libraries.push(LinkItem::named_runtime(*library));
+                }
             }
         }
     }
@@ -542,7 +577,11 @@ impl BridgeLinkMetadata {
 
 /// Accepts only non-empty regular archive files without following symbolic links.
 /// Exact-path failures report that path without unrelated fallback search directories.
-fn validate_archive_path(name: &str, archive: PathBuf) -> Result<PathBuf, LinkError> {
+fn validate_archive_path(
+    name: &str,
+    archive: PathBuf,
+    _target: Target,
+) -> Result<PathBuf, LinkError> {
     let valid = std::fs::symlink_metadata(&archive)
         .map(|metadata| metadata.file_type().is_file() && metadata.len() > 0)
         .unwrap_or(false);
@@ -685,37 +724,52 @@ fn collect_path_dependencies(table: &toml::Table, crate_dir: &Path, dirs: &mut V
 }
 
 impl BridgeStaticlib {
+    /// Returns whether this bridge must be retained in full on the selected platform.
+    ///
+    /// The web bridge owns the Unix entrypoint, but force-loading its GNU/COFF
+    /// archive introduces duplicate import members. Explicit `--with-*` forcing
+    /// still takes precedence for every bridge and target.
+    fn requires_whole_archive(&self, platform: Platform, forced: bool) -> bool {
+        forced
+            || (self.whole_archive
+                && !(platform == Platform::Windows && self.lib_name == "elephc_web"))
+    }
+
     /// Returns the archive filename produced by this bridge's Cargo package.
     pub(super) fn archive_filename(&self) -> String {
         format!("lib{}.a", self.lib_name)
     }
 
     /// Locates this bridge archive, auto-building it in a source checkout if needed.
-    fn archive_path(&self) -> Result<PathBuf, LinkError> {
+    fn archive_path(&self, target: Target) -> Result<PathBuf, LinkError> {
         if let Some(env_dir) = self.override_dir() {
-            return self.validate_override_archive(&self.archive_filename(), Path::new(&env_dir));
+            return self.validate_override_archive(
+                &self.archive_filename(),
+                Path::new(&env_dir),
+                target,
+            );
         }
-        if let Some(archive) = self.find_archive() {
+        if let Some(archive) = self.find_archive(target) {
             if self.lib_name == "elephc_pdo"
                 && super::pdo::profile_selected()
                 && self.claim_rebuild_attempt()
             {
                 if let Some(workspace) = self.find_workspace() {
-                    self.build_staticlib(&workspace);
-                    if let Some(rebuilt) = self.find_archive() {
-                        return self.validate_archive(rebuilt);
+                    self.build_staticlib(&workspace, target);
+                    if let Some(rebuilt) = self.find_archive(target) {
+                        return self.validate_archive(rebuilt, target);
                     }
                 }
             }
-            return self.validate_archive(self.refreshed_if_stale(archive));
+            return self.validate_archive(self.refreshed_if_stale(archive, target), target);
         }
         if let Some(workspace) = self.find_workspace() {
-            self.build_staticlib(&workspace);
-            if let Some(archive) = self.find_archive() {
-                return self.validate_archive(archive);
+            self.build_staticlib(&workspace, target);
+            if let Some(archive) = self.find_archive(target) {
+                return self.validate_archive(archive, target);
             }
         }
-        Err(self.missing_error())
+        Err(self.missing_error(target))
     }
 
     /// Locates (auto-building if needed) a curl-aware `libelephc_magician_curl.a` — a
@@ -750,40 +804,46 @@ impl BridgeStaticlib {
     /// generic "elephc_magician missing", which would misdirect anyone troubleshooting a
     /// build where the PLAIN magician archive is present and only the curl-aware one is
     /// not.
-    fn magician_curl_archive_path(&self) -> Result<PathBuf, LinkError> {
+    fn magician_curl_archive_path(&self, target: Target) -> Result<PathBuf, LinkError> {
         debug_assert_eq!(self.lib_name, "elephc_magician");
         let filename = self.magician_curl_archive_filename();
 
         if let Some(env_dir) = self.override_dir() {
-            return self.validate_override_archive(&filename, Path::new(&env_dir));
+            return self.validate_override_archive(&filename, Path::new(&env_dir), target);
         }
 
-        if let Some(archive) = self.find_named_archive(&filename) {
+        if let Some(archive) = self.find_named_archive(&filename, target) {
             // STALENESS, mirroring `refreshed_if_stale`: skip the `cargo build` spawn
             // entirely when the archive is already newer than every magician source file.
             // Without this check every `elephc` invocation that compiles an eval()+curl
             // program pays a full `cargo build -p elephc-magician --features curl`
             // subprocess, even when nothing changed since the last one.
             let Some(workspace) = self.find_workspace() else {
-                return self.validate_archive(archive);
+                return self.validate_archive(archive, target);
             };
             if !self.sources_are_newer_than(&workspace, &archive) {
-                return self.validate_archive(archive);
+                return self.validate_archive(archive, target);
             }
             if !self.claim_curl_rebuild_attempt() {
                 // Another resolution already attempted the rebuild this process; reuse
                 // whatever is on disk now rather than spawning a second concurrent build.
-                return self.validate_archive(archive);
+                return self.validate_archive(archive, target);
             }
-            self.build_magician_curl_staticlib(&workspace, &filename)?;
-            return self.validate_archive(self.magician_curl_missing_error_if_absent(&filename)?);
+            self.build_magician_curl_staticlib(&workspace, &filename, target)?;
+            return self.validate_archive(
+                self.magician_curl_missing_error_if_absent(&filename, target)?,
+                target,
+            );
         }
 
         let Some(workspace) = self.find_workspace() else {
-            return Err(self.magician_curl_missing_error());
+            return Err(self.magician_curl_missing_error(target));
         };
-        self.build_magician_curl_staticlib(&workspace, &filename)?;
-        self.validate_archive(self.magician_curl_missing_error_if_absent(&filename)?)
+        self.build_magician_curl_staticlib(&workspace, &filename, target)?;
+        self.validate_archive(
+            self.magician_curl_missing_error_if_absent(&filename, target)?,
+            target,
+        )
     }
 
     /// The curl-aware magician archive's own filename — distinct from
@@ -796,14 +856,14 @@ impl BridgeStaticlib {
     /// `elephc_magician` (which `missing_error()` would report, and which is misleading
     /// here: the PLAIN magician archive may be present and fine — only the curl-aware
     /// build is missing, so the message should say so and suggest the fix).
-    fn magician_curl_missing_error(&self) -> LinkError {
+    fn magician_curl_missing_error(&self, target: Target) -> LinkError {
         let LinkError::MissingBridge {
             archive,
             env_var,
             searched,
             override_dir,
             ..
-        } = self.missing_archive_error(&self.magician_curl_archive_filename());
+        } = self.missing_archive_error(&self.magician_curl_archive_filename(), target);
         LinkError::MissingBridge {
             name: format!(
                 "{} (curl-aware build for eval()+curl programs — run elephc from an elephc \
@@ -821,15 +881,19 @@ impl BridgeStaticlib {
     /// curl-aware-archive error `magician_curl_archive_path` uses everywhere else —
     /// never silently falling back to a stale/previous archive when the build (or the
     /// copy inside it) did not actually produce a fresh one at this path.
-    fn magician_curl_missing_error_if_absent(&self, filename: &str) -> Result<PathBuf, LinkError> {
-        self.find_named_archive(filename)
-            .ok_or_else(|| self.magician_curl_missing_error())
+    fn magician_curl_missing_error_if_absent(
+        &self,
+        filename: &str,
+        target: Target,
+    ) -> Result<PathBuf, LinkError> {
+        self.find_named_archive(filename, target)
+            .ok_or_else(|| self.magician_curl_missing_error(target))
     }
 
     /// `find_archive()`'s search, generalized to an arbitrary archive filename so the
     /// curl-aware variant can reuse the same candidate-directory list.
-    fn find_named_archive(&self, filename: &str) -> Option<PathBuf> {
-        first_archive_candidate(self.archive_search_dirs(), filename)
+    fn find_named_archive(&self, filename: &str, target: Target) -> Option<PathBuf> {
+        first_archive_candidate(self.archive_search_dirs(target), filename)
     }
 
     /// Registers a curl-aware-magician rebuild as attempted, separately from
@@ -856,16 +920,36 @@ impl BridgeStaticlib {
     /// `workspace/target/<profile>` mirrors `find_named_archive`'s remaining candidates in
     /// the same priority order, so whatever this returns is always a location the SAME
     /// discovery function that will look for the result would actually find it at.
-    fn magician_curl_destination_dir(&self, workspace: &Path, release: bool) -> PathBuf {
-        if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
-            return dir;
+    fn magician_curl_destination_dir(
+        &self,
+        workspace: &Path,
+        release: bool,
+        target: Target,
+    ) -> PathBuf {
+        if target_is_native(target) {
+            if let Some(dir) = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(Path::to_path_buf))
+            {
+                return dir;
+            }
         }
         if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
             if !target_dir.is_empty() {
-                return PathBuf::from(target_dir).join(if release { "release" } else { "debug" });
+                let base = if target_is_native(target) {
+                    PathBuf::from(target_dir)
+                } else {
+                    PathBuf::from(target_dir).join(cargo_target_triple(target))
+                };
+                return base.join(if release { "release" } else { "debug" });
             }
         }
-        workspace.join(if release { "target/release" } else { "target/debug" })
+        let base = if target_is_native(target) {
+            workspace.join("target")
+        } else {
+            workspace.join("target").join(cargo_target_triple(target))
+        };
+        base.join(if release { "release" } else { "debug" })
     }
 
     /// Builds `elephc-magician` with `--features curl` and copies the resulting
@@ -880,7 +964,12 @@ impl BridgeStaticlib {
     /// destination directory not existing, which it never created either) left
     /// `find_named_archive` reporting a generic, misleading `MissingBridge("elephc_magician")`
     /// for what was actually a link-preparation failure with a real, discoverable cause.
-    fn build_magician_curl_staticlib(&self, workspace: &Path, filename: &str) -> Result<(), LinkError> {
+    fn build_magician_curl_staticlib(
+        &self,
+        workspace: &Path,
+        filename: &str,
+        target: Target,
+    ) -> Result<(), LinkError> {
         let release = std::env::current_exe()
             .ok()
             .and_then(|executable| executable.parent().map(Path::to_path_buf))
@@ -911,35 +1000,45 @@ impl BridgeStaticlib {
             "--target-dir",
         ]);
         command.arg(&curl_target_dir);
+        if !target_is_native(target) {
+            command.args(["--target", cargo_target_triple(target)]);
+        }
         if release {
             command.arg("--release");
         }
         let status = command
             .current_dir(workspace)
             .status()
-            .map_err(|_| self.magician_curl_missing_error())?;
+            .map_err(|_| self.magician_curl_missing_error(target))?;
         if !status.success() {
-            return Err(self.magician_curl_missing_error());
+            return Err(self.magician_curl_missing_error(target));
         }
-        let profile_dir = curl_target_dir.join(if release { "release" } else { "debug" });
+        let profile_dir = if target_is_native(target) {
+            curl_target_dir.join(if release { "release" } else { "debug" })
+        } else {
+            curl_target_dir
+                .join(cargo_target_triple(target))
+                .join(if release { "release" } else { "debug" })
+        };
         let built = profile_dir.join(self.archive_filename());
-        let destination_dir = self.magician_curl_destination_dir(workspace, release);
-        std::fs::create_dir_all(&destination_dir).map_err(|_| self.magician_curl_missing_error())?;
+        let destination_dir = self.magician_curl_destination_dir(workspace, release, target);
+        std::fs::create_dir_all(&destination_dir)
+            .map_err(|_| self.magician_curl_missing_error(target))?;
         std::fs::copy(&built, destination_dir.join(filename))
-            .map_err(|_| self.magician_curl_missing_error())?;
+            .map_err(|_| self.magician_curl_missing_error(target))?;
         Ok(())
     }
 
     /// Validates a fallback-discovered archive and retains the search context on failure.
-    fn validate_archive(&self, archive: PathBuf) -> Result<PathBuf, LinkError> {
-        validate_archive_path(self.lib_name, archive.clone())
-            .map_err(|_| self.invalid_discovered_archive_error(&archive))
+    fn validate_archive(&self, archive: PathBuf, target: Target) -> Result<PathBuf, LinkError> {
+        validate_archive_path(self.lib_name, archive.clone(), target)
+            .map_err(|_| self.invalid_discovered_archive_error(&archive, target))
     }
 
     /// Names the invalid archive and only the fallback directories reached before finding it.
-    fn invalid_discovered_archive_error(&self, archive: &Path) -> LinkError {
+    fn invalid_discovered_archive_error(&self, archive: &Path, target: Target) -> LinkError {
         let filename = archive.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-        let directories = self.archive_search_dirs();
+        let directories = self.archive_search_dirs(target);
         let searched = directories
             .iter()
             .position(|directory| directory.join(filename).as_path() == archive)
@@ -964,20 +1063,20 @@ impl BridgeStaticlib {
     /// Carries the archive, the override variable and the directories actually consulted, so
     /// the diagnostic can say how to fix it. A binary copied out of its build tree used to
     /// fail here with only the bridge's linker name (issue #517).
-    fn missing_error(&self) -> LinkError {
-        self.missing_archive_error(&self.archive_filename())
+    fn missing_error(&self, target: Target) -> LinkError {
+        self.missing_archive_error(&self.archive_filename(), target)
     }
 
     /// [`Self::missing_error`] for an archive filename other than this bridge's default one —
     /// the curl-aware magician build, whose absence must not be reported as the plain
     /// archive's.
-    fn missing_archive_error(&self, filename: &str) -> LinkError {
+    fn missing_archive_error(&self, filename: &str, target: Target) -> LinkError {
         LinkError::MissingBridge {
             name: self.lib_name.to_string(),
             archive: Some(filename.to_string()),
             env_var: Some(self.env_var.to_string()),
             searched: self
-                .archive_search_dirs()
+                .archive_search_dirs(target)
                 .iter()
                 .map(|directory| directory.display().to_string())
                 .collect(),
@@ -1028,10 +1127,11 @@ impl BridgeStaticlib {
         &self,
         filename: &str,
         directory: &Path,
+        target: Target,
     ) -> Result<PathBuf, LinkError> {
         let archive = directory.join(filename);
         let present = std::fs::symlink_metadata(&archive).is_ok();
-        validate_archive_path(self.lib_name, archive.clone()).map_err(|_| {
+        validate_archive_path(self.lib_name, archive.clone(), target).map_err(|_| {
             if present {
                 self.invalid_override_error(&archive, directory)
             } else {
@@ -1061,37 +1161,64 @@ impl BridgeStaticlib {
     /// The environment override is deliberately NOT here: it short-circuits discovery in
     /// `archive_path` before any of these are consulted, and the message names it separately
     /// as the way out rather than as somewhere that was checked.
-    fn archive_search_dirs(&self) -> Vec<PathBuf> {
+    fn archive_search_dirs(&self, target: Target) -> Vec<PathBuf> {
         if let Some(directories) = test_archive_search_dirs() {
             return directories;
         }
-        let Some(executable_dir) = std::env::current_exe()
+        let native = target_is_native(target);
+        let mut candidates = Vec::new();
+        if let Some(executable_dir) = std::env::current_exe()
             .ok()
             .and_then(|executable| executable.parent().map(Path::to_path_buf))
-        else {
-            return vec![PathBuf::from("target/debug"), PathBuf::from("target/release")];
-        };
-        let mut candidates = vec![
-            executable_dir.clone(),
-            executable_dir
-                .parent()
-                .map(|parent| parent.join("lib"))
-                .unwrap_or_default(),
-        ];
-        if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
-            if !target_dir.is_empty() {
-                candidates.push(PathBuf::from(&target_dir).join("debug"));
-                candidates.push(PathBuf::from(target_dir).join("release"));
+        {
+            if native {
+                candidates.push(executable_dir.clone());
+                candidates.push(
+                    executable_dir
+                        .parent()
+                        .map(|parent| parent.join("lib"))
+                        .unwrap_or_default(),
+                );
+            } else {
+                let profile_dir = if executable_dir.file_name().is_some_and(|name| name == "deps") {
+                    executable_dir.parent()
+                } else {
+                    Some(executable_dir.as_path())
+                };
+                if let Some(profile_dir) = profile_dir {
+                    if let (Some(target_root), Some(profile)) =
+                        (profile_dir.parent(), profile_dir.file_name())
+                    {
+                        candidates
+                            .push(target_root.join(cargo_target_triple(target)).join(profile));
+                    }
+                }
             }
         }
-        candidates.push(PathBuf::from("target/debug"));
-        candidates.push(PathBuf::from("target/release"));
+        if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+            if !target_dir.is_empty() {
+                let base = if native {
+                    PathBuf::from(target_dir)
+                } else {
+                    PathBuf::from(target_dir).join(cargo_target_triple(target))
+                };
+                candidates.push(base.join("debug"));
+                candidates.push(base.join("release"));
+            }
+        }
+        let source_target = if native {
+            PathBuf::from("target")
+        } else {
+            PathBuf::from("target").join(cargo_target_triple(target))
+        };
+        candidates.push(source_target.join("debug"));
+        candidates.push(source_target.join("release"));
         candidates
     }
 
     /// Returns the first installed or source-tree candidate containing this archive.
-    fn find_archive(&self) -> Option<PathBuf> {
-        self.find_named_archive(&self.archive_filename())
+    fn find_archive(&self, target: Target) -> Option<PathBuf> {
+        self.find_named_archive(&self.archive_filename(), target)
     }
 
     /// Rebuilds `archive` when this checkout's sources have moved past it.
@@ -1116,7 +1243,7 @@ impl BridgeStaticlib {
     /// declines, the archive keeps its old timestamp and still looks stale. Without the bound
     /// every link would spawn cargo again forever, turning a rare staleness into a permanent
     /// tax on a compiler's hot path.
-    fn refreshed_if_stale(&self, archive: PathBuf) -> PathBuf {
+    fn refreshed_if_stale(&self, archive: PathBuf, target: Target) -> PathBuf {
         let Some(workspace) = self.find_workspace() else {
             return archive;
         };
@@ -1126,8 +1253,8 @@ impl BridgeStaticlib {
         if !self.claim_rebuild_attempt() {
             return archive;
         }
-        self.build_staticlib(&workspace);
-        self.find_archive().unwrap_or(archive)
+        self.build_staticlib(&workspace, target);
+        self.find_archive(target).unwrap_or(archive)
     }
 
     /// Registers this bridge as rebuild-attempted, returning whether the caller won the claim.
@@ -1207,13 +1334,16 @@ impl BridgeStaticlib {
     }
 
     /// Best-effort builds this bridge in the active debug or release profile.
-    fn build_staticlib(&self, workspace: &Path) {
+    fn build_staticlib(&self, workspace: &Path, target: Target) {
         let release = std::env::current_exe()
             .ok()
             .and_then(|executable| executable.parent().map(Path::to_path_buf))
             .is_some_and(|directory| directory.file_name().is_some_and(|name| name == "release"));
         let mut command = Command::new("cargo");
         command.args(["build", "-p", self.crate_name]);
+        if !target_is_native(target) {
+            command.args(["--target", cargo_target_triple(target)]);
+        }
         if self.lib_name == "elephc_pdo" {
             let features = super::pdo::cargo_features();
             if !features.is_empty() {
@@ -1224,6 +1354,37 @@ impl BridgeStaticlib {
             command.arg("--release");
         }
         let _ = command.current_dir(workspace).status();
+    }
+}
+
+/// Returns whether the bridge artifact uses the compiler process's OS, CPU, and ABI.
+///
+/// Windows PE output always follows MinGW's GNU ABI, so an MSVC-hosted compiler
+/// must build and discover the `x86_64-pc-windows-gnu` archive instead of its
+/// incompatible native `.lib` artifact.
+fn target_is_native(target: Target) -> bool {
+    let platform_and_arch_match = target.platform == Platform::detect_host()
+        && match target.arch {
+            Arch::AArch64 => cfg!(target_arch = "aarch64"),
+            Arch::X86_64 => cfg!(target_arch = "x86_64"),
+        };
+    let abi_matches = match (target.platform, target.arch) {
+        (Platform::Windows, Arch::X86_64) => cfg!(all(windows, target_env = "gnu")),
+        (Platform::Windows, Arch::AArch64) => cfg!(all(windows, target_env = "msvc")),
+        _ => true,
+    };
+    platform_and_arch_match && abi_matches
+}
+
+/// Returns Cargo's target triple for one target-aware bridge static library build.
+fn cargo_target_triple(target: Target) -> &'static str {
+    match (target.platform, target.arch) {
+        (Platform::MacOS, Arch::AArch64) => "aarch64-apple-darwin",
+        (Platform::MacOS, Arch::X86_64) => "x86_64-apple-darwin",
+        (Platform::Linux, Arch::AArch64) => "aarch64-unknown-linux-gnu",
+        (Platform::Linux, Arch::X86_64) => "x86_64-unknown-linux-gnu",
+        (Platform::Windows, Arch::X86_64) => "x86_64-pc-windows-gnu",
+        (Platform::Windows, Arch::AArch64) => "aarch64-pc-windows-msvc",
     }
 }
 
@@ -1253,6 +1414,28 @@ mod tests {
                 archive.contains(&format!("debug/lib{}.a", bridge.lib_name)),
                 "lib{}.a is missing from the archive include list in .config/nextest.toml",
                 bridge.lib_name
+            );
+        }
+    }
+
+    /// Windows keeps a deliberate bridge inventory instead of inheriting the
+    /// host list, so every catalogued bridge must also appear in that exact
+    /// cross-build block.
+    #[test]
+    fn every_bridge_is_cross_built_for_windows() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
+            .expect("read ci workflow");
+        let windows = workflow
+            .split_once("BRIDGE_CRATES_WINDOWS: >-")
+            .and_then(|(_, tail)| tail.split_once("\n\n"))
+            .map(|(inventory, _)| inventory)
+            .expect("read explicit Windows bridge inventory");
+        for bridge in BRIDGES {
+            assert!(
+                windows.contains(&format!("-p {}", bridge.crate_name)),
+                "{} is missing from BRIDGE_CRATES_WINDOWS in .github/workflows/ci.yml",
+                bridge.crate_name
             );
         }
     }
@@ -1713,6 +1896,9 @@ mod tests {
         );
         assert!(pdo.apple_libraries.is_empty());
 
+        let iconv = bridge_for_library("elephc_iconv").expect("iconv bridge");
+        assert_eq!(iconv.windows_libraries, &["iconv"]);
+
         // The xml bridge's parser is the managed `libxml2` package (spliced in by
         // `pipeline::backend`, never by this table), and libxml2's encoding handlers
         // reference iconv — libc on glibc, a separate `libiconv.tbd` in every Apple SDK.
@@ -1779,6 +1965,24 @@ mod tests {
         }
     }
 
+    /// Windows system libraries are bare MinGW linker names and never host paths or flags.
+    #[test]
+    fn windows_libraries_are_bare_linker_names() {
+        for bridge in BRIDGES {
+            for library in bridge.windows_libraries {
+                assert!(
+                    !library.is_empty()
+                        && !library.starts_with("-l")
+                        && !library.starts_with("lib")
+                        && !library.contains('.')
+                        && !library.contains('/'),
+                    "{} declares a malformed Windows library `{library}`",
+                    bridge.lib_name
+                );
+            }
+        }
+    }
+
     /// The xml bridge's `-liconv` is emitted on Apple targets only, AFTER the archives,
     /// and never on Linux — where glibc already carries iconv and a `-liconv` would fail
     /// the link outright (there is no such library to find).
@@ -1791,7 +1995,12 @@ mod tests {
             LinkItem::managed_archive("/cache/libxml2/lib/libxml2.a", "libxml2"),
         ]);
 
-        let apple = resolve_with(&plan, &[], Platform::MacOS, |_| Ok(executable.clone()))
+        let apple = resolve_with(
+            &plan,
+            &[],
+            Target::new(Platform::MacOS, Arch::AArch64),
+            |_| Ok(executable.clone()),
+        )
             .expect("xml bridge must resolve on Apple");
         let items = apple.plan.items();
         let iconv = items
@@ -1814,7 +2023,12 @@ mod tests {
             "iconv must be named exactly once"
         );
 
-        let linux = resolve_with(&plan, &[], Platform::Linux, |_| Ok(executable.clone()))
+        let linux = resolve_with(
+            &plan,
+            &[],
+            Target::new(Platform::Linux, Arch::X86_64),
+            |_| Ok(executable.clone()),
+        )
             .expect("xml bridge must resolve on Linux");
         assert!(
             !linux
@@ -1873,6 +2087,89 @@ mod tests {
         assert!(named[0] > last_archive, "-liconv must trail every archive: {items:?}");
     }
 
+    /// The Windows iconv bridge carries its MinGW dependency after the bridge archive.
+    /// The CI sysroot exposes `libiconv.a`; leaving this item out produces undefined
+    /// references to `iconv_open`, `iconv`, and `iconv_close` at the final PE link.
+    #[test]
+    fn windows_iconv_library_follows_the_bridge_archive() {
+        let executable = std::env::current_exe().expect("test executable path");
+        let plan = LinkPlan::from_items(vec![LinkItem::named_runtime("elephc_iconv")]);
+        let resolved = resolve_with(
+            &plan,
+            &[],
+            Target::new(Platform::Windows, Arch::X86_64),
+            |_| Ok(executable.clone()),
+        )
+        .expect("iconv bridge must resolve on Windows");
+        let items = resolved.plan.items();
+        let archive = items
+            .iter()
+            .position(|item| matches!(item, LinkItem::StaticArchive { origin: LinkOrigin::Bridge { name }, .. } if name == "elephc_iconv"))
+            .expect("resolved plan carries the iconv bridge archive");
+        let iconv = items
+            .iter()
+            .position(|item| matches!(item, LinkItem::NamedLibrary { name, origin: LinkOrigin::Runtime } if name == "iconv"))
+            .expect("Windows link must name MinGW iconv");
+        assert!(iconv > archive, "-liconv must trail the bridge archive: {items:?}");
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| matches!(item, LinkItem::NamedLibrary { name, .. } if name == "iconv"))
+                .count(),
+            1,
+            "Windows iconv must be named exactly once"
+        );
+
+        let linux = resolve_with(
+            &plan,
+            &[],
+            Target::new(Platform::Linux, Arch::X86_64),
+            |_| Ok(executable.clone()),
+        )
+        .expect("iconv bridge must resolve on Linux");
+        assert!(!linux.plan.items().iter().any(
+            |item| matches!(item, LinkItem::NamedLibrary { name, .. } if name == "iconv")
+        ));
+    }
+
+    /// Eval-only Windows programs link Magician but not the standalone iconv bridge.
+    /// Magician embeds the shared iconv implementation, so its PE link still needs the
+    /// MinGW `libiconv.a` provider after the archive; Unix keeps resolving those symbols
+    /// from libc and must not gain a spurious `-liconv` dependency.
+    #[test]
+    fn windows_magician_iconv_library_is_target_gated_and_follows_the_archive() {
+        let executable = std::env::current_exe().expect("test executable path");
+        let plan = LinkPlan::from_items(vec![LinkItem::named_runtime("elephc_magician")]);
+        let windows = resolve_with(
+            &plan,
+            &[],
+            Target::new(Platform::Windows, Arch::X86_64),
+            |_| Ok(executable.clone()),
+        )
+        .expect("Magician bridge must resolve on Windows");
+        let items = windows.plan.items();
+        let magician = items
+            .iter()
+            .position(|item| matches!(item, LinkItem::StaticArchive { origin: LinkOrigin::Bridge { name }, .. } if name == "elephc_magician"))
+            .expect("resolved plan carries the Magician archive");
+        let iconv = items
+            .iter()
+            .position(|item| matches!(item, LinkItem::NamedLibrary { name, origin: LinkOrigin::Runtime } if name == "iconv"))
+            .expect("Windows eval link must name MinGW iconv");
+        assert!(iconv > magician, "-liconv must trail Magician: {items:?}");
+
+        let linux = resolve_with(
+            &plan,
+            &[],
+            Target::new(Platform::Linux, Arch::X86_64),
+            |_| Ok(executable.clone()),
+        )
+        .expect("Magician bridge must resolve on Linux");
+        assert!(!linux.plan.items().iter().any(
+            |item| matches!(item, LinkItem::NamedLibrary { name, .. } if name == "iconv")
+        ));
+    }
+
     /// Verifies automatic TLS linking stays lazy while `--with-tls` force-loads the archive.
     #[test]
     fn tls_whole_archive_is_reserved_for_explicit_forcing() {
@@ -1880,7 +2177,12 @@ mod tests {
         let plan = LinkPlan::from_items(vec![LinkItem::named_runtime("elephc_tls")]);
 
         for (forced, expected_whole_archive) in [(&[][..], false), (&["elephc_tls".to_string()][..], true)] {
-            let resolution = resolve_with(&plan, forced, Platform::MacOS, |_| Ok(archive.clone()))
+            let resolution = resolve_with(
+                &plan,
+                forced,
+                Target::new(Platform::MacOS, Arch::AArch64),
+                |_| Ok(archive.clone()),
+            )
                 .expect("TLS bridge must resolve");
             assert!(resolution.plan.items().iter().any(|item| matches!(
                 item,
@@ -1891,6 +2193,27 @@ mod tests {
                 } if name == "elephc_tls" && *whole_archive == expected_whole_archive
             )));
         }
+    }
+
+    /// Verifies PE bridge builds select MinGW artifacts unless the compiler itself uses GNU Windows.
+    #[test]
+    fn windows_gnu_bridge_target_requires_matching_host_abi() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        assert_eq!(
+            target_is_native(target),
+            cfg!(all(windows, target_arch = "x86_64", target_env = "gnu"))
+        );
+        assert_eq!(cargo_target_triple(target), "x86_64-pc-windows-gnu");
+    }
+
+    /// Verifies the web bridge avoids COFF whole-archive import duplication on Windows.
+    #[test]
+    fn web_bridge_is_not_whole_archived_on_windows() {
+        let web = bridge_for_library("elephc_web").expect("web bridge entry");
+        assert!(web.requires_whole_archive(Platform::Linux, false));
+        assert!(web.requires_whole_archive(Platform::MacOS, false));
+        assert!(!web.requires_whole_archive(Platform::Windows, false));
+        assert!(web.requires_whole_archive(Platform::Windows, true));
     }
 
     /// Verifies bridge progress selection and PHP extension reporting share the bridge table.
@@ -1932,7 +2255,7 @@ mod tests {
         let resolution = resolve_with(
             &LinkPlan::from_items(vec![archive.clone()]),
             &[],
-            Platform::MacOS,
+            Target::new(Platform::MacOS, Arch::AArch64),
             |_| panic!("an exact bridge archive must not trigger discovery"),
         )
         .expect("exact bridge metadata must resolve");
@@ -1958,7 +2281,12 @@ mod tests {
             LinkItem::named_runtime("elephc_magician"),
         ]);
         let executable = std::env::current_exe().expect("test executable path");
-        let resolution = resolve_with(&plan, &[], Platform::MacOS, |_| Ok(executable.clone()))
+        let resolution = resolve_with(
+            &plan,
+            &[],
+            Target::new(Platform::MacOS, Arch::AArch64),
+            |_| Ok(executable.clone()),
+        )
             .expect("embedded bridge plan must resolve");
         let bridge_names: Vec<&str> = resolution
             .plan
@@ -1983,31 +2311,39 @@ mod tests {
     #[test]
     fn missing_named_bridge_is_structured_error() {
         let plan = LinkPlan::from_items(vec![LinkItem::named_runtime("elephc_tls")]);
-        let error = resolve_with(&plan, &[], Platform::Linux, |bridge| Err(bridge.missing_error()))
-            .expect_err("missing bridge must fail before command rendering");
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        let error = resolve_with(&plan, &[], target, |bridge| {
+            Err(bridge.missing_error(target))
+        })
+        .expect_err("missing bridge must fail before command rendering");
 
         assert_eq!(
             error,
             bridge_for_library("elephc_tls")
                 .expect("tls bridge")
-                .missing_error()
+                .missing_error(target)
         );
     }
 
     /// Verifies exact archive paths report the path without unvisited fallback locations.
     #[test]
     fn invalid_archive_reports_exact_path_without_fallbacks() {
+        let target = Target::new(Platform::Linux, Arch::X86_64);
         let nonexistent = std::env::temp_dir().join(format!(
             "elephc-missing-bridge-{}/libelephc_tls.a",
             std::process::id()
         ));
-        let missing = validate_archive_path("elephc_tls", nonexistent.clone()).unwrap_err().to_string();
+        let missing = validate_archive_path("elephc_tls", nonexistent.clone(), target)
+            .unwrap_err()
+            .to_string();
         assert!(missing.contains(&nonexistent.display().to_string()));
         assert!(!missing.contains("looked in:"));
         assert!(!missing.contains("ELEPHC_TLS_LIB_DIR"));
 
         let directory = std::env::temp_dir();
-        let invalid = validate_archive_path("elephc_tls", directory.clone()).unwrap_err().to_string();
+        let invalid = validate_archive_path("elephc_tls", directory.clone(), target)
+            .unwrap_err()
+            .to_string();
         assert!(invalid.contains(&directory.display().to_string()));
         assert!(!invalid.contains("looked in:"));
     }
@@ -2016,9 +2352,10 @@ mod tests {
     #[test]
     fn invalid_discovered_archive_retains_reached_search_context() {
         let bridge = bridge_for_library("elephc_tls").expect("tls bridge");
-        let directories = bridge.archive_search_dirs();
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        let directories = bridge.archive_search_dirs(target);
         let archive = directories[1].join(bridge.archive_filename());
-        let error = bridge.invalid_discovered_archive_error(&archive);
+        let error = bridge.invalid_discovered_archive_error(&archive, target);
         let LinkError::MissingBridge { searched, .. } = &error;
         assert_eq!(
             searched,
@@ -2046,7 +2383,10 @@ mod tests {
         assert!(rendered.contains("ELEPHC_TLS_LIB_DIR"));
 
         let invalid_path = std::env::temp_dir();
-        let invalid = bridge.validate_archive(invalid_path.clone()).unwrap_err().to_string();
+        let invalid = bridge
+            .validate_archive(invalid_path.clone(), target)
+            .unwrap_err()
+            .to_string();
         assert!(invalid.contains(&invalid_path.display().to_string()));
         assert!(invalid.contains("Replace invalid archive"));
     }
@@ -2064,13 +2404,14 @@ mod tests {
     #[test]
     fn missing_bridge_message_names_the_archive_the_search_and_the_override() {
         let bridge = bridge_for_library("elephc_web").expect("web bridge");
-        let rendered = bridge.missing_error().to_string();
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        let rendered = bridge.missing_error(target).to_string();
 
         assert!(rendered.contains("required Elephc bridge `elephc_web`"));
         assert!(rendered.contains("needs: libelephc_web.a"));
         assert!(rendered.contains("ELEPHC_WEB_LIB_DIR"));
         assert!(rendered.contains("--print-capabilities"));
-        for directory in bridge.archive_search_dirs() {
+        for directory in bridge.archive_search_dirs(target) {
             assert!(
                 rendered.contains(&directory.display().to_string()),
                 "the message must list every directory discovery checks, missing {}:\n{}",
@@ -2090,12 +2431,13 @@ mod tests {
     #[test]
     fn invalid_override_message_names_the_override_and_not_the_untried_fallbacks() {
         let bridge = bridge_for_library("elephc_web").expect("web bridge");
+        let target = Target::new(Platform::Linux, Arch::X86_64);
         let directory = std::env::temp_dir().join(format!(
             "elephc-override-miss-{}",
             std::process::id()
         ));
         let error = bridge
-            .validate_override_archive("libelephc_web.a", &directory)
+            .validate_override_archive("libelephc_web.a", &directory, target)
             .expect_err("an override directory without the archive must fail");
         let rendered = error.to_string();
 
@@ -2113,7 +2455,7 @@ mod tests {
             !rendered.contains("keep the bridge archives next to the elephc binary"),
             "advice that the override would ignore must not be offered:\n{rendered}"
         );
-        for fallback in bridge.archive_search_dirs() {
+        for fallback in bridge.archive_search_dirs(target) {
             assert!(
                 !rendered.contains(&fallback.display().to_string()),
                 "an untried fallback must not be reported as searched, found {}:\n{}",
@@ -2138,24 +2480,25 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&base);
-        let target = base.join("real.a");
+        let link_target = base.join("real.a");
+        let target = Target::new(Platform::Linux, Arch::X86_64);
         let cases = ["empty", "directory", "dangling-link", "link"];
         for case in cases {
             std::fs::create_dir_all(base.join(case)).expect("create override fixture");
         }
-        std::fs::write(&target, b"!<arch>\n").expect("create link target");
+        std::fs::write(&link_target, b"!<arch>\n").expect("create link target");
         std::fs::write(base.join("empty").join(&filename), b"").expect("create empty entry");
         std::fs::create_dir(base.join("directory").join(&filename)).expect("create directory entry");
         std::os::unix::fs::symlink(base.join("nowhere.a"), base.join("dangling-link").join(&filename))
             .expect("create dangling link entry");
-        std::os::unix::fs::symlink(&target, base.join("link").join(&filename))
+        std::os::unix::fs::symlink(&link_target, base.join("link").join(&filename))
             .expect("create link entry");
 
         for case in cases {
             let directory = base.join(case);
             let archive = directory.join(&filename);
             let error = bridge
-                .validate_override_archive(&filename, &directory)
+                .validate_override_archive(&filename, &directory, target)
                 .expect_err("an invalid override entry must fail");
             let LinkError::MissingBridge { archive: reported, .. } = &error;
             assert_eq!(reported.as_deref(), Some(archive.display().to_string().as_str()), "{case}");
@@ -2203,6 +2546,7 @@ mod tests {
     #[test]
     fn dangling_archive_link_stops_production_discovery_with_its_search_context() {
         let bridge = bridge_for_library("elephc_tls").expect("tls bridge");
+        let target = Target::new(Platform::Linux, Arch::X86_64);
         let filename = bridge.archive_filename();
         let base = std::env::temp_dir().join(format!(
             "elephc-dangling-archive-{}",
@@ -2220,9 +2564,9 @@ mod tests {
 
         let error = {
             let _search = TestArchiveSearchDirs::install(directories.clone());
-            assert_eq!(bridge.find_archive().as_deref(), Some(dangling.as_path()));
+            assert_eq!(bridge.find_archive(target).as_deref(), Some(dangling.as_path()));
             bridge
-                .archive_path()
+                .archive_path(target)
                 .expect_err("a dangling link must stop discovery, not fall through to a later archive")
         };
         let _ = std::fs::remove_dir_all(&base);
@@ -2260,12 +2604,17 @@ mod tests {
     #[test]
     fn invalid_override_message_names_the_curl_aware_archive_when_that_is_the_one_missing() {
         let bridge = bridge_for_library("elephc_magician").expect("magician bridge");
+        let target = Target::new(Platform::Linux, Arch::X86_64);
         let directory = std::env::temp_dir().join(format!(
             "elephc-override-curl-miss-{}",
             std::process::id()
         ));
         let rendered = bridge
-            .validate_override_archive(&bridge.magician_curl_archive_filename(), &directory)
+            .validate_override_archive(
+                &bridge.magician_curl_archive_filename(),
+                &directory,
+                target,
+            )
             .expect_err("an override directory without the archive must fail")
             .to_string();
 
@@ -2294,7 +2643,8 @@ mod tests {
             "elephc_not_a_bridge",
             false,
         )]);
-        let rendered = resolve_with(&plan, &[], Platform::Linux, |_| {
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        let rendered = resolve_with(&plan, &[], target, |_| {
             panic!("an exact path must not invoke discovery")
         })
         .expect_err("an unknown bridge with a missing exact archive must fail")
@@ -2318,7 +2668,8 @@ mod tests {
             "elephc_tls",
             false,
         )]);
-        let invalid = resolve_with(&empty_plan, &[], Platform::Linux, |_| {
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        let invalid = resolve_with(&empty_plan, &[], target, |_| {
             panic!("exact path must not invoke locator")
         })
         .expect_err("empty exact-path archive must fail");
@@ -2329,7 +2680,7 @@ mod tests {
         let _ = std::fs::remove_file(&symlink);
         std::os::unix::fs::symlink(std::env::current_exe().expect("test executable"), &symlink)
             .expect("create archive symlink fixture");
-        let invalid = validate_archive_path("elephc_tls", symlink.clone())
+        let invalid = validate_archive_path("elephc_tls", symlink.clone(), target)
             .expect_err("a symlink is not a regular archive")
             .to_string();
         assert!(invalid.contains(&symlink.display().to_string()));
@@ -2404,13 +2755,18 @@ mod tests {
         /// Resolves a plan with sentinel archives while preserving the real routing decision.
         fn resolve_with_fake_locators(plan: &LinkPlan) -> BridgeResolution {
             let needs_curl = plan_requires_library(plan, "elephc_curl");
-            resolve_with(plan, &[], Platform::Linux, |bridge| {
-                if bridge.lib_name == "elephc_magician" && needs_curl {
-                    Ok(PathBuf::from("/fake/libelephc_magician_curl.a"))
-                } else {
-                    Ok(PathBuf::from(format!("/fake/lib{}.a", bridge.lib_name)))
-                }
-            })
+            resolve_with(
+                plan,
+                &[],
+                Target::new(Platform::Linux, Arch::X86_64),
+                |bridge| {
+                    if bridge.lib_name == "elephc_magician" && needs_curl {
+                        Ok(PathBuf::from("/fake/libelephc_magician_curl.a"))
+                    } else {
+                        Ok(PathBuf::from(format!("/fake/lib{}.a", bridge.lib_name)))
+                    }
+                },
+            )
             .expect("fake locators never fail")
         }
 

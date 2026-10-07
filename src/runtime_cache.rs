@@ -128,7 +128,17 @@ fn prepare_runtime_object_with_mode(
         library_boundary,
         env!("ELEPHC_RUNTIME_BUILD_ID").as_bytes(),
     );
-    let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, cache_key));
+    let windows_toolchain = if target.platform == crate::codegen::platform::Platform::Windows {
+        Some(crate::windows_toolchain::WindowsToolchain::configured()?.cache_key())
+    } else {
+        None
+    };
+    let cache_path = cache_dir.join(runtime_cache_file_name(
+        heap_size,
+        target,
+        cache_key,
+        windows_toolchain,
+    ));
     let integrity_path = cache_dir.join(format!(
         "{}.integrity",
         cache_path.file_name().and_then(|name| name.to_str()).unwrap_or("runtime.o")
@@ -144,13 +154,16 @@ fn prepare_runtime_object_with_mode(
         }
     }
 
-    let runtime_asm = codegen::generate_runtime_with_features_mode(
+    let mut runtime_asm = codegen::generate_runtime_with_features_mode(
         heap_size,
         target,
         features,
         pic,
         library_boundary,
     );
+    if target.platform == crate::codegen::platform::Platform::Windows {
+        runtime_asm = target.transform_assembly(&runtime_asm);
+    }
 
     let unique = format!(
         "{}_{}",
@@ -176,22 +189,28 @@ fn prepare_runtime_object_with_mode(
 
     // Shared with the user object's assembly: both must carry the same Mach-O
     // platform, or ld rejects whichever one disagrees.
-    let mut assembler = crate::linker::assembler_command(target);
-    assembler.arg("-o").arg(&temp_obj_path).arg(&temp_asm_path);
+    let mut assembler = if target.platform == crate::codegen::platform::Platform::Windows {
+        crate::windows_toolchain::assembler_command(&temp_asm_path, &temp_obj_path)?
+    } else {
+        let mut command = crate::linker::assembler_command(target);
+        command.arg("-o").arg(&temp_obj_path).arg(&temp_asm_path);
+        command
+    };
+    let assembler_name = assembler.get_program().to_string_lossy().into_owned();
     let assembler_status = assembler.status().map_err(|err| {
         format!(
             "failed to run runtime assembler '{}' for '{}': {}",
-            target.assembler_cmd(),
+            assembler_name,
             temp_obj_path.display(),
             err
         )
     })?;
-    let _ = fs::remove_file(&temp_asm_path);
     if !assembler_status.success() {
         let _ = fs::remove_file(&temp_obj_path);
         return Err(format!(
-            "runtime assembler failed while building '{}'",
-            cache_path.display()
+            "runtime assembler failed while building '{}' (asm left at {})",
+            cache_path.display(),
+            temp_asm_path.display()
         ));
     }
 

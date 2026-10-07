@@ -18,11 +18,20 @@ use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 
 /// Builds the cache file name for a runtime object.
-pub(super) fn runtime_cache_file_name(heap_size: usize, target: Target, runtime_hash: u64) -> String {
+pub(super) fn runtime_cache_file_name(
+    heap_size: usize,
+    target: Target,
+    runtime_hash: u64,
+    toolchain: Option<&str>,
+) -> String {
+    let target_identity = toolchain.map_or_else(
+        || target.as_str().to_string(),
+        |toolchain| format!("{}-{toolchain}", target.as_str()),
+    );
     format!(
         "runtime-v{}-{}-rt{:016x}-heap{}.o",
         env!("CARGO_PKG_VERSION"),
-        target.as_str(),
+        target_identity,
         runtime_hash,
         heap_size
     )

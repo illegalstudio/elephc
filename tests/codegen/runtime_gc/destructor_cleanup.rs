@@ -10,6 +10,22 @@
 
 use crate::support::*;
 
+/// Automatic shutdown destruction returns through its own x86 frame instead of the caller's.
+#[test]
+fn test_core_automatic_shutdown_destructor_returns_cleanly() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class AutomaticShutdownDestructor {
+    public function __destruct() { echo "D"; }
+}
+$value = new AutomaticShutdownDestructor();
+echo "ok|";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ok|D", "{}", out.stderr);
+}
+
 /// Repeated dynamic dispatch preserves receiver ownership and independently owns copied selector names.
 #[test]
 fn test_core_dynamic_method_loop_preserves_receiver_owner() {

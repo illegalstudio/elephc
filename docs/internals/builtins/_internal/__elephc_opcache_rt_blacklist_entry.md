@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_blacklist_entry() - internals"
 description: "Compiler internals for __elephc_opcache_rt_blacklist_entry(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1129
+  order: 1145
 ---
 
 ## `__elephc_opcache_rt_blacklist_entry()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_opcache_rt_blacklist_entry.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_blacklist_entry.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:699](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L699) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

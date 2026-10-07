@@ -220,10 +220,18 @@ fn test_argv_count_exists() {
     assert_eq!(out, "1");
 }
 
-/// Compiles `<?php echo $argv[0];` and asserts it ends with `/test` (script path is set by test runner).
+/// Compiles `<?php echo $argv[0];` and checks the target-native test executable suffix.
 #[test]
 fn test_argv_first_entry_exists() {
     let out = compile_and_run("<?php echo $argv[0];");
-    assert!(out.ends_with("/test"), "unexpected argv[0]: {out}");
+    let normalized = out.replace('\\', "/");
+    let expected_suffix = if target().platform == Platform::Windows {
+        "/test.exe"
+    } else {
+        "/test"
+    };
+    assert!(
+        normalized.ends_with(expected_suffix),
+        "unexpected argv[0]: {out}"
+    );
 }
-

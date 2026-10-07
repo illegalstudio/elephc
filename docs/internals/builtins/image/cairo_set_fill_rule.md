@@ -2,7 +2,7 @@
 title: "cairo_set_fill_rule() - internals"
 description: "Compiler internals for cairo_set_fill_rule(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 434
+  order: 438
 ---
 
 ## `cairo_set_fill_rule()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13464](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13464) (`cairo_set_fill_rule`)
+- **Lowering**: [`src/image_prelude.rs`:13535](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13535) (`cairo_set_fill_rule`)
 - **Function symbol**: `cairo_set_fill_rule()`
 
 

@@ -2,7 +2,7 @@
 title: "cairo_set_source_rgb()"
 description: "Uses an opaque color as the source for subsequent drawing."
 sidebar:
-  order: 440
+  order: 444
 ---
 
 ## cairo_set_source_rgb()

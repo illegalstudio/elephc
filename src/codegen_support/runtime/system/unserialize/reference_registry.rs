@@ -17,8 +17,8 @@ pub(super) fn emit_register_array(emitter: &mut Emitter) {
     emitter.blank();
     emitter.label_global("__rt_unserialize_register_array");
     abi::emit_frame_prologue(emitter, 32);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
+    abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), 8);
+    abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), 16);
     abi::load_at_offset(emitter, abi::secondary_scratch_reg(emitter), 16);
     match emitter.target.arch {
         Arch::AArch64 => {

@@ -2,7 +2,7 @@
 title: "cairo_scale() - internals"
 description: "Compiler internals for cairo_scale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 433
+  order: 437
 ---
 
 ## `cairo_scale()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13667](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13667) (`cairo_scale`)
+- **Lowering**: [`src/image_prelude.rs`:13738](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13738) (`cairo_scale`)
 - **Function symbol**: `cairo_scale()`
 
 

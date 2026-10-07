@@ -70,7 +70,7 @@ fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
 }
 
 /// Verifies that DCE removes an empty try-catch shell when both bodies contain only pure (side-effect-free) statements.
-/// After eliminating the dead pure bodies, the try-catch itself becomes a no-op and is removed, leaving an empty function.
+/// DCE first removes the pure bodies, then drops the now-empty try shell, leaving an empty function.
 #[test]
 fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
     let pure_builtin = Expr::new(
@@ -112,6 +112,61 @@ fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
         panic!("expected function");
     };
     assert!(body.is_empty());
+}
+
+/// Verifies that a fully qualified builtin carrying `MAY_THROW` keeps its
+/// catch path, even when the builtin result itself is unused.
+#[test]
+fn test_eliminate_dead_code_keeps_fqn_throwing_builtin_try_catch() {
+    let throwing_call = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from_parts(
+                crate::names::NameKind::FullyQualified,
+                vec!["escapeshellarg".into()],
+            ),
+            args: vec![Expr::string_lit("value")],
+        },
+        Span::dummy(),
+    );
+    assert!(expr_effect(&throwing_call).may_throw);
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: vec![Stmt::new(
+                StmtKind::Try {
+                    try_body: vec![Stmt::new(
+                        StmtKind::ExprStmt(throwing_call),
+                        Span::dummy(),
+                    )],
+                    catches: vec![crate::parser::ast::CatchClause {
+                        exception_types: vec!["ValueError".into()],
+                        variable: Some("error".into()),
+                        body: vec![Stmt::echo(Expr::string_lit("caught"))],
+                    }],
+                    finally_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::Try { catches, .. } = &body[0].kind else {
+        panic!("expected throwing try/catch to survive dead-code elimination");
+    };
+    assert_eq!(catches.len(), 1);
 }
 
 /// Verifies that an unknown truthy switch entry is preserved before a matching case.

@@ -664,15 +664,16 @@ $f4->start("A", "B", "C", "D");
 /// silently corrupting the heap. The program must not reach "should-not-reach".
 #[test]
 fn test_fiber_stack_overflow_faults_via_guard_page() {
-    // The fiber stack now has a 16 KB PROT_NONE guard page at its bottom. A
-    // runaway recursion inside the fiber must trip that page and terminate
-    // with SIGSEGV/SIGBUS instead of silently corrupting the heap.
+    // The fiber stack now has a 16 KB PROT_NONE guard page at its bottom. Keep
+    // work per frame scalar-only and retain a post-call effect to prevent tail
+    // recursion, so slow Wine hosts reach the guard page deterministically.
     let out = compile_and_run_capture(
         r#"<?php
 function recurse(int $n): int {
-    $buf = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     if ($n > 1000000) return $n;
-    return recurse($n + 1);
+    $result = recurse($n + 1);
+    if ($result < 0) echo "unreachable";
+    return $result;
 }
 $f = new Fiber(function(): void {
     recurse(0);

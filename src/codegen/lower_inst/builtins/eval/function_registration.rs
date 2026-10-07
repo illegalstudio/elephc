@@ -65,39 +65,26 @@ pub(super) fn register_eval_native_function(
         ),
         Some(&invoker_label),
     );
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let (name_label, name_len) = ctx.data.add_string(registration.name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &descriptor_label,
-    );
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &invoker_label,
-    );
     let visible_indexes = source_declared_param_indexes(&registration.signature);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        visible_indexes.len() as i64,
+    stage_eval_native_local_word(ctx, context_offset, PhpType::Pointer(None));
+    stage_eval_native_label(ctx, &name_label);
+    stage_eval_native_int(ctx, name_len as i64);
+    stage_eval_native_label(ctx, &descriptor_label);
+    stage_eval_native_label(ctx, &invoker_label);
+    stage_eval_native_int(ctx, visible_indexes.len() as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_function",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+        ],
     );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_function");
-    abi::emit_call_label(ctx.emitter, &symbol);
     register_eval_native_function_bridge_support(
         ctx,
         context_offset,

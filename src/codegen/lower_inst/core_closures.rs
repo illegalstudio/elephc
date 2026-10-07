@@ -326,7 +326,7 @@ pub(super) fn promote_local_slot_for_ref_capture_unchecked(
     abi::emit_push_result_value(ctx.emitter, &local_ty);
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         crate::codegen_support::runtime::reference_cells::payload_tag(&local_ty),
     );
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");

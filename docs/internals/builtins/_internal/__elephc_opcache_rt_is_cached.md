@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_is_cached() - internals"
 description: "Compiler internals for __elephc_opcache_rt_is_cached(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1133
+  order: 1149
 ---
 
 ## `__elephc_opcache_rt_is_cached()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_opcache_rt_is_cached.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_is_cached.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:699](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L699) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

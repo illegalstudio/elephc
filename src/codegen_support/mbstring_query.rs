@@ -14,7 +14,7 @@ use elephc_builtin_contract::mbstring_abi::invoke::MbNativeQueryV1;
 /// Stack-aligned storage for one invocation's native query policy and displaced output owner.
 pub(crate) const STATE_BYTES: usize = (std::mem::size_of::<MbNativeQueryV1>() + 15) & !15;
 
-/// Initializes untyped output publication and supplies the live query policy as the sixth C argument.
+/// Initializes output publication and supplies query policy as the sixth internal-helper argument.
 pub(crate) fn stage(emitter: &mut Emitter, offset: usize) {
     let target = emitter.target;
     let scratch = match target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r10" };
@@ -25,7 +25,7 @@ pub(crate) fn stage(emitter: &mut Emitter, offset: usize) {
     }
     abi::emit_extern_symbol_address(emitter, scratch, &query_configuration);
     abi::emit_store_to_sp(emitter, scratch, offset + 24);
-    abi::emit_temporary_stack_address(emitter, abi::int_arg_reg_name(target, 5), offset);
+    abi::emit_temporary_stack_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 5), offset);
 }
 
 #[cfg(test)]
@@ -42,11 +42,15 @@ mod tests {
             ("ios-sim-arm64", "_elephc_mbstring_query_configuration_v1@GOTPAGE"),
             ("linux-aarch64", "elephc_mbstring_query_configuration_v1"),
             ("linux-x86_64", "elephc_mbstring_query_configuration_v1@GOTPCREL"),
+            ("windows-x86_64", "elephc_mbstring_query_configuration_v1"),
         ] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             stage(&mut emitter, 0);
             let asm = emitter.output();
             assert!(asm.contains(relocation), "{name}:\n{asm}");
+            if name == "windows-x86_64" {
+                assert!(asm.contains("lea r9, [rsp]"), "{name}: sixth helper input must use r9\n{asm}");
+            }
         }
     }
 }

@@ -117,7 +117,7 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // preserve the indexed-array pointer across nested comparator calls
     emitter.instruction("push r14");                                            // preserve the indexed-array length across nested comparator calls
     emitter.instruction("push r15");                                            // preserve the swapped flag across nested comparator calls
-    emitter.instruction("sub rsp, 16");                                         // reserve a local slot for the optional callback environment pointer
+    emitter.instruction("sub rsp, 24");                                         // reserve the callback environment slot and keep nested callback calls 16-byte aligned
     emitter.instruction("mov r12, rdi");                                        // preserve the comparator callback address in a callee-saved register for the whole bubble-sort pass
     emitter.instruction("mov r13, rsi");                                        // preserve the indexed-array pointer in a callee-saved register for the whole bubble-sort pass
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save optional callback environment pointer for captured comparator wrappers
@@ -142,7 +142,7 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_usort_call_linux_x86_64");                     // keep legacy two-argument comparator ABI when no environment is present
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // pass capture environment after the compared pair
     emitter.label("__rt_usort_call_linux_x86_64");
-    emitter.instruction("call r12");                                            // invoke the user comparator callback on the current adjacent indexed-array pair
+    emitter.emit_platform_callback_call("r12", 3);
     emitter.instruction("cmp rax, 0");                                          // did the comparator report that the current adjacent pair is already ordered?
     emitter.instruction("jle __rt_usort_noswap_linux_x86_64");                  // skip the swap path when the comparator says the left element should stay before the right element
     emitter.instruction("lea r10, [r13 + 24]");                                 // reload the indexed-array payload base after the comparator call clobbered caller-saved registers
@@ -162,7 +162,7 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_usort_outer_linux_x86_64");                   // repeat another bubble-sort pass while at least one adjacent pair was swapped
 
     emitter.label("__rt_usort_done_linux_x86_64");
-    emitter.instruction("add rsp, 16");                                         // release the comparator environment slot before restoring callee-saved registers
+    emitter.instruction("add rsp, 24");                                         // release the aligned comparator environment area before restoring callee-saved registers
     emitter.instruction("pop r15");                                             // restore the saved swapped-flag register after the x86_64 usort() helper finishes
     emitter.instruction("pop r14");                                             // restore the saved indexed-array length register after the x86_64 usort() helper finishes
     emitter.instruction("pop r13");                                             // restore the saved indexed-array pointer register after the x86_64 usort() helper finishes

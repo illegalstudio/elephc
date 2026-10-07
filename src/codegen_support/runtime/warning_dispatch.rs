@@ -163,8 +163,8 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_default");
     emit_arguments(e);
     emit_activation(e);
-    abi::emit_load_symbol_to_reg(e, a0, "_php_error_handler_callable", 0);
-    arg(e, 1, ARGS);
+    abi::emit_load_symbol_to_reg(e, abi::runtime_helper_int_arg_reg(e, 0), "_php_error_handler_callable", 0);
+    abi::emit_load_temporary_stack_slot(e, abi::runtime_helper_int_arg_reg(e, 1), ARGS);
     abi::emit_call_label(e, "__rt_error_handler_invoke");
     save(e, RESULT);
     // Only the exact PHP boolean false selects the default warning path.
@@ -222,7 +222,7 @@ fn emit_arguments(e: &mut Emitter) {
     let result = abi::int_result_reg(e);
     let scratch = if arm { "x10" } else { "r10" };
     for (index, value) in [(0, 4), (1, 8)] {
-        abi::emit_load_int_immediate(e, abi::int_arg_reg_name(e.target, index), value);
+        abi::emit_load_int_immediate(e, abi::runtime_helper_int_arg_reg(e, index), value);
     }
     abi::emit_call_label(e, "__rt_array_new");
     crate::codegen_support::emit_array_value_type_stamp(e, result, &PhpType::Mixed);

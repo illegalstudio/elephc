@@ -31,7 +31,12 @@ fn check_image(src: &str) -> Result<(), String> {
     let ast = elephc::conditional::apply(ast, &defines);
     let ast = elephc::autoload::collect_aliases(ast);
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
-    let ast = elephc::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::image_prelude::inject_if_used(
+        ast,
+        false,
+        elephc::codegen_support::platform::Target::detect_host(),
+        &mut prelude_inventory,
+    );
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;

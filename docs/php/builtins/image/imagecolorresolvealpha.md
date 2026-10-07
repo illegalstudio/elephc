@@ -2,7 +2,7 @@
 title: "imagecolorresolvealpha()"
 description: "Returns the palette index of a color with alpha, allocating or approximating it."
 sidebar:
-  order: 475
+  order: 479
 ---
 
 ## imagecolorresolvealpha()

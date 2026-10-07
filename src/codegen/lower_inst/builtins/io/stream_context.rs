@@ -81,9 +81,20 @@ pub(crate) fn lower_stream_context_create(
     ensure_arg_count_between(inst, "stream_context_create", 0, 2)?;
     if let Some(options) = inst.operands.first().copied() {
         store_stream_context_options(ctx, options, true)?;
+        ctx.load_value_to_result(options)?;
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the options pointer to context registration
+        }
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("mov x0, #0"),             // pass a null options pointer to context registration
+            Arch::X86_64 => ctx.emitter.instruction("xor edi, edi"),            // pass a null options pointer to context registration
+        }
     }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_context_register");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     capture_stream_notification_callback(ctx, inst.operands.get(1).copied())?;
-    emit_fd_result(ctx, 1);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     store_if_result(ctx, inst)
 }
 
@@ -115,9 +126,22 @@ pub(crate) fn lower_stream_context_set_option(
     ensure_arg_count_between(inst, "stream_context_set_option", 2, 4)?;
     match inst.operands.len() {
         2 => {
+            let context = expect_operand(inst, 0)?;
             let options = expect_operand(inst, 1)?;
-            store_stream_context_options(ctx, options, false)?;
-            emit_bool_result(ctx, true);
+            ctx.load_value_to_result(context)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            ctx.load_value_to_result(options)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x1, x0");                      // pass the options pointer to context update
+                    abi::emit_pop_reg(ctx.emitter, "x0");
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rsi, rax");                    // pass the options pointer to context update
+                    abi::emit_pop_reg(ctx.emitter, "rdi");
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_stream_context_update");
         }
         4 => {
             lower_stream_context_set_option_4(ctx, inst)?;
@@ -376,12 +400,16 @@ pub(crate) fn lower_stream_context_get_options(
     inst: &Instruction,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "stream_context_get_options", 1)?;
+    let context = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(context)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the context handle to options lookup
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_context_lookup");
     let empty_label = ctx.next_label("scgo_empty");
     let done_label = ctx.next_label("scgo_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
-            ctx.emitter.instruction("ldr x0, [x9]");                            // load the persisted stream-context options pointer
             ctx.emitter.instruction(&format!("cbz x0, {}", empty_label));       // allocate an empty hash when no context options exist
             abi::emit_call_label(ctx.emitter, "__rt_incref");
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the empty-hash fallback after retaining options
@@ -392,8 +420,6 @@ pub(crate) fn lower_stream_context_get_options(
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
-            ctx.emitter.instruction("mov rax, QWORD PTR [r9]");                 // load the persisted stream-context options pointer
             ctx.emitter.instruction("test rax, rax");                           // test whether a context options pointer exists
             ctx.emitter.instruction(&format!("jz {}", empty_label));            // allocate an empty hash when no context options exist
             ctx.emitter.instruction("mov rdi, rax");                            // pass the options pointer to incref
@@ -419,6 +445,38 @@ pub(crate) fn lower_stream_context_get_params(
     store_if_result(ctx, inst)
 }
 
+/// Boxes a read-all result as `Mixed`, then reclaims any owned source block.
+///
+/// `__rt_stream_get_contents` returns either a borrowed concat-arena slice or an owned
+/// heap block. Mixed string boxing persists a separate copy, so the source is dead once
+/// boxing completes. `__rt_heap_free_safe` ignores the arena case and releases only the
+/// managed heap case; without it, every oversized read-all stranded its accumulation block.
+fn box_read_all_result_and_release_source(ctx: &mut FunctionContext<'_>) {
+    let (pointer, _) = abi::string_result_regs(ctx.emitter);
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, pointer);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    abi::emit_push_reg(ctx.emitter, result);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the source pointer saved below the boxed result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the source pointer saved below the boxed result
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    abi::emit_pop_reg(ctx.emitter, result);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("add sp, sp, #16");                         // discard the saved source-pointer slot
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("add rsp, 16");                             // discard the saved source-pointer slot
+        }
+    }
+}
+
 /// Lowers `stream_get_contents(stream, length?, offset?)` to `string|false`.
 pub(crate) fn lower_stream_get_contents(
     ctx: &mut FunctionContext<'_>,
@@ -429,7 +487,7 @@ pub(crate) fn lower_stream_get_contents(
     load_stream_fd_to_result(ctx, stream, "stream_get_contents")?;
     if inst.operands.len() == 1 {
         lower_stream_get_contents_read_all(ctx);
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        box_read_all_result_and_release_source(ctx);
         return store_if_result(ctx, inst);
     }
 
@@ -461,7 +519,7 @@ pub(crate) fn lower_stream_get_contents(
     ctx.emitter.label(&read_all);
     lower_stream_get_contents_reload_fd_and_leave_frame(ctx);
     lower_stream_get_contents_read_all(ctx);
-    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    box_read_all_result_and_release_source(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("b {}", done));                    // skip the seek-failure false result after reading successfully

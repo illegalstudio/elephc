@@ -2,13 +2,13 @@
 title: "mb_convert_variables()"
 description: "Detects one source encoding and converts strings in variables, nested arrays, and object properties by reference."
 sidebar:
-  order: 834
+  order: 850
 ---
 
 ## mb_convert_variables()
 
 ```php
-function mb_convert_variables(string $to_encoding, array|string $from_encoding, mixed $var, ...$vars): string|false
+function mb_convert_variables(string $to_encoding, array|string $from_encoding, mixed &$var, ...$vars): string|false
 ```
 
 Detects one source encoding and converts strings in variables, nested arrays, and object properties by reference.

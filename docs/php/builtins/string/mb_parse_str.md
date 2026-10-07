@@ -2,13 +2,13 @@
 title: "mb_parse_str()"
 description: "Parses URL-encoded input with shared encoding detection and writes decoded variables by reference."
 sidebar:
-  order: 864
+  order: 880
 ---
 
 ## mb_parse_str()
 
 ```php
-function mb_parse_str(string $string, mixed $result): bool
+function mb_parse_str(string $string, mixed &$result): bool
 ```
 
 Parses URL-encoded input with shared encoding detection and writes decoded variables by reference.

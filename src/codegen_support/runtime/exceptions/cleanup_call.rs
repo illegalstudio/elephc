@@ -26,7 +26,6 @@ const CAUGHT: usize = 40;
 /// Emits the non-escaping unary cleanup boundary; the caller owns the pending exception slot.
 pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
     let older = match emitter.target.arch { Arch::AArch64 => "x1", Arch::X86_64 => "rdi" };
     let scratch = abi::secondary_scratch_reg(emitter);
     emitter.blank();
@@ -34,7 +33,7 @@ pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
     // -- save the callback and install a handler whose lifetime ends before returning --
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [ENTRY, PAYLOAD, OUTPUT].into_iter().enumerate() {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
     abi::store_at_offset(emitter, result, PREVIOUS);
@@ -50,7 +49,7 @@ pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
     }
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::emit_frame_slot_address(emitter, arg0, HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
+    abi::emit_frame_slot_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.bl_c("setjmp");                                                     // retain cleanup control when the unary callback throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_cleanup_invoke_caught");
     abi::load_at_offset(emitter, result, PAYLOAD);
@@ -92,9 +91,9 @@ pub(crate) fn emit_guarded_cleanup_call(
     payload: &str,
     pending_offset: usize,
 ) {
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
-    let arg2 = abi::int_arg_reg_name(emitter.target, 2);
+    let arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
+    let arg2 = abi::runtime_helper_int_arg_reg(emitter, 2);
     abi::emit_reg_move(emitter, arg1, payload);
     abi::emit_symbol_address(emitter, arg0, entry);
     abi::emit_frame_slot_address(emitter, arg2, pending_offset);

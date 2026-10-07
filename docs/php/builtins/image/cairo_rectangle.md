@@ -2,7 +2,7 @@
 title: "cairo_rectangle()"
 description: "Adds a closed rectangular subpath to the current path."
 sidebar:
-  order: 429
+  order: 433
 ---
 
 ## cairo_rectangle()

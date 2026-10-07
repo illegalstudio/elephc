@@ -141,6 +141,7 @@ impl Emitter {
     /// Emit a label that is visible across object files (for two-object linking).
     /// On Linux, places each global symbol in its own `.text.<name>` section so
     /// that `--gc-sections` can eliminate unreachable helpers at link time.
+    /// On Windows, emits `.globl` only (PE/COFF does not support per-function sections via GAS).
     pub fn label_global(&mut self, name: &str) {
         // An assembler-local name cannot be `.globl` ("non-local symbol required"). Catch
         // it here with the offending label instead of an assembler error thousands of
@@ -308,43 +309,270 @@ impl Emitter {
                 let target = self.target;
                 target.emit_linux_syscall(self, macos_num);
             }
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => panic!("Windows does not use AArch64 syscalls (see issue #379)"),
         }
     }
 
     // ── Platform-aware C symbol call ─────────────────────────────────
 
     /// Emit `bl _func` (macOS) or `bl func` (Linux) for C library calls.
+    ///
+    /// For a symbol that may be an imported Windows API function
+    /// (msvcrt/ws2_32 — anything a `WIN32_IMPORTS` entry could name), prefer
+    /// [`Emitter::emit_call_c`]: on windows-x86_64 `bl_c` always emits a bare
+    /// `call func`, which is only correct for internal/toolchain symbols —
+    /// a bare msvcrt/ws2_32 import expects the MSx64 calling convention, not
+    /// SysV, so calling it through `bl_c` is the Class-1 ABI bug. `bl_c`
+    /// remains the right choice for symbols that never resolve to a Windows
+    /// import.
     pub fn bl_c(&mut self, func: &str) {
         match (self.platform, self.target.arch) {
             (Platform::MacOS, Arch::AArch64) => self.instruction(&format!("bl _{}", func)),
             (Platform::Linux, Arch::AArch64) => self.instruction(&format!("bl {}", func)),
             (Platform::Linux, Arch::X86_64) => self.instruction(&format!("call {}", func)),
+            (Platform::Windows, Arch::X86_64) => {
+                debug_assert!(
+                    super::runtime::windows_c_shim_name(func).is_none(),
+                    "bl_c(\"{func}\") on windows-x86_64 targets a symbol with a registered \
+                     __rt_sys_* shim; call emit_call_c(\"{func}\") instead so the shim's \
+                     SysV->MSx64 ABI conversion is applied rather than a raw SysV-staged import call"
+                );
+                // MinGW's C-library setjmp/longjmp are SEH-based and read their
+                // arguments MSx64-style; elephc's SysV-staged, SEH-free replacements
+                // (see runtime::exceptions::setjmp) are used on this target instead.
+                let name = match func {
+                    "setjmp" => "__rt_setjmp",
+                    "longjmp" => "__rt_longjmp",
+                    other => other,
+                };
+                self.instruction(&format!("call {}", name));
+            }
             (Platform::MacOS, Arch::X86_64) => {
                 panic!("C symbol calls are not implemented yet for target macos-x86_64");
             }
-            (Platform::Windows, _) => panic!("Windows target is not yet supported (see issue #379)"),
+            (Platform::Windows, Arch::AArch64) => {
+                panic!("Windows ARM64 target is not yet supported (see issue #379)");
+            }
         }
+    }
+
+    /// Symbols for which, on windows-x86_64, `emit_shim_c_symbols` /
+    /// `emit_shim_c_symbol_delegates` (`codegen_support::runtime::win32`)
+    /// emit an internal label of the identical name that performs its own
+    /// SysV→MSx64 ABI conversion internally (e.g. `write`, `read`, `stat`).
+    /// A bare `call <symbol>` for one of these reaches that internal label,
+    /// not the msvcrt/ws2_32 import of the same name, so it is safe for
+    /// [`Emitter::emit_call_c`] to emit it unchanged. Keep this list in sync
+    /// with the labels those two functions emit.
+    const EMIT_CALL_C_SYSV_STUB_DELEGATES: &'static [&'static str] = &[
+        "accept4", "access", "brk", "chdir", "chmod", "clock_gettime", "close", "dirfd",
+        "execve", "exit", "fcntl", "fgetc", "fileno", "flock", "fnmatch", "fstat", "fsync",
+        "ftruncate", "futex", "getcwd", "getpid", "getrandom", "glob", "globfree", "h_errno",
+        "hstrerror", "ioctl", "kill", "link", "lseek", "lstat", "main", "mkdir", "mmap",
+        "mprotect", "munmap", "open", "pclose", "popen", "read", "readlink", "realpath",
+        "rename", "rmdir", "sleep", "stat", "symlink", "sysinfo", "system", "timegm", "umask",
+        "uname", "unlink", "usleep", "utimensat", "write", "writev",
+    ];
+
+    /// Emit a call to a C-library symbol that may be an imported Windows API
+    /// function (msvcrt/ws2_32). Contrast with [`Emitter::bl_c`]: `bl_c`
+    /// emits a bare `call func` on windows-x86_64 unconditionally, which is
+    /// wrong whenever `func` is a bare msvcrt/ws2_32 import (entered with
+    /// SysV registers instead of the MSx64 ABI it expects — the Class-1 ABI
+    /// bug). `emit_call_c` routes `symbol` correctly on windows-x86_64:
+    /// - if `symbol` has a registered `__rt_sys_<symbol>` shim (the registry
+    ///   is `codegen_support::runtime::win32::windows_c_shim_name`, the
+    ///   single source of truth for Windows C shims), emits
+    ///   `call __rt_sys_<symbol>`;
+    /// - else, if `symbol` is a known SysV stub-delegate (see
+    ///   [`Self::EMIT_CALL_C_SYSV_STUB_DELEGATES`]), emits a bare
+    ///   `call <symbol>` — correct because the call target is the internal
+    ///   stub-delegate label, not the msvcrt/ws2_32 import;
+    /// - else PANICS with a message naming the missing shim/stub. This is a
+    ///   build-time exhaustiveness guard: it only fires for symbols actually
+    ///   passed to `emit_call_c`, so a future call site added for a symbol
+    ///   with neither a shim nor a stub blows up the first test that
+    ///   exercises it, instead of silently reintroducing the Class-1 bug.
+    ///
+    /// On every other target, emits exactly what `bl_c` emits (`call symbol`
+    /// on Linux x86_64; `bl _symbol`/`bl symbol` on AArch64) — byte-identical.
+    pub fn emit_call_c(&mut self, symbol: &str) {
+        if (self.platform, self.target.arch) != (Platform::Windows, Arch::X86_64) {
+            self.bl_c(symbol);
+            return;
+        }
+        if let Some(shim) = super::runtime::windows_c_shim_name(symbol) {
+            self.instruction(&format!("call {}", shim));
+        } else if Self::EMIT_CALL_C_SYSV_STUB_DELEGATES.contains(&symbol) {
+            self.instruction(&format!("call {}", symbol));
+        } else {
+            panic!(
+                "emit_call_c(\"{symbol}\"): no Windows shim and not a SysV stub-delegate — \
+                 add a __rt_sys_{symbol} shim or register {symbol} as stub-covered"
+            );
+        }
+    }
+
+    /// Emits, on windows-x86_64 ONLY, the reverse-index-order remap of the SysV
+    /// integer argument registers into the MSx64 registers a GENERATED callback
+    /// (closure/descriptor invoker, user method, magic method) reads, immediately
+    /// before an indirect `call` into that generated code. Mirror of
+    /// `remap_platform_args_to_runtime_helper_regs` (generated→`__rt_*`, SysV): here
+    /// a hand-written runtime helper calls BACK into generated code, so the
+    /// SysV-staged args must be moved into the MSx64 argument registers. Reverse
+    /// index order (r9←rcx, r8←rdx, rdx←rsi, rcx←rdi) avoids clobbering a source
+    /// register a later index still reads (rcx is SysV arg3 AND MSx64 arg0; rdx is
+    /// SysV arg2 AND MSx64 arg1). No-op (nothing emitted) on every
+    /// non-windows-x86_64 target, so output is byte-identical there. `int_reg_count`
+    /// MUST be ≤4: a callback consuming >4 integer registers passes its 5th+ arg on
+    /// the MSx64 stack and needs bespoke stack+shadow staging, not this helper.
+    pub fn remap_sysv_args_to_platform_for_callback(&mut self, int_reg_count: usize) {
+        assert!(
+            int_reg_count <= 4,
+            "reverse-ABI callback remap covers <=4 register args; {int_reg_count} needs MSx64 stack staging"
+        );
+        if (self.platform, self.target.arch) != (Platform::Windows, Arch::X86_64) {
+            return;
+        }
+        for idx in (0..int_reg_count).rev() {
+            let src = crate::codegen_support::abi::runtime_helper_int_arg_reg(self, idx);
+            let dst = crate::codegen_support::abi::int_arg_reg_name(self.target, idx);
+            if src != dst {
+                self.instruction(&format!("mov {}, {}", dst, src));             // SysV callback arg -> MSx64 reg the generated callee reads
+            }
+        }
+    }
+
+    /// Calls generated PHP-ABI code from a hand-written SysV runtime helper.
+    ///
+    /// Runtime helpers always stage integer arguments in SysV registers. On
+    /// Windows x86_64, generated functions instead consume MSx64 registers and
+    /// require 32 bytes of caller shadow space. This adapter relocates the call
+    /// target away from argument registers, stages the fifth and sixth SysV
+    /// arguments in MSx64 stack slots, remaps the first four registers without
+    /// collisions, and restores the stack after the indirect call. Other
+    /// targets retain the original bare indirect-call sequence byte-for-byte.
+    pub fn emit_platform_callback_call(&mut self, fnptr_reg: &str, int_arg_count: usize) {
+        self.emit_sysv_to_msx64_indirect_call(fnptr_reg, int_arg_count, "generated PHP callback");
+    }
+
+    /// Emits a call to a NATIVE (real C/Rust, MSx64-ABI) function through the
+    /// pointer in `fnptr_reg`, correcting the ABI on windows-x86_64. The
+    /// hand-written runtime helpers stage arguments in the SysV registers; a
+    /// genuine native callee on windows reads the MSx64 registers, needs
+    /// 32-byte caller shadow space, and (at >=4 args) would collide with a
+    /// fn-ptr parked in r9. This relocates the fn-ptr off the MSx64 argument
+    /// registers into r11, reserves the shadow space (plus 8-byte slots for
+    /// the 5th/6th integer args, 16-byte aligned), moves the SysV 5th/6th
+    /// args (r8/r9) onto the stack BEFORE the register remap clobbers them,
+    /// remaps the first <=4 SysV integer args into the MSx64 registers
+    /// (reverse index order, via `remap_sysv_args_to_platform_for_callback`),
+    /// then calls the relocated pointer. Byte-identical to a bare
+    /// `call {fnptr_reg}` on every other target. Arguments must already be in
+    /// the SysV integer registers (rdi/rsi/rdx/rcx/r8/r9); no float args
+    /// (assert-free but undefined if present); `int_arg_count` must be <= 6
+    /// (a 7th+ arg needs bespoke staging). The caller frame must be 16-byte
+    /// aligned at this point.
+    pub fn emit_native_bridge_call(&mut self, fnptr_reg: &str, int_arg_count: usize) {
+        self.emit_sysv_to_msx64_indirect_call(fnptr_reg, int_arg_count, "native bridge");
+    }
+
+    /// Calls a statically linked native C/Rust bridge symbol from a hand-written
+    /// runtime helper whose integer arguments use the compiler's SysV runtime ABI.
+    ///
+    /// Windows x86_64 materializes the platform-mangled symbol address and routes
+    /// it through [`Emitter::emit_native_bridge_call`] so arguments are remapped
+    /// and the mandatory MSx64 shadow space is reserved. Other targets retain a
+    /// direct platform-mangled C-symbol call.
+    pub fn emit_native_bridge_symbol_call(&mut self, symbol: &str, int_arg_count: usize) {
+        if (self.platform, self.target.arch) != (Platform::Windows, Arch::X86_64) {
+            self.bl_c(symbol);
+            return;
+        }
+
+        let extern_symbol = self.target.extern_symbol(symbol);
+        crate::codegen_support::abi::emit_symbol_address(self, "r11", &extern_symbol);
+        self.emit_native_bridge_call("r11", int_arg_count);
+    }
+
+    /// Calls an indirect bridge entry whose published pointer already exposes
+    /// the compiler runtime ABI, including through a Windows ABI adapter.
+    pub fn emit_published_bridge_call(&mut self, fnptr_reg: &str) {
+        match self.target.arch {
+            Arch::AArch64 => self.instruction(&format!("blr {fnptr_reg}")),
+            Arch::X86_64 => self.instruction(&format!("call {fnptr_reg}")),
+        }
+    }
+
+    /// Emits the shared SysV-runtime to MSx64 indirect-call transition.
+    fn emit_sysv_to_msx64_indirect_call(
+        &mut self,
+        fnptr_reg: &str,
+        int_arg_count: usize,
+        callee_kind: &str,
+    ) {
+        if (self.platform, self.target.arch) != (Platform::Windows, Arch::X86_64) {
+            self.instruction(&format!("call {}", fnptr_reg));                   // native call, SysV/AAPCS ABI — byte-identical off windows
+            return;
+        }
+        assert!(
+            int_arg_count <= 6,
+            "{callee_kind} call remap covers <=6 integer args; {int_arg_count} needs bespoke staging"
+        );
+        if fnptr_reg != "r11" {
+            self.instruction(&format!("mov r11, {}", fnptr_reg));               // relocate the fn-ptr off the MSx64 argument registers
+        }
+        // 32-byte MSx64 shadow space + one 8-byte slot per 5th/6th SysV int arg, 16-byte aligned
+        let stack_args = int_arg_count.saturating_sub(4);
+        let frame = (32 + stack_args * 8 + 15) / 16 * 16;
+        self.instruction(&format!("sub rsp, {}", frame));                       // reserve MSx64 shadow space and stack-arg slots
+        for idx in 4..int_arg_count {
+            let src = crate::codegen_support::abi::runtime_helper_int_arg_reg(self, idx);
+            let offset = 32 + (idx - 4) * 8;
+            self.instruction(&format!("mov QWORD PTR [rsp + {}], {}", offset, src)); // 5th+ SysV int arg -> MSx64 stack slot (before the remap clobbers r8/r9)
+        }
+        self.remap_sysv_args_to_platform_for_callback(int_arg_count.min(4));
+        self.instruction("call r11");                                           // invoke the MSx64 callee via the relocated pointer
+        self.instruction(&format!("add rsp, {}", frame));                       // release the shadow + stack-arg scratch
     }
 
     // ── Platform-aware entry point ───────────────────────────────────
 
-    /// Returns the program entry point symbol: `_main` (macOS) or `main` (Linux).
+    /// Returns the program entry point symbol: `_main` (macOS), `main` (Linux),
+    /// or `__elephc_main` (Windows x86_64 — the Win32 shim emits the real `main`
+    /// wrapper that calls into `__elephc_main`).
     pub fn entry_symbol(&self) -> &'static str {
         match self.target.arch {
             Arch::AArch64 => match self.platform {
                 Platform::MacOS => "_main",
                 Platform::Linux => "main",
-                Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+                Platform::Windows => {
+                    panic!("Windows ARM64 target is not yet supported (see issue #379)")
+                }
             },
-            Arch::X86_64 => "main",
+            Arch::X86_64 => match self.platform {
+                Platform::Windows => "__elephc_main",
+                _ => "main",
+            },
         }
     }
 
-    /// Emit the program entry point label: `_main` (macOS) or `main` (Linux).
+    /// Emit the program entry point label: `_main` (macOS), `main` (Linux),
+    /// or `__elephc_main` (Windows — the Win32 shim emits the real `main` wrapper).
     pub fn entry_label(&mut self) {
-        let symbol = self.entry_symbol();
-        self.label_global(symbol);
+        match self.target.arch {
+            Arch::AArch64 => match self.platform {
+                Platform::MacOS => self.label_global("_main"),
+                Platform::Linux => self.label_global("main"),
+                Platform::Windows => {
+                    panic!("Windows ARM64 target is not yet supported (see issue #379)");
+                }
+            },
+            Arch::X86_64 => match self.platform {
+                Platform::Windows => self.label_global("__elephc_main"),
+                _ => self.label_global("main"),
+            },
+        }
     }
 }
 
@@ -409,7 +637,23 @@ pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
     use super::*;
+
+    /// Collects Rust source files below one runtime directory for structural ABI checks.
+    fn collect_runtime_rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).expect("runtime source directory must be readable") {
+            let path = entry.expect("runtime source entry must be readable").path();
+            if path.is_dir() {
+                collect_runtime_rust_files(&path, files);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                files.push(path);
+            }
+        }
+    }
 
     /// Verifies comment prefix is platform aware.
     #[test]
@@ -527,5 +771,60 @@ mod tests {
         e.reopen_text_section(enclosing);
         let out = e.output();
         assert!(!out.contains(".section"), "{out}");
+    }
+
+    /// Rejects new raw runtime indirect calls unless their ABI family is explicitly reviewed.
+    #[test]
+    fn runtime_indirect_calls_are_structurally_allowlisted() {
+        let runtime_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/codegen_support/runtime");
+        let allowed = BTreeMap::from([
+            // `stream_open` has seven integer arguments. Its source-side SysV
+            // seventh stack argument requires bespoke Windows stack staging;
+            // see the target-specific invariant and regression in `io/fopen.rs`.
+            (("io/fopen.rs", "r11"), 1usize),
+            (("io/fwrite.rs", "r9"), 3usize),
+            (("io/ob_handler.rs", "r10"), 1usize),
+            (("strings/hash_hmac.rs", "r11"), 1usize),
+        ]);
+        let mut files = Vec::new();
+        collect_runtime_rust_files(&runtime_root, &mut files);
+        let mut observed = BTreeMap::<(String, String), usize>::new();
+
+        for path in files {
+            let relative = path
+                .strip_prefix(&runtime_root)
+                .expect("runtime source remains below its root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source = fs::read_to_string(&path).expect("runtime source is readable");
+            for line in source.lines() {
+                let Some(call) = line.split("emitter.instruction(\"call ").nth(1) else { // inspect generated call sites for ABI validation
+                    continue;
+                };
+                let Some(register) = call.split('"').next() else {
+                    continue;
+                };
+                if !matches!(
+                    register,
+                    "rax" | "rbx" | "rcx" | "rdx" | "rsi" | "rdi" | "r8" | "r9"
+                        | "r10" | "r11" | "r12" | "r13" | "r14" | "r15"
+                ) {
+                    continue;
+                }
+                *observed
+                    .entry((relative.clone(), register.to_string()))
+                    .or_default() += 1;
+            }
+        }
+
+        let allowed = allowed
+            .into_iter()
+            .map(|((path, register), count)| ((path.to_string(), register.to_string()), count))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            observed, allowed,
+            "new runtime indirect calls need an ABI helper or explicit classification"
+        );
     }
 }

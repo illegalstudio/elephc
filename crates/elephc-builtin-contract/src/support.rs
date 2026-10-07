@@ -134,7 +134,9 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
         BuiltinKind::Function => BackendImplementation::Registry,
         BuiltinKind::LanguageConstruct => BackendImplementation::LanguageConstruct,
         BuiltinKind::DedicatedSyntax => BackendImplementation::DedicatedSyntax,
-        BuiltinKind::PreludeProvided => BackendImplementation::Prelude,
+        BuiltinKind::PreludeProvided | BuiltinKind::WindowsOnlyPreludeProvided => {
+            BackendImplementation::Prelude
+        }
         BuiltinKind::NameResolverRewrite => BackendImplementation::NameResolverRewrite,
     };
     BackendSupport::Implemented(implementation)
@@ -161,7 +163,9 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
     // procedural families) is an explicit, auditable absence rather than a missing binding.
     if matches!(
         contract.kind,
-        BuiltinKind::PreludeProvided | BuiltinKind::NameResolverRewrite
+        BuiltinKind::PreludeProvided
+            | BuiltinKind::WindowsOnlyPreludeProvided
+            | BuiltinKind::NameResolverRewrite
     ) && !matches!(contract.area, Area::Curl | Area::Xml)
         && !EVAL_IMPLEMENTED_PRELUDE_SURFACES.contains(&contract.name)
     {
@@ -372,7 +376,7 @@ mod tests {
         // The shared INI helper is internal but participates in both runtime registries.
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 682 + curl_surface);
+        assert_eq!(eval_registry, 696 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -393,14 +397,14 @@ mod tests {
         assert_eq!(eval_internal, 111);
         // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 353);
+        assert_eq!(eval_pending, 355);
         // The shared mbstring catalog adds sixty-four registry contracts, including
-        // its internal INI helper, to the prior compiler registry surface; the eleven
-        // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
-        assert_eq!(aot_registry, 737);
+        // its internal INI helper. The eleven opcache helpers and fourteen registry-backed
+        // Windows/process contracts are both present in the rebased catalog.
+        assert_eq!(aot_registry, 751);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 409 + curl_surface);
+        assert_eq!(aot_external, 411 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -447,10 +451,10 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 85);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 595 + curl_surface);
-        // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
-        // call from AOT code and have no eval execution route of their own.
-        assert_eq!(unsupported, 464);
+        assert_eq!(interpreter_adapter, 609 + curl_surface);
+        // Includes the eleven `__elephc_opcache_rt_*` helpers plus the two Windows-only
+        // prelude contracts, none of which has an eval execution route of its own.
+        assert_eq!(unsupported, 466);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

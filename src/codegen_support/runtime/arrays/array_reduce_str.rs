@@ -118,7 +118,7 @@ fn emit_array_reduce_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [r9 + 8]");                         // callback arg 2: element string length
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // pass the capture environment after the element pair
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the callback address
-    emitter.instruction("call r11");                                            // rax = callback(accumulator, element)
+    emitter.emit_platform_callback_call("r11", 4);                                // call generated PHP callback with the target ABI
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // accumulator = callback result
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload i after the callback clobbered caller-saved registers
     emitter.instruction("add r9, 1");                                           // i += 1

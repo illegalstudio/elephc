@@ -60,7 +60,7 @@ pub(super) fn lower_stream_timeout_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov x3, x2");                              // pass microseconds as wrapper option arg2
             ctx.emitter.instruction("mov x2, x1");                              // pass seconds as wrapper option arg1
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the read-timeout option identifier for wrapper dispatch
                 &format!("mov x1, #{}", STREAM_OPTION_READ_TIMEOUT)
             );                                                                  // select STREAM_OPTION_READ_TIMEOUT
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
@@ -75,7 +75,7 @@ pub(super) fn lower_stream_timeout_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov rcx, rdx");                            // pass microseconds as wrapper option arg2
             ctx.emitter.instruction("mov rdx, rsi");                            // pass seconds as wrapper option arg1
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the read-timeout option identifier for wrapper dispatch
                 &format!("mov rsi, {}", STREAM_OPTION_READ_TIMEOUT)
             );                                                                  // select STREAM_OPTION_READ_TIMEOUT
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
@@ -193,13 +193,35 @@ pub(super) fn store_fsockopen_error_outputs(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    let errno_slot = if inst.operands.len() >= 3 {
-        source_load_local_slot(ctx, expect_operand(inst, 2)?)?
+    store_socket_error_outputs(ctx, inst, 2, 3, false)
+}
+
+/// Stores local `$error_code` and `$error_message` outputs for
+/// `stream_socket_server`, whose by-reference arguments begin at index 1.
+pub(super) fn store_stream_socket_server_error_outputs(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    store_socket_error_outputs(ctx, inst, 1, 2, true)
+}
+
+/// Stores socket creation error outputs for a pair of caller-visible operand
+/// indices. The runtime currently exposes a stable ECONNREFUSED diagnostic for
+/// all failed socket creation paths, matching the existing fsockopen subset.
+fn store_socket_error_outputs(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    errno_index: usize,
+    errstr_index: usize,
+    use_runtime_errno: bool,
+) -> Result<()> {
+    let errno_slot = if inst.operands.len() > errno_index {
+        source_load_local_slot(ctx, expect_operand(inst, errno_index)?)?
     } else {
         None
     };
-    let errstr_slot = if inst.operands.len() >= 4 {
-        source_load_local_slot(ctx, expect_operand(inst, 3)?)?
+    let errstr_slot = if inst.operands.len() > errstr_index {
+        source_load_local_slot(ctx, expect_operand(inst, errstr_index)?)?
     } else {
         None
     };
@@ -214,13 +236,21 @@ pub(super) fn store_fsockopen_error_outputs(
             abi::emit_push_reg(ctx.emitter, "x0");
             ctx.emitter.instruction("cmp x0, #0");                              // test whether the fsockopen connection succeeded
             ctx.emitter.instruction("mov x9, #0");                              // success error code is zero
-            ctx.emitter.instruction(&format!("mov x10, #{}", econnrefused));    // failure error code is ECONNREFUSED
+            if use_runtime_errno {
+                abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_stream_socket_errno", 0);
+            } else {
+                ctx.emitter.instruction(&format!("mov x10, #{}", econnrefused));// set the stream error result for the refused connection
+            }
             ctx.emitter.instruction("csel x9, x9, x10, ge");                    // choose the error code for the connection outcome
             abi::emit_symbol_address(ctx.emitter, "x10", &msg_sym);
             abi::emit_symbol_address(ctx.emitter, "x11", &empty_sym);
             ctx.emitter.instruction("csel x10, x11, x10, ge");                  // choose the error-message pointer for the outcome
             ctx.emitter.instruction("mov x11, #0");                             // success error-message length is zero
             ctx.emitter.instruction(&format!("mov x12, #{}", msg_len));         // failure error-message byte length
+            if use_runtime_errno {
+                abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_stream_socket_error_ptr", 0);
+                abi::emit_load_symbol_to_reg(ctx.emitter, "x12", "_stream_socket_error_len", 0);
+            }
             ctx.emitter.instruction("csel x11, x11, x12, ge");                  // choose the error-message length for the outcome
             if let Some(slot) = errstr_slot {
                 let preserve_errno = errno_slot.is_some()
@@ -241,7 +271,11 @@ pub(super) fn store_fsockopen_error_outputs(
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("cmp rax, 0");                              // test whether the fsockopen connection succeeded
-            ctx.emitter.instruction(&format!("mov r9, {}", econnrefused));      // failure error code is ECONNREFUSED
+            if use_runtime_errno {
+                abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_stream_socket_errno", 0);
+            } else {
+                ctx.emitter.instruction(&format!("mov r9, {}", econnrefused));  // set the stream error result for the refused connection
+            }
             ctx.emitter.instruction("mov r10, 0");                              // success error code is zero without clobbering compare flags
             ctx.emitter.instruction("cmovge r9, r10");                          // choose the error code for the connection outcome
             abi::emit_symbol_address(ctx.emitter, "r10", &msg_sym);
@@ -249,6 +283,10 @@ pub(super) fn store_fsockopen_error_outputs(
             ctx.emitter.instruction("cmovge r10, r11");                         // choose the error-message pointer for the outcome
             ctx.emitter.instruction(&format!("mov r11, {}", msg_len));          // failure error-message byte length
             ctx.emitter.instruction("mov rcx, 0");                              // success error-message length is zero without clobbering compare flags
+            if use_runtime_errno {
+                abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_stream_socket_error_ptr", 0);
+                abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_stream_socket_error_len", 0);
+            }
             ctx.emitter.instruction("cmovge r11, rcx");                         // choose the error-message length for the outcome
             if let Some(slot) = errstr_slot {
                 let preserve_errno = errno_slot.is_some()
@@ -321,4 +359,3 @@ pub(super) fn store_string_output_to_local(
     abi::store_at_offset_scratch(ctx.emitter, len_reg, offset - 8, "x13");
     Ok(())
 }
-

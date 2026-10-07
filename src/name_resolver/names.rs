@@ -355,7 +355,7 @@ pub(super) fn resolve_constant_name(
         if symbols.has_constant(&name.as_canonical()) {
             return name.as_canonical();
         }
-        if is_builtin_global_constant(name.as_str()) {
+        if is_builtin_global_constant(name.as_str(), symbols.platform) {
             return name.as_canonical();
         }
         return local;
@@ -375,7 +375,8 @@ pub(super) fn resolve_constant_name(
 /// resolution: every constant the shared catalog registers unconditionally (`PHP_OS`, `SID`,
 /// `STDIN`, `JSON_*`, `CURLOPT_*`, ...), so a bare mention resolves to the global even inside
 /// a namespace, with or without the owning bridge or prelude being linked.
-fn is_builtin_global_constant(name: &str) -> bool {
+fn is_builtin_global_constant(name: &str, platform: crate::codegen::platform::Platform) -> bool {
     crate::types::predefined_constants::is_registered_constant(name)
-        || crate::types::pcntl_constants::is_pcntl_int_constant(name)
+        || (platform != crate::codegen::platform::Platform::Windows
+            && crate::types::pcntl_constants::is_pcntl_int_constant(name))
 }

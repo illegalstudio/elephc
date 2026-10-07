@@ -1428,12 +1428,11 @@ fn encode_field(value: &str) -> String {
 
 /// Microseconds since the Unix epoch, for placing a slice on a shared axis.
 fn unix_micros() -> u64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    // SAFETY: `ts` is a valid, fully owned `timespec` for the duration of the call.
-    unsafe {
-        libc::clock_gettime(libc::CLOCK_REALTIME, &mut ts);
-    }
-    ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1_000
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros()
+        .min(u128::from(u64::MAX)) as u64
 }
 
 /// Random lowercase hex, `bytes` bytes wide, from the OS entropy pool. Falls
@@ -1838,14 +1837,12 @@ fn write_chrome_trace(
 /// Monotonic nanoseconds — the instrumentation clock. Not async-signal-safe, but
 /// enter/exit run in ordinary compiled code, never a signal handler.
 fn now_ns() -> u64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    // SAFETY: ts is a valid, owned timespec.
-    unsafe {
-        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
-    }
-    (ts.tv_sec as u64)
-        .wrapping_mul(1_000_000_000)
-        .wrapping_add(ts.tv_nsec as u64)
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    ORIGIN
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_nanos()
+        .min(u128::from(u64::MAX)) as u64
 }
 
 /// Reads the CPU's monotonic counter, in its own ticks.
@@ -2280,6 +2277,7 @@ const ABANDONED_CLAIM_SECS: u32 = 60;
 /// someone else, which for this question is still "alive" — only `ESRCH` says
 /// the process is gone. Erring toward alive is the safe direction: it leaves a
 /// slot claimed a little longer rather than handing it to a second writer.
+#[cfg(unix)]
 fn process_is_alive(pid: i32) -> bool {
     if pid <= 0 {
         return false;
@@ -2288,6 +2286,12 @@ fn process_is_alive(pid: i32) -> bool {
         return true;
     }
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Windows capture handoff is process-local until a shared mapping/identity backend exists.
+#[cfg(not(unix))]
+fn process_is_alive(pid: i32) -> bool {
+    pid > 0 && pid as u32 == std::process::id()
 }
 
 /// Seconds on a clock that is the same for every process sharing the mapping
@@ -2300,17 +2304,7 @@ fn process_is_alive(pid: i32) -> bool {
 /// every outstanding claim by however much it jumped and can retire a live
 /// writer's claim the instant it lands.
 fn monotonic_seconds() -> u32 {
-    let mut now = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // Safety: writes one `timespec` this call owns.
-    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } != 0 {
-        // Reads as "claimed just now", which delays reclamation rather than
-        // hastening it. The other direction hands out a live writer's slot.
-        return 0;
-    }
-    now.tv_sec as u32
+    (now_ns() / 1_000_000_000) as u32
 }
 /// A value that distinguishes the process now running under `pid` from any
 /// earlier one that held the same pid, or `None` where it cannot be had.
@@ -2369,6 +2363,7 @@ fn process_start_id(_pid: i32) -> Option<u32> {
 }
 
 /// Folds a start time into the owner token's upper word, never to 0.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn fold_start_id(value: u64) -> u32 {
     let folded = (value ^ (value >> 32)) as u32;
     if folded == 0 {
@@ -2501,6 +2496,7 @@ fn capture_owner() -> Option<&'static AtomicU64> {
 
 /// Maps the rendezvous. Idempotent, and silent on failure: a diagnostic that
 /// cannot allocate its scratch must not take the process down.
+#[cfg(unix)]
 fn map_capture_region() {
     if CAPTURE_REGION.load(Ordering::Acquire) != 0 {
         return;
@@ -2536,6 +2532,11 @@ fn map_capture_region() {
         unsafe { libc::munmap(region, CAPTURE_BYTES) };
     }
 }
+
+/// Windows has no fork-inherited shared capture mapping in the current direct-worker model.
+/// Exact instrumentation still records and dumps locally; remote capture remains unavailable.
+#[cfg(not(unix))]
+fn map_capture_region() {}
 
 /// Asks for the next slice to be handed back instead of only printed.
 ///

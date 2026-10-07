@@ -10,6 +10,24 @@
 
 use super::*;
 
+/// Opens a private save frame around a public Windows lifecycle entry.
+fn emit_windows_prologue(emitter: &mut Emitter, target: Target) -> Option<usize> {
+    let base = windows_callee_saved_base(target, 16);
+    if base.is_some() {
+        abi::emit_frame_prologue(emitter, windows_callee_saved_frame_size(target, 16));
+        emit_save_windows_callee_saved(emitter, base);
+    }
+    base
+}
+
+/// Restores the Windows nonvolatile save area without disturbing `rax`.
+fn emit_windows_epilogue(emitter: &mut Emitter, target: Target, base: Option<usize>) {
+    if base.is_some() {
+        emit_restore_windows_callee_saved(emitter, base);
+        abi::emit_frame_restore(emitter, windows_callee_saved_frame_size(target, 16));
+    }
+}
+
 /// Emits ABI version, lifecycle, last-status, last-error, and owned-buffer release exports.
 pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
     startup: Option<&str>, runtime_error: (&str, usize)) {
@@ -26,7 +44,8 @@ pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
         emitter.blank();
         emitter.comment(&format!("cdylib lifecycle: {lifecycle}"));
         emitter.label_global(&target.extern_symbol(lifecycle));
-        if lifecycle == "elephc_init" {
+        let windows_frame = emit_windows_prologue(emitter, target);
+        if lifecycle == "elephc_init" && windows_frame.is_none() {
             abi::emit_frame_prologue(emitter, 16);
         }
         emit_clear_error_inline(emitter);
@@ -62,8 +81,11 @@ pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
                 emitter.instruction(&failure);                                  // return recoverable runtime failure to the host initializer
                 emitter.label("L_cdylib_init_return");
             }
-            abi::emit_frame_restore(emitter, 16);
+            if windows_frame.is_none() {
+                abi::emit_frame_restore(emitter, 16);
+            }
         }
+        emit_windows_epilogue(emitter, target, windows_frame);
         emitter.instruction("ret");                                             // return to the current C-ABI caller
     }
 
@@ -104,11 +126,19 @@ pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
     emitter.blank();
     emitter.comment("cdylib release of caller-owned export storage");
     emitter.label_global(&target.extern_symbol("elephc_free"));
+    let windows_frame = emit_windows_prologue(emitter, target);
     match target.arch {
         Arch::AArch64 => emitter.instruction("b __rt_heap_free_safe"),          // release non-borrowed runtime storage when present
         Arch::X86_64 => {
-            emitter.instruction("mov rax, rdi");                                // adapt the SysV pointer register to the runtime free ABI
-            emitter.instruction("jmp __rt_heap_free_safe");                     // release non-borrowed runtime storage when present
+            let source = if is_windows_x86_64(target) { "rcx" } else { "rdi" };
+            emitter.instruction(&format!("mov rax, {source}"));                 // adapt the public pointer register to the runtime free ABI
+            if windows_frame.is_some() {
+                emitter.instruction("call __rt_heap_free_safe");                // release storage before restoring MS x64 nonvolatile registers
+                emit_windows_epilogue(emitter, target, windows_frame);
+                emitter.instruction("ret");                                     // return through the restored Windows public ABI frame
+            } else {
+                emitter.instruction("jmp __rt_heap_free_safe");                 // tail-release storage through the matching SysV ABI
+            }
         }
     }
 }

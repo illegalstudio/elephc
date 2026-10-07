@@ -143,7 +143,7 @@ fn test_effect_analysis_recognizes_pure_builtin_calls() {
         Span::dummy(),
     );
 
-    assert!(!expr_has_side_effects(&expr));
+    assert!(!crate::optimize::effects::expr_has_side_effects(&expr));
     assert!(!expr_effect(&expr).may_throw);
     assert!(!expr_is_observable(&expr));
 }
@@ -159,7 +159,7 @@ fn test_effect_analysis_treats_eval_as_dynamic_barrier() {
         Span::dummy(),
     );
 
-    assert!(expr_has_side_effects(&expr));
+    assert!(crate::optimize::effects::expr_has_side_effects(&expr));
     assert!(expr_effect(&expr).may_throw);
     assert!(expr_is_observable(&expr));
 }
@@ -182,9 +182,9 @@ fn test_effect_analysis_keeps_unknown_property_and_array_reads_observable() {
         Span::dummy(),
     );
 
-    assert!(expr_has_side_effects(&property));
+    assert!(crate::optimize::effects::expr_has_side_effects(&property));
     assert!(expr_effect(&property).may_throw);
-    assert!(expr_has_side_effects(&array));
+    assert!(crate::optimize::effects::expr_has_side_effects(&array));
     assert!(expr_effect(&array).may_throw);
     assert!(expr_is_observable(&array));
 }
@@ -230,7 +230,7 @@ fn test_effect_analysis_refines_read_only_builtin_metadata() {
         Span::dummy(),
     );
 
-    assert!(!expr_has_side_effects(&expr));
+    assert!(!crate::optimize::effects::expr_has_side_effects(&expr));
     assert!(!expr_effect(&expr).may_throw);
     assert!(!expr_is_observable(&expr));
 }
@@ -282,7 +282,7 @@ fn test_effect_analysis_refines_builtin_with_known_pure_callback() {
         Span::dummy(),
     );
 
-    assert!(!expr_has_side_effects(&expr));
+    assert!(!crate::optimize::effects::expr_has_side_effects(&expr));
     assert!(!expr_effect(&expr).may_throw);
     assert!(!expr_is_observable(&expr));
 }

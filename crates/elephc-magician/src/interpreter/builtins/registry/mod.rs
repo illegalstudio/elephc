@@ -234,6 +234,15 @@ fn builtin_is_available(
         && (!spec.runtime_builtin.is_some_and(RuntimeBuiltinId::is_mbregex) || mbregex_available)
         && (!matches!(spec.area(), EvalArea::Pcntl)
             || eval_pcntl_builtin_is_available(spec.name))
+        && (!matches!(spec.name,
+            "sapi_windows_vt100_support"
+                | "sapi_windows_cp_set"
+                | "sapi_windows_cp_get"
+                | "sapi_windows_cp_conv"
+                | "sapi_windows_cp_is_utf8"
+                | "sapi_windows_set_ctrl_handler"
+                | "sapi_windows_generate_ctrl_event"
+        ) || cfg!(target_os = "windows"))
 }
 
 /// Looks up an eval builtin spec WITHOUT the strict-PHP filter.

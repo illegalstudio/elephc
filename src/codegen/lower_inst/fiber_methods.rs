@@ -31,7 +31,7 @@ pub(super) fn lower_fiber_start(
         abi::emit_push_result_value(ctx.emitter, &push_ty);
     }
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, receiver_arg)?;
     emit_store_fiber_start_args(ctx, &assignments, args.len())?;
     abi::emit_call_label(ctx.emitter, "__rt_fiber_start");
@@ -49,9 +49,9 @@ pub(super) fn lower_fiber_resume(
         fiber_single_optional_arg(ctx, inst.operands.get(1..).unwrap_or(&[]), "Fiber::resume")?;
     emit_optional_mixed_arg(ctx, value)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed resume value while loading the receiver
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, receiver_arg)?;
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1)); // pass the boxed resume value as runtime helper argument 2
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1)); // pass the boxed resume value as runtime helper argument 2
     abi::emit_call_label(ctx.emitter, "__rt_fiber_resume");
     store_if_result(ctx, inst)
 }
@@ -77,8 +77,8 @@ pub(super) fn lower_fiber_throw(
         )));
     }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the Throwable while loading the Fiber receiver
-    ctx.load_value_to_reg(object, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1)); // pass the Throwable object as runtime helper argument 2
+    ctx.load_value_to_reg(object, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1)); // pass the Throwable object as runtime helper argument 2
     abi::emit_call_label(ctx.emitter, "__rt_fiber_throw");
     store_if_result(ctx, inst)
 }
@@ -175,7 +175,7 @@ pub(super) fn lower_fiber_noarg_runtime_method(
             helper
         )));
     }
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, receiver_arg)?;
     abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)
@@ -266,7 +266,7 @@ pub(super) fn lower_fiber_state_predicate(
     object: ValueId,
     state: FiberStatePredicate,
 ) -> Result<()> {
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, receiver_arg)?;
     emit_fiber_state_predicate_call(ctx, inst, state)
 }
@@ -305,7 +305,7 @@ pub(super) fn emit_mixed_fiber_receiver_to_arg(
         .ok_or_else(|| {
             CodegenIrError::unsupported("mixed Fiber predicate without Fiber metadata")
         })?;
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
@@ -345,7 +345,7 @@ pub(super) fn emit_fiber_state_predicate_call(
 ) -> Result<()> {
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
         state.expected_state() as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_fiber_state_eq");

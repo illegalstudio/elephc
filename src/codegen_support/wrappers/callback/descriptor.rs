@@ -13,7 +13,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::arrays::emit_array_value_type_stamp;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 use crate::codegen_support::{DeferredCallbackWrapper, DeferredExternCallbackTrampoline};
 use crate::types::PhpType;
 
@@ -56,7 +56,7 @@ fn emit_aarch64_descriptor_callback_wrapper(
     emitter.instruction(&format!("mov x20, {}", env_reg));                      // keep the descriptor callback environment pointer across nested calls
     emitter.instruction("ldr x19, [x20]");                                      // load the selected callable descriptor from env slot zero
 
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, false);
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(
@@ -100,7 +100,7 @@ fn emit_x86_64_descriptor_callback_wrapper(
     emitter.instruction(&format!("mov r13, {}", env_reg));                      // keep the descriptor callback environment pointer across nested calls
     emitter.instruction("mov r12, QWORD PTR [r13]");                            // load the selected callable descriptor from env slot zero
 
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, false);
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(
@@ -154,7 +154,7 @@ fn emit_aarch64_extern_callback_trampoline(
     emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); // preserve runtime-loop registers across descriptor invocation
 
     abi::emit_load_symbol_to_reg(emitter, "x19", &trampoline.descriptor_slot_label, 0);
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, true);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(
@@ -178,11 +178,19 @@ fn emit_x86_64_extern_callback_trampoline(
     let wrapper = extern_trampoline_wrapper_view(trampoline);
     let visible_count = wrapper.visible_arg_types.len();
     let slot_count = (visible_count + 1).max(1);
-    let frame_size = align16(slot_count * 16 + 64);
+    let is_windows_native = emitter.target.platform == Platform::Windows;
+    let frame_size = if is_windows_native {
+        align16(slot_count * 16 + 240)
+    } else {
+        align16(slot_count * 16 + 64)
+    };
     let saved_descriptor_offset = slot_count * 16 + 16;
     let saved_env_offset = slot_count * 16 + 24;
     let saved_runtime_index_offset = slot_count * 16 + 32;
     let saved_runtime_count_offset = slot_count * 16 + 40;
+    let saved_rdi_offset = slot_count * 16 + 48;
+    let saved_rsi_offset = slot_count * 16 + 56;
+    let saved_xmm_base_offset = slot_count * 16 + 80;
 
     emitter.blank();
     emitter.comment(&format!(
@@ -196,9 +204,21 @@ fn emit_x86_64_extern_callback_trampoline(
     abi::store_at_offset(emitter, "r13", saved_env_offset);
     abi::store_at_offset(emitter, "r14", saved_runtime_index_offset);
     abi::store_at_offset(emitter, "r15", saved_runtime_count_offset);
+    // -- preserve MSx64 registers not preserved by the internal SysV-compatible ABI --
+    if is_windows_native {
+        abi::store_at_offset(emitter, "rdi", saved_rdi_offset);
+        abi::store_at_offset(emitter, "rsi", saved_rsi_offset);
+        for xmm_index in 6..=15 {
+            let offset = saved_xmm_base_offset + (xmm_index - 6) * 16;
+            emitter.instruction(&format!(                                       // preserve an MSx64 nonvolatile vector register across SysV helpers
+                "movdqu XMMWORD PTR [rbp - {}], xmm{}",
+                offset, xmm_index
+            ));
+        }
+    }
 
     abi::emit_load_symbol_to_reg(emitter, "r12", &trampoline.descriptor_slot_label, 0);
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, true);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(
@@ -212,6 +232,18 @@ fn emit_x86_64_extern_callback_trampoline(
     abi::load_at_offset(emitter, "r14", saved_runtime_index_offset);
     abi::load_at_offset(emitter, "r13", saved_env_offset);
     abi::load_at_offset(emitter, "r12", saved_descriptor_offset);
+    // -- restore MSx64 registers after all internal SysV-compatible helper calls --
+    if is_windows_native {
+        for xmm_index in (6..=15).rev() {
+            let offset = saved_xmm_base_offset + (xmm_index - 6) * 16;
+            emitter.instruction(&format!(                                       // restore an MSx64 nonvolatile vector register after SysV helpers
+                "movdqu xmm{}, XMMWORD PTR [rbp - {}]",
+                xmm_index, offset
+            ));
+        }
+        abi::load_at_offset(emitter, "rsi", saved_rsi_offset);
+        abi::load_at_offset(emitter, "rdi", saved_rdi_offset);
+    }
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
 }

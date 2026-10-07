@@ -12,13 +12,17 @@
 //! - On a match the canonical name is duplicated into owned heap storage via
 //!   `__rt_str_persist`; a null pointer is returned when no entry matches.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 
 /// getservbyport: look up a service name by port number and protocol.
 /// Input:  AArch64 x0 = port, x1/x2 = protocol name
 ///         x86_64  rdi = port, rsi/rdx = protocol name
 /// Output: string pointer/length, or a null pointer when no entry matches
 pub fn emit_getservbyport(emitter: &mut Emitter) {
+    if emitter.platform == Platform::Windows {
+        emit_getservbyport_windows_x86_64(emitter);
+        return;
+    }
     if emitter.target.arch == Arch::X86_64 {
         emit_getservbyport_linux_x86_64(emitter);
         return;
@@ -197,6 +201,51 @@ pub fn emit_getservbyport(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // zero length for the not-found case
     emitter.instruction("ldp x29, x30, [sp], #48");                             // restore frame pointer and return address
     emitter.instruction("ret");                                                 // return the not-found result
+}
+
+/// Emits the Windows x86_64 service-name lookup through Winsock.
+///
+/// `servent.s_name` is transient native storage. The helper measures and
+/// persists it before returning so subsequent Winsock calls cannot invalidate
+/// the PHP string result.
+fn emit_getservbyport_windows_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: getservbyport ---");
+    emitter.label_global("__rt_getservbyport");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer for the port spill frame
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable base across C-string conversion
+    emitter.instruction("sub rsp, 16");                                         // reserve the host-order port and protocol-length spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the PHP host-order port across protocol conversion
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the counted protocol length across conversion
+    emitter.instruction("mov rax, rsi");                                        // load the protocol payload into the C-string conversion input
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the protocol byte length into the conversion input
+    emitter.instruction("call __rt_cstr");                                      // NUL-terminate the protocol in bounded scratch storage
+    emitter.instruction("mov rsi, rax");                                        // pass the protocol C string as the shim's second SysV argument
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the PHP host-order port as the shim's first SysV argument
+    emitter.instruction("call __rt_sys_getservbyport");                         // return a transient servent pointer or null
+    emitter.instruction("test rax, rax");                                       // did Winsock find a matching service entry?
+    emitter.instruction("jz __rt_gsbp_windows_missing");                        // map a missing service to PHP false
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // load servent.s_name from the x64 structure head
+    emitter.instruction("test rax, rax");                                       // guard a malformed entry without a canonical name
+    emitter.instruction("jz __rt_gsbp_windows_missing");                        // treat an absent canonical name as PHP false
+    emitter.instruction("xor edx, edx");                                        // initialize the C-string byte length accumulator
+    emitter.label("__rt_gsbp_windows_strlen");
+    emitter.instruction("cmp BYTE PTR [rax + rdx], 0");                         // stop at the transient C-string terminator
+    emitter.instruction("je __rt_gsbp_windows_persist");                        // persist after measuring the complete canonical name
+    emitter.instruction("inc rdx");                                             // count one canonical-name byte
+    emitter.instruction("jmp __rt_gsbp_windows_strlen");                        // continue measuring the transient name
+    emitter.label("__rt_gsbp_windows_persist");
+    emitter.instruction("call __rt_str_persist");                               // copy the result into owned storage before another lookup
+    emitter.instruction("add rsp, 16");                                         // release the conversion spill frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the owned PHP string pair
+    emitter.label("__rt_gsbp_windows_missing");
+    emitter.instruction("xor eax, eax");                                        // return a null string pointer for PHP false
+    emitter.instruction("xor edx, edx");                                        // return no string length on lookup failure
+    emitter.instruction("add rsp, 16");                                         // release the conversion spill frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the missing-entry result pair
+    emitter.blank();
 }
 
 /// Emits the Linux x86_64 stream runtime helper for getservbyport.

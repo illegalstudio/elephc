@@ -593,7 +593,7 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.instruction("add x0, sp, #192");                                    // conversion scratch destination
     emitter.instruction(&format!("mov x1, #{}", CONV_SCRATCH_CAP));             // conversion scratch capacity
     emitter.instruction("add x2, sp, #160");                                    // the mini C format string
-    emitter.bl_c("snprintf");                                                   // render the integer body through libc
+    emitter.emit_call_c("snprintf");                                            // render the integer body through the target-aware C ABI
     emitter.instruction("b __rt_sprintf_snret");                                // clamp and take the result
 
 }
@@ -693,7 +693,7 @@ fn emit_float_conversion(emitter: &mut Emitter) {
     emitter.instruction("add x0, sp, #192");                                    // conversion scratch destination
     emitter.instruction(&format!("mov x1, #{}", CONV_SCRATCH_CAP));             // conversion scratch capacity
     emitter.instruction("add x2, sp, #160");                                    // the mini C format string
-    emitter.bl_c("snprintf");                                                   // render the float body through libc
+    emitter.emit_call_c("snprintf");                                            // render the float body through the target-aware C ABI
     emitter.instruction("b __rt_sprintf_snret");                                // clamp and take the result
 }
 
@@ -904,7 +904,7 @@ fn emit_fatal(emitter: &mut Emitter, label: &str, symbol: &str, len: usize) {
 }
 
 #[cfg(test)]
-mod tests {
+mod windows_tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
@@ -978,5 +978,55 @@ mod tests {
         let x64 = sprintf_asm(Target::new(Platform::Linux, Arch::X86_64));
         assert!(x64.contains("jmp __rt_sprintf_sfatal_x64"), "{x64}");
         assert!(x64.contains("_sprintf_unknown_spec_msg"), "{x64}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::{Arch, Target};
+
+    use super::*;
+
+    /// Verifies the `%E`/`%G` uppercase specifiers dispatch to the float path
+    /// alongside `%f`/`%e`/`%g` on AArch64 (a WF10b fix: they previously fell
+    /// through to the integer path, reinterpreting the double's raw bits as an
+    /// integer and producing garbage).
+    #[test]
+    fn test_emit_sprintf_aarch64_dispatches_uppercase_e_and_g_to_float_path() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_sprintf(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("cmp w12, #69\n"), "'E' (69) must be checked");
+        assert!(asm.contains("cmp w12, #71\n"), "'G' (71) must be checked");
+    }
+
+    /// Verifies the AArch64 `%e`/`%E` exponent compaction (PHP's
+    /// minimum-digit exponent). Compaction runs before the shared padding
+    /// stage, so the old padding-byte guard is no longer part of this path.
+    #[test]
+    fn test_emit_sprintf_aarch64_float_path_has_exponent_trim_with_padding_guard() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_sprintf(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("__rt_sprintf_expfix_scan:\n"));
+        assert!(asm.contains("__rt_sprintf_expfix_zloop:\n"));
+    }
+
+    /// Verifies the post-`snprintf` result clamp used by both AArch64 ABIs.
+    /// The formatter no longer re-renders an oversized conversion; it clamps
+    /// libc's "would have written" count to the bytes present in the scratch.
+    #[test]
+    fn test_emit_sprintf_snprintf_result_clamps_without_rerender() {
+        for platform in [Platform::Linux, Platform::MacOS] {
+            let mut emitter = Emitter::new(Target::new(platform, Arch::AArch64));
+            emit_sprintf(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_sprintf_snret:\n"), "{platform:?}");
+            assert!(asm.contains("sxtw x4, w0\n"), "{platform:?}");
+            assert!(asm.contains(&format!("cmp x4, #{}\n", CONV_SCRATCH_CAP - 1)), "{platform:?}");
+            assert!(asm.contains(&format!("mov x4, #{}\n", CONV_SCRATCH_CAP - 1)), "{platform:?}");
+        }
     }
 }

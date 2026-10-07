@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_errno() - internals"
 description: "Compiler internals for __elephc_curl_multi_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1097
+  order: 1113
 ---
 
 ## `__elephc_curl_multi_errno()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_multi_errno.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_multi_errno.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:699](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L699) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

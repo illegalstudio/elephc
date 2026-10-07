@@ -162,7 +162,17 @@ pub(in crate::interpreter) fn eval_time_values_result(
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "microtime" => match evaluated_args {
-            [] | [_] => eval_microtime_result(values),
+            [] => eval_microtime_string_result(values),
+            // Only a truthy as_float selects the float form; php otherwise returns
+            // the "<usec fraction> <seconds>" string. This arm is the named-argument
+            // and call_user_func path, and it ignored the flag entirely.
+            [as_float] => {
+                if values.truthy(*as_float)? {
+                    eval_microtime_result(values)
+                } else {
+                    eval_microtime_string_result(values)
+                }
+            }
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "sleep" => {

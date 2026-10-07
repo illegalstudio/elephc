@@ -2,7 +2,7 @@
 title: "exif_thumbnail() - internals"
 description: "Compiler internals for exif_thumbnail(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 450
+  order: 454
 ---
 
 ## `exif_thumbnail()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3987](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3987) (`exif_thumbnail`)
+- **Lowering**: [`src/image_prelude.rs`:4058](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4058) (`exif_thumbnail`)
 - **Function symbol**: `exif_thumbnail()`
 
 
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function exif_thumbnail(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed
+function exif_thumbnail(string $filename, mixed &$width = 0, mixed &$height = 0, mixed &$image_type = 0): mixed
 ```
 
 ## What the type checker enforces

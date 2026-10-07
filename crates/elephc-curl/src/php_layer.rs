@@ -211,13 +211,17 @@ fn write_all_stdout(bytes: &[u8]) -> usize {
     }
     let mut written = 0usize;
     while written < bytes.len() {
+        // Windows msvcrt declares `_write`'s count as `unsigned int`, while Unix uses
+        // `size_t`. Chunking at c_uint::MAX is valid on both and avoids truncating a large
+        // callback body at the cross-target ABI boundary.
+        let count = (bytes.len() - written).min(libc::c_uint::MAX as usize);
         // SAFETY: `bytes[written..]` is a valid slice for its own length;
         // `libc::write` only reads from it.
         let n = unsafe {
             libc::write(
                 1,
                 bytes[written..].as_ptr() as *const c_void,
-                bytes.len() - written,
+                count as _,
             )
         };
         if n < 0 {

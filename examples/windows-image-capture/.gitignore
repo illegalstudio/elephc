@@ -1,0 +1,5 @@
+*.s
+*.o
+main
+main.exe
+desktop.png

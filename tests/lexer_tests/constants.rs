@@ -9,13 +9,19 @@
 
 use super::*;
 
-/// Verifies `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR` tokenize as runtime constant tokens.
+/// Verifies `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`, `PATH_SEPARATOR` tokenize as
+/// runtime constant tokens.
 #[test]
 fn test_runtime_constant_tokens() {
-    let t = tokens("<?php PHP_EOL PHP_OS DIRECTORY_SEPARATOR");
+    let t = tokens("<?php PHP_EOL PHP_OS DIRECTORY_SEPARATOR PATH_SEPARATOR");
     assert_eq!(
-        t[1..4],
-        [Token::PhpEol, Token::PhpOs, Token::DirectorySeparator]
+        t[1..5],
+        [
+            Token::PhpEol,
+            Token::PhpOs,
+            Token::DirectorySeparator,
+            Token::PathSeparator
+        ]
     );
 }
 

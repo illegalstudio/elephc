@@ -1,16 +1,16 @@
 //! Purpose:
-//! Renders typed link plans into deterministic macOS and Linux tool invocations.
+//! Renders typed link plans into macOS, Linux, and GNU-ABI Windows tool invocations.
 //! Executes prepared assembler/linker commands without owning dependency discovery.
 //!
 //! Called from:
 //! - `crate::linker` after bridge resolution and optional archive deduplication.
 //!
 //! Key details:
-//! - Rendering is pure and unit-testable; SDK and Homebrew probes are injected as data.
+//! - macOS SDK probes are injected while Windows driver selection uses the configured toolchain.
 //! - Whole-archive flags are scoped to exactly one archive and item order is preserved.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 use crate::codegen::platform::{AppleVariant, Platform, Target};
@@ -69,6 +69,14 @@ impl RenderedCommand {
         command
     }
 
+    /// Converts a configured process command into the renderer's inert representation.
+    fn from_command(command: Command) -> Self {
+        Self {
+            program: command.get_program().to_owned(),
+            args: command.get_args().map(|argument| argument.to_owned()).collect(),
+        }
+    }
+
     /// Returns arguments as lossy strings for focused renderer tests.
     #[cfg(test)]
     fn arguments_lossy(&self) -> Vec<String> {
@@ -99,7 +107,7 @@ pub(super) fn render_link_command(
             homebrew_paths,
         ),
         Platform::Linux => render_linux_command(target, emit, paths, plan, needs_libdl),
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        Platform::Windows => render_windows_command(emit, paths, plan),
     }
 }
 
@@ -122,6 +130,12 @@ pub(super) fn run_tool(name: &str, command: &mut Command) {
             process::exit(1);
         }
     }
+}
+
+/// Reports an invalid target-toolchain configuration and terminates compilation.
+pub(super) fn fail_tool_configuration(name: &str, message: &str) -> ! {
+    eprintln!("{name} configuration error: {message}");
+    process::exit(1);
 }
 
 /// Returns the minimum-OS version recorded in `-platform_version`.
@@ -265,6 +279,65 @@ fn render_linux_command(
     }
 }
 
+/// Renders a GNU-ABI PE command for the configured MinGW or LLVM Windows driver.
+///
+/// LLVM mode still uses the GNU Windows ABI, keeping generated PE/COFF objects,
+/// MinGW imports, and Rust bridge archives link-compatible.
+fn render_windows_command(
+    emit: Emit,
+    paths: LinkPaths<'_>,
+    plan: &LinkPlan,
+) -> RenderedCommand {
+    let driver = crate::windows_toolchain::linker_command()
+        .unwrap_or_else(|message| fail_tool_configuration("Linker", &message));
+    render_windows_command_with(driver, emit, paths, plan)
+}
+
+/// Renders a Windows link invocation from an already configured driver command.
+///
+/// Splitting driver selection from rendering keeps PE argument ordering testable
+/// without probing a host's MinGW or LLVM installation.
+fn render_windows_command_with(
+    driver: Command,
+    emit: Emit,
+    paths: LinkPaths<'_>,
+    plan: &LinkPlan,
+) -> RenderedCommand {
+    let mut rendered = RenderedCommand::from_command(driver);
+    rendered
+        .args
+        .extend(windows_pe_hardening_linker_flags().iter().map(OsString::from));
+    if matches!(emit, Emit::Cdylib) {
+        rendered.args.push(OsString::from("-shared"));
+        rendered.args.push(OsString::from(format!(
+            "-Wl,--out-implib,{}",
+            windows_import_library_path(paths.bin).display()
+        )));
+    }
+    rendered.args.extend([
+        OsString::from("-o"),
+        paths.bin.as_os_str().to_owned(),
+        paths.object.as_os_str().to_owned(),
+        paths.runtime.as_os_str().to_owned(),
+    ]);
+    for path in mingw_sysroot_link_paths() {
+        let mut argument = OsString::from("-L");
+        argument.push(path);
+        rendered.args.push(argument);
+    }
+    append_search_paths(&mut rendered.args, plan);
+    if windows_link_needs_duplicate_bridge_tolerance(plan) {
+        rendered
+            .args
+            .push(OsString::from("-Wl,--allow-multiple-definition"));
+    }
+    append_link_inputs(&mut rendered.args, plan, Platform::Windows);
+    rendered
+        .args
+        .extend(windows_import_libraries().iter().map(OsString::from));
+    rendered
+}
+
 /// Appends every typed search path before archive and named-library inputs.
 fn append_search_paths(args: &mut Vec<OsString>, plan: &LinkPlan) {
     for item in plan.items() {
@@ -294,11 +367,13 @@ fn append_link_inputs(args: &mut Vec<OsString>, plan: &LinkPlan, platform: Platf
                     args.push(path.as_os_str().to_owned());
                     args.push(OsString::from("-Wl,--no-whole-archive"));
                 }
-                (Platform::MacOS | Platform::Linux, false) => {
+                (Platform::MacOS | Platform::Linux | Platform::Windows, false) => {
                     args.push(path.as_os_str().to_owned());
                 }
-                (Platform::Windows, _) => {
-                    panic!("Windows target is not yet supported (see issue #379)")
+                (Platform::Windows, true) => {
+                    args.push(OsString::from("-Wl,--whole-archive"));
+                    args.push(path.as_os_str().to_owned());
+                    args.push(OsString::from("-Wl,--no-whole-archive"));
                 }
             },
             LinkItem::NamedLibrary { name, .. } if name != "System" => {
@@ -352,6 +427,90 @@ fn bridge_archive_count(plan: &LinkPlan) -> usize {
             )
         })
         .count()
+}
+
+/// Returns existing conventional archive directories below the optional MinGW sysroot.
+fn mingw_sysroot_link_paths() -> Vec<PathBuf> {
+    std::env::var_os("ELEPHC_MINGW_SYSROOT")
+        .map(PathBuf::from)
+        .map(|base| mingw_sysroot_link_paths_from(&base))
+        .unwrap_or_default()
+}
+
+/// Filters a sysroot to existing `lib` and `lib64` link directories only.
+fn mingw_sysroot_link_paths_from(base: &Path) -> Vec<PathBuf> {
+    if !base.is_dir() {
+        return Vec::new();
+    }
+    [base.join("lib"), base.join("lib64")]
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+/// Returns PE loader mitigations GNU ld can emit safely without a CFG table.
+fn windows_pe_hardening_linker_flags() -> &'static [&'static str] {
+    &[
+        "-Wl,--dynamicbase",
+        "-Wl,--high-entropy-va",
+        "-Wl,--nxcompat",
+    ]
+}
+
+/// Returns the import archive paired with one Windows cdylib output.
+fn windows_import_library_path(dll_path: &Path) -> PathBuf {
+    let stem = dll_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("elephc_module");
+    dll_path.with_file_name(format!("lib{stem}.dll.a"))
+}
+
+/// Returns Win32 import libraries after bridge archives have introduced references.
+fn windows_import_libraries() -> &'static [&'static str] {
+    &[
+        "-lkernel32",
+        "-lmsvcrt",
+        "-lwinmm",
+        "-lws2_32",
+        "-ladvapi32",
+        "-lbcrypt",
+        "-lshlwapi",
+        "-lshell32",
+        "-lsecur32",
+        "-luserenv",
+        "-lntdll",
+        "-luser32",
+        "-lgdi32",
+    ]
+}
+
+/// Determines whether MinGW must tolerate duplicate Rust bridge archive members.
+fn windows_link_needs_duplicate_bridge_tolerance(plan: &LinkPlan) -> bool {
+    let bridge_count = plan
+        .items()
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                LinkItem::StaticArchive {
+                    origin: LinkOrigin::Bridge { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    let force_loaded_tls = plan.items().iter().any(|item| {
+        matches!(
+            item,
+            LinkItem::StaticArchive {
+                whole_archive: true,
+                origin: LinkOrigin::Bridge { name },
+                ..
+            } if name == "elephc_tls"
+        )
+    });
+    bridge_count >= 2 || force_loaded_tls
 }
 
 #[cfg(test)]

@@ -21,6 +21,9 @@ pub(super) enum PcntlCallMode {
 
 /// Returns whether one PCNTL builtin exists on the current supported target.
 pub(in crate::interpreter) fn eval_pcntl_builtin_is_available(name: &str) -> bool {
+    if cfg!(target_os = "windows") && (name.starts_with("pcntl_") || name.starts_with("posix_")) {
+        return false;
+    }
     match name {
         "pcntl_getqos_class" | "pcntl_setqos_class" => cfg!(target_os = "macos"),
         "pcntl_getcpu"

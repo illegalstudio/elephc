@@ -159,24 +159,32 @@ fn register_eval_native_user_constant_array(
     elements: &[EvalNativeCallableArrayDefaultElement],
 ) {
     let spec = encode_eval_native_array_default_elements(elements);
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    emit_eval_constant_name_args(ctx, name);
+    push_eval_context_local_for_native_constant(ctx, context_offset);
+    push_eval_constant_name_args(ctx, name);
     let (spec_label, spec_len) = ctx.data.add_string(&spec);
     abi::emit_symbol_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        abi::int_result_reg(ctx.emitter),
         &spec_label,
     );
+    push_eval_native_constant_word(ctx, PhpType::Pointer(None));
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        abi::int_result_reg(ctx.emitter),
         spec_len as i64,
     );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_user_constant_array");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    push_eval_native_constant_word(ctx, PhpType::Int);
+    emit_eval_native_constant_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_user_constant_array",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Int,
+        ],
+    );
 }
 
 /// Emits one scalar constant registration call against the requested bridge symbol.
@@ -191,54 +199,88 @@ fn register_eval_native_scalar_constant(
     string_value: Option<&str>,
     symbol_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    emit_eval_constant_name_args(ctx, name);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        kind,
-    );
+    push_eval_context_local_for_native_constant(ctx, context_offset);
+    push_eval_constant_name_args(ctx, name);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), kind);
+    push_eval_native_constant_word(ctx, PhpType::Int);
     if let Some(string_value) = string_value {
         let (value_label, value_len) = ctx.data.add_string(string_value.as_bytes());
         abi::emit_symbol_address(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 4),
+            abi::int_result_reg(ctx.emitter),
             &value_label,
         );
+        push_eval_native_constant_word(ctx, PhpType::Pointer(None));
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 5),
+            abi::int_result_reg(ctx.emitter),
             value_len as i64,
         );
+        push_eval_native_constant_word(ctx, PhpType::Int);
     } else {
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 4),
-            word,
-        );
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 5),
-            0,
-        );
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), word);
+        push_eval_native_constant_word(ctx, PhpType::Int);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        push_eval_native_constant_word(ctx, PhpType::Int);
     }
-    let symbol = ctx.emitter.target.extern_symbol(symbol_name);
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_native_constant_c_abi_call(
+        ctx,
+        symbol_name,
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+        ],
+    );
+}
+
+/// Stages the persistent eval-context handle as a native C ABI pointer argument.
+fn push_eval_context_local_for_native_constant(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+) {
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result, context_offset);
+    push_eval_native_constant_word(ctx, PhpType::Pointer(None));
+}
+
+/// Stages one integer or pointer result word for a native eval-constant registration call.
+fn push_eval_native_constant_word(ctx: &mut FunctionContext<'_>, ty: PhpType) {
+    stage_eval_native_word(ctx, ty);
+}
+
+/// Materializes and invokes an eval-constant Rust `extern "C"` registration function.
+///
+/// These targets are Rust FFI exports, rather than internal `__rt_*` helpers: their argument
+/// layout must therefore follow each target's native C ABI. In particular, MS x64 receives the
+/// fifth and later words after its 32-byte shadow space; staging through the shared C-ABI planner
+/// both reserves those slots and keeps SysV/AAPCS register placement unchanged on other targets.
+fn emit_eval_native_constant_c_abi_call(
+    ctx: &mut FunctionContext<'_>,
+    symbol_name: &str,
+    argument_types: &[PhpType],
+) {
+    emit_eval_native_c_abi_call(ctx, symbol_name, argument_types);
 }
 
 /// Materializes one constant name into the shared name pointer/length argument pair.
-fn emit_eval_constant_name_args(ctx: &mut FunctionContext<'_>, name: &str) {
+fn push_eval_constant_name_args(ctx: &mut FunctionContext<'_>, name: &str) {
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
     abi::emit_symbol_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        abi::int_result_reg(ctx.emitter),
         &name_label,
     );
+    push_eval_native_constant_word(ctx, PhpType::Pointer(None));
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        abi::int_result_reg(ctx.emitter),
         name_len as i64,
     );
+    push_eval_native_constant_word(ctx, PhpType::Int);
 }
 
 /// Encodes one prescanned scalar constant for the eval registration ABI.

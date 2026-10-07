@@ -18,6 +18,7 @@
 //!   which is precisely why `--web-isolation=pool|request` ran no monitoring at
 //!   all: the isolated path never goes through `worker`.
 
+#[cfg(not(test))]
 extern "C" {
     /// Runtime `.comm` slot holding `elephc_probe_set_route` under `--probe`,
     /// else zero. Mangled per target like the other runtime externs.
@@ -35,6 +36,22 @@ extern "C" {
     /// checks that a profiling request is signed by the build key.
     static elephc_probe_verify_fn: usize;
 }
+
+#[cfg(test)]
+#[no_mangle]
+static elephc_probe_route_fn: usize = 0;
+#[cfg(test)]
+#[no_mangle]
+static elephc_probe_rearm_fn: usize = 0;
+#[cfg(test)]
+#[no_mangle]
+static elephc_instr_trace_fn: usize = 0;
+#[cfg(test)]
+#[no_mangle]
+static elephc_instr_request_fn: usize = 0;
+#[cfg(test)]
+#[no_mangle]
+static elephc_probe_verify_fn: usize = 0;
 
 type SetRouteFn = unsafe extern "C" fn(*const u8, usize);
 type RearmFn = unsafe extern "C" fn();

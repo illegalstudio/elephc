@@ -20,12 +20,9 @@ use super::super::Checker;
 impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
-    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, the
-    /// `PHP_VERSION*` / `PHP_SAPI` version surface, `SID`, pathinfo
-    /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, stream resources, and lock flags),
-    /// array, JSON, stream, date, and preg constants, `PHP_SESSION_*`
-    /// session-status constants, and `E_*` error-level constants. All other tables (function declarations,
-    /// classes, interfaces, enums, etc.) are initialized empty.
+    /// Initializes PHP's platform, version (`PHP_VERSION*` / `PHP_SAPI`), path, stream, lock,
+    /// array, JSON, date, preg, session, and error-level constants. All other declaration tables
+    /// (functions, classes, interfaces, and enums) start empty.
     ///
     /// # Arguments
     /// * `target` - The full compilation target, stored for platform- and Apple-variant-specific
