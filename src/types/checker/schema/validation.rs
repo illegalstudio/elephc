@@ -293,6 +293,17 @@ impl SourceVisibleShape {
             })
             .count()
     }
+
+    /// Accepts calls admitted by `required`, permitting extra optional parameters and defaults.
+    fn widens_parameter_shape(&self, required: &Self) -> bool {
+        self.param_count >= required.param_count
+            && self.required_param_count() <= required.required_param_count()
+            && self.ref_params.iter().take(required.param_count).eq(required.ref_params.iter())
+            && self.has_defaults.iter().enumerate().skip(required.param_count)
+                .all(|(index, default)| *default
+                    || (self.variadic.is_some() && index + 1 == self.param_count))
+            && (required.variadic.is_none() || self.variadic.is_some())
+    }
 }
 
 /// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
@@ -303,6 +314,7 @@ impl SourceVisibleShape {
 /// injected contracts are synthesized after the `func_args` pass and can never carry its hidden
 /// collector or actual-count parameter, so comparing those slots against such a contract would
 /// report an ABI difference the source never declared.
+/// `allow_optional_widening` enables PHP-visible call-shape widening for final enum interfaces.
 pub(crate) fn validate_signature_compatibility(
     span: crate::span::Span,
     owner_name: &str,
@@ -312,6 +324,7 @@ pub(crate) fn validate_signature_compatibility(
     kind: &str,
     context: &str,
     compare_generated_abi: bool,
+    allow_optional_widening: bool,
 ) -> Result<(), CompileError> {
     // The hidden variadic that collects surplus positional arguments for
     // `func_num_args()`/`func_get_args()`/`func_get_arg()` is a real ABI parameter, so an
@@ -335,6 +348,14 @@ pub(crate) fn validate_signature_compatibility(
 
     let child = SourceVisibleShape::of(child_sig);
     let parent = SourceVisibleShape::of(parent_sig);
+
+    if allow_optional_widening {
+        return if child.widens_parameter_shape(&parent) { Ok(()) } else {
+            Err(CompileError::new(span, &format!(
+                "Incompatible parameter shape when {context} {kind}: {owner_name}::{method_name}",
+            )))
+        };
+    }
 
     if child.param_count != parent.param_count {
         return Err(CompileError::new(
@@ -427,16 +448,7 @@ pub(crate) fn validate_abstract_trait_signature(
 ) -> Result<(), CompileError> {
     let actual = SourceVisibleShape::of(actual);
     let required = SourceVisibleShape::of(required);
-    let by_ref_compatible = actual.ref_params.iter().take(required.param_count)
-        .eq(required.ref_params.iter());
-    let extra_optional = actual.has_defaults.iter().enumerate().skip(required.param_count)
-        .all(|(index, default)| *default
-            || (actual.variadic.is_some() && index + 1 == actual.param_count));
-    if actual.param_count < required.param_count
-        || actual.required_param_count() > required.required_param_count()
-        || !by_ref_compatible || !extra_optional
-        || (required.variadic.is_some() && actual.variadic.is_none())
-    {
+    if !actual.widens_parameter_shape(&required) {
         return Err(CompileError::new(span, &format!(
             "Incompatible parameter shape when implementing trait method: {owner}::{method}",
         )));
@@ -557,6 +569,7 @@ pub(crate) fn validate_override_signature(
         kind,
         "overriding",
         parent_declaration_is_source && method.span.line != 0,
+        false,
     )?;
     if parent_sig.declared_return && !child_sig.declared_return {
         return Err(CompileError::new(

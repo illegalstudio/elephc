@@ -9,6 +9,39 @@
 
 use super::*;
 
+/// Covariant returns see every enum's transitive interfaces regardless of HashMap order.
+#[test]
+fn test_enum_followup_cross_enum_transitive_return() {
+    let source = "<?php interface P {} interface C extends P {} interface Factory { public function create(): P; } enum Value implements C { case A; } enum Maker implements Factory { case A; public function create(): Value { return Value::A; } }";
+    for _ in 0..64 { expect_no_error(source); }
+}
+
+/// Both instance and static enum implementations may add optional parameters or defaults.
+#[test]
+fn test_enum_followup_optional_interface_parameters() {
+    for declaration in [
+        "public function f(int $x, int $y = 0): int { return $x; }",
+        "public function f(int $x = 1): int { return $x; }",
+        "public static function f(int $x, int $y = 0): int { return $x; }",
+        "public static function f(int $x = 1): int { return $x; }",
+    ] {
+        let modifier = if declaration.contains("static") { "static " } else { "" };
+        expect_no_error(&format!("<?php interface I {{ public {modifier}function f(int $x): int; }} enum E implements I {{ case A; {declaration} }}"));
+    }
+}
+
+/// Optional widening does not permit extra required arguments or changed reference passing.
+#[test]
+fn test_error_enum_followup_interface_parameter_narrowing() {
+    for declaration in [
+        "public function f(int $x, int $y): int { return $x; }",
+        "public function f(int &$x): int { return $x; }",
+    ] {
+        expect_error(&format!("<?php interface I {{ public function f(int $x): int; }} enum E implements I {{ case A; {declaration} }}"), "Incompatible parameter shape");
+    }
+    expect_error("<?php interface I { public function f(int $x = 1): int; } enum E implements I { case A; public function f(int $x): int { return $x; } }", "Incompatible parameter shape");
+}
+
 /// An alias of an abstract trait method keeps its parameter and return requirements.
 #[test]
 fn test_error_enum_review_abstract_alias_contract() {

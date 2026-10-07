@@ -31,6 +31,16 @@ enum E implements Contract {
 }
 function describe(ParentContract $value): string { return $value->label(); }
 echo describe(E::make()), E::A->current()->name, E::OWNER, E::TRAIT_NAME;
+interface OptionalContract { public function f(int $x): string; }
+enum OptionalValue implements OptionalContract {
+    case A;
+    const DATA = ['v'];
+    public function f(int $x, string $prefix = 'ok', array $data = self::DATA): string {
+        return $prefix . $data[0] . $x;
+    }
+}
+function render(OptionalContract $value): string { return $value->f(2); }
+echo render(OptionalValue::A);
 "#;
     let module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),

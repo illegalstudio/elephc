@@ -2965,6 +2965,11 @@ fn interface_method_table_symbol(
             interface_sig.params, interface_sig.return_type,
             actual_sig.params, actual_sig.return_type,
         ))?;
+    if abi_plan == MethodAbiPlan::OptionalDefaults {
+        return Ok(crate::names::function_symbol(&interface_method_wrapper_symbol(
+            class_info.class_id, interface_info.interface_id, method_name,
+        )));
+    }
     if interface_method_needs_return_wrapper(interface_info, method_name, impl_class, classes)
         || abi_plan != MethodAbiPlan::Direct
     {

@@ -1,5 +1,6 @@
 //! Purpose:
-//! Adapts source-visible method calls to physical methods carrying generated `func_args` slots.
+//! Plans source-visible method ABI adaptation, including EIR-owned optional-default calls.
+//! Emits wrappers for physical methods carrying generated `func_args` slots.
 //! Owns planning, symbols, and target-aware wrapper assembly for these boundaries.
 //!
 //! Called from:
@@ -30,6 +31,7 @@ pub(crate) enum MethodKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodAbiPlan {
     Direct,
+    OptionalDefaults,
     AppendEmptyCollector,
     BoxArguments,
     BoxArgumentsAndAppendEmptyCollector,
@@ -76,6 +78,14 @@ pub(crate) fn plan_method_abi(
                 || (!caller.ref_params[index] && can_box_param_as_mixed(source_ty, target_ty))
         },
     );
+    let optional_tail = projected.params.len() > caller.params.len()
+        && projected.ref_params.iter().take(caller.params.len()).eq(caller.ref_params.iter())
+        && projected.defaults.iter().enumerate().skip(caller.params.len())
+            .all(|(index, default)| default.is_some()
+                || (projected.variadic.is_some() && index + 1 == projected.params.len()));
+    if optional_tail && compatible_values {
+        return Ok(MethodAbiPlan::OptionalDefaults);
+    }
     if !compatible_shape || !compatible_values {
         let reason = if append_collector {
             "source method ABI adaptation found a visible parameter mismatch"
@@ -181,6 +191,7 @@ pub(crate) fn source_method_entry_symbol(
     let source = source_visible_signature(physical)?;
     match plan_method_abi(&source, physical)? {
         MethodAbiPlan::Direct => Ok(physical_method_symbol(class_name, method_name, kind)),
+        MethodAbiPlan::OptionalDefaults => Err("optional method defaults require an EIR adapter".to_string()),
         MethodAbiPlan::AppendEmptyCollector
         | MethodAbiPlan::BoxArguments
         | MethodAbiPlan::BoxArgumentsAndAppendEmptyCollector => Ok(source_method_adapter_symbol(
@@ -261,6 +272,9 @@ pub(crate) fn emit_method_adapter(
     box_return_as_mixed: bool,
 ) -> Result<(), String> {
     let plan = plan_method_abi(caller, physical)?;
+    if plan == MethodAbiPlan::OptionalDefaults {
+        return Err("optional method defaults require an EIR adapter".to_string());
+    }
     if box_return_as_mixed && physical.by_ref_return {
         return Err("source method ABI adapter cannot value-box a by-reference return".to_string());
     }
@@ -409,6 +423,7 @@ fn can_box_param_as_mixed(source: &PhpType, target: &PhpType) -> bool {
         && !matches!(source.codegen_repr(), PhpType::Never)
 }
 
+/// Selects the physical instance or static method entry symbol.
 fn physical_method_symbol(class_name: &str, method_name: &str, kind: MethodKind) -> String {
     match kind {
         MethodKind::Instance => method_symbol(class_name, method_name),
@@ -416,6 +431,7 @@ fn physical_method_symbol(class_name: &str, method_name: &str, kind: MethodKind)
     }
 }
 
+/// Roots the generated empty collector until the adapted call returns or unwinds.
 fn emit_empty_collector_owner(emitter: &mut Emitter, owner_offset: usize) {
     abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
     abi::emit_load_int_immediate(
@@ -431,6 +447,7 @@ fn emit_empty_collector_owner(emitter: &mut Emitter, owner_offset: usize) {
     abi::emit_push_call_operand_owner(emitter, owner_address, false);
 }
 
+/// Pushes every ABI word of a spilled argument in target-aware order.
 fn push_frame_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => {
@@ -460,6 +477,7 @@ fn push_frame_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     }
 }
 
+/// Spills a complete return value before temporary-owner cleanup.
 fn preserve_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => abi::store_at_offset(emitter, abi::float_result_reg(emitter), offset),
@@ -479,6 +497,7 @@ fn preserve_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     }
 }
 
+/// Restores every return word after temporary-owner cleanup.
 fn restore_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => abi::load_at_offset(emitter, abi::float_result_reg(emitter), offset),
@@ -502,6 +521,7 @@ fn restore_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 mod tests {
     use super::*;
 
+    /// Builds consistent signature metadata for ABI planning tests.
     fn signature(params: Vec<(String, PhpType)>, variadic: Option<String>) -> FunctionSig {
         let len = params.len();
         FunctionSig {
@@ -520,6 +540,25 @@ mod tests {
         }
     }
 
+    /// Extra optional parameters select EIR adaptation without weakening required or reference shapes.
+    #[test]
+    fn planner_routes_optional_defaults_to_eir() {
+        let source = signature(vec![("x".to_string(), PhpType::Int)], None);
+        let mut physical = signature(vec![
+            ("x".to_string(), PhpType::Int), ("extra".to_string(), PhpType::Int),
+        ], None);
+        physical.defaults[1] = Some(crate::parser::ast::Expr::new(
+            crate::parser::ast::ExprKind::IntLiteral(2), crate::span::Span::dummy(),
+        ));
+        assert_eq!(plan_method_abi(&source, &physical).unwrap(), MethodAbiPlan::OptionalDefaults);
+        physical.ref_params[0] = true;
+        assert!(plan_method_abi(&source, &physical).is_err());
+        physical.ref_params[0] = false;
+        physical.defaults[1] = None;
+        assert!(plan_method_abi(&source, &physical).is_err());
+    }
+
+    /// A single generated collector difference has a dedicated target-aware adapter.
     #[test]
     fn planner_accepts_only_one_generated_collector_difference() {
         let source = signature(vec![("name".to_string(), PhpType::Str)], None);
@@ -540,6 +579,7 @@ mod tests {
         );
     }
 
+    /// A source variadic's unknown count cannot be synthesized by the fixed-signature adapter.
     #[test]
     fn planner_rejects_source_variadic_actual_count_adaptation() {
         let source = signature(
@@ -561,6 +601,7 @@ mod tests {
             .contains("actual-count"));
     }
 
+    /// Source variadics retain their raw physical entry and every hidden argc argument.
     #[test]
     fn source_vtable_keeps_source_variadics_raw_and_never_drops_an_injected_hidden_argc() {
         let mut physical = signature(
@@ -653,6 +694,7 @@ mod tests {
             .contains("unsupported physical signature difference"));
     }
 
+    /// Reference returns preserve one pointer rather than boxing the pointed-to value.
     #[test]
     fn by_reference_return_is_preserved_as_one_pointer_and_never_value_boxed() {
         let mut caller = signature(Vec::new(), None);
@@ -787,6 +829,7 @@ mod tests {
         }
     }
 
+    /// Arguments spill before allocation and collector owners balance on every supported target.
     #[test]
     fn emitter_spills_before_allocating_and_balances_collector_ownership_on_all_targets() {
         let source = signature(vec![("name".to_string(), PhpType::Str)], None);

@@ -15,6 +15,23 @@ use crate::types::traits::FlattenedClass;
 
 use super::{interfaces, state::ClassBuildState, Checker};
 
+/// Publishes every transitive enum interface before any cross-enum type compatibility check.
+pub(crate) fn expand_enum_interfaces(
+    checker: &mut Checker, enum_unit: &FlattenedClass,
+) -> Result<(), CompileError> {
+    let info = checker.classes.get(&enum_unit.name).expect("enum metadata exists");
+    let mut state = ClassBuildState::from_parent(Some(info));
+    let implicit = state.interfaces.clone();
+    // Direct names are already registered, but marking them seen would skip their parents.
+    state.interfaces.clear();
+    interfaces::collect_interfaces(&mut state, enum_unit, &HashMap::new(), checker)?;
+    for name in implicit {
+        if !state.interfaces.contains(&name) { state.interfaces.push(name); }
+    }
+    checker.classes.get_mut(&enum_unit.name).expect("enum metadata exists").interfaces = state.interfaces;
+    Ok(())
+}
+
 /// Applies ordinary interface contract checks to the completed, final enum class metadata.
 pub(crate) fn validate_enum_interface_contracts(
     checker: &mut Checker, enum_unit: &FlattenedClass,
@@ -34,9 +51,7 @@ pub(crate) fn validate_enum_interface_contracts(
     state.static_method_impl_classes = info.static_method_impl_classes.clone();
     state.late_static_method_returns = info.late_static_method_returns.clone();
     state.late_static_static_method_returns = info.late_static_static_method_returns.clone();
-    state.interfaces.clear();
     let class_map = HashMap::new();
-    interfaces::collect_interfaces(&mut state, enum_unit, &class_map, checker)?;
     let mut next_fn_id = 0;
     let mut building = HashSet::new();
     interfaces::validate_interface_contracts(

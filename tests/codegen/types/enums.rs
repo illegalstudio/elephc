@@ -9,6 +9,73 @@
 
 use super::*;
 
+/// Repeated interface calls retire structured default owners instead of accumulating them.
+#[test]
+fn test_enum_followup_interface_default_ownership() {
+    let run = |iterations| compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function f(int $x): string; }}
+enum E implements I {{
+    case A;
+    public function f(int $x, string $prefix = 'v', array $values = [2]): string {{
+        return $prefix . $values[0] . $x;
+    }}
+}}
+function render(I $value): string {{ return $value->f(1); }}
+for ($i = 0; $i < {iterations}; $i++) {{ echo render(E::A); }}
+"#));
+    let once = run(1);
+    let repeated = run(100);
+    assert!(once.success && repeated.success, "{}\n{}", once.stderr, repeated.stderr);
+    assert_eq!(once.stdout, "v21");
+    assert_eq!(repeated.stdout, "v21".repeat(100));
+    for metric in ["live_blocks=", "live_bytes="] {
+        let retained = |stderr: &str| stderr.lines().next().unwrap()
+            .split_whitespace().find_map(|field| field.strip_prefix(metric))
+            .unwrap().parse::<usize>().unwrap();
+        assert_eq!(retained(&once.stderr), retained(&repeated.stderr), "{}", repeated.stderr);
+    }
+}
+
+/// EIR adapters materialize structured defaults and keep caller reference arguments attached.
+#[test]
+fn test_enum_followup_interface_structured_defaults_and_references() {
+    let out = compile_and_run(r#"<?php
+interface Data { public function f(int $x): string; }
+enum Value implements Data {
+    case A;
+    const DATA = ['v'];
+    public function f(int $x, string $prefix = 'ok', array $data = self::DATA): string {
+        return $prefix . $data[0] . $x;
+    }
+}
+function render(Data $value): string { return $value->f(2); }
+interface Ref { public function f(int &$x): int; }
+enum RefValue implements Ref {
+    case A;
+    public function f(int &$x, int $extra = 2): int { $x += $extra; return $x; }
+}
+function update(Ref $value, int &$x): int { return $value->f($x); }
+$x = 3;
+echo render(Value::A), ':', update(RefValue::A, $x), ':', $x;
+"#);
+    assert_eq!(out, "okv2:5:5");
+}
+
+/// Enum interface widening preserves direct and interface-dispatched optional argument calls.
+#[test]
+fn test_enum_followup_optional_interface_calls() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x): int; }
+enum Extra implements I { case A; public function f(int $x, int $y = 2): int { return $x + $y; } }
+enum Optional implements I { case A; public function f(int $x = 3): int { return $x; } }
+interface S { public static function f(int $x): int; }
+enum StaticExtra implements S { case A; public static function f(int $x = 4, int $y = 5): int { return $x + $y; } }
+function call_interface(I $value): int { return $value->f(1); }
+echo Extra::A->f(1), ':', Optional::A->f(), ':', StaticExtra::f(), ':', call_interface(Extra::A);
+"#);
+    assert_eq!(out, "3:3:9:3");
+}
+
 /// Trait magic constants retain trait identity while binding class identity to each consumer.
 #[test]
 fn test_enum_review_trait_magic_constant_values() {
