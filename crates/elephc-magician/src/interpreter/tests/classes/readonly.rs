@@ -12,6 +12,19 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// A readonly redeclaration without a default cannot inherit initialized parent storage.
+#[test]
+fn execute_program_readonly_followup_redeclaration_discards_parent_default() {
+    let program = parse_fragment(br#"class ParentBox { public int $id = 0; }
+    class ChildBox extends ParentBox { public public(set) readonly int $id; }
+    $box = new ChildBox();
+    return isset($box->id);"#).expect("parse redeclared readonly slot");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("allocate child slot");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
 /// A global overwrite checks initialized readonly state before implicit protected-set access.
 #[test]
 fn execute_program_readonly_followup_initialized_write_error_precedence() {

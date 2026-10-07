@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Eval child readonly redeclarations discard parent defaults before constructor initialization.
+#[test]
+fn test_asymmetric_followup_eval_redeclared_readonly_initialization() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class ParentBox { public int $id = 0; }
+class ChildBox extends ParentBox {
+    public public(set) readonly int $id;
+    public function __construct() { $this->id = 7; }
+}
+class UninitializedBox extends ParentBox { public public(set) readonly int $id; }
+$box = new ChildBox();
+$empty = new UninitializedBox();
+echo $box->id, ":", isset($empty->id) ? "bad" : "empty";
+unset($empty, $box);');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "7:empty");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Eval reports initialized readonly modification before its implicit protected setter.
 #[test]
 fn test_asymmetric_followup_eval_readonly_error_precedence() {
