@@ -153,6 +153,28 @@ pub(super) fn first_class_callable_descriptor(
     Ok(None)
 }
 
+/// Whether a builtin, invoked through a callable, hands back an owned heap string.
+///
+/// The invoker copies a borrowed string result and takes an owned one as is, so getting this
+/// wrong in the borrowed direction leaks one string per call. Owned results come from the
+/// mbstring engine and from the transforms that persist before returning (`strtoupper`,
+/// `strtolower`); everything else answers in the concat scratch buffer.
+pub(super) fn builtin_returns_owned_string(name: &str) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|definition| {
+        let semantics = &definition.spec.semantics;
+        matches!(
+            semantics.runtime_functions,
+            crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                if target.uses_mbstring_runtime()
+        ) || matches!(
+            semantics.lowering,
+            crate::builtins::semantics::BuiltinLowering::Runtime(
+                crate::ir::RuntimeCallTarget::UnaryString(runtime)
+            ) if runtime.returns_owned_string()
+        )
+    })
+}
+
 /// Returns descriptor metadata for builtin first-class callable targets.
 pub(super) fn first_class_builtin_descriptor(
     ctx: &mut FunctionContext<'_>,
@@ -183,13 +205,7 @@ pub(super) fn first_class_builtin_descriptor(
     }
     let wrapper_sig = runtime_builtin_wrapper_sig(&name, &callable_wrapper_sig(&sig));
     let owns_string_return = wrapper_sig.return_type.codegen_repr() == PhpType::Str
-        && crate::builtins::registry::lookup(&name).is_some_and(|definition| {
-            matches!(
-                definition.spec.semantics.runtime_functions,
-                crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
-                    if target.uses_mbstring_runtime()
-            )
-        });
+        && builtin_returns_owned_string(&name);
     let entry_label =
         emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig, strict_php)?;
     Ok(Some(FirstClassCallableDescriptor {

@@ -1,6 +1,6 @@
 //! Purpose:
 //! Decides whether a parsed program references the Termwind-facing DOM HTML
-//! surface — `DOMDocument`, `DOMNode`, `DOMElement`, `DOMText`, `DOMComment`,
+//! surface: `DOMDocument`, `DOMNode`, `DOMElement`, `DOMText`, `DOMComment`,
 //! `DOMCharacterData`, or `DOMNodeList` — so the HTML prelude is injected only
 //! for programs that actually walk a loaded HTML tree.
 //!
@@ -14,6 +14,8 @@
 //! - Class-name positions trigger injection: `new`, static receivers,
 //!   `instanceof`, `catch`, `extends`/`implements`, type hints, trait uses, and
 //!   `use` imports. There is no user-facing procedural `dom_*` function set.
+//! - Generic bounds, defaults, inherited arguments and callable/array member
+//!   types are visited before monomorphization removes their syntactic wrappers.
 //! - Capability probes (`class_exists('DOMDocument')`) are string literals and
 //!   deliberately do NOT trigger injection — same rule as the PDO/mysqli
 //!   preludes. A probe-only program honestly reports that the class is absent.
@@ -25,8 +27,8 @@
 use crate::names::Name;
 use crate::parser::ast::{
     CallableTarget, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    InstanceOfTarget, PackedField, StaticReceiver, Stmt, StmtKind, TraitAdaptation, TraitUse,
-    TypeExpr,
+    GenericDecl, InstanceOfTarget, PackedField, StaticReceiver, Stmt, StmtKind,
+    TraitAdaptation, TraitUse, TypeExpr, TypeParam,
 };
 
 /// Global class fallbacks offered by the prelude, behind user-owned declarations.
@@ -59,7 +61,11 @@ fn name_is_dom_class(name: &Name) -> bool {
 /// Returns whether a static receiver names a DOM class (`DOMDocument::...`).
 /// `self`, `static`, and `parent` never resolve to a DOM class at this position.
 fn receiver_refs_dom(receiver: &StaticReceiver) -> bool {
-    matches!(receiver, StaticReceiver::Named(name) if name_is_dom_class(name))
+    match receiver {
+        StaticReceiver::Named(name) => name_is_dom_class(name),
+        StaticReceiver::Generic(class_type) => type_refs_dom(class_type),
+        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => false,
+    }
 }
 
 /// Returns whether an `instanceof` target references a DOM class, recursing into
@@ -67,6 +73,7 @@ fn receiver_refs_dom(receiver: &StaticReceiver) -> bool {
 fn instanceof_target_refs_dom(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(name) => name_is_dom_class(name),
+        InstanceOfTarget::Generic(class_type) => type_refs_dom(class_type),
         InstanceOfTarget::Expr(expr) => expr_refs_dom(expr),
     }
 }
@@ -97,11 +104,35 @@ fn type_refs_dom(type_expr: &TypeExpr) -> bool {
         TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => {
             type_refs_dom(inner)
         }
+        TypeExpr::AssocArray { key, value } => type_refs_dom(key) || type_refs_dom(value),
+        TypeExpr::CallableSig { params, ret } => {
+            params.iter().any(type_refs_dom) || type_refs_dom(ret)
+        }
         TypeExpr::Named(name) => name_is_dom_class(name),
+        TypeExpr::GenericClass { name, args } => {
+            name_is_dom_class(name) || args.iter().any(type_refs_dom)
+        }
         TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
             members.iter().any(type_refs_dom)
         }
     }
+}
+
+/// Finds DOM references in generic parameter bounds and default type arguments.
+fn type_params_ref_dom(params: &[TypeParam]) -> bool {
+    params.iter().any(|param| {
+        param.bound.as_ref().is_some_and(type_refs_dom)
+            || param.default.as_ref().is_some_and(type_refs_dom)
+    })
+}
+
+/// Visits a declaration's own parameters and arguments passed to its inherited types.
+fn generics_ref_dom(generics: Option<&GenericDecl>) -> bool {
+    generics.is_some_and(|generics| {
+        type_params_ref_dom(&generics.type_params)
+            || generics.extends_args.iter().any(type_refs_dom)
+            || generics.interface_args.iter().flatten().any(type_refs_dom)
+    })
 }
 
 /// Returns whether any parameter's type hint or default value references the
@@ -117,6 +148,7 @@ fn params_ref_dom(params: &[(String, Option<TypeExpr>, Option<Expr>, bool)]) -> 
 /// or any conflict-resolution adaptation.
 fn trait_use_refs_dom(trait_use: &TraitUse) -> bool {
     trait_use.trait_names.iter().any(name_is_dom_class)
+        || trait_use.type_args.iter().flatten().any(type_refs_dom)
         || trait_use.adaptations.iter().any(|adaptation| match adaptation {
             TraitAdaptation::Alias { trait_name, .. } => {
                 trait_name.as_ref().is_some_and(name_is_dom_class)
@@ -142,14 +174,16 @@ fn class_property_refs_dom(property: &ClassProperty) -> bool {
 /// Returns whether a method's parameters, return type, or body reference the
 /// hashing surface.
 fn class_method_refs_dom(method: &ClassMethod) -> bool {
-    params_ref_dom(&method.params)
+    type_params_ref_dom(&method.type_params)
+        || params_ref_dom(&method.params)
+        || method.variadic_type.as_ref().is_some_and(type_refs_dom)
         || method.return_type.as_ref().is_some_and(type_refs_dom)
         || method.body.iter().any(stmt_refs_dom)
 }
 
 /// Returns whether a class constant's initializer references the hashing surface.
 fn class_const_refs_dom(constant: &ClassConst) -> bool {
-    expr_refs_dom(&constant.value)
+    constant.type_expr.as_ref().is_some_and(type_refs_dom) || expr_refs_dom(&constant.value)
 }
 
 /// Returns whether an enum case's backing-value expression references the hashing
@@ -245,11 +279,13 @@ fn expr_refs_dom(expr: &Expr) -> bool {
         ExprKind::Cast { expr, .. } | ExprKind::PtrCast { expr, .. } => expr_refs_dom(expr),
         ExprKind::Closure {
             params,
+            variadic_type,
             return_type,
             body,
             ..
         } => {
             params_ref_dom(params)
+                || variadic_type.as_ref().is_some_and(type_refs_dom)
                 || return_type.as_ref().is_some_and(type_refs_dom)
                 || body.iter().any(stmt_refs_dom)
         }
@@ -259,6 +295,9 @@ fn expr_refs_dom(expr: &Expr) -> bool {
         }
         ExprKind::NewObject { class_name, args } => {
             name_is_dom_class(class_name) || args.iter().any(expr_refs_dom)
+        }
+        ExprKind::NewGeneric { class_type, args } => {
+            type_refs_dom(class_type) || args.iter().any(expr_refs_dom)
         }
         ExprKind::NewDynamic { name_expr, args } => {
             expr_refs_dom(name_expr) || args.iter().any(expr_refs_dom)
@@ -428,12 +467,16 @@ fn stmt_refs_dom(stmt: &Stmt) -> bool {
                     .is_some_and(|body| body.iter().any(stmt_refs_dom))
         }
         StmtKind::FunctionDecl {
+            type_params,
             params,
+            variadic_type,
             return_type,
             body,
             ..
         } => {
-            params_ref_dom(params)
+            type_params_ref_dom(type_params)
+                || params_ref_dom(params)
+                || variadic_type.as_ref().is_some_and(type_refs_dom)
                 || return_type.as_ref().is_some_and(type_refs_dom)
                 || body.iter().any(stmt_refs_dom)
         }
@@ -442,6 +485,7 @@ fn stmt_refs_dom(stmt: &Stmt) -> bool {
         StmtKind::ListUnpack { value, .. } => expr_refs_dom(value),
         StmtKind::StaticVar { init, .. } => expr_refs_dom(init),
         StmtKind::ClassDecl {
+            generics,
             extends,
             implements,
             trait_uses,
@@ -450,7 +494,8 @@ fn stmt_refs_dom(stmt: &Stmt) -> bool {
             constants,
             ..
         } => {
-            extends.as_ref().is_some_and(name_is_dom_class)
+            generics_ref_dom(generics.as_deref())
+                || extends.as_ref().is_some_and(name_is_dom_class)
                 || implements.iter().any(name_is_dom_class)
                 || trait_uses.iter().any(trait_use_refs_dom)
                 || properties.iter().any(class_property_refs_dom)
@@ -458,34 +503,48 @@ fn stmt_refs_dom(stmt: &Stmt) -> bool {
                 || constants.iter().any(class_const_refs_dom)
         }
         StmtKind::EnumDecl {
+            generics,
             backing_type,
             cases,
+            implements,
+            trait_uses,
+            methods,
+            constants,
             ..
         } => {
-            backing_type.as_ref().is_some_and(type_refs_dom)
+            generics_ref_dom(generics.as_deref())
+                || backing_type.as_ref().is_some_and(type_refs_dom)
                 || cases.iter().any(enum_case_refs_dom)
+                || implements.iter().any(name_is_dom_class)
+                || trait_uses.iter().any(trait_use_refs_dom)
+                || methods.iter().any(class_method_refs_dom)
+                || constants.iter().any(class_const_refs_dom)
         }
         StmtKind::PackedClassDecl { fields, .. } => fields.iter().any(packed_field_refs_dom),
         StmtKind::InterfaceDecl {
+            generics,
             extends,
             properties,
             methods,
             constants,
             ..
         } => {
-            extends.iter().any(name_is_dom_class)
+            generics_ref_dom(generics.as_deref())
+                || extends.iter().any(name_is_dom_class)
                 || properties.iter().any(class_property_refs_dom)
                 || methods.iter().any(class_method_refs_dom)
                 || constants.iter().any(class_const_refs_dom)
         }
         StmtKind::TraitDecl {
+            generics,
             trait_uses,
             properties,
             methods,
             constants,
             ..
         } => {
-            trait_uses.iter().any(trait_use_refs_dom)
+            generics_ref_dom(generics.as_deref())
+                || trait_uses.iter().any(trait_use_refs_dom)
                 || properties.iter().any(class_property_refs_dom)
                 || methods.iter().any(class_method_refs_dom)
                 || constants.iter().any(class_const_refs_dom)
@@ -608,6 +667,60 @@ mod tests {
         assert!(!program_uses_dom_html(&parse(
             "<?php $items = ['other' => 1, ...[2]];"
         )));
+    }
+
+    /// Generic and composite types retain DOM references until the prelude is injected.
+    #[test]
+    fn detects_dom_in_generic_type_shapes() {
+        for source in [
+            "<?php function f(array<string, DOMNode> $items): void {}",
+            "<?php function f(callable(DOMNode): int $visit): void {}",
+            "<?php function f(callable(int): DOMNode $visit): void {}",
+            "<?php function f(Box<DOMNode> $box): void {}",
+            "<?php $box = new Box<DOMNode>();",
+            "<?php $box = new Box<int>(new DOMDocument());",
+            "<?php if ($box instanceof Box<DOMNode>) { echo 1; }",
+            "<?php Box<DOMNode>::run();",
+            "<?php $run = Box<DOMNode>::run(...);",
+        ] {
+            assert!(program_uses_dom_html(&parse(source)), "{source}");
+        }
+    }
+
+    /// Bound/default parameters and inherited class/interface/trait arguments are visited.
+    #[test]
+    fn detects_dom_in_generic_declarations() {
+        for source in [
+            "<?php function f<T: DOMNode>(T $node): void {}",
+            "<?php function f<T = DOMNode>(): void {}",
+            "<?php class Box<T: DOMNode> {}",
+            "<?php class Box<T = DOMNode> {}",
+            "<?php class Box { public function f<T: DOMNode>(T $node): void {} }",
+            "<?php class Box extends Source<DOMNode> {}",
+            "<?php class Box implements Source<DOMNode> {}",
+            "<?php interface Box extends Source<DOMNode> {}",
+            "<?php trait Box<T: DOMNode> {}",
+            "<?php class Box { use Source<DOMNode>; }",
+            "<?php enum Box implements Source<DOMNode> { case A; }",
+            "<?php enum Box { public function f(DOMNode $node): void {} case A; }",
+        ] {
+            assert!(program_uses_dom_html(&parse(source)), "{source}");
+        }
+    }
+
+    /// Generic syntax alone, user declarations and shadowing parameters do not opt into DOM.
+    #[test]
+    fn ignores_unrelated_and_user_owned_generic_types() {
+        for source in [
+            "<?php $box = new Box<int>();",
+            "<?php function f(array<string, int> $items, callable(int): int $visit): void {}",
+            "<?php class DOMDocument<T> {} $box = new DOMDocument<int>();",
+            "<?php class DOMNode {} function f(Box<DOMNode> $box): void {}",
+            "<?php class Box<DOMNode> { public DOMNode $value; }",
+            "<?php namespace App; class DOMNode {} class Box extends Source<DOMNode> {}",
+        ] {
+            assert!(!program_uses_dom_html(&parse(source)), "{source}");
+        }
     }
 
     /// Capability probes and string mentions do not trigger injection.

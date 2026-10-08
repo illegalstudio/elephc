@@ -133,8 +133,20 @@ impl Checker {
                 ))
             }
             CallableTarget::StaticMethod { receiver, method } => {
+
                 let method_key = crate::names::php_symbol_key(method);
+
+                // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+                // it, and this pass can run on a generic function's template body — which is
+                // walked and then stripped, never instantiated.
+                let receiver = &receiver.written_class_receiver();
+
                 let resolved_class_name = match receiver {
+                    // A generic receiver is instantiated into an ordinary named one before type checking;
+                    // a template has no class to reach through.
+                    StaticReceiver::Generic(_) => unreachable!(
+                        "StaticReceiver::Generic must be instantiated by generics::classes"
+                    ),
                     StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
                     StaticReceiver::Self_ => {
                         self.current_class.as_ref().cloned().ok_or_else(|| {
@@ -423,6 +435,7 @@ impl Checker {
             }
             if promoted {
                 self.functions.remove(name);
+                self.completed_function_signatures.remove(name);
                 self.ensure_function_variant_group_signature(name, crate::span::Span::dummy())?;
             }
             return Ok(());
@@ -631,6 +644,11 @@ impl Checker {
     ) -> Option<String> {
         match receiver {
             StaticReceiver::Named(class_name) => Some(class_name.as_str().to_string()),
+            // Same contract every other checker site states: a generic receiver is instantiated
+            // into an ordinary named one before type checking, so a template never reaches here.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone(),
             StaticReceiver::Parent => self
                 .classes
@@ -813,6 +831,7 @@ echo unpackSpareName(keepsSpareName(...)), ':', positionalOnlyTail(1, 2);
 function variant_tail_left(string $head, ...$rest): string { return $head; }
 function variant_tail_right(string $head, ...$rest): string { return $head; }
 $callback = vArIaNt_TaIl(...);
+$second = variant_tail(...);
 "#;
         let tokens = crate::lexer::tokenize(source).expect("tokenize");
         let mut program = crate::parser::parse(&tokens).expect("parse");
@@ -827,22 +846,17 @@ $callback = vArIaNt_TaIl(...);
             crate::span::Span::dummy(),
         ));
 
-        let checked = crate::types::checker::check_types(
-            &program,
-            Target::parse("linux-x86_64").expect("supported target"),
-        )
-        .expect("a statically inventoried variant group is a valid first-class callable");
-        let tail = checked
-            .functions
-            .get("variant_tail")
-            .expect("the group signature is materialized during callable resolution")
-            .params
-            .last()
-            .expect("the variadic occupies the last parameter slot");
-        assert_eq!(
-            tail.1,
-            crate::types::signatures::descriptor_variadic_container(),
-            "the group and its variants must use the descriptor-safe tail container",
-        );
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let checked = crate::types::checker::check_types(
+                &program, Target::parse(target).expect("supported target"),
+            ).expect("a promoted variant group remains a valid first-class callable");
+            for name in ["variant_tail", "variant_tail_left", "variant_tail_right"] {
+                let tail = checked.functions.get(name)
+                    .expect("promotion must rebuild the completed group signature")
+                    .params.last().expect("the variadic occupies the last parameter slot");
+                assert_eq!(tail.1, crate::types::signatures::descriptor_variadic_container(),
+                    "{target}: {name} must use the descriptor-safe tail container");
+            }
+        }
     }
 }

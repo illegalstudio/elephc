@@ -125,7 +125,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `NestedArrayAssign { target, value }` | `$arr[0][1] = 5;`, `$obj->items[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |
 | `TypedAssign { type_expr, name, value }` | `int $x = 42;`, `buffer<int> $xs = buffer_new<int>(8);` |
-| `FunctionDecl { name, params, param_attributes, variadic, variadic_by_ref, variadic_type, return_type, by_ref_return, body }` | `function foo(int $a, &$b, string $c = "x"): string { }`, `function &ref(): int { ... }` — params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `param_attributes` stores the PHP 8 attribute groups attached to each parameter (aligned with `params`, plus the variadic when present). `variadic` is `Option<String>` for variadic parameters (`...$args`), `variadic_by_ref` is `true` for a by-reference variadic (`&...$args`), `variadic_type` is the optional declared element type on that variadic (`int ...$xs`), `return_type` is an optional declared `TypeExpr`, and `by_ref_return` is `true` when declared `function &f()` so calls return a reference (alias) to the returned lvalue rather than a copy |
+| `FunctionDecl { name, type_params, params, param_attributes, variadic, variadic_by_ref, variadic_type, return_type, by_ref_return, body }` | `function foo(int $a, &$b, string $c = "x"): string { }`, `function &ref(): int { ... }` , params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `param_attributes` stores the PHP 8 attribute groups attached to each parameter (aligned with `params`, plus the variadic when present). `variadic` is `Option<String>` for variadic parameters (`...$args`), `variadic_by_ref` is `true` for a by-reference variadic (`&...$args`), `variadic_type` is the optional declared element type on that variadic (`int ...$xs`), `return_type` is an optional declared `TypeExpr`, and `by_ref_return` is `true` when declared `function &f()` so calls return a reference (alias) to the returned lvalue rather than a copy |
 | `FunctionVariantGroup { name, variants }` | Internal resolver metadata for include-loaded hidden function implementations behind one public name |
 | `FunctionVariantMark { name, variant }` | Internal include-body marker that activates the hidden function variant loaded at that runtime include point |
 | `Return(Option<Expr>)` | `return $x;` or `return;` |
@@ -145,11 +145,11 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` for simple local positional destructuring; skipped, keyed, nested, and non-local destructuring patterns lower to `Synthetic` assignment statements |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls. `static $count;` without an initializer is also accepted and desugars to `init = null`, matching PHP |
-| `ClassDecl { name, extends, implements, is_abstract, is_final, is_readonly_class, trait_uses, properties, constants, methods }` | `final readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
-| `EnumDecl { name, backing_type, cases, implements, trait_uses, methods, constants }` | `enum Status: int { case Ok = 1; case Err = 2; }` — `trait_uses` holds `use Trait;` clauses inside the enum body, flattened into enum method metadata by the checker |
+| `ClassDecl { name, generics, extends, implements, is_abstract, is_final, is_readonly_class, trait_uses, properties, constants, methods }` | `final readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
+| `EnumDecl { name, generics, backing_type, cases, implements, trait_uses, methods, constants }` | `enum Status: int { case Ok = 1; case Err = 2; }` , `trait_uses` holds `use Trait;` clauses inside the enum body, flattened into enum method metadata by the checker |
 | `PackedClassDecl { name, fields }` | `packed class Vec2 { public float $x; public float $y; }` |
-| `InterfaceDecl { name, extends, properties, methods, constants }` | `interface Named extends Stringable { public string $name { get; } public function name(): string; }` |
-| `TraitDecl { name, trait_uses, properties, constants, methods }` | `trait Named { public const KIND = "name"; ... }` |
+| `InterfaceDecl { name, generics, extends, properties, methods, constants }` | `interface Named extends Stringable { public string $name { get; } public function name(): string; }` |
+| `TraitDecl { name, generics, trait_uses, properties, constants, methods }` | `trait Named { public const KIND = "name"; ... }` — `generics` holds the type parameters of `trait Holder<T>`, `None` for an ordinary trait |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
 | `StaticPropertyAssign { receiver, property, value }` | `Counter::$count = 10;`, `self::$count = 10;` |
 | `StaticPropertyArrayPush { receiver, property, value }` | `Counter::$items[] = 10;`, `self::$items[] = 10;` |
@@ -230,7 +230,9 @@ Parsed type annotations use `TypeExpr` before the checker resolves them into
 
 ```
 Int  Float  Bool  False  Str  Void  Never  Iterable
-Array(Box<TypeExpr>)  Ptr(Option<Name>)  Buffer(Box<TypeExpr>)  Named(Name)
+Array(Box<TypeExpr>)  AssocArray { key, value }
+Ptr(Option<Name>)  Buffer(Box<TypeExpr>)  Named(Name)
+GenericClass { name, args }  CallableSig { params, ret }
 Nullable(Box<TypeExpr>)  Union(Vec<TypeExpr>)  Intersection(Vec<TypeExpr>)
 ```
 
@@ -241,6 +243,19 @@ type of a typed array annotation. Nullable shorthand (`?T`), explicit unions
 (`T|U`), and PHP 8.1 intersections (`A&B`, where every member must be a
 class/interface type) are represented separately so the checker can reject
 invalid forms such as `?T|U` and normalize accepted declarations.
+
+`AssocArray` is the declared `array<K, V>` hash layout, distinct from the
+packed `array<T>` represented by `Array`. `GenericClass` names a class or
+interface with type arguments; specialization rewrites it to an ordinary
+`Named` type. `CallableSig` carries parameter and return annotations for
+checking and inference while preserving ordinary callable descriptor storage.
+
+Generic function and method declarations carry `type_params`; explicit calls
+carry `type_args`. Class-like declarations carry optional `generics` metadata.
+`NewGeneric { class_type, args }`, generic static receivers, and generic
+`instanceof` targets are transient forms rewritten to ordinary concrete class
+references by specialization before EIR lowering. See
+[Generics](../beyond-php/generics.md).
 
 ### Class-related types
 
@@ -254,10 +269,10 @@ invalid forms such as `?T|U` and normalize accepted declarations.
 | `EnumCaseDecl` | `name`, `value`, `span`, `attributes` | A backed or unit enum case declaration, with declaration-level attributes preserved in the AST. |
 | `ClassConst` | `name`, `visibility`, `is_final`, `value`, `span`, `attributes` | A class, interface, or trait constant declaration. A declarator list (`const A = 1, B = 2;`) yields one entry per name, and `span` covers that entry's own declarator (`B = 2`). |
 | `ClassProperty` | `name`, `visibility`, `type_expr`, `hooks`, `readonly`, `is_final`, `is_static`, `is_abstract`, `by_ref`, `default`, `span`, `attributes` | A property declaration inside a class, trait, or interface, optionally carrying a parsed property type declaration, hook contract, static-property marker, by-reference promotion marker, or declaration-level attributes. A declarator list (`public int $a = 1, $b;`) yields one entry per name, and a class-body entry's `span` covers its own declarator (`$a = 1`) |
-| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `param_attributes`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface, including source-order parameter attribute groups |
+| `ClassMethod` | `name`, `type_params`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `param_attributes`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface, including source-order parameter attribute groups |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
-| `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
+| `TraitUse` | `trait_names`, `type_args`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body; `type_args` holds the type arguments of `use Holder<int>`, aligned with `trait_names` |
 | `TraitAdaptation` | `Alias { trait_name: Option<Name>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<Name>, method, instead_of: Vec<Name> }` | PHP-style trait conflict resolution and aliasing |
 | `UseItem` / `UseKind` | `kind`, `name`, `alias` | Namespace import entries for `use`, `use function`, `use const`, and group-use declarations |
 | `CallableTarget` | `Function(Name)`, `StaticMethod { receiver, method }`, `Method { object, method }` | Structured target of first-class callable syntax such as `foo(...)` or `Cls::bar(...)` |

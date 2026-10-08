@@ -7,11 +7,15 @@
 //! Key details:
 //! - Complex sibling trees exercise boxed stack pop and interface traversal.
 //! - Target cases are independently scheduled under the normal CI timeout.
+//! - Generic containers retain concrete DOM member types through the complete frontend.
 
 /// Validates one target's DOM stack and interface method assembly boundaries.
 fn verify(target: &str) {
     let module = super::lower_source_at_for_target(r#"<?php
 $doc = new DOMDocument();
+class HtmlBox<T> { public function __construct(public T $node) {} }
+$boxed = new HtmlBox<DOMDocument>($doc);
+echo $boxed->node->nodeName;
 $doc->loadHTML('<div>A<!--hidden--><span>B</span><b>C</b></div>');
 $div = $doc->getElementsByTagName('div')->item(0);
 foreach ($div->childNodes as $child) { echo $child->nodeValue; }

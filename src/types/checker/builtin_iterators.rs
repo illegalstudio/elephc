@@ -93,6 +93,7 @@ pub(crate) fn inject_builtin_iterators(
 /// type-check sees a concrete return value compatible with `mixed`.
 fn stub_method_returning_null(name: &str) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -121,6 +122,7 @@ fn stub_method_returning_null(name: &str) -> ClassMethod {
 /// The parameter type is patched separately by `patch_builtin_generator_signatures`.
 fn stub_method_returning_null_with_param(name: &str, param: &str) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -147,6 +149,7 @@ fn stub_method_returning_null_with_param(name: &str, param: &str) -> ClassMethod
 /// Used for `Generator::valid()`.
 fn stub_method_returning_false(name: &str) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -176,6 +179,7 @@ fn stub_method_returning_false(name: &str) -> ClassMethod {
 /// Used for `Generator::next()` and `Generator::rewind()`.
 fn stub_void_method(name: &str) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,

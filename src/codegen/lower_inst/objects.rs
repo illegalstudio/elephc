@@ -149,6 +149,9 @@ pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;
+// The one stderr-and-exit sequence for the whole lowering tree. Every caller names it rather than
+// open-coding the platform split, so `Emitter::syscall`'s macOS-to-Linux mapping has a single site.
+pub(super) use dynamic_factory::emit_fatal_message;
 mod dynamic_pdo;
 mod property_defaults;
 mod known_property_reads;

@@ -10,6 +10,7 @@
 //!   dedicated syntax, preludes, and intentionally eval-only functions.
 //! - AOT registry metadata contributes compiler semantics; backend availability and
 //!   effective signatures come from the shared support and signature profiles.
+//! - Dedicated date and OPcache dispatch routes supplement declarative eval bindings.
 //! - The example can read Magician through a dev-dependency without linking the
 //!   interpreter into the compiler binary.
 
@@ -205,6 +206,17 @@ fn eval_support_json(contract: &BuiltinContract) -> Value {
             "supported": true,
             "kind": "date-alias",
             "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
+        });
+    }
+
+    // OPcache uses native prelude declarations and dedicated interpreter fallback
+    // handlers rather than eval_builtin! homes, like date aliases use a dispatcher.
+    // Export that existing route so generated pages do not claim the APIs are absent.
+    if contract.area == Area::Opcache && !contract.internal {
+        return json!({
+            "supported": true,
+            "kind": "opcache-dispatch",
+            "home_file": "crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs",
         });
     }
 

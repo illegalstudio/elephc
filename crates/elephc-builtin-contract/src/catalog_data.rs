@@ -25764,9 +25764,9 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Array,
+        returns: TypeSpec::Union(&[TypeSpec::Array, TypeSpec::False]),
         by_ref_return: false,
-        summary: "Returns the OPcache directives, blacklist, and version.",
+        summary: "Returns the OPcache directives, blacklist, and version, or false when API access is restricted.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.opcache-get-configuration.php"),

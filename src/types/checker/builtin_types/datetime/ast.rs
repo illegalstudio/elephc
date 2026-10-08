@@ -122,6 +122,7 @@ pub(super) fn method(
     body: Vec<Stmt>,
 ) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,

@@ -92,6 +92,7 @@ pub(super) fn datetime_zone_list_identifiers() -> ClassMethod {
     // only to be read back into the same array literal this builds directly.
     let body = super::bodies::list_identifiers(super::timezone_ids::TIMEZONE_IDENTIFIERS);
     ClassMethod {
+        type_params: Vec::new(),
         name: "listIdentifiers".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -291,6 +292,7 @@ pub(super) fn datetime_zone_get_transitions() -> ClassMethod {
 /// directly and marshals the result into the nested array literal.
 pub(super) fn datetime_zone_list_abbreviations() -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: "listAbbreviations".to_string(),
         visibility: Visibility::Public,
         is_static: true,

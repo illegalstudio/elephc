@@ -871,7 +871,16 @@ fn resolve_static_receiver_class(
     receiver: &StaticReceiver,
     span: crate::span::Span,
 ) -> Result<String, CompileError> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => resolve_class_name(checker, name.as_str())
             .map(str::to_string)
             .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", name))),
@@ -1091,6 +1100,22 @@ fn check_callback_builtin_call_in_engine_frame(
             // as authoritative parameter types for callbacks over refcounted arrays.
             let _ = checker.check_function_call(cb_name, callback_args, span, env);
             return Ok(PhpType::Int);
+        }
+        // A BUILTIN named by string. `check_function_call` below resolves user functions and
+        // variant groups only — builtins are resolved one level up, where a call expression is
+        // inferred — so `array_map('strlen', $a)` reported "Undefined function: strlen" inside
+        // any function body (and, on `origin/main`, at the top level too). The signature is the
+        // one a first-class callable of the same builtin gets, with the same refusals and the
+        // same library requirements, so `'strlen'` and `strlen(...)` cannot drift apart.
+        if crate::name_resolver::is_builtin_function(cb_name.as_str()) {
+            let key = crate::names::php_symbol_key(cb_name.trim_start_matches('\\'));
+            if let Some(message) = crate::builtins::registry::first_class_callable_rejection(&key) {
+                return Err(CompileError::new(span, message));
+            }
+            if let Some(sig) = crate::types::first_class_callable_builtin_sig(&key) {
+                checker.require_first_class_callable_builtin_libraries(&key);
+                return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+            }
         }
         return checker.check_function_call(cb_name, callback_args, span, env);
     }

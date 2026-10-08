@@ -7,8 +7,48 @@
 //! Key details:
 //! - Closing tags match open element names; comments retain their own value only.
 //! - User-owned DOM names must not trigger conflicting prelude declarations.
+//! - Generic type references inject DOM before monomorphization, without stealing user names.
 
 use crate::support::*;
+
+/// A generic function's bound keeps the namespace ownership of a user-defined DOM class.
+#[test]
+fn dom_html_review_generic_function_bound_uses_namespace() {
+    let out = compile_and_run(r#"<?php
+namespace App;
+class DOMDocument {}
+function identity<T: DOMDocument>(T $value): T { return $value; }
+$document = identity(new DOMDocument());
+echo get_class($document);
+"#);
+    assert_eq!(out, "App\\DOMDocument");
+}
+
+/// A DOM reference carried only by inherited generic arguments still enables dynamic creation.
+#[test]
+fn dom_html_review_generic_inheritance_injects_prelude() {
+    let out = compile_and_run(r#"<?php
+class Box<T> {}
+class Documents extends Box<DOMDocument> {}
+$name = 'DOMDocument';
+$document = new $name();
+echo $document->nodeName;
+"#);
+    assert_eq!(out, "#document");
+}
+
+/// A user's generic DOM class remains user-owned through explicit instantiation.
+#[test]
+fn dom_html_review_user_generic_class_is_not_redeclared() {
+    let out = compile_and_run(r#"<?php
+class DOMDocument<T> {
+    public function __construct(public T $value) {}
+}
+$document = new DOMDocument<int>(42);
+echo $document->value;
+"#);
+    assert_eq!(out, "42");
+}
 
 /// The user-facing example exercises sibling stack reuse and comment-free aggregate text.
 #[test]

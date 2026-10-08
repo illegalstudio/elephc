@@ -130,7 +130,7 @@ fn stmt_carries_decision(stmt: &Stmt) -> bool {
         }
         StmtKind::Try { try_body, catches, finally_body } => {
             stmts_carry_decision(try_body)
-                || catches.iter().any(|CatchClause { exception_types: _, variable: _, body }| {
+                || catches.iter().any(|CatchClause { exception_type_args: _, exception_types: _, variable: _, body }| {
                     stmts_carry_decision(body)
                 })
                 || finally_body.as_ref().is_some_and(|body| stmts_carry_decision(body))
@@ -192,7 +192,8 @@ fn expr_carries_decision(expr: &Expr) -> bool {
         }
         ExprKind::StaticMethodCall { receiver: _, method: _, args }
         | ExprKind::NewScopedObject { receiver: _, args }
-        | ExprKind::NewObject { class_name: _, args } => exprs_carry_decision(args),
+        | ExprKind::NewObject { class_name: _, args }
+        | ExprKind::NewGeneric { class_type: _, args } => exprs_carry_decision(args),
         ExprKind::ClosureCall { var: _, args } => exprs_carry_decision(args),
         ExprKind::ExprCall { callee, args } => {
             expr_carries_decision(callee) || exprs_carry_decision(args)
@@ -237,6 +238,7 @@ fn expr_carries_decision(expr: &Expr) -> bool {
                 || match target {
                     InstanceOfTarget::Expr(target) => expr_carries_decision(target),
                     InstanceOfTarget::Name(_) => false,
+                    InstanceOfTarget::Generic(_) => false,
                 }
         }
         ExprKind::YieldFrom(inner)

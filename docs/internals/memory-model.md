@@ -972,6 +972,31 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_elephc_iconv_call_fn`, `_elephc_iconv_release_fn`, and `_elephc_curl_*_fn`: late-bound character-set conversion and curl easy, multi, share, callback, and multipart bridge entry points
 - enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
 
+### Request and cleanup metadata
+
+The fixed runtime also reserves the following BSS metadata. Every symbol in
+this table occupies 8 bytes; queue nodes, handler-stack entries, and temporary
+values themselves live on the heap. These slots supplement the scratch buffers
+and heap counters described above.
+
+| Symbols | Purpose |
+|---|---|
+| `_mbstring_catalog_array` | Cached native mbstring catalog array |
+| `_mbstring_deferred_capture_head`, `_mbstring_deferred_capture_tail`, `_mbstring_deferred_capture_draining` | Deferred capture queue and its reentrancy guard |
+| `_mbstring_ini_native_active` | Native mbstring INI-state activation marker |
+| `_unser_temporaries` | Temporary-value cleanup state for unserialization |
+| `_elephc_eval_ob_release_fn` | Eval output-handler retirement callback, including owned Throwable output |
+| `_php_backtrace_next_line` | Source line for the next native backtrace frame |
+| `_gc_pending_throw` | Pending exception escaping cycle-collector cleanup |
+| `_hash_write_guard_top` | Active hash-mutation cleanup guard chain |
+| `_gc_runs`, `_gc_collected` | Productive collection count and cumulative collected nodes |
+| `_gc_application_started`, `_gc_collector_started`, `_gc_free_started`, `_gc_destructor_started` | Start timestamps for application and collection phases |
+| `_gc_collector_time`, `_gc_destructor_time`, `_gc_free_time`, `_gc_destructor_depth` | Accumulated phase durations and nested destructor depth |
+| `_php_error_handler_value`, `_php_error_handler_callable`, `_php_error_handler_mask` | Original PHP handler value, normalized callable, and accepted error levels |
+| `_php_error_handler_context`, `_php_error_handler_context_release`, `_php_error_handler_stack` | Eval handler context, its release callback, and prior error-handler registrations |
+| `_php_exception_handler_value`, `_php_exception_handler_callable` | Original PHP exception-handler value and normalized callable |
+| `_php_exception_handler_context`, `_php_exception_handler_context_release`, `_php_exception_handler_stack` | Eval handler context, its release callback, and prior exception-handler registrations |
+
 ### Global variables
 
 Two 8-byte BSS slots store the program's command-line arguments:

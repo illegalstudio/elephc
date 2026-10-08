@@ -13,6 +13,7 @@ use super::*;
 pub(super) fn builtin_reflection_method_get_prototype_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "getPrototype".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -62,6 +63,7 @@ pub(super) fn builtin_reflection_method_get_prototype_method() -> ClassMethod {
 pub(super) fn builtin_reflection_property_is_default_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "isDefault".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -94,6 +96,7 @@ pub(super) fn builtin_reflection_property_is_default_method() -> ClassMethod {
 pub(super) fn builtin_reflection_constant_false_union_method(method_name: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -117,6 +120,7 @@ pub(super) fn builtin_reflection_constant_false_union_method(method_name: &str) 
 pub(super) fn builtin_reflection_constant_false_bool_method(method_name: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -140,6 +144,7 @@ pub(super) fn builtin_reflection_constant_false_bool_method(method_name: &str) -
 pub(super) fn builtin_reflection_constant_empty_array_method(method_name: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -163,6 +168,7 @@ pub(super) fn builtin_reflection_constant_empty_array_method(method_name: &str) 
 pub(super) fn builtin_reflection_constant_null_mixed_method(method_name: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -196,6 +202,7 @@ pub(super) fn builtin_reflection_method_name_predicate_method(
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -219,6 +226,7 @@ pub(super) fn builtin_reflection_method_name_predicate_method(
 pub(super) fn builtin_reflection_property_has_type_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "hasType".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -274,6 +282,7 @@ pub(super) fn builtin_reflection_property_modifier_mask_method(method_name: &str
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -306,6 +315,7 @@ pub(super) fn builtin_reflection_property_has_hook_method() -> ClassMethod {
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "hasHook".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -339,6 +349,7 @@ pub(super) fn builtin_reflection_property_get_hook_method() -> ClassMethod {
     );
     let has_hook = function_call("array_key_exists", vec![hook_kind, hooks], dummy_span);
     ClassMethod {
+        type_params: Vec::new(),
         name: "getHook".to_string(),
         visibility: Visibility::Public,
         is_static: false,

@@ -32,6 +32,7 @@ fn noisy_function(name: &str) -> Stmt {
     Stmt::new(
         StmtKind::FunctionDecl {
             name: name.to_string(),
+            type_params: Vec::new(),
             params: vec![("p".to_string(), None, None, false)],
             param_attributes: Vec::new(),
             variadic: None,

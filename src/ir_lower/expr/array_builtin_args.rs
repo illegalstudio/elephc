@@ -107,6 +107,159 @@ pub(super) fn lower_builtin_call_args(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
+    let rewritten = builtin_string_callbacks_as_first_class(sig, args);
+    let args = rewritten.as_deref().unwrap_or(args);
+    let operands = lower_planned_builtin_call_args(ctx, name, sig, args);
+    let canonical = php_symbol_key(name.trim_start_matches('\\'));
+    let lowering = crate::builtins::registry::lookup(&canonical)
+        .map(|def| def.spec.semantics.argument_lowering);
+    match lowering {
+        Some(crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues { arg, sole }) => {
+            lower_bare_array_values_operand(ctx, sig, args, operands, arg, sole)
+        }
+        _ => operands,
+    }
+}
+
+/// Lowers a string literal naming a BUILTIN, at a `callable` parameter, as that builtin's
+/// first-class callable: `array_filter($a, 'is_numeric')` as `array_filter($a, is_numeric(...))`.
+///
+/// The checker types a builtin named by string with the signature `is_numeric(...)` gets (see
+/// `check_callback_builtin_call_in_engine_frame`). The lowering has to match it, because the
+/// runtime resolves a callback STRING against user functions only: left as a string,
+/// `array_filter` died at run time with "must be a valid callback", where `origin/main` had refused
+/// the program at compile time — a regression, which this closes. In php the two spellings name the
+/// same callable, so nothing observable changes; the first-class form is simply the one the backend
+/// already builds a PHP-ABI wrapper for.
+///
+/// A builtin whose first-class form the backend cannot build yet (`usort` with `strcmp(...)`) is
+/// then refused at compile time, loudly, instead of crashing at run time. Spreads are left alone:
+/// which parameter a spread element lands on is not known here.
+fn builtin_string_callbacks_as_first_class(
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    let sig = sig?;
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    // The builtin contracts type most callback parameters `mixed` — `array_filter`, `usort` and
+    // `array_reduce` all do — so the type alone misses them. php-src names every one of them
+    // `$callback`, and that convention is what identifies the position.
+    let is_callable_param = |index: usize| {
+        sig.params.get(index).is_some_and(|(name, ty)| {
+            name.trim_start_matches('$') == "callback" || ty.codegen_repr() == PhpType::Callable
+        })
+    };
+    let builtin_callable = |literal: &Expr| -> Option<Expr> {
+        let ExprKind::StringLiteral(function) = &literal.kind else { return None };
+        if !crate::name_resolver::is_builtin_function(function) {
+            return None;
+        }
+        let key = php_symbol_key(function.trim_start_matches('\\'));
+        if crate::builtins::registry::first_class_callable_rejection(&key).is_some()
+            || crate::types::first_class_callable_builtin_sig(&key).is_none()
+        {
+            return None;
+        }
+        Some(Expr::new(
+            ExprKind::FirstClassCallable(CallableTarget::Function(crate::names::Name::from(
+                function.clone(),
+            ))),
+            literal.span,
+        ))
+    };
+    let mut rewritten: Option<Vec<Expr>> = None;
+    for (position, arg) in args.iter().enumerate() {
+        let (index, literal) = match &arg.kind {
+            ExprKind::NamedArg { name, value } => {
+                let Some(index) = sig.params.iter().position(|(param, _)| param == name) else {
+                    continue;
+                };
+                (index, value.as_ref())
+            }
+            _ => (position, arg),
+        };
+        if !is_callable_param(index) {
+            continue;
+        }
+        let Some(callable) = builtin_callable(literal) else { continue };
+        let replacement = match &arg.kind {
+            ExprKind::NamedArg { name, .. } => Expr::new(
+                ExprKind::NamedArg { name: name.clone(), value: Box::new(callable) },
+                arg.span,
+            ),
+            _ => callable,
+        };
+        rewritten.get_or_insert_with(|| args.to_vec())[position] = replacement;
+    }
+    rewritten
+}
+
+/// Replaces a bare-`array` operand with the owned `array<mixed>` list of its values.
+///
+/// See `BuiltinArgumentLowering::BareArrayValues` for why. Only an operand the checker typed as the
+/// bare declaration — `array<mixed>|array<mixed, mixed>` — is converted: a typed array already
+/// reaches the builtin's own path and needs nothing, and converting it would only copy it.
+///
+/// Ownership follows `coerce_operands_to_params`, which makes the same kind of substitution: every
+/// by-value operand is rooted FIRST, because `array_values()` may throw and an unrooted owned
+/// temporary evaluated earlier would then leak; the source is released if it was a temporary the
+/// call owned, and the fresh list is rooted in its place.
+fn lower_bare_array_values_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    mut operands: Vec<crate::ir::ValueId>,
+    arg: usize,
+    sole: bool,
+) -> Vec<crate::ir::ValueId> {
+    if sole && (args.len() != 1 || args.iter().any(is_spread_arg)) {
+        return operands;
+    }
+    let Some(&operand) = operands.get(arg) else {
+        return operands;
+    };
+    if !ctx.builder.value_php_type(operand).is_php_array() {
+        return operands;
+    }
+    let span = args.first().map_or_else(crate::span::Span::dummy, |first| first.span);
+    for index in 0..operands.len() {
+        if sig.is_some_and(|sig| sig.ref_params.get(index).copied().unwrap_or(false)) {
+            continue;
+        }
+        let lowered = LoweredValue {
+            value: operands[index],
+            ir_type: ctx.builder.value_type(operands[index]),
+        };
+        operands[index] = root_evaluated_call_argument(ctx, lowered, span).value;
+    }
+    let source = LoweredValue {
+        value: operands[arg],
+        ir_type: ctx.builder.value_type(operands[arg]),
+    };
+    let values = ctx.emit_owned_value(
+        crate::ir::Op::RuntimeCall,
+        vec![source.value],
+        Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::ArrayValues,
+        ))),
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        crate::ir_lower::effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    release_coerced_source_if_owned(ctx, source, Some(span));
+    operands[arg] = root_evaluated_call_argument(ctx, values, span).value;
+    operands
+}
+
+/// Lowers builtin operands through the builtin's own argument-lowering strategy.
+fn lower_planned_builtin_call_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
     if is_empty_static_indexed_spread_arg(args) && zero_arity_call_signature(name, sig) {
         return Vec::new();
     }
@@ -122,6 +275,7 @@ pub(super) fn lower_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::Standard
         | crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
         | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+        | crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues { .. }
     ) {
         if let Some(sig) = sig {
             if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, name,

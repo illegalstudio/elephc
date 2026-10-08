@@ -145,6 +145,7 @@ fn receiver_refs_curl(receiver: &StaticReceiver) -> bool {
 fn instanceof_target_refs_curl(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(name) => name_is_curl_class(name),
+        InstanceOfTarget::Generic(class_type) => type_refs_curl(class_type),
         InstanceOfTarget::Expr(expr) => expr_refs_curl(expr),
     }
 }
@@ -176,7 +177,16 @@ fn type_refs_curl(type_expr: &TypeExpr) -> bool {
         TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => {
             type_refs_curl(inner)
         }
+        TypeExpr::AssocArray { key, value } => type_refs_curl(key) || type_refs_curl(value),
+        // A declared signature can name one of these classes, and a program
+        // that mentions it only through a callback still needs the prelude.
+        TypeExpr::CallableSig { params, ret } => {
+            params.iter().any(type_refs_curl) || type_refs_curl(ret)
+        }
         TypeExpr::Named(name) => name_is_curl_class(name),
+        TypeExpr::GenericClass { name, args } => {
+            name_is_curl_class(name) || args.iter().any(type_refs_curl)
+        }
         TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
             members.iter().any(type_refs_curl)
         }
@@ -345,6 +355,9 @@ fn expr_refs_curl(expr: &Expr) -> bool {
         }
         ExprKind::NewObject { class_name, args } => {
             name_is_curl_class(class_name) || args.iter().any(expr_refs_curl)
+        }
+        ExprKind::NewGeneric { class_type, args } => {
+            type_refs_curl(class_type) || args.iter().any(expr_refs_curl)
         }
         ExprKind::NewDynamic { name_expr, args } => {
             expr_refs_curl(name_expr) || args.iter().any(expr_refs_curl)

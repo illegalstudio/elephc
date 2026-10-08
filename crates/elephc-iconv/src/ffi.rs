@@ -30,7 +30,9 @@ use crate::error::{IconvError, IconvResult};
 
 #[cfg_attr(target_os = "macos", link(name = "iconv"))]
 unsafe extern "C" {
+    /// Opens a native conversion descriptor for the requested source and destination charsets.
     fn iconv_open(tocode: *const c_char, fromcode: *const c_char) -> *mut c_void;
+    /// Converts input bytes through the descriptor, updating buffer pointers and remaining lengths.
     fn iconv(
         cd: *mut c_void,
         inbuf: *mut *mut c_char,
@@ -38,7 +40,9 @@ unsafe extern "C" {
         outbuf: *mut *mut c_char,
         outbytesleft: *mut usize,
     ) -> usize;
+    /// Closes a native conversion descriptor and releases its resources.
     fn iconv_close(cd: *mut c_void) -> c_int;
+    /// Queries or replaces the process locale for the requested category.
     fn setlocale(category: c_int, locale: *const c_char) -> *mut c_char;
     /// Sets one GNU-compatible option on a descriptor; Apple stores it per charset pair.
     #[cfg(target_vendor = "apple")]
