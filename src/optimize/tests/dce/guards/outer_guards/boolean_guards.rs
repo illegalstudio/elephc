@@ -34,6 +34,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_strict_bool_guard
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -87,6 +88,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_and_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -137,6 +139,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_negated_and_guard
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -195,6 +198,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_or_false_branch()
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

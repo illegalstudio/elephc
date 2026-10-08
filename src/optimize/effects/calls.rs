@@ -325,7 +325,16 @@ fn resolve_property_receiver(object: &Expr) -> Option<InstanceEffectReceiver> {
         }),
         ExprKind::NewScopedObject { receiver, .. } => {
             let context = ACTIVE_CLASS_EFFECT_CONTEXT.with(|slot| slot.borrow().clone())?;
+            // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+            // it, and this pass can run on a generic function's template body — which is
+            // walked and then stripped, never instantiated.
+            let receiver = &receiver.written_class_receiver();
             match receiver {
+                // A generic receiver is instantiated into an ordinary named one before type checking;
+                // a template has no class to reach through.
+                crate::parser::ast::StaticReceiver::Generic(_) => unreachable!(
+                    "StaticReceiver::Generic must be instantiated by generics::classes"
+                ),
                 crate::parser::ast::StaticReceiver::Self_ => Some(InstanceEffectReceiver {
                     class_name: context.class_name,
                     exact: true,
@@ -444,7 +453,16 @@ fn resolve_instance_receiver(
         }),
         ExprKind::NewScopedObject { receiver, .. } => {
             let context = ACTIVE_CLASS_EFFECT_CONTEXT.with(|slot| slot.borrow().clone())?;
+            // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+            // it, and this pass can run on a generic function's template body — which is
+            // walked and then stripped, never instantiated.
+            let receiver = &receiver.written_class_receiver();
             match receiver {
+                // A generic receiver is instantiated into an ordinary named one before type checking;
+                // a template has no class to reach through.
+                crate::parser::ast::StaticReceiver::Generic(_) => unreachable!(
+                    "StaticReceiver::Generic must be instantiated by generics::classes"
+                ),
                 crate::parser::ast::StaticReceiver::Self_ => Some(InstanceEffectReceiver {
                     class_name: context.class_name,
                     exact: true,
@@ -618,7 +636,16 @@ fn resolve_instance_method_implementation(
 /// - `StaticReceiver::Parent` → looks up the parent class name from `ACTIVE_CLASS_EFFECT_CONTEXT`
 /// - `StaticReceiver::Static` → returns `None` (cannot resolve without more context)
 pub(super) fn resolve_static_receiver_class(receiver: &crate::parser::ast::StaticReceiver) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        crate::parser::ast::StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         crate::parser::ast::StaticReceiver::Named(class_name) => Some(class_name.as_str().to_string()),
         crate::parser::ast::StaticReceiver::Self_ => ACTIVE_CLASS_EFFECT_CONTEXT
             .with(|slot| slot.borrow().as_ref().map(|context| context.class_name.clone())),

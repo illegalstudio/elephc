@@ -98,6 +98,7 @@ pub(crate) fn open_polled_control_channel() -> Option<ControlChannel> {
     Some(channel)
 }
 
+/// Creates a private socket pair and authenticates the monitor control channel with the supplied magic bytes.
 fn open_channel_with(magic: &[u8]) -> Option<ControlChannel> {
     unsafe {
         let mut fds = [0i32; 2];

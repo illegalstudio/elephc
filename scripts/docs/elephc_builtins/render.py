@@ -337,6 +337,12 @@ def _availability_section(b: dict) -> str:
                 "- **`eval()` (magician interpreter)**: supported through a declarative "
                 f"interpreter builtin ([`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home}))."
             )
+        elif kind == "opcache-dispatch":
+            lines.append(
+                "- **`eval()` (magician interpreter)**: supported through native "
+                "OPcache prelude declarations or dedicated interpreter handlers; "
+                "see [OPcache](../../opcache.md)."
+            )
         elif kind == "date-alias":
             lines.append(
                 "- **`eval()` (magician interpreter)**: supported through the "
@@ -361,6 +367,15 @@ def _availability_section(b: dict) -> str:
 def _eval_internals_section(b: dict) -> str:
     """How the eval interpreter reaches this builtin, for the internals page."""
     ev = b.get("eval") or {}
+    if ev.get("kind") == "opcache-dispatch":
+        home = ev.get("home_file") or ""
+        return (
+            "Calls prefer the program's native OPcache prelude declarations, which "
+            "carry the configured directives, live cache, and API restrictions. "
+            "Dedicated interpreter handlers cover programs without those declarations "
+            f"([`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home})). "
+            "This route does not use an `eval_builtin!` binding."
+        )
     if not ev.get("supported"):
         return (
             "_Not callable from eval'd code - the magician interpreter has no "

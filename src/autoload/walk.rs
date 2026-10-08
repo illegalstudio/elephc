@@ -398,6 +398,12 @@ fn collect_type_expr(ty: &TypeExpr, out: &mut HashSet<String>) {
     match ty {
         TypeExpr::Named(name) => push_name(name, out),
         TypeExpr::Array(inner) => collect_type_expr(inner, out),
+        // Both halves: a class named only in `array<string, Foo>` still has to be discovered,
+        // or autoloading never pulls it in and the program fails at the first use.
+        TypeExpr::AssocArray { key, value } => {
+            collect_type_expr(key, out);
+            collect_type_expr(value, out);
+        }
         TypeExpr::Nullable(inner) => collect_type_expr(inner, out),
         TypeExpr::Union(parts) | TypeExpr::Intersection(parts) => {
             for p in parts {
@@ -406,6 +412,16 @@ fn collect_type_expr(ty: &TypeExpr, out: &mut HashSet<String>) {
         }
         TypeExpr::Buffer(inner) => collect_type_expr(inner, out),
         TypeExpr::Ptr(Some(name)) => push_name(name, out),
+        // The TEMPLATE is the file to load: `Box<User>` is declared in whatever file declares
+        // `class Box`, and the instantiated class does not exist until after autoloading. Its
+        // arguments name classes with files of their own, so both halves are collected — the
+        // same reason `array<string, Foo>` collects both.
+        TypeExpr::GenericClass { name, args } => {
+            push_name(name, out);
+            for arg in args {
+                collect_type_expr(arg, out);
+            }
+        }
         _ => {}
     }
 }
@@ -420,10 +436,22 @@ fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
                 collect_refs_expr(a, out);
             }
         }
+        // `new Box<User>(...)` demands the file declaring `Box` and the file declaring `User`,
+        // and its constructor arguments can name classes of their own.
+        ExprKind::NewGeneric { class_type, args } => {
+            collect_type_expr(class_type, out);
+            for a in args {
+                collect_refs_expr(a, out);
+            }
+        }
         ExprKind::InstanceOf { value, target } => {
             collect_refs_expr(value, out);
             match target {
                 crate::parser::ast::InstanceOfTarget::Name(name) => push_name(name, out),
+                // `instanceof Box<User>` demands both files, exactly as the type position does.
+                crate::parser::ast::InstanceOfTarget::Generic(class_type) => {
+                    collect_type_expr(class_type, out)
+                }
                 crate::parser::ast::InstanceOfTarget::Expr(inner) => collect_refs_expr(inner, out),
             }
         }
@@ -625,8 +653,11 @@ fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
 
 /// Collect a class reference from a static receiver (::scope).
 fn collect_static_receiver(receiver: &StaticReceiver, out: &mut HashSet<String>) {
-    if let StaticReceiver::Named(name) = receiver {
-        push_name(name, out);
+    match receiver {
+        StaticReceiver::Named(name) => push_name(name, out),
+        // `Box<User>::of()` demands the file declaring `Box` and the file declaring `User`.
+        StaticReceiver::Generic(class_type) => collect_type_expr(class_type, out),
+        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {}
     }
 }
 

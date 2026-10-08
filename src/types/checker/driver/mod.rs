@@ -82,9 +82,15 @@ pub(super) fn check_types_impl(
     program: &Program,
     target: Target,
     options: CheckOptions,
+    generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target);
     checker.strict_locals = options.strict_locals;
+    // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
+    // Empty on every path that does not run `generics::monomorphize`, which is what makes those
+    // paths behave exactly as they did before this feature.
+    checker.class_templates = generics.class_templates.clone();
+    checker.method_templates = generics.method_templates.clone();
     // Program-wide and computed once, BEFORE any body is walked: the top-level `unset` that has to
     // consult it can sit textually above the `function w() { global $a; }` that makes the name
     // program-global. Shared with EIR lowering's `all_global_var_names` so the two sides cannot
@@ -135,6 +141,7 @@ pub(super) fn check_types_impl(
     checker.declared_classes = class_map.keys().cloned().collect();
     for stmt in program {
         if let StmtKind::InterfaceDecl {
+            generics: _,
             name,
             extends,
             properties,
@@ -404,6 +411,15 @@ pub(super) fn check_types_impl(
 
     checker.prescan_extern_decls(program, &mut errors);
 
+    // Every class, interface and enum is registered, and no body has been checked: a violated
+    // bound is reported now, alone, instead of as whatever the instantiated body trips over.
+    if let Err(error) =
+        checker.verify_class_type_argument_bounds_before_bodies(&generics.class_type_argument_bounds)
+    {
+        errors.extend(error.flatten());
+        return Err(CompileError::from_many(errors));
+    }
+
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
@@ -486,6 +502,7 @@ mod tests {
             is_abstract: true,
             is_final: false,
             has_body: false,
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

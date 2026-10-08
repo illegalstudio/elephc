@@ -89,6 +89,35 @@ impl Name {
         .with_text()
     }
 
+    /// Returns this name with type ARGUMENTS appended to its last part: `identity` -> `identity<int>`.
+    ///
+    /// The instantiated name is this compiler's encoding for an instantiation — `Box<int>` is a
+    /// real class name, not a decoration — so a call site that writes its type arguments encodes
+    /// them the same way, and one spelling serves the parser, the checker and every diagnostic.
+    /// The namespace parts are untouched: `App\identity<int>` keeps resolving as `App\identity`
+    /// would.
+    pub fn with_type_arguments(self, args: &[crate::parser::ast::TypeExpr]) -> Self {
+        if args.is_empty() {
+            return self;
+        }
+        let rendered = args
+            .iter()
+            .map(crate::generics::describe_type)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut parts = self.parts;
+        if let Some(last) = parts.last_mut() {
+            *last = format!("{}<{}>", last, rendered);
+        }
+        Self {
+            kind: self.kind,
+            parts,
+            text: String::new(),
+            function_fallback: self.function_fallback,
+        }
+        .with_text()
+    }
+
     /// Builds the canonical text representation by joining parts with backslashes.
     ///
     /// Called internally after construction to populate `self.text` from `self.parts`.

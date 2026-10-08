@@ -279,6 +279,7 @@ fn test_try_tail_reachability_prefers_finally_only_when_safe() {
     assert!(safe.can_sink_into_finally);
 
     let catch_body = vec![crate::parser::ast::CatchClause {
+        exception_type_args: Vec::new(),
         exception_types: vec!["Exception".into()],
         variable: Some("e".into()),
         body: vec![Stmt::new(StmtKind::Return(Some(Expr::int_lit(9))), Span::dummy())],
@@ -296,11 +297,13 @@ fn test_try_tail_reachability_prefers_finally_only_when_safe() {
 fn test_build_try_cfg_tracks_try_catch_and_finally_successors() {
     let catches = vec![
         crate::parser::ast::CatchClause {
+            exception_type_args: Vec::new(),
             exception_types: vec!["Exception".into()],
             variable: Some("e".into()),
             body: vec![Stmt::new(StmtKind::Break(1), Span::dummy())],
         },
         crate::parser::ast::CatchClause {
+            exception_type_args: Vec::new(),
             exception_types: vec!["RuntimeException".into()],
             variable: Some("e".into()),
             body: vec![Stmt::new(
@@ -341,11 +344,13 @@ fn test_build_try_cfg_tracks_try_catch_and_finally_successors() {
 fn test_classify_try_cfg_paths_tracks_try_and_catch_bodies() {
     let catches = vec![
         crate::parser::ast::CatchClause {
+            exception_type_args: Vec::new(),
             exception_types: vec!["Exception".into()],
             variable: Some("e".into()),
             body: vec![Stmt::echo(Expr::int_lit(8))],
         },
         crate::parser::ast::CatchClause {
+            exception_type_args: Vec::new(),
             exception_types: vec!["RuntimeException".into()],
             variable: Some("e".into()),
             body: vec![Stmt::new(
@@ -378,11 +383,13 @@ fn test_classify_try_cfg_paths_tracks_try_and_catch_bodies() {
 fn test_try_tail_reachability_tracks_catch_fallthrough_without_finally() {
     let catches = vec![
         crate::parser::ast::CatchClause {
+            exception_type_args: Vec::new(),
             exception_types: vec!["Exception".into()],
             variable: Some("e".into()),
             body: vec![Stmt::echo(Expr::int_lit(8))],
         },
         crate::parser::ast::CatchClause {
+            exception_type_args: Vec::new(),
             exception_types: vec!["RuntimeException".into()],
             variable: Some("e".into()),
             body: vec![Stmt::new(StmtKind::Return(Some(Expr::int_lit(9))), Span::dummy())],

@@ -20,7 +20,7 @@ use crate::parser::ast::{CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
 use crate::parser::stmt::{
     expect_semicolon, expect_token, name_starts_at, parse_block, parse_body,
-    parse_destructuring_pattern_unpack, parse_name, parse_stmt, starts_destructuring_pattern,
+    parse_destructuring_pattern_unpack, parse_stmt, starts_destructuring_pattern,
 };
 use crate::span::Span;
 
@@ -413,20 +413,25 @@ pub fn parse_try(
         *pos += 1;
         expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'catch'")?;
         let mut exception_types = Vec::new();
+        let mut exception_type_args: Vec<Vec<crate::parser::ast::TypeExpr>> = Vec::new();
         loop {
             if *pos < tokens.len() && tokens[*pos].0 == Token::Self_ {
                 exception_types.push(crate::names::Name::unqualified("self"));
+                exception_type_args.push(Vec::new());
                 *pos += 1;
             } else if *pos < tokens.len() && tokens[*pos].0 == Token::Parent {
                 exception_types.push(crate::names::Name::unqualified("parent"));
+                exception_type_args.push(Vec::new());
                 *pos += 1;
             } else if name_starts_at(tokens, *pos) {
-                exception_types.push(parse_name(
+                let (name, args) = crate::parser::stmt::parse_inherited_name(
                     tokens,
                     pos,
                     span,
                     "Expected exception class name in catch clause",
-                )?);
+                )?;
+                exception_types.push(name);
+                exception_type_args.push(args);
             } else {
                 return Err(CompileError::new(
                     span,
@@ -438,6 +443,11 @@ pub fn parse_try(
                 continue;
             }
             break;
+        }
+        // Dropped entirely when nothing was written, so a catch with no generic class is the
+        // same AST the synthetic builders produce. See `CatchClause::exception_type_args`.
+        if exception_type_args.iter().all(Vec::is_empty) {
+            exception_type_args.clear();
         }
         let variable = match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Variable(name)) => {
@@ -455,7 +465,7 @@ pub fn parse_try(
         expect_token(tokens, pos, &Token::RParen, "Expected ')' after catch clause")?;
         let body = parse_body(tokens, pos)?;
         catches.push(CatchClause {
-            exception_types,
+            exception_type_args,exception_types,
             variable,
             body,
         });

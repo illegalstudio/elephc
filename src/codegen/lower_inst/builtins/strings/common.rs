@@ -151,6 +151,17 @@ pub(in crate::codegen::lower_inst::builtins) fn load_value_as_string_to_regs(
         move_string_result_to_regs(ctx, ptr_reg, len_reg);
         return Ok(());
     }
+    // A bare `array` is `array<mixed>|array<mixed, mixed>`, and its codegen form is `Mixed` — so it
+    // fell into the runtime `Mixed` cast below and silently became the string "Array".
+    // `str_replace($a, "z", "xyx")` returned the subject untouched, searching for "Array". The
+    // checker KNOWS this value is an array, exactly as it knows an `array<int>` is, and that one is
+    // refused by the last arm; a bare declaration gets the same answer instead of a wrong string.
+    if raw_ty.is_php_array() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} string coercion for PHP type {:?}",
+            name, raw_ty
+        )));
+    }
     let ty = raw_ty.codegen_repr();
     match ty {
         PhpType::Str => ctx.load_string_value_to_regs(value, ptr_reg, len_reg),

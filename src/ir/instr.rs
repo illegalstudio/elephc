@@ -280,6 +280,7 @@ impl IterStartMetadata {
 }
 
 impl fmt::Debug for IterStartMetadata {
+    /// Formats iterator-start metadata with its unpacked state and reference mode.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("IterStartMetadata")
@@ -299,6 +300,7 @@ impl PackedIteratorState {
     const BY_REF: u32 = 1 << 31;
     const SLOT_MASK: u32 = !Self::BY_REF;
 
+    /// Packs an iterator-state slot with its by-reference flag, rejecting reserved high bits.
     fn new(state: LocalSlotId, by_ref: bool) -> Self {
         let raw = state.as_raw();
         assert_eq!(
@@ -309,10 +311,12 @@ impl PackedIteratorState {
         Self(raw | if by_ref { Self::BY_REF } else { 0 })
     }
 
+    /// Extracts the iterator-state local slot without the packed reference flag.
     fn state(self) -> LocalSlotId {
         LocalSlotId::from_raw(self.0 & Self::SLOT_MASK)
     }
 
+    /// Reports the reference-iteration flag stored in compact iterator metadata.
     fn is_by_ref(self) -> bool {
         self.0 & Self::BY_REF != 0
     }
@@ -325,6 +329,7 @@ struct PackedOptionalLocalSlot(u32);
 impl PackedOptionalLocalSlot {
     const NONE: u32 = u32::MAX;
 
+    /// Encodes an optional local slot while reserving the absent-slot sentinel.
     fn new(slot: Option<LocalSlotId>) -> Self {
         match slot {
             Some(slot) => {
@@ -336,6 +341,7 @@ impl PackedOptionalLocalSlot {
         }
     }
 
+    /// Decodes an optional local slot, treating the reserved sentinel as absent.
     fn get(self) -> Option<LocalSlotId> {
         (self.0 != Self::NONE).then(|| LocalSlotId::from_raw(self.0))
     }

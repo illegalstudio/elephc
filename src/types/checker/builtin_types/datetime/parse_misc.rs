@@ -72,6 +72,7 @@ return ["sec" => $sec, "usec" => $usec, "minuteswest" => $mw, "dsttime" => $dst]
 pub(super) fn datetime_gettimeofday() -> ClassMethod {
     let body = super::bodies::gettimeofday();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_gettimeofday".to_string(),
         visibility: Visibility::Public,
         is_static: true,

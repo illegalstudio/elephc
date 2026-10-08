@@ -1530,6 +1530,7 @@ echo 1 + 2;
 #[cfg(target_os = "linux")]
 #[test]
 fn test_cli_debug_info_resolves_compile_unit_anchors_with_addr2line() {
+    /// Reports whether an external tool cannot be invoked for its version probe.
     fn tool_missing(tool: &str) -> bool {
         std::process::Command::new(tool)
             .arg("--version")

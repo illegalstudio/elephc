@@ -103,6 +103,7 @@ const REFLECTION_PRODUCING_BUILTINS: &[&str] = &["class_get_attributes"];
 mod tests {
     use super::*;
 
+    /// Parses a PHP source fixture for builtin-class usage-gate assertions.
     fn parse(source: &str) -> Vec<Stmt> {
         let tokens = crate::lexer::tokenize(source).expect("tokenize");
         crate::parser::parse(&tokens).expect("parse")

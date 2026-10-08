@@ -88,16 +88,21 @@ unsafe extern "C" fn write(
     0
 }
 
+/// Rejects unused capture initialize requests in the variable-conversion fixture.
 unsafe extern "C" fn unused_capture_initialize(
     _: *mut c_void, _: *const c_void, _: *mut MbCaptureOutputV1,
 ) -> i32 { 1 }
+/// Rejects unused capture fill requests in the variable-conversion fixture.
 unsafe extern "C" fn unused_capture_fill(
     _: *mut c_void, _: *mut c_void, _: *const u8, _: u64,
 ) -> i32 { 1 }
+/// Rejects unused capture release requests in the variable-conversion fixture.
 unsafe extern "C" fn unused_capture_release(_: *mut c_void, _: *mut c_void) -> i32 { 1 }
+/// Rejects unused query configuration requests in the variable-conversion fixture.
 unsafe extern "C" fn unused_query_configuration(
     _: *mut c_void, _: u32, _: *mut MbQueryConfigV1,
 ) -> i32 { 1 }
+/// Rejects unused query register requests in the variable-conversion fixture.
 unsafe extern "C" fn unused_query_register(
     _: *mut c_void, _: *mut c_void, _: *const MbQueryStepV1, _: u64, _: *const u8, _: u64,
     _: *mut MbQueryRegisteredV1,
