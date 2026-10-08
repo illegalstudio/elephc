@@ -56,6 +56,7 @@ fn elephc_bin() -> String {
 /// runtime cache so parallel tests never share cached runtime objects.
 fn elephc_command(dir: &Path) -> Command {
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd

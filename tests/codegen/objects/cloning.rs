@@ -2166,6 +2166,7 @@ fn emit_clone_dynamic_property_assembly(dir: &std::path::Path, target: &str) -> 
     let mut command = std::process::Command::new(binary);
     command.env("XDG_CACHE_HOME", dir.join("cache-root"));
     command.current_dir(dir);
+    command.arg("build");
     command.args(["--emit-asm", "--target", target]);
     if target.starts_with("ios") {
         command.args(["--emit", "staticlib"]);

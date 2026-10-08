@@ -1912,7 +1912,7 @@ fn test_eval_aot_fragment_ignores_a_colliding_outer_decision() {
         .expect("failed to run elephc CLI with --emit-ir");
     assert!(
         output.status.success(),
-        "elephc --emit-ir failed: stderr={}",
+        "elephc build --emit-ir failed: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);

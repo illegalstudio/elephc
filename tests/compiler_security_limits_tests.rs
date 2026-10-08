@@ -62,7 +62,7 @@ fn deeply_nested_source_reports_compiler_depth_limit() {
     let php = dir.join("main.php");
     fs::write(&php, source).expect("write deeply nested PHP fixture");
 
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache"))
         .arg(&php)
         .output()
@@ -98,7 +98,7 @@ echo descend(0);
     )
     .expect("write recursive PHP fixture");
 
-    let compile = Command::new(elephc_bin())
+    let compile = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache"))
         .arg(&php)
         .output()
@@ -148,7 +148,7 @@ fn large_frames_report_runtime_recursion_limit_before_stack_overflow() {
     source.push_str(";\n}\necho descend_large(0);\n");
     fs::write(&php, source).expect("write large-frame recursion fixture");
 
-    let compile = Command::new(elephc_bin())
+    let compile = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache"))
         .arg(format!("--heap-size={LARGE_FRAME_TEST_HEAP_BYTES}"))
         .arg(&php)
@@ -194,7 +194,7 @@ fn distinct_include_chain_reports_depth_limit() {
         fs::write(dir.join(format!("f{index}.php")), next).expect("write include-chain member");
     }
 
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache"))
         .arg(dir.join("f0.php"))
         .output()
@@ -217,7 +217,7 @@ fn deeply_nested_unserialize_is_rejected_before_runtime_recursion() {
     fs::write(&php, format!("<?php var_dump(unserialize({wire:?}));"))
         .expect("write nested unserialize fixture");
 
-    let compile = Command::new(elephc_bin())
+    let compile = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache"))
         .arg(&php)
         .output()
@@ -265,7 +265,7 @@ fn nesting_below_the_limit_compiles_and_runs() {
     let php = dir.join("main.php");
     fs::write(&php, source).expect("write deeply nested PHP fixture");
 
-    let compile = Command::new(elephc_bin())
+    let compile = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache"))
         .arg("-q")
         .arg(&php)

@@ -1,7 +1,7 @@
 <?php
 // elephc-web: a tiny Laravel-style framework — routing, controllers, middleware.
 //
-// Compile: cargo run -- --web examples/web-framework/main.php
+// Compile: cargo run -- build --web examples/web-framework/main.php
 // Run:     ./examples/web-framework/main --listen 127.0.0.1:8080 --access-log
 // Try:     curl -i  127.0.0.1:8080/
 //          curl -i  127.0.0.1:8080/hello/ada

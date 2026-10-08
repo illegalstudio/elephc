@@ -405,7 +405,7 @@ for the full `macos-aarch64`, `linux-aarch64`, and `linux-x86_64` matrix.
 
 ## Acceptance criteria
 
-- `elephc main.lfc` compiles valid tagless source to the normal output paths.
+- `elephc build main.lfc` compiles valid tagless source to the normal output paths.
 - PHP tags in LFC code are rejected, and non-code text is never output
   implicitly.
 - Existing tagged PHP input behavior remains unchanged.

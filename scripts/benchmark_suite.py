@@ -116,7 +116,7 @@ def measure_elephc(case_dir: Path, cwd: Path, expected: str, iterations: int, wa
     php_copy = cwd / "main.php"
     shutil.copy2(case_dir / "main.php", php_copy)
     subprocess.run(
-        [str(elephc_bin()), str(php_copy)],
+        [str(elephc_bin()), "build", str(php_copy)],
         cwd=cwd,
         text=True,
         capture_output=True,

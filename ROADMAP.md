@@ -985,7 +985,7 @@ and 0.x validation rather than by speculative pass work.
 
 ### Web server (`--web`) — delivered
 
-`elephc --web app.php` compiles a standard PHP file into a standalone prefork
+`elephc build --web app.php` compiles a standard PHP file into a standalone prefork
 HTTP server binary. The produced binary uses `SO_REUSEPORT` prefork workers; each
 request re-runs the top-level PHP body from a fresh state (globals, function
 statics, and static class properties all reset between requests). Run it with

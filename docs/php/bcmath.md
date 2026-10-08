@@ -74,7 +74,7 @@ Using any `bc*` function auto-links `libelephc_bcmath`. Use `--with-bcmath` to
 force-link the bridge when calls are reached only through indirection:
 
 ```bash
-elephc --with-bcmath app.php
+elephc build --with-bcmath app.php
 ```
 
 `extension_loaded('bcmath')` reports `true` when the AOT binary links the

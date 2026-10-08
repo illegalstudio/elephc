@@ -5,13 +5,13 @@ sidebar:
   order: 7
 ---
 
-`elephc --source-map file.php` (or `file.lfc`) writes a `file.map` sidecar next
+`elephc build --source-map file.php` (or `file.lfc`) writes a `file.map` sidecar next
 to the generated assembly, mapping the assembly back to user source. The map is a JSON document
 with a versioned, machine-readable schema intended for external tooling
 (debuggers, profilers, disassembly viewers).
 
 ```bash
-elephc --emit-asm --source-map hello.php
+elephc build --emit-asm --source-map hello.php
 # writes hello.s and hello.map
 ```
 

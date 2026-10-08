@@ -52,7 +52,7 @@ From the project directory:
 
 ```bash
 elephc native add pcre2
-elephc main.php
+elephc build main.php
 ./main
 ```
 
@@ -196,7 +196,7 @@ env:
   ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
 steps:
   - run: elephc native install --locked --target "${{ matrix.target }}"
-  - run: elephc --target "${{ matrix.target }}" main.php
+  - run: elephc build --target "${{ matrix.target }}" main.php
 ```
 
 This example deliberately shows the three targets with native CI runners. Add

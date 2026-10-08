@@ -1,7 +1,7 @@
 <?php
 
 // Build/run with the optional pure-Rust Firebird profile:
-// cargo run --features pdo-firebird -- examples/pdo-firebird/main.php
+// cargo run --features pdo-firebird -- build examples/pdo-firebird/main.php
 // ELEPHC_FIREBIRD_DSN='firebird:dbname=127.0.0.1/3050:/data/app.fdb;charset=UTF8;user=SYSDBA;password=secret' ./examples/pdo-firebird/main
 $dsn = (string) getenv("ELEPHC_FIREBIRD_DSN");
 try {

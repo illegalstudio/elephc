@@ -14,7 +14,7 @@ elephc.
 ## Compiling a web server
 
 ```bash
-elephc --web app.php
+elephc build --web app.php
 # app.php -> app  (a self-contained HTTP server binary)
 ```
 
@@ -22,9 +22,9 @@ Plain `--web` selects the original high-throughput in-process worker model. The
 isolation model is a **compile-time** choice, not a runtime server switch:
 
 ```bash
-elephc --web --web-isolation=worker app.php   # same as plain --web
-elephc --web --web-isolation=pool app.php     # persistent handler pool
-elephc --web --web-isolation=request app.php  # disposable child per request
+elephc build --web --web-isolation=worker app.php   # same as plain --web
+elephc build --web --web-isolation=pool app.php     # persistent handler pool
+elephc build --web --web-isolation=request app.php  # disposable child per request
 ```
 
 The generated process entry calls a different bridge symbol for each model, so
@@ -219,17 +219,17 @@ Example deployments:
 
 ```bash
 # Fast stateless API: four independent in-process PHP workers.
-elephc --web api.php
+elephc build --web api.php
 ./api --listen 0.0.0.0:8080 --workers 4 --max-execution-time 30
 
 # Database-backed service: two web workers, four persistent handlers each
 # (at most eight concurrent PHP handlers), recycled after 1,000 requests.
-elephc --web --web-isolation=pool service.php
+elephc build --web --web-isolation=pool service.php
 ./service --listen 0.0.0.0:8080 --workers 2 \
   --handler-concurrency 4 --max-handler-requests 1000 --max-execution-time 30
 
 # Native/FFI endpoint: every completed request discards its handler process.
-elephc --web --web-isolation=request native-endpoint.php
+elephc build --web --web-isolation=request native-endpoint.php
 ./native-endpoint --listen 127.0.0.1:8080 --workers 2 \
   --handler-concurrency 2 --max-execution-time 10
 ```

@@ -15,7 +15,7 @@ Using a PCNTL function auto-links the bridge. Use `--with-pcntl` when calls are
 only discoverable at runtime, for example through opaque dynamic `eval()`:
 
 ```bash
-elephc --with-pcntl worker.php
+elephc build --with-pcntl worker.php
 ```
 
 `extension_loaded('pcntl')` and `extension_loaded('posix')` report `true`

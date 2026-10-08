@@ -24,7 +24,7 @@ boundary.
 ## Building a cdylib
 
 ```bash
-elephc --emit cdylib auth.php
+elephc build --emit cdylib auth.php
 # Linux: auth.php -> libauth.so and libauth.h
 # macOS: auth.php -> libauth.dylib and libauth.h
 ```

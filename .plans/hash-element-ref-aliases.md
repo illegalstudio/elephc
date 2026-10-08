@@ -413,7 +413,7 @@ php -r '$a=[1,2,3]; $b =& $a[5]; var_dump(count($a));'           # PHP: 4 (spars
 **Steps:**
 - [ ] Update docs per the file list; keep Astro frontmatter intact; remove
   the "not supported" note for hash refs.
-- [ ] Extend the example; `cargo run -- examples/references/main.php` and
+- [ ] Extend the example; `cargo run -- build examples/references/main.php` and
   run the binary to confirm output.
 - [ ] Commit `docs: hash element reference aliases`.
 

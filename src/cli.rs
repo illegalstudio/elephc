@@ -1,12 +1,12 @@
 //! Purpose:
 //! Owns exact top-level command dispatch plus compiler-option parsing and target selection.
-//! Keeps `elephc native` isolated while preserving every legacy compile invocation.
+//! Routes `elephc build` to the compiler and requires an explicit command.
 //!
 //! Called from:
 //! - `crate::main()` before invoking `crate::pipeline::compile()`.
 //!
 //! Key details:
-//! - Only an exact `args[1] == "native"` selects native dependency commands.
+//! - Only exact first-position command names select build, native, or monitor.
 //! - Exits immediately on invalid CLI state so later stages receive normalized options.
 
 use std::collections::HashSet;
@@ -34,7 +34,7 @@ const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex", "mysqli"];
 
 /// Short usage line shown after every parameter error, alongside the `--help` hint.
 /// The full categorized reference lives in `HELP`.
-pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source-file>";
+pub(crate) const USAGE: &str = "Usage: elephc build [OPTIONS] <source-file>";
 
 /// Compiler package version embedded into the binary by Cargo.
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -87,7 +87,7 @@ pub(crate) fn print_mascotte() {
 
 /// Returns true if `-h` or `--help` appears anywhere in the argument list, so
 /// help always wins regardless of position or what else was passed alongside
-/// it (e.g. `elephc --check --help app.php` still shows help).
+/// it (e.g. `elephc build --check --help app.php` still shows help).
 fn wants_help(args: &[String]) -> bool {
     args.iter().any(|a| a == "-h" || a == "--help")
 }
@@ -110,7 +110,7 @@ fn wants_capabilities(args: &[String]) -> bool {
 /// it never gained `iconv`, so `--help` advertised a smaller compiler than the
 /// one the user had, while the typo error beside it — derived from the table —
 /// listed it correctly. Print this const directly and that comes back.
-pub(crate) const HELP: &str = concat!("Usage: elephc [OPTIONS] <source-file>
+pub(crate) const HELP: &str = concat!("Usage: elephc build [OPTIONS] <source-file>
 
 A PHP-to-native AOT compiler
 Version: ", env!("CARGO_PKG_VERSION"), "
@@ -119,6 +119,7 @@ Arguments:
   <source-file>           Tagged .php or tagless .lfc source file to compile
 
 Subcommands:
+  build <source-file>     Compile a source file (native executable by default)
   native <COMMAND>        Native dependency management (see `elephc native --help`)
   monitor <TARGET>        Profile a program built with --with-monitoring: a .php
                           source, a binary, or a running service's address
@@ -256,18 +257,21 @@ pub(crate) struct CliConfig {
     pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
-/// A fully parsed top-level invocation of either the compiler or native package manager.
+/// A fully parsed top-level invocation of the compiler or a utility command.
 pub(crate) enum Command {
-    /// The existing PHP compilation command and all of its normalized options.
-    Compile(CliConfig),
+    /// A source build selected by `elephc build`.
+    Build(CliConfig),
     /// One validated `elephc native` subcommand.
     Native(NativeCommand),
     /// One validated `elephc monitor` sampling invocation.
     Monitor(crate::monitor::MonitorCommand),
 }
 
-/// Parses the exact top-level `native` selector before falling back to legacy compilation.
+/// Parses exact top-level command names and global information flags.
 pub(crate) fn parse_args(args: &[String]) -> Command {
+    if args.get(1).map(String::as_str) == Some("build") {
+        return Command::Build(parse_compile_args(args));
+    }
     if args.get(1).map(String::as_str) == Some("monitor") {
         return match crate::monitor::parse_monitor_args(&args[2..]) {
             Ok(command) => Command::Monitor(command),
@@ -278,7 +282,24 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
         };
     }
     if args.get(1).map(String::as_str) != Some("native") {
-        return Command::Compile(parse_compile_args(args));
+        match args.get(1).map(String::as_str) {
+            Some("-h" | "--help") => {
+                println!("{}", help_text());
+                process::exit(0);
+            }
+            Some("-V" | "--version") => {
+                println!("elephc {VERSION}");
+                process::exit(0);
+            }
+            Some("--print-capabilities") => {
+                print!("{}", capability_report());
+                process::exit(0);
+            }
+            Some(command) => fail(&format!(
+                "Unknown command: {command}. Build a source file with 'elephc build <source-file>'"
+            )),
+            None => fail("no command given"),
+        }
     }
 
     match parse_native_args(&args[2..]) {
@@ -294,9 +315,9 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
     }
 }
 
-/// Parses legacy compilation arguments into a normalized configuration.
+/// Parses `build` arguments into a normalized compilation configuration.
 fn parse_compile_args(args: &[String]) -> CliConfig {
-    if args.len() < 2 {
+    if args.len() <= 2 {
         fail("no source file given");
     }
     if wants_help(args) {
@@ -362,7 +383,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         _ => true,
     };
 
-    let mut i = 1;
+    let mut i = 2;
     while i < args.len() {
         let arg = &args[i];
         if let Some(val) = arg.strip_prefix("--heap-size=") {
@@ -923,10 +944,12 @@ mod tests {
     use super::*;
     use crate::codegen::platform::{AppleVariant, Arch, Platform};
 
-    /// Extracts the compile configuration returned for a legacy invocation.
+    /// Extracts the compile configuration returned for an explicit build.
     fn compile_config(args: &[String]) -> CliConfig {
-        let Command::Compile(config) = parse_args(args) else {
-            panic!("expected compile command");
+        let mut build_args = vec![args[0].clone(), "build".into()];
+        build_args.extend_from_slice(&args[1..]);
+        let Command::Build(config) = parse_args(&build_args) else {
+            panic!("expected build command");
         };
         config
     }
@@ -1502,10 +1525,43 @@ mod tests {
             Command::Native(NativeCommand::List { .. })
         ));
 
-        let explicit_source = vec!["elephc".into(), "./native".into()];
-        let Command::Compile(config) = parse_args(&explicit_source) else {
+        let explicit_source = vec!["elephc".into(), "build".into(), "./native".into()];
+        let Command::Build(config) = parse_args(&explicit_source) else {
             panic!("explicit source path must remain a compile command");
         };
         assert_eq!(config.filename, "./native");
+    }
+
+    /// `build` uses the normal compilation pipeline and accepts its options.
+    #[test]
+    fn build_command_parses_source_and_options() {
+        let args = vec![
+            "elephc".into(),
+            "build".into(),
+            "--quiet".into(),
+            "app.php".into(),
+        ];
+        let Command::Build(config) = parse_args(&args) else {
+            panic!("expected explicit build command");
+        };
+        assert_eq!(config.filename, "app.php");
+        assert!(config.quiet);
+        assert!(!config.check_only);
+        assert_eq!(config.emit, Emit::Executable);
+    }
+
+    /// Explicit relative paths preserve access to source files named `build`.
+    #[test]
+    fn explicit_build_path_remains_a_source_file() {
+        let args = vec!["elephc".into(), "build".into(), "./build".into()];
+        let Command::Build(config) = parse_args(&args) else {
+            panic!("expected a source file");
+        };
+        assert_eq!(config.filename, "./build");
+    }
+
+    #[test]
+    fn help_documents_build_command() {
+        assert!(help_text().contains("build <source-file>"));
     }
 }

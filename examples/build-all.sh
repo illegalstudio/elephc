@@ -9,7 +9,7 @@ if [ ! -f "Cargo.toml" ]; then
     exit 1
 fi
 
-ELEPHC="cargo run --release --"
+ELEPHC="cargo run --release -- build"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PASS=0
 FAIL=0

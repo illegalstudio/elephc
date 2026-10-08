@@ -63,14 +63,14 @@ functions expose new (smaller) inline candidates. The passes are **on by default
 
 ```bash
 # Default: EIR optimization passes enabled
-elephc hot.php
+elephc build hot.php
 
 # Disable them (for A/B comparison or diagnostics)
-elephc --no-ir-opt hot.php
-elephc --ir-opt=off hot.php
+elephc build --no-ir-opt hot.php
+elephc build --ir-opt=off hot.php
 
 # Explicit enable
-elephc --ir-opt=on hot.php
+elephc build --ir-opt=on hot.php
 ```
 
 The environment variable `ELEPHC_IR_OPT=off` disables the passes for a whole run
@@ -102,8 +102,8 @@ You can see the effect directly with [`--emit-ir`](output-and-diagnostics.md#--e
 
 ```bash
 # With passes on, `$argc * 1` folds away; with --no-ir-opt it stays an `imul`.
-elephc --emit-ir app.php
-elephc --emit-ir --no-ir-opt app.php
+elephc build --emit-ir app.php
+elephc build --emit-ir --no-ir-opt app.php
 ```
 
 This is a peephole-level optimization. It speeds up code that contains redundant
@@ -251,8 +251,8 @@ ownership cleanup.
 You can compare the shape directly:
 
 ```bash
-elephc --emit-ir app.php
-elephc --emit-ir --no-ir-opt app.php
+elephc build --emit-ir app.php
+elephc build --emit-ir --no-ir-opt app.php
 ```
 
 ### Dead store elimination
@@ -333,10 +333,10 @@ them to the stack on every use.
 
 ```bash
 # Default: linear-scan registers
-elephc hot.php
+elephc build hot.php
 
 # Fall back to stack-only placement (spill everything)
-elephc --regalloc=stack hot.php
+elephc build --regalloc=stack hot.php
 ```
 
 `ELEPHC_REGALLOC=stack` applies the fallback to a whole run. The stack fallback
@@ -357,7 +357,7 @@ not model implicit exception edges or values preserved across generator suspensi
 | `sentinel` | In-band `PHP_INT_MAX - 1` sentinel in one-word slots (compatibility opt-out). |
 
 ```bash
-elephc --null-repr=sentinel sentinel.php
+elephc build --null-repr=sentinel sentinel.php
 ```
 
 `ELEPHC_NULL_REPR` overrides the default for a whole run. Most programs should

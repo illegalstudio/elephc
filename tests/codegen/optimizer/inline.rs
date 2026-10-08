@@ -30,6 +30,7 @@ fn compile_run_with_ir_opt(src: &str, ir_opt_on: bool) -> String {
     // Invoke the built binary (assumes cargo test has a recent build) with flag.
     let elephc = elephc_cli_bin();
     let mut cmd = Command::new(&elephc);
+    cmd.arg("build");
     cmd.arg(&php_path);
     if !ir_opt_on {
         cmd.arg("--no-ir-opt");
@@ -110,6 +111,7 @@ fn test_inline_emits_no_call_for_typed_scalar_helper() {
 
     let elephc = elephc_cli_bin();
     let ir = Command::new(&elephc)
+        .arg("build")
         .arg("--emit-ir")
         .arg(&php_path)
         .output()
@@ -330,6 +332,7 @@ echo calc($argc);
     fs::write(&php_path, src).unwrap();
     let elephc = elephc_cli_bin();
     let ir = Command::new(&elephc)
+        .arg("build")
         .arg("--emit-ir")
         .arg(&php_path)
         .output()
@@ -395,6 +398,7 @@ fn test_inline_emits_no_call_for_string_helper() {
 
     let elephc = elephc_cli_bin();
     let ir = Command::new(&elephc)
+        .arg("build")
         .arg("--emit-ir")
         .arg(&php_path)
         .output()
@@ -464,6 +468,7 @@ function helper($x) { return $x + 41; }
     // for the small helper remains in the IR text (inlining happened).
     let elephc = elephc_cli_bin();
     let ir_out = Command::new(&elephc)
+        .arg("build")
         .arg("--emit-ir")
         .arg(&main_path)
         .output()

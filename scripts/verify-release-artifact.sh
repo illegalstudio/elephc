@@ -156,7 +156,7 @@ while IFS=$'\t' read -r kind name archives; do
         fi
         sed 's/^/          /' native-add.log
     fi
-    if ! "$ELEPHC" "--with-$name" probe.php >compile.log 2>&1; then
+    if ! "$ELEPHC" build "--with-$name" probe.php >compile.log 2>&1; then
         fail "$kind $name: --with-$name did not link"
         sed 's/^/          /' compile.log
         continue

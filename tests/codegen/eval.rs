@@ -79,7 +79,7 @@ eval($code);
     );
     assert!(
         compile_stderr.contains("dynamic eval was compiled without optional regex support")
-            && compile_stderr.contains("elephc --with-regex <source-file>"),
+            && compile_stderr.contains("elephc build --with-regex <source-file>"),
         "compile output should contain the regex capability reminder:\n{compile_stderr}"
     );
     assert!(

@@ -1066,7 +1066,7 @@ finalize.
 **Example:** `examples/mysqli-crud/main.php` reads
 `ELEPHC_MY_HOST` / `USER` / `PASSWORD` / `DB` (or `ELEPHC_MY_DSN`),
 creates a table, inserts, selects, prints rows, drops the table. Skip
-gracefully with a message if env is unset so `cargo run -- examples/mysqli-crud/main.php`
+gracefully with a message if env is unset so `cargo run -- build examples/mysqli-crud/main.php`
 does not require MySQL to compile.
 
 **ROADMAP:** add a **new** 0.x section (do not reopen completed PDO

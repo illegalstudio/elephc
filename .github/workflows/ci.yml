@@ -2107,6 +2107,7 @@ jobs:
         shell: bash
         run: |
           ./target/debug/elephc \
+            build \
             --target "${{ matrix.target }}" \
             examples/date-json-regex/main.php
           ./examples/date-json-regex/main > "$RUNNER_TEMP/date-json-regex.out"
@@ -2124,6 +2125,7 @@ jobs:
         shell: bash
         run: |
           ./target/debug/elephc \
+            build \
             --target "${{ matrix.target }}" \
             examples/curl-get/main.php
           ./examples/curl-get/main > "$RUNNER_TEMP/curl-get.out"
@@ -2145,6 +2147,7 @@ jobs:
         shell: bash
         run: |
           ./target/debug/elephc \
+            build \
             --target "${{ matrix.target }}" \
             examples/xml/main.php
           ./examples/xml/main > "$RUNNER_TEMP/xml.out"

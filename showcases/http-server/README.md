@@ -41,7 +41,7 @@ The easiest way is the `build.sh` helper in this directory:
 Or do it by hand:
 
 ```bash
-cargo run -- showcases/http-server/main.php
+cargo run -- build showcases/http-server/main.php
 ./showcases/http-server/main
 ```
 

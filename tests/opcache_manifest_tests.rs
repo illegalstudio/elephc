@@ -64,6 +64,7 @@ fn elephc_bin() -> String {
 /// returns the executable path.
 fn compile(dir: &Path, stem: &str, ini: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd.arg(dir.join(format!("{}.php", stem)));
@@ -939,7 +940,7 @@ if (is_array($s)) {
         )
         .unwrap();
 
-        let output = Command::new(elephc_bin())
+        let output = Command::new(elephc_bin()).arg("build")
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
             .current_dir(&dir)
             .arg("--php-version")

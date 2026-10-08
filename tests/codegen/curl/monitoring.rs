@@ -222,7 +222,7 @@ echo ">>";
     }
 
     let run = |shape: &str, capture: &str| -> (String, serde_json::Value) {
-        let monitored = elephc_cli_command(&dir)
+        let monitored = elephc_root_command(&dir)
             .args(["monitor", "./main", "--save", capture])
             .env("ELEPHC_NATIVE_CACHE", &cache)
             .env("ELEPHC_FIXTURE_BURN", shape)

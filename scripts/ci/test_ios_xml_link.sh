@@ -119,7 +119,7 @@ cp "$PROJECT_DIR/examples/xml/elephc.lock" "$WORK_DIR/elephc.lock"
 # `--with-xml` is redundant for a program that already names the surface; it is passed
 # anyway so the bridge is forced even if detection ever changed.
 echo "==> compiling xml-using PHP as an $ELEPHC_TARGET staticlib"
-"$ELEPHC_BIN" --with-xml --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
+"$ELEPHC_BIN" build --with-xml --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
 test -s "$WORK_DIR/libmain.a"
 test -s "$WORK_DIR/libmain.h"
 

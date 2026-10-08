@@ -38,7 +38,7 @@ Requires SDL2 and a local copy of `DOOM1.WAD` (shareware).
 
 ```bash
 # compile
-cargo run -- -l SDL2 -L /opt/homebrew/lib --heap-size=67108864 showcases/doom/main.php
+cargo run -- build -l SDL2 -L /opt/homebrew/lib --heap-size=67108864 showcases/doom/main.php
 
 # run
 ./showcases/doom/main

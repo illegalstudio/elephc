@@ -1,7 +1,7 @@
 <?php
 // SDL2 window + renderer + simple interactive loop.
 // Run with:
-// elephc -l SDL2 -L /opt/homebrew/lib examples/sdl_window/main.php
+// elephc build -l SDL2 -L /opt/homebrew/lib examples/sdl_window/main.php
 // ./examples/sdl_window/main
 
 extern "SDL2" {

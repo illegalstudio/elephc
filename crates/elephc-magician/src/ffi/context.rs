@@ -56,7 +56,7 @@ pub unsafe extern "C" fn __elephc_eval_context_retain(ctx: *mut ElephcEvalContex
 /// introspection, matching the PHP interpreter where those names do not exist.
 ///
 /// Generated code emits this call while initializing the eval context, only in
-/// binaries compiled with `elephc --strict-php`. The flag is thread-local and
+/// binaries compiled with `elephc build --strict-php`. The flag is thread-local and
 /// elephc programs run every eval on the initializing thread, so one call
 /// covers the program lifetime.
 #[no_mangle]

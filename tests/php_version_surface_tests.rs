@@ -78,6 +78,7 @@ fn compile_raw(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> std::pro
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd.args(flags).arg(&php);

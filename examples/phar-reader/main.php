@@ -5,7 +5,7 @@
 //
 // The archive path is resolved at compile time relative to the compiler's
 // working directory, so compile this from the repository root:
-//   cargo run -- examples/phar-reader/main.php
+//   cargo run -- build examples/phar-reader/main.php
 //   ./examples/phar-reader/main
 //
 // Regenerate app.phar with: php -d phar.readonly=0 build-phar.php

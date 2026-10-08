@@ -596,7 +596,7 @@ driver to DB-Library. Install FreeTDS (`brew install freetds` on macOS or
 `apt install freetds-dev` on Debian/Ubuntu), then compile with:
 
 ```bash
-cargo run --features pdo-dblib -- app.php
+cargo run --features pdo-dblib -- build app.php
 ```
 
 The profile makes `dblib:` available through `PDO::getAvailableDrivers()`, enables
@@ -628,7 +628,7 @@ points callers to the namespaced constants, matching php-src's stubs.
 Enable Firebird without a system `libfbclient` dependency:
 
 ```bash
-cargo run --features pdo-firebird -- app.php
+cargo run --features pdo-firebird -- build app.php
 ```
 
 The profile registers `firebird:`, the three historical `PDO::FB_ATTR_*` format
@@ -660,7 +660,7 @@ Install unixODBC and the database-specific ODBC driver, then enable the profile:
 ```bash
 brew install unixodbc                 # macOS
 sudo apt install unixodbc-dev         # Debian/Ubuntu build dependency
-cargo run --features pdo-odbc -- app.php
+cargo run --features pdo-odbc -- build app.php
 ```
 
 The profile follows php-src's architecture: PDO calls the ODBC 3 driver-manager ABI,
@@ -692,7 +692,7 @@ PDO_INFORMIX remains a PECL extension and requires IBM/HCL Client SDK. Install
 the target-compatible SDK and register its ODBC driver, then enable the profile:
 
 ```bash
-cargo run --features pdo-informix -- app.php
+cargo run --features pdo-informix -- build app.php
 ```
 
 The implementation tracks stable PECL PDO_INFORMIX 1.3.7. That extension does
@@ -734,7 +734,7 @@ PDO_IBM remains a PECL extension and requires an IBM Db2 or Informix CLI/ODBC
 driver registered with the target's driver manager:
 
 ```bash
-cargo run --features pdo-ibm -- app.php
+cargo run --features pdo-ibm -- build app.php
 ```
 
 The implementation tracks stable PECL PDO_IBM 1.7.0. Its seven historical
@@ -779,7 +779,7 @@ PDO_SQLSRV is optional and requires Microsoft ODBC Driver 18 or 17 plus the
 platform ODBC driver manager:
 
 ```bash
-cargo run --features pdo-sqlsrv -- app.php
+cargo run --features pdo-sqlsrv -- build app.php
 ```
 
 The profile tracks Microsoft Drivers for PHP for SQL Server 5.13.1. That release
@@ -845,7 +845,7 @@ not declare a `Pdo\Sqlsrv` class, so elephc deliberately does the same.
 PDO_OCI is optional because, like PHP's extension, it needs an Oracle client at runtime:
 
 ```bash
-cargo run --features pdo-oci -- app.php
+cargo run --features pdo-oci -- build app.php
 ```
 
 Install Oracle Instant Client for the target and expose its directory through the
@@ -885,7 +885,7 @@ PDO_CUBRID is optional because PHP's official external extension delegates its p
 and authentication behavior to the CUBRID CCI client:
 
 ```bash
-cargo run --features pdo-cubrid -- app.php
+cargo run --features pdo-cubrid -- build app.php
 ```
 
 Install the CCI client for the target platform. If the dynamic loader cannot find
