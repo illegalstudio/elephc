@@ -218,6 +218,25 @@ impl PhpType {
         }
     }
 
+    /// Returns true for the `int|float` union PHP's arithmetic produces at the overflow boundary.
+    ///
+    /// This is what `$i++` leaves in an integer local: `PHP_INT_MAX++` is a float in php-src and
+    /// in elephc, so the local afterwards is one or the other. It is a genuine type rather than
+    /// a fallback, which is why it gets a name: `mixed` would say the same thing about a counter
+    /// as about a `json_decode` result, and every value derived from the counter would inherit
+    /// that.
+    ///
+    /// Exact and order-independent: a WIDER union (`int|float|string`, `int|false`) is not this
+    /// type and must keep reaching the ordinary rules — in particular the `X|false` diagnostics,
+    /// which exist to catch an unchecked sentinel.
+    pub fn is_int_float_union(&self) -> bool {
+        let PhpType::Union(members) = self else {
+            return false;
+        };
+        members.len() == 2 && members.contains(&PhpType::Int) && members.contains(&PhpType::Float)
+
+    }
+
     /// Returns true if this is an indexed array of a scalar (int/float/bool) element type.
     ///
     /// The hash-based builtins accept such indexed inputs by converting them to integer-keyed
@@ -333,6 +352,9 @@ impl fmt::Display for PhpType {
             PhpType::AssocArray { key, value } => write!(f, "array<{}, {}>", key, value),
             PhpType::Buffer(inner) => write!(f, "buffer<{}>", inner),
             PhpType::Callable => write!(f, "callable"),
+            // An EMPTY class name is the `object` type hint: any object, no particular class.
+            // Rendering it as the empty string produced "expects , got int".
+            PhpType::Object(name) if name.is_empty() => write!(f, "object"),
             PhpType::Object(name) => write!(f, "{}", name),
             PhpType::Packed(name) => write!(f, "packed {}", name),
             PhpType::Pointer(Some(name)) => write!(f, "ptr<{}>", name),

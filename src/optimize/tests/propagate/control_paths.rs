@@ -57,6 +57,7 @@ fn test_propagate_constants_merges_identical_try_catch_assignments() {
             StmtKind::Try {
                 try_body: vec![Stmt::assign("base", Expr::int_lit(2))],
                 catches: vec![crate::parser::ast::CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec![Name::from("Exception")],
                     variable: Some("e".to_string()),
                     body: vec![Stmt::assign("base", Expr::int_lit(2))],
@@ -89,6 +90,7 @@ fn test_propagate_constants_ignores_unreachable_catch_after_non_throwing_try() {
             StmtKind::Try {
                 try_body: vec![Stmt::assign("base", Expr::int_lit(2))],
                 catches: vec![crate::parser::ast::CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec![Name::from("Exception")],
                     variable: Some("e".to_string()),
                     body: vec![Stmt::assign("base", Expr::int_lit(9))],

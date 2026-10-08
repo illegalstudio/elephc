@@ -107,6 +107,7 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::NewObject { .. }
+        | ExprKind::NewGeneric { .. }
         | ExprKind::NewDynamic { .. }
         | ExprKind::NewDynamicObject { .. }
         | ExprKind::NewScopedObject { .. }

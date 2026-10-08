@@ -13,6 +13,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::{abi, CodegenIrError, Result};
 use crate::types::PhpType;
 
+/// Loads signal values into integer-array storage and reports whether normalization allocated an owner.
 pub(super) fn load_signal_int_array(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,

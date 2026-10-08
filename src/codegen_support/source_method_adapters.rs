@@ -409,6 +409,7 @@ fn can_box_param_as_mixed(source: &PhpType, target: &PhpType) -> bool {
         && !matches!(source.codegen_repr(), PhpType::Never)
 }
 
+/// Selects the raw instance or static method symbol for the physical ABI.
 fn physical_method_symbol(class_name: &str, method_name: &str, kind: MethodKind) -> String {
     match kind {
         MethodKind::Instance => method_symbol(class_name, method_name),
@@ -416,6 +417,7 @@ fn physical_method_symbol(class_name: &str, method_name: &str, kind: MethodKind)
     }
 }
 
+/// Registers an initially empty hidden collector slot for call-operand cleanup.
 fn emit_empty_collector_owner(emitter: &mut Emitter, owner_offset: usize) {
     abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
     abi::emit_load_int_immediate(
@@ -431,6 +433,7 @@ fn emit_empty_collector_owner(emitter: &mut Emitter, owner_offset: usize) {
     abi::emit_push_call_operand_owner(emitter, owner_address, false);
 }
 
+/// Pushes a spilled argument from its frame slot using its target ABI representation.
 fn push_frame_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => {
@@ -460,6 +463,7 @@ fn push_frame_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     }
 }
 
+/// Spills the method result before adapter cleanup can clobber its return registers.
 fn preserve_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => abi::store_at_offset(emitter, abi::float_result_reg(emitter), offset),
@@ -479,6 +483,7 @@ fn preserve_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     }
 }
 
+/// Restores the preserved method result to the target return registers after cleanup.
 fn restore_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => abi::load_at_offset(emitter, abi::float_result_reg(emitter), offset),
@@ -502,6 +507,7 @@ fn restore_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 mod tests {
     use super::*;
 
+    /// Constructs a checker signature fixture with the requested parameters and variadic marker.
     fn signature(params: Vec<(String, PhpType)>, variadic: Option<String>) -> FunctionSig {
         let len = params.len();
         FunctionSig {
@@ -521,6 +527,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies ABI planning accepts one compiler-generated collector appended to a source signature.
     fn planner_accepts_only_one_generated_collector_difference() {
         let source = signature(vec![("name".to_string(), PhpType::Str)], None);
         let mut physical = source.clone();
@@ -541,6 +548,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies ABI planning rejects unsupported actual-count adaptation for source variadics.
     fn planner_rejects_source_variadic_actual_count_adaptation() {
         let source = signature(
             vec![("values".to_string(), PhpType::Mixed)],
@@ -562,6 +570,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies source vtables retain raw variadic ABI and preserve injected argument-count slots.
     fn source_vtable_keeps_source_variadics_raw_and_never_drops_an_injected_hidden_argc() {
         let mut physical = signature(
             vec![("values".to_string(), PhpType::Mixed)],
@@ -654,6 +663,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies reference-return adapters preserve the alias pointer without boxing the referenced value.
     fn by_reference_return_is_preserved_as_one_pointer_and_never_value_boxed() {
         let mut caller = signature(Vec::new(), None);
         caller.return_type = PhpType::Mixed;
@@ -788,6 +798,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies every target spills arguments before allocation and balances hidden collector ownership.
     fn emitter_spills_before_allocating_and_balances_collector_ownership_on_all_targets() {
         let source = signature(vec![("name".to_string(), PhpType::Str)], None);
         let mut physical = source.clone();

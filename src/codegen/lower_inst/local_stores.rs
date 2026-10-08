@@ -76,6 +76,7 @@ pub(in crate::codegen) enum RefCellStorePrevious {
     Keep,
 }
 
+/// Stores through a reference cell while preserving or retiring its previous payload as required.
 pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;

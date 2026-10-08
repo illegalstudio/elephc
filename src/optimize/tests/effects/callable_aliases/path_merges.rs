@@ -81,6 +81,7 @@ fn test_program_function_effects_merge_callable_aliases_across_if_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: vec![("flag".to_string(), None, None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -151,6 +152,7 @@ fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -174,6 +176,7 @@ fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
                             Span::dummy(),
                         )],
                         catches: vec![crate::parser::ast::CatchClause {
+                            exception_type_args: Vec::new(),
                             exception_types: vec![Name::from("Exception")],
                             variable: Some("e".to_string()),
                             body: vec![Stmt::new(
@@ -227,6 +230,7 @@ fn test_program_function_effects_merge_callable_aliases_across_switch_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: vec![("flag".to_string(), None, None, false)],
             param_attributes: Vec::new(),
             variadic: None,

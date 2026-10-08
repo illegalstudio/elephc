@@ -1,0 +1,18 @@
+# Cargo configuration for local builds and test runs.
+
+[env]
+# Rust gives a SPAWNED thread 2 MiB of stack, against 8 MiB for a process's main thread.
+# `cargo test` runs every test on a spawned thread, so a test that compiles a deeply nested
+# expression overflows there while the same program compiles fine through the CLI — the
+# compiler walks an expression tree recursively, and a 128-term sum is 128 frames deep.
+#
+# Measured: `test_suspended_fiber_recursion_budget_does_not_leak_to_main` builds exactly that
+# shape and aborted the WHOLE `codegen_tests` process with `fatal runtime error: stack
+# overflow`. Because the process aborts, no summary line is printed and every other test's
+# result is lost, so a full local suite could not give a verdict at all. `elephc --check` on
+# the same generated file succeeds, which is what identifies this as the thread stack rather
+# than a compiler limit.
+#
+# CI runs nextest, which gives each test its own process and therefore the main thread's 8 MiB,
+# so this only ever mattered locally.
+RUST_MIN_STACK = "16777216"

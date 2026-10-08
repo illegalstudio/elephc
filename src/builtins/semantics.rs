@@ -191,6 +191,19 @@ pub enum BuiltinArgumentLowering {
     /// Type an unannotated `xml_set_*_handler()` closure's parameters from the SAX event
     /// it receives, so the EIR closure signature matches what the checker hook validated.
     XmlHandlerSetter,
+    /// Lower a bare-`array` argument through `array_values()` first, for a builtin that reads
+    /// only its VALUES, in order.
+    ///
+    /// A declared `array` is `array<mixed>|array<mixed, mixed>`: boxed storage whose layout —
+    /// packed or hash — is known only at run time. Builtins that never look at keys (`max`,
+    /// `vsprintf`, `array_count_values`, ...) have typed `array<mixed>` paths and none for a boxed
+    /// operand, so they either refused a bare array or read the cell as a raw array: `vsprintf`
+    /// printed `0-0` for `["x", "y"]`. `array_values()` already dispatches on the runtime layout
+    /// and yields an owned `array<mixed>` list, which is exactly what those paths take.
+    ///
+    /// `sole` limits it to a call where this is the ONLY argument — `max($a)`, not `max($a, $b)`,
+    /// where the array itself is the value compared and its keys come back with it.
+    BareArrayValues { arg: usize, sole: bool },
     /// Bind the receiver to its hidden internal-array-pointer cursor slot.
     ///
     /// PHP's `key`/`current`/`next`/`prev`/`reset`/`end` read and move a per-array
@@ -486,7 +499,7 @@ pub const fn unary_string_runtime(
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
         argument_lowering: BuiltinArgumentLowering::Standard,
-        callable: BuiltinCallablePolicy::Dynamic(callable_accepts_string_source),
+        callable: BuiltinCallablePolicy::Dynamic(callable_accepts_string_coercible_source),
         lowering: BuiltinLowering::Runtime(target),
     }
 }
@@ -661,9 +674,16 @@ pub fn callable_accepts_any_source(_source: Option<&PhpType>) -> bool {
     true
 }
 
-/// Accepts runtime wrapper sources that already use concrete string storage.
-pub fn callable_accepts_string_source(source: Option<&PhpType>) -> bool {
-    source.is_none_or(|source| source.codegen_repr() == PhpType::Str)
+/// Accepts the sources a `Str -> Str` transform's wrapper can coerce to its string parameter.
+///
+/// A bare `array` hands its callback boxed elements, so `array_map($name, $bare)` asks for a
+/// wrapper over `mixed`. Refusing it took `strtoupper` out of the runtime case table and the call
+/// died with "array_map callback string does not name a supported callable"; the wrapper's own
+/// call to the transform converts the boxed element exactly as a direct call does.
+pub fn callable_accepts_string_coercible_source(source: Option<&PhpType>) -> bool {
+    source.is_none_or(|source| {
+        matches!(source.codegen_repr(), PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+    })
 }
 
 /// Accepts the dynamic string-like sources supported by shared `strlen` validation.

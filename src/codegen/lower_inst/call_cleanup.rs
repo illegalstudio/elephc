@@ -174,7 +174,7 @@ pub(super) fn plan_call_arg_temp_cleanups(
                 offset: cleanups.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
                 ty: PhpType::Mixed,
             });
-        } else if direct_call_arg_splits_borrowed_array(ctx, *value, &source_ty, param_ty)? {
+        } else if direct_call_arg_splits_widened_array(&source_ty, param_ty) {
             cleanups.push(CallArgTempCleanup {
                 param_index: index,
                 offset: cleanups.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
@@ -198,18 +198,25 @@ pub(super) fn direct_call_arg_creates_mixed_temp(source_ty: &PhpType, param_ty: 
 /// 1 and only clones when the array is visibly shared. Handing it a BORROWED array therefore
 /// rewrote the caller's own array — `f($pts)` with `function f(array $a)` and `$pts` an array
 /// of objects left `$pts[0]->x` reading a boxed cell as a raw object pointer AFTER the call,
-/// on data the callee never touched, with no diagnostic. An owned temporary is left alone: it
-/// has no other reader, so converting it in place is both correct and free.
-fn direct_call_arg_splits_borrowed_array(
-    ctx: &FunctionContext<'_>,
-    value: ValueId,
-    source_ty: &PhpType,
-    param_ty: &PhpType,
-) -> Result<bool> {
-    if !argument_widens_typed_array(source_ty, param_ty) {
-        return Ok(false);
-    }
-    Ok(ctx.value_ownership(value)? != Ownership::Owned)
+/// on data the callee never touched, with no diagnostic.
+///
+/// An OWNED operand needs the split just as much, because owned is not unique. The operand of
+/// a call is usually `acquire` of a local — one more reference to the local's own array — and
+/// the call parks it in an operand-owner slot that releases it after the call. Converted
+/// unguarded, `__rt_array_ensure_unique` saw the shared array, cloned it and gave up the
+/// operand's reference to the original; the clone went to the callee and was never released,
+/// and the slot then released the original a second time:
+///
+/// ```text
+/// function g(array<mixed> $a): int { return count($a); }
+/// $ints = [3, 1, 2]; g($ints); echo count($ints);     // php: 3, elephc: 0, freed
+/// ```
+///
+/// `new ArrayIterator($local)` reaches the same boundary through its `array<mixed>` constructor.
+/// The incref makes the split unconditional and the cleanup slot owns the clone, so the
+/// operand's own reference is untouched whoever releases it.
+fn direct_call_arg_splits_widened_array(source_ty: &PhpType, param_ty: &PhpType) -> bool {
+    argument_widens_typed_array(source_ty, param_ty)
 }
 
 /// Returns whether this argument boundary widens a typed array into Mixed element slots.

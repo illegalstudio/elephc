@@ -178,6 +178,7 @@ fn method_vis(
     body: Vec<Stmt>,
 ) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility,
         is_static: false,
@@ -611,6 +612,7 @@ return new DatePeriod($start_dt, $iv, $recurrences, $options);
 fn date_period_create_from_iso8601_string() -> ClassMethod {
     let body = bodies::create_from_iso8601();
     ClassMethod {
+        type_params: Vec::new(),
         name: "createFromISO8601String".to_string(),
         visibility: Visibility::Public,
         is_static: true,

@@ -213,6 +213,21 @@ pub enum ExprKind {
         class_name: Name,
         args: Vec<Expr>,
     },
+    /// `new Box<int>(5)` — construction of a generic class at explicit type arguments.
+    ///
+    /// Lives only between parsing and monomorphization, exactly like
+    /// [`crate::parser::ast::TypeExpr::GenericClass`], which is what `class_type` always holds.
+    /// `crate::generics::classes` rewrites it to an ordinary `NewObject` naming the instantiated
+    /// class, so nothing downstream has a notion of constructing a template.
+    ///
+    /// A separate variant rather than a field on `NewObject` because the type arguments have to
+    /// be a `TypeExpr`, not text: the name resolver canonicalizes `new Box<User>` to
+    /// `\App\Box<\App\User>`, and it can only do that by walking the argument as a type. It
+    /// also keeps every pass that predates generics matching on `NewObject` unchanged.
+    NewGeneric {
+        class_type: crate::parser::ast::TypeExpr,
+        args: Vec<Expr>,
+    },
     /// PHP `new $var()` / `new $var(args)` — the class is named at runtime
     /// by a string expression. Resolved through the runtime class table at
     /// codegen time (`__rt_new_by_name`).
@@ -341,15 +356,57 @@ pub enum CastType {
 /// Static receiver.
 pub enum StaticReceiver {
     Named(Name),
+    /// `Box<int>::of(1)` — static access through a generic class named with type arguments.
+    ///
+    /// Lives only between parsing and monomorphization, exactly like
+    /// [`crate::parser::ast::TypeExpr::GenericClass`], which is always what it holds.
+    /// `generics::classes` instantiates the template and the AST walker collapses this back to
+    /// `Named`, so no pass after that has a notion of a generic static receiver.
+    ///
+    /// A variant rather than a `Name` carrying angle brackets because the arguments have to be
+    /// resolved and substituted as TYPES: `Box<User>` inside a namespace names that namespace's
+    /// `User`, and `Box<T>` inside a template becomes `Box<int>` only once `T` is bound.
+    Generic(crate::parser::ast::TypeExpr),
     Self_,
     Static,
     Parent,
+}
+
+impl StaticReceiver {
+    /// Returns this receiver with a generic class reduced to the class it is WRITTEN on.
+    ///
+    /// `Box<int>::of()` reaches through `Box` until `generics::classes` renames it to
+    /// `Box<int>`, so a pass that asks "which class does this receiver name" gets a truthful
+    /// answer either side of instantiation. Every other receiver is returned unchanged.
+    ///
+    /// Used by the passes that only look a receiver up — the effect model, the checker's class
+    /// resolution, reflection metadata — so their matches can state that a generic receiver
+    /// never reaches them, and be right. It is NOT used by the passes that rebuild a receiver:
+    /// those must carry the type arguments through, or the instantiation never happens.
+    pub fn written_class_receiver(&self) -> StaticReceiver {
+        match self {
+            StaticReceiver::Generic(crate::parser::ast::TypeExpr::GenericClass {
+                name, ..
+            }) => StaticReceiver::Named(name.clone()),
+            StaticReceiver::Generic(crate::parser::ast::TypeExpr::Named(name)) => {
+                StaticReceiver::Named(name.clone())
+            }
+            other => other.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 /// InstanceOf target.
 pub enum InstanceOfTarget {
     Name(Name),
+    /// `$x instanceof Box<int>` — a generic class named with type arguments.
+    ///
+    /// Lives only between parsing and monomorphization, exactly like
+    /// [`crate::parser::ast::TypeExpr::GenericClass`], which is always what it holds. The AST
+    /// walker collapses it back to `Name` once the type is concrete, so no pass after
+    /// instantiation has a notion of a generic instanceof target.
+    Generic(crate::parser::ast::TypeExpr),
     Expr(Box<Expr>),
 }
 

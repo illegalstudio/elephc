@@ -73,6 +73,7 @@ pub(crate) fn literal_of(value: ConstValue) -> Option<ExprKind> {
     })
 }
 
+/// Reports whether a constant route uses shared predefined or dynamic registration.
 fn is_registered_route(route: ConstantRoute) -> bool {
     matches!(route, ConstantRoute::Predefined | ConstantRoute::Dynamic)
 }

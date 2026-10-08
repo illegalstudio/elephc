@@ -1019,6 +1019,8 @@ pub fn s_try(
     let catches = catches
         .into_iter()
         .map(|(types, variable, body)| CatchClause {
+            // A synthesised catch names ordinary classes; nothing generic reaches here.
+            exception_type_args: Vec::new(),
             exception_types: types.into_iter().map(class_name).collect(),
             variable: variable.map(str::to_string),
             body,
@@ -1059,6 +1061,7 @@ pub fn s_do_while(body: Vec<Stmt>, condition: Expr) -> Stmt {
     Stmt::new(StmtKind::DoWhile { body, condition }, Span::synthetic())
 }
 
+/// Builds a synthetic while statement with its condition and body.
 pub fn s_while(condition: Expr, body: Vec<Stmt>) -> Stmt {
     Stmt::new(StmtKind::While { condition, body }, Span::synthetic())
 }
@@ -1617,6 +1620,7 @@ impl MethodBuilder {
         // of a method that has no body.
         let param_attributes = vec![Vec::new(); self.signature.params.len()];
         ClassMethod {
+            type_params: Vec::new(),
             name: self.name,
             visibility: self.visibility,
             is_static: self.is_static,
@@ -1656,6 +1660,7 @@ impl MethodBuilder {
         param_attributes
             .resize_with(params.len() + usize::from(variadic_name.is_some()), Vec::new);
         ClassMethod {
+            type_params: Vec::new(),
             name: self.name,
             visibility: self.visibility,
             is_static: self.is_static,
@@ -1802,6 +1807,9 @@ impl FunctionBuilder {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: self.name,
+                // Synthetic declarations are already monomorphic: a builder emits one concrete
+                // function, never a template to instantiate.
+                type_params: Vec::new(),
                 params,
                 param_attributes,
                 variadic: variadic_name,
@@ -2441,7 +2449,8 @@ impl ClassBuilder {
     pub fn build(self) -> Stmt {
         Stmt::new(
             StmtKind::ClassDecl {
-                name: self.name,
+                generics: None,
+            name: self.name,
                 extends: self.extends,
                 implements: self.implements,
                 is_abstract: false,
@@ -2511,7 +2520,8 @@ impl InterfaceBuilder {
     pub fn build(self) -> Stmt {
         Stmt::new(
             StmtKind::InterfaceDecl {
-                name: self.name,
+                generics: None,
+            name: self.name,
                 extends: self.extends,
                 properties: Vec::new(),
                 methods: self.methods,

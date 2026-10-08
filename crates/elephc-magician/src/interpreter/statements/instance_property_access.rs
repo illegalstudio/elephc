@@ -620,6 +620,7 @@ pub(super) fn validate_eval_native_array_property_assignment(
     )
 }
 
+/// Binds a writable instance property to a source reference and publishes its initialized storage.
 pub(super) fn eval_property_reference_bind_result(
     object: RuntimeCellHandle,
     property_name: &str,

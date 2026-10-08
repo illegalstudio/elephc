@@ -7,6 +7,14 @@
 //! Key details:
 //! - Omitted/null callbacks remove empty values; filtering preserves PHP keys and value types.
 //! - Result storage is boxed because indexed inputs may acquire holes or retain string keys.
+//! - The PHP golden signature is `optional(&["array","callback","mode"], 1, &[null, 0])`.
+//!   The legacy CHECK arm required 2 or 3 arguments (`args.len() < 2 || args.len() > 3`),
+//!   so `min_args: 2` reproduces that enforcement in `check_arity`; the derived max of 3
+//!   from the optional signature already matches.
+//! - `check` validates the first argument is an array, derives callback argument types from the
+//!   static mode value, and validates the callback signature. The return type preserves the
+//!   input array element type — and, for an ASSOCIATIVE source, its key type too, because php
+//!   drops entries without renumbering.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{BuiltinArgumentLowering, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics};

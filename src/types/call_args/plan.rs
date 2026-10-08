@@ -102,6 +102,11 @@ pub(crate) enum CallArgPlanError {
     PositionalAfterSpread {
         span: Span,
     },
+    /// A statically known unpack supplies a positional entry after a named one, which php
+    /// rejects with "Cannot use positional argument after named argument during unpacking".
+    PositionalAfterNamedUnpack {
+        span: Span,
+    },
     SpreadAfterNamed {
         span: Span,
     },

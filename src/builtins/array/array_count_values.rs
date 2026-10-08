@@ -22,8 +22,14 @@ use crate::types::{array_key_type_from_value_type, PhpType};
 builtin! {
     contract: "array_count_values",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayCountValues,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(
+            crate::ir::RuntimeFnId::ArrayCountValues,
+        ),
+        crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues {
+            arg: 0,
+            sole: false,
+        },
     ),
 }
 
@@ -34,6 +40,9 @@ builtin! {
 /// re-inferred here to drive the return type, and arity is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // A bare `array` reaches the runtime as the `array<mixed>` list of its values
+    // (`BuiltinArgumentLowering::BareArrayValues`); counting never looks at keys.
+    let ty = if ty.is_php_array() { PhpType::Array(Box::new(PhpType::Mixed)) } else { ty };
     match ty {
         PhpType::Array(elem) => Ok(PhpType::AssocArray {
             key: Box::new(array_key_type_from_value_type(*elem)),

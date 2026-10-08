@@ -254,7 +254,7 @@ function pos(): int {
     return strpos("abc", "z");
 }
 "#,
-        "Function 'pos' return type expects Int, got Union([Int, False])",
+        "Function 'pos' return type expects int, got int|false",
     );
 }
 

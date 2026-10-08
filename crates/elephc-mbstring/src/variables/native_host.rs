@@ -49,11 +49,17 @@ struct Value {
 }
 
 unsafe extern "C" {
+    /// Detaches shared indexed-array storage before an in-place variable conversion.
     fn elephc_mbstring_variable_array_unique_v1(value: *mut u8) -> *mut u8;
+    /// Detaches shared associative-array storage before an in-place variable conversion.
     fn elephc_mbstring_variable_hash_unique_v1(value: *mut u8) -> *mut u8;
+    /// Allocates native reference storage for the requested payload tag.
     fn elephc_mbstring_variable_reference_new_v1(tag: u64) -> *mut u8;
+    /// Allocates a native boxed value from its runtime tag and payload words.
     fn elephc_mbstring_variable_box_v1(tag: u64, low: u64, high: u64) -> *mut u8;
+    /// Copies converted string bytes into native storage that survives the conversion call.
     fn elephc_mbstring_variable_persist_v1(bytes: *const u8, length: u64) -> *mut u8;
+    /// Releases one owner of the supplied native boxed or reference value.
     fn elephc_mbstring_variable_release_v1(value: *mut u8);
 }
 

@@ -126,41 +126,68 @@ type MessageHandler = unsafe extern "C" fn(
 
 #[link(name = "sybdb")]
 extern "C" {
+    /// Initializes the DB-Library client before opening connections.
     fn dbinit() -> c_int;
+    /// Allocates a DB-Library login record.
     fn dblogin() -> *mut LoginRecord;
+    /// Releases a DB-Library login record.
     fn dbloginfree(login: *mut LoginRecord);
+    /// Sets a selected login-record string field.
     fn dbsetlname(login: *mut LoginRecord, value: *const c_char, which: c_int) -> c_int;
+    /// Selects the protocol version on a login record.
     fn dbsetlversion(login: *mut LoginRecord, version: c_uchar) -> c_int;
+    /// Sets the DB-Library connection timeout in seconds.
     fn dbsetlogintime(seconds: c_int) -> c_int;
+    /// Sets the DB-Library query timeout in seconds.
     fn dbsettime(seconds: c_int) -> c_int;
+    /// Opens a FreeTDS connection using the login record and selected DB-Library mode.
     fn tdsdbopen(
         login: *mut LoginRecord,
         server: *const c_char,
         msdblib: c_int,
     ) -> *mut DbProcess;
+    /// Closes a DB-Library connection.
     fn dbclose(process: *mut DbProcess);
+    /// Reports whether the connection is unusable.
     fn dbdead(process: *mut DbProcess) -> c_int;
+    /// Appends SQL text to the connection command buffer.
     fn dbcmd(process: *mut DbProcess, sql: *const c_char) -> c_int;
+    /// Executes the buffered SQL command.
     fn dbsqlexec(process: *mut DbProcess) -> c_int;
+    /// Advances to the next result set and reports its status.
     fn dbresults(process: *mut DbProcess) -> c_int;
+    /// Advances to the next row of the current result set.
     fn dbnextrow(process: *mut DbProcess) -> c_int;
+    /// Returns the current result-set column count.
     fn dbnumcols(process: *mut DbProcess) -> c_int;
+    /// Returns the selected result column name.
     fn dbcolname(process: *mut DbProcess, column: c_int) -> *mut c_char;
+    /// Returns the selected result column native type.
     fn dbcoltype(process: *mut DbProcess, column: c_int) -> c_int;
+    /// Returns the selected result column declared length.
     fn dbcollen(process: *mut DbProcess, column: c_int) -> c_int;
+    /// Returns the selected result column source name.
     fn dbcolsource(process: *mut DbProcess, column: c_int) -> *mut c_char;
+    /// Returns native precision and scale metadata for the selected result column.
     fn dbcoltypeinfo(process: *mut DbProcess, column: c_int) -> *mut DbTypeInfo;
+    /// Returns the selected result column user-defined type identifier.
     fn dbcolutype(process: *mut DbProcess, column: c_int) -> c_int;
+    /// Returns the selected column bytes in the current row.
     fn dbdata(process: *mut DbProcess, column: c_int) -> *mut c_uchar;
+    /// Returns the selected column byte length in the current row.
     fn dbdatlen(process: *mut DbProcess, column: c_int) -> c_int;
+    /// Returns the affected-row count for the current command.
     fn dbcount(process: *mut DbProcess) -> c_int;
+    /// Cancels pending results on the connection.
     fn dbcancel(process: *mut DbProcess) -> c_int;
+    /// Sets a native DB-Library connection option.
     fn dbsetopt(
         process: *mut DbProcess,
         option: c_int,
         char_parameter: *const c_char,
         int_parameter: c_int,
     ) -> c_int;
+    /// Converts native data between the supplied source and destination types.
     fn dbconvert(
         process: *mut DbProcess,
         source_type: c_int,
@@ -170,16 +197,23 @@ extern "C" {
         dest: *mut c_uchar,
         dest_len: c_int,
     ) -> c_int;
+    /// Decodes a native datetime into the broken-down date record.
     fn dbdatecrack(
         process: *mut DbProcess,
         record: *mut DbDateRec2,
         datetime: *mut DbDateTime,
     ) -> c_int;
+    /// Attaches bridge-owned diagnostic state to the connection.
     fn dbsetuserdata(process: *mut DbProcess, data: *mut c_uchar);
+    /// Returns the bridge-owned diagnostic state attached to the connection.
     fn dbgetuserdata(process: *mut DbProcess) -> *mut c_uchar;
+    /// Installs the DB-Library error callback and returns the previous callback.
     fn dberrhandle(handler: Option<ErrorHandler>) -> Option<ErrorHandler>;
+    /// Installs the DB-Library message callback and returns the previous callback.
     fn dbmsghandle(handler: Option<MessageHandler>) -> Option<MessageHandler>;
+    /// Returns the client library version string.
     fn dbversion() -> *const c_char;
+    /// Returns the negotiated connection protocol version.
     fn dbtds(process: *mut DbProcess) -> c_int;
 }
 

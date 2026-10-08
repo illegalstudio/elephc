@@ -18,8 +18,14 @@ use crate::types::PhpType;
 builtin! {
     contract: "max",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Max,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(
+            crate::ir::RuntimeFnId::Max,
+        ),
+        crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues {
+            arg: 0,
+            sole: true,
+        },
     ),
 }
 
