@@ -17,6 +17,7 @@ fn test_eliminate_dead_code_prunes_nested_if_from_transitive_range_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -62,6 +63,7 @@ fn test_eliminate_dead_code_prunes_strict_int_outside_intersected_range() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -122,6 +124,7 @@ fn test_eliminate_dead_code_drops_switch_int_cases_outside_range() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -175,6 +178,7 @@ fn test_eliminate_dead_code_refuses_overflowing_range_bound() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -230,6 +234,7 @@ fn test_eliminate_dead_code_invalidates_range_guard_on_write() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -294,6 +299,7 @@ fn test_eliminate_dead_code_keeps_fractional_gap_branch_for_float_domain() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("x".into(), Some(TypeExpr::Float), None, false)],
             param_attributes: vec![Vec::new()],
             variadic: None,
@@ -352,6 +358,7 @@ fn test_eliminate_dead_code_uses_integer_ranges_across_elseif_false_prefix() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: vec![Vec::new()],
             variadic: None,
@@ -411,6 +418,7 @@ fn test_eliminate_dead_code_invalidates_range_for_foreach_iteration_variable() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: vec![Vec::new()],
             variadic: None,
@@ -475,6 +483,7 @@ fn test_eliminate_dead_code_seeds_integer_domain_from_typed_local() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("input".into(), None, None, false)],
             param_attributes: vec![Vec::new()],
             variadic: None,
@@ -542,6 +551,7 @@ fn test_eliminate_dead_code_does_not_seed_non_exact_int_typed_locals() {
         let program = vec![Stmt::new(
             StmtKind::FunctionDecl {
                 name: "main".into(),
+                type_params: Vec::new(),
                 params: vec![("input".into(), None, None, false)],
                 param_attributes: vec![Vec::new()],
                 variadic: None,
@@ -605,6 +615,7 @@ fn test_eliminate_dead_code_invalidates_typed_local_domain_for_by_ref_call() {
     let mutator = Stmt::new(
         StmtKind::FunctionDecl {
             name: "mutate".into(),
+            type_params: Vec::new(),
             params: vec![("value".into(), None, None, true)],
             param_attributes: vec![Vec::new()],
             variadic: None,
@@ -625,6 +636,7 @@ fn test_eliminate_dead_code_invalidates_typed_local_domain_for_by_ref_call() {
     let caller = Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![("input".into(), None, None, false)],
             param_attributes: vec![Vec::new()],
             variadic: None,

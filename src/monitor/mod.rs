@@ -620,6 +620,7 @@ impl ControlChannel {
         self.child = -1;
     }
 
+    /// Closes the owned child control-channel descriptor and marks it unavailable.
     fn release_child(&mut self) {
         if self.child >= 0 {
             unsafe {

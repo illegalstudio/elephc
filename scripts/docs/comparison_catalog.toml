@@ -278,12 +278,12 @@ feature  = "OPcache"
 status   = "partial"
 php      = "https://www.php.net/manual/en/book.opcache.php"
 docs     = "docs/php/opcache.md"
-evidence = "tests/opcache_ini_tests.rs"
-notes    = "Compatibility surface; programs are AOT-compiled, there is no opcode cache"
+evidence = "tests/opcache_runtime_cache_tests.rs"
+notes    = "Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT"
 
 [[limitations]]
 title = "eval() coverage of the prelude-implemented modules"
-notes = "The modules whose eval() column is zero \u2014 gd, exif, mysqli, PDO, session, OPcache \u2014 are all implemented by a PHP prelude the compiler injects, and the interpreter dispatches through the shared builtin registry, where a prelude function has no binding. Closing it is one `eval_builtin!` surface at a time, tracked per module: mysqli #746, PDO #748, session #1211, gd and exif #1212, OPcache #1213, with #906 as the umbrella. Until then, call those functions from compiled code and pass the results into the fragment."
+notes = "The generated eval() counts are zero for gd, exif, mysqli, PDO, and session because their functions use injected PHP preludes without interpreter bindings. OPcache has a separate supported route through native prelude declarations or dedicated interpreter handlers, including the live script cache and API restrictions. The remaining module gaps are tracked by mysqli #746, PDO #748, session #1211, gd and exif #1212, with #906 as the umbrella; call those functions from compiled code and pass the results into the fragment until their eval() surfaces are implemented."
 
 [[limitations]]
 title = "Static subset, AOT only"

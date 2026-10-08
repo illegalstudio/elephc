@@ -838,7 +838,7 @@ function bad_base(int $x): string {
     )
     .expect("a string function returning an int base case must not type-check");
     assert!(
-        error.contains("return type expects Str, got Int"),
+        error.contains("return type expects string, got int"),
         "unexpected diagnostic: {error}"
     );
 }

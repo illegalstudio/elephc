@@ -110,6 +110,7 @@ fn packed_field_refs_ve(_field: &PackedField) -> bool {
 fn instanceof_target_refs_ve(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_refs_ve(expr),
     }
 }
@@ -219,7 +220,9 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         ExprKind::ExprCall { callee, args } => {
             expr_refs_ve(callee) || args.iter().any(expr_refs_ve)
         }
-        ExprKind::NewObject { args, .. } => args.iter().any(expr_refs_ve),
+        ExprKind::NewObject { args, .. } | ExprKind::NewGeneric { args, .. } => {
+            args.iter().any(expr_refs_ve)
+        }
         ExprKind::NewDynamic { name_expr, args } => {
             expr_refs_ve(name_expr) || args.iter().any(expr_refs_ve)
         }

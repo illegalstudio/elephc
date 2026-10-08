@@ -37,6 +37,7 @@ mod nested_autovivify;
 mod nested_mixed_write;
 mod mixed_append_autovivify;
 mod assoc_set_ops;
+mod bare_array_values;
 mod assoc_spread;
 mod widened_signatures;
 mod write_evaluation_order;

@@ -134,6 +134,7 @@ struct ClassProbe {
     member: Option<usize>,
 }
 
+/// Constructs a builtin-class usage probe with an optional member identifier.
 const fn probe(name: &'static str, class: usize, member: Option<usize>) -> ClassProbe {
     ClassProbe {
         name,
@@ -308,6 +309,12 @@ fn scan_type(ty: &crate::parser::ast::TypeExpr, usage: &mut Usage) {
         TypeExpr::Named(name) => record_class(usage, &name.as_canonical()),
         TypeExpr::Nullable(inner) | TypeExpr::Array(inner) | TypeExpr::Buffer(inner) => {
             scan_type(inner, usage)
+        }
+        // Both halves, so a prelude class named only in an `array<K, V>` key or value is not
+        // pruned out from under the program that declared it.
+        TypeExpr::AssocArray { key, value } => {
+            scan_type(key, usage);
+            scan_type(value, usage);
         }
         TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
             for member in members {
@@ -690,6 +697,11 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             match target {
                 InstanceOfTarget::Expr(target) => scan_expr(target, usage),
                 InstanceOfTarget::Name(name) => record_class(usage, &name.as_canonical()),
+                InstanceOfTarget::Generic(class_type) => {
+                    for name in class_type.named_classes() {
+                        record_class(usage, &name.as_canonical());
+                    }
+                }
             }
         }
         ExprKind::Negate(inner)
@@ -790,6 +802,16 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 record_class(usage, &name.as_canonical());
             }
             record_method(usage, method);
+            for arg in args {
+                scan_expr(arg, usage);
+            }
+        }
+        // The head of the constructed type is the class this construction keeps alive; its
+        // type arguments name classes of their own and are recorded the same way.
+        ExprKind::NewGeneric { class_type, args } => {
+            for name in class_type.named_classes() {
+                record_class(usage, &name.as_canonical());
+            }
             for arg in args {
                 scan_expr(arg, usage);
             }

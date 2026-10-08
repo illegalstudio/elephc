@@ -211,6 +211,7 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
     })
 }
 
+/// Returns the PHP_OS spelling for the host platform running the eval interpreter.
 fn eval_php_os_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "Darwin"

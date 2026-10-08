@@ -200,11 +200,12 @@ class Coverage:
         return sum(1 for s in self.supported.get(module, []) if s["_eval"])
 
     def aot_only_routes(self, module: str) -> set:
-        """Returns the compile-time routes of a module's symbols that `eval()` does not have.
+        """Return AOT routes whose symbols lack exported eval support.
 
         The zero columns below the table are more interesting when they share a route:
-        every function reached only through an injected prelude is missing from `eval()`
-        for one reason, not for its own.
+        Injected preludes do not contribute eval_builtin! bindings. Dedicated dispatch
+        paths, such as OPcache's native declarations and fallback handlers, can still
+        make a surface callable inside eval().
         """
         return {
             s.get("_aot_kind")
@@ -459,15 +460,14 @@ def render(
     if divergences:
         lines += [
             "",
-            "The counts above are what a compiled program has. Code run through `eval()` "
-            "sees a different set in these modules (compiled / eval()):",
+            "The counts above are what a compiled program has. Exported backend "
+            "support differs in these modules (compiled / eval()):",
             "",
         ]
         lines += [f"- {item}" for item in divergences]
 
-        # Group the modules whose whole eval() gap is prelude-routed. They are one gap with
-        # one shape: the interpreter dispatches through the shared builtin registry, and a
-        # prelude function has no registry binding for it to find.
+        # Group shared-registry gaps caused by prelude routes. A zero binding count
+        # alone does not establish runtime unavailability, as OPcache uses other paths.
         prelude_modules, prelude_count = [], 0
         for ext in modules:
             coverage = coverages["functions"]
@@ -480,13 +480,10 @@ def render(
             names = ", ".join(f"`{m}`" for m in prelude_modules)
             lines += [
                 "",
-                f"Most of that is one gap rather than several. {prelude_count} of those "
-                f"functions — every one missing from {names} — are implemented by a PHP "
-                "prelude the compiler injects into the program it is compiling. The "
-                "interpreter dispatches through the shared builtin registry, and a prelude "
-                "function has no registry binding there, so it is not that these surfaces "
-                "were skipped one by one: none of them has an entry point `eval()` can "
-                "reach. Closing it means an `eval_builtin!` binding per surface; see "
+                f"Of those functions, {prelude_count} from {names} are implemented by "
+                "PHP preludes and have no shared `eval_builtin!` binding. This count "
+                "is separate from OPcache's dedicated interpreter handlers and native "
+                "prelude dispatch, which are counted as supported inside `eval()`. See "
                 "**eval() coverage of the prelude-implemented modules** under "
                 "[Known limitations](#known-limitations) for what is tracked.",
             ]

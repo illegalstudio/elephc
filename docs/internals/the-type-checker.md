@@ -68,6 +68,26 @@ This is still much smaller than full PHP's runtime type system, but it now inclu
 
 `Resource(Option<String>)` represents PHP resource handles. `Resource(None)` is a generic resource, while `Resource(Some("stream"))` is the stream-handle shape used by successful `fopen()` calls and the `STDIN` / `STDOUT` / `STDERR` constants. Resource values are stored as one 8-byte native payload in codegen, but the type checker keeps them distinct from integers so stream built-ins can reject plain numeric descriptors.
 
+## Generic specialization
+
+`src/generics.rs::monomorphize()` drives checking to a fixed point: each round
+collects requested function, class, constructor, and method instantiations,
+substitutes their concrete types, splices declarations into the AST, and checks
+again. Generic traits are instantiated before trait flattening. Templates are
+removed before downstream optimization and EIR lowering, which receive ordinary
+concrete declarations such as `Box<int>` and `identity<int>`.
+
+The checker validates bounds and variance, and records resolved call, construction,
+and method sites in `CheckResult`. Site keys include the enclosing body scope and
+source span, so one template coordinate can select different instantiations.
+Typed arrays retain their declared element or key/value storage, and callable
+signatures carry inference information while keeping ordinary descriptor storage.
+
+Supported PHPDoc templates are applied per physical file after the strict-PHP
+audit. They affect type checking and specialization in both modes; strict mode
+rejects the native generic syntax. See [Generics](../beyond-php/generics.md) for
+bounds, defaults, variance, runtime class identities, and current limitations.
+
 ## How inference works
 
 The type checker walks the AST top-down, maintaining a **type environment** — a `HashMap<String, PhpType>` that maps variable names to their types. It also tracks a **constants map** — a `HashMap<String, PhpType>` that records the type of each user-defined constant (declared via `const` or `define()`).

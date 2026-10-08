@@ -40,6 +40,7 @@ fn test_eliminate_dead_code_rebuilds_empty_elseif_tail_as_needed_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -100,6 +101,7 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_cumulative_fal
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -168,6 +170,7 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_negated_compos
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -244,6 +247,7 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_demorgan_equiv
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

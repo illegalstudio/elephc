@@ -14,6 +14,7 @@ use super::*;
 pub(super) fn datetime_sun_rs() -> ClassMethod {
     let body = super::bodies::sun_rs();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_sun_rs".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -45,6 +46,7 @@ pub(super) fn datetime_sun_rs() -> ClassMethod {
 pub(super) fn datetime_sun_val() -> ClassMethod {
     let body = super::bodies::sun_val();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_sun_val".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -72,6 +74,7 @@ pub(super) fn datetime_sun_val() -> ClassMethod {
 pub(super) fn datetime_sun_info() -> ClassMethod {
     let body = super::bodies::sun_info();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_date_sun_info".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -102,6 +105,7 @@ pub(super) fn datetime_sun_info() -> ClassMethod {
 pub(super) fn datetime_sunfunc() -> ClassMethod {
     let body = super::bodies::sunfunc();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_date_sunfunc".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -160,6 +164,7 @@ pub(super) fn datetime_sunfunc() -> ClassMethod {
 pub(super) fn datetime_date_parse() -> ClassMethod {
     let body = super::bodies::date_parse();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_date_parse".to_string(),
         visibility: Visibility::Public,
         is_static: true,

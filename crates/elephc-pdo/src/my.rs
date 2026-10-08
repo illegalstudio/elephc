@@ -1031,35 +1031,47 @@ fn mb_charset(charset: &str) -> Option<MbCharset> {
     let name = charset.trim().to_ascii_lowercase();
     let head: &str = name.split(|c| c == '_' || c == '-').next().unwrap_or(&name);
     // -- lead predicates --
+    /// Reports whether a byte can begin a GBK multibyte character.
     fn gbk_lead(b: u8) -> bool { (0x81..=0xFE).contains(&b) }
+    /// Reports whether a byte can begin a BIG5 multibyte character.
     fn big5_lead(b: u8) -> bool { (0xA1..=0xF9).contains(&b) }
+    /// Reports whether a byte can begin a Shift-JIS multibyte character.
     fn sjis_lead(b: u8) -> bool { (0x81..=0x9F).contains(&b) || (0xE0..=0xFC).contains(&b) }
+    /// Reports whether a byte can begin a GB2312 multibyte character.
     fn gb2312_lead(b: u8) -> bool { (0xA1..=0xF7).contains(&b) }
+    /// Reports whether a byte can begin a EUC-KR multibyte character.
     fn euckr_lead(b: u8) -> bool { (0xA1..=0xFE).contains(&b) }
+    /// Reports whether a byte can begin a EUC-JP multibyte character.
     fn eucjp_lead(b: u8) -> bool { (0xA1..=0xFE).contains(&b) || b == 0x8E || b == 0x8F }
     // -- char_len predicates (bytes[i] is already a lead) --
+    /// Returns a valid GBK character length at the supplied offset, or zero for invalid bytes.
     fn gbk_len(b: &[u8], i: usize) -> usize {
         let t = *b.get(i + 1).unwrap_or(&0);
         if (0x40..=0x7E).contains(&t) || (0x80..=0xFE).contains(&t) { 2 } else { 0 }
     }
+    /// Returns a valid BIG5 character length at the supplied offset, or zero for invalid bytes.
     fn big5_len(b: &[u8], i: usize) -> usize {
         let t = *b.get(i + 1).unwrap_or(&0);
         if (0x40..=0x7E).contains(&t) || (0xA1..=0xFE).contains(&t) { 2 } else { 0 }
     }
+    /// Returns a valid Shift-JIS character length at the supplied offset, or zero for invalid bytes.
     fn sjis_len(b: &[u8], i: usize) -> usize {
         let t = *b.get(i + 1).unwrap_or(&0);
         if (0x40..=0x7E).contains(&t) || (0x80..=0xFC).contains(&t) { 2 } else { 0 }
     }
+    /// Returns a valid GB2312 character length at the supplied offset, or zero for invalid bytes.
     fn gb2312_len(b: &[u8], i: usize) -> usize {
         let t = *b.get(i + 1).unwrap_or(&0);
         if (0xA1..=0xFE).contains(&t) { 2 } else { 0 }
     }
+    /// Returns a valid EUC-KR character length at the supplied offset, or zero for invalid bytes.
     fn euckr_len(b: &[u8], i: usize) -> usize {
         // MySQL `euckr` is EUC-KR (KS X 1001), trail 0xA1..=0xFE (never 0x5C) —
         // NOT UHC/cp949, whose wider ASCII-range trails php does not honor here.
         let t = *b.get(i + 1).unwrap_or(&0);
         if (0xA1..=0xFE).contains(&t) { 2 } else { 0 }
     }
+    /// Returns a valid EUC-JP character length at the supplied offset, or zero for invalid bytes.
     fn eucjp_len(b: &[u8], i: usize) -> usize {
         match b[i] {
             // Half-width katakana: 0x8E + one 0xA1..=0xDF byte.
@@ -1347,6 +1359,7 @@ pub fn translate_placeholders(
     feature = "ibm",
     feature = "sqlsrv"
 ))]
+/// Translates generic PDO named placeholders to positional slots without MySQL-specific quoting rules.
 pub(crate) fn translate_pdo_placeholders(
     sql: &str,
 ) -> (String, HashMap<String, i64>, Vec<i64>, bool) {

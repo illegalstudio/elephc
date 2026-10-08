@@ -145,6 +145,8 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
+        // See the read gate in `inference::objects::access`: relaxed for neither `mixed` nor
+        // `int|float`, because the lowering has no arm for a boxed runtime property name.
         if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
             return Err(CompileError::new(
                 property.span,

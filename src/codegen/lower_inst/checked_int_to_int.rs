@@ -1,19 +1,26 @@
 //! Purpose:
 //! Lowers checked integer arithmetic whose only observable result is a PHP `int`.
-//! Keeps the in-range path scalar and reproduces PHP overflow-to-float-to-int semantics.
+//! Keeps the in-range path scalar and STOPS on an overflow it cannot represent.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()` for `IChecked*ToInt` opcodes.
 //!
 //! Key details:
-//! - The overflow path performs the same double arithmetic as boxed checked operators,
-//!   then uses the shared exact PHP float-to-int conversion on every supported target.
-//! - The helper call preserves the original arithmetic operands and allocates no Mixed cell.
+//! - These opcodes exist because `checked_int_sink` proved every observation of the value is a
+//!   PHP `int`, which is what lets the result live in a raw slot with no Mixed cell.
+//! - That proof is exactly what an overflow breaks. php promotes to float; a raw slot cannot
+//!   hold one, and converting the true double back to an int printed
+//!   `int(-9223372036854775808)` where php prints `float(9.223372036854776E+18)` — measured on
+//!   `for ($i = PHP_INT_MAX - 1; …; $i++)`. So the overflow path reports and exits instead.
+//! - The alternative was measured and rejected: boxing every incremented int local fixes the
+//!   promotion and costs 4.7x on a 20M-iteration loop, because the boxed slot also turns the
+//!   loop's `icmp` into `php_rel_cmp` and its `ichecked_add` into `mixed_numeric_binop`.
+//! - The in-range path is untouched: the overflow branch already existed to compute the double.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::Result;
-use crate::ir::Instruction;
+use crate::ir::{Immediate, Instruction};
 
 use super::super::context::FunctionContext;
 use super::{arithmetic::load_integer_operand, expect_operand, store_if_result};
@@ -78,8 +85,16 @@ pub(super) fn lower_checked_int_to_int(
     }
 
     ctx.emitter.label(&overflow_label);
-    emit_overflow_conversion(ctx, op, saved_lhs_reg, rhs_reg);
-    abi::emit_php_float_to_int(ctx.emitter, result_reg);
+    // `Immediate::Bool(true)` means an explicit `(int)` cast observed this value, and php's own
+    // answer there is the promoted double converted back to an int. Anything else means the
+    // narrowing came from a raw int SLOT, where php would have kept the float — so the program
+    // stops rather than print a number php never produces.
+    if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        emit_overflow_conversion(ctx, op, saved_lhs_reg, rhs_reg);
+        abi::emit_php_float_to_int(ctx.emitter, result_reg);
+    } else {
+        emit_int_overflow_fatal(ctx);
+    }
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -148,6 +163,20 @@ fn emit_x86_64_checked(
     );                                                                          // compute the scalar result and set the signed-overflow flag
     ctx.emitter.instruction(&format!("jo {}", overflow_label));                 // convert the promoted double only when the operation overflowed
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // keep the in-range scalar result and skip overflow conversion
+}
+
+/// Reports an integer overflow the narrowed slot cannot represent, and exits.
+///
+/// Reached only from a `IChecked*ToInt` overflow branch, so the value is one `checked_int_sink`
+/// proved is observed as an `int` everywhere. php would promote it to a float; this slot holds
+/// 64 raw bits and cannot, and the previous answer — php's float-to-int conversion of the true
+/// result — was a number php never produces.
+fn emit_int_overflow_fatal(ctx: &mut FunctionContext<'_>) {
+    super::objects::emit_fatal_message(
+        ctx,
+        b"Fatal error: integer overflow in arithmetic whose result is used as an int; \
+php would promote this value to float, which this storage cannot hold\n",
+    );
 }
 
 /// Recomputes an overflowing operation as double, matching PHP's promotion path.

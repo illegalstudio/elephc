@@ -64,6 +64,7 @@ pub(crate) fn inject_builtin_json_interfaces(
 /// to populate the `JsonSerializable` interface entry in `inject_builtin_json_interfaces`.
 fn json_serialize_method() -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: "jsonSerialize".to_string(),
         visibility: Visibility::Public,
         is_static: false,

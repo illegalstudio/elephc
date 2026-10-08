@@ -527,6 +527,7 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => call_args_write_local(None, args, name),
         ExprKind::ExprCall { callee, args } => {
             expr_writes_local(callee, name) || call_args_write_local(None, args, name)
@@ -667,6 +668,7 @@ fn expr_is_variable(expr: &Expr, name: &str) -> bool {
 fn instance_of_target_writes_local(target: &InstanceOfTarget, name: &str) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_writes_local(expr, name),
     }
 }
@@ -862,6 +864,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_contains_eval_call),
         ExprKind::ExprCall { callee, args } => {
             expr_contains_eval_call(callee) || args.iter().any(expr_contains_eval_call)
@@ -920,6 +923,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
 pub(super) fn instance_of_target_contains_eval_call(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_contains_eval_call(expr),
     }
 }
