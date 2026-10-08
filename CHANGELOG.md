@@ -5,6 +5,29 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.2] - 2026-10-08
+
+- Added compile-time generics for functions, classes, interfaces, methods, and traits, with inference, bounds, defaults, variance, typed arrays and callables, and PHPDoc template support; `--strict-php` accepts PHPDoc templates and rejects native generic syntax.
+- Added a runtime OPcache script cache for dynamic `include` and `require` through `eval()`, with optional persistent file caching, timestamp revalidation, admission limits, blacklists, preloading, live statistics, and API restrictions; ordinary compiled code remains ahead of time and no tracing JIT is provided.
+- Improved scalar code generation by promoting eligible `int`, `bool`, and `float` locals into SSA values across branches and loops, and refining effects for resolved static calls.
+- Added EIR integer range and induction-variable analysis to remove proven-safe overflow checks and simplify boxed numeric values while preserving PHP overflow-to-float behavior.
+- Added project INI directives in the `[ini]` table of `elephc.toml`, using the same settings as `--ini` and allowing command-line overrides.
+- Fixed sparse array writes, typed-to-mixed array argument ownership, bare-array value builtins, mapped result types, `array_map(null, ...)`, associative filtering and sorting, internal-pointer values, and callable string-transform leaks.
+- Fixed ownership of callable and reference entries in associative `array_chunk()` results, bound closures on Linux x86_64, and strings stored in static properties.
+- Fixed crashes when reading untyped null properties from `get_object_vars()` or an object-to-array cast.
+- Fixed deeply nested compiler entry points, unreachable EIR continuations, reference-return callable metadata, and dynamic include/eval handling of templates, argument counts, scoped returns, and pending exceptions across `finally`.
+- Fixed constant propagation and control-flow handling across switch fallthrough, side-effecting case labels, and default blocks that appear before later cases.
+- Fixed descriptor wrapper placement to keep generated functions contiguous, avoiding AArch64 branch-range assembly failures and broken ELF function extents under `--debug-info`.
+- Fixed source identities for literal eval fragments so type and binding metadata cannot collide with equal coordinates in root or included files.
+- Fixed heap leaks when eval writes back replacements through native typed by-reference variadic parameters.
+- Fixed `implode()` and `join()` on nullable, mixed, and runtime-promoted arrays, preserving actual element layouts, catchable type errors, and safe integer formatting near the string scratch-buffer limit.
+- Fixed serialization and unserialization of PHP classes that forbid it, with catchable exceptions, and omitted uninitialized typed properties from serialized property counts.
+- Fixed `PDOException` subclass validation and reflected method ownership, isolated driver connection diagnostics per thread, and preserved SQLSRV constructor SQLSTATE and native error codes.
+- Fixed qualified predefined names, named `::class` constants in defaults and attribute keys, nested array spread types, interface reflection order, strict-PHP callable guards, runtime `boolval()` callables, and the exception class and messages for invalid mixed throws.
+- Fixed argument-unpack validation to reject positional entries after named entries within the same unpacked array.
+- Fixed `urlencode()` and `rawurlencode()` to leave ASCII digits unescaped.
+- Improved diagnostics for unparenthesized `instanceof` call targets, missing class-constant names, disabled `class_alias()` autoload, and conflicting include-variant signatures.
+
 ## [0.27.1] - 2026-09-29
 - Added the full PHP 8.5.10 mbstring symbol surface to native compilation and `eval()`: all 65 functions and 9 constants through a shared bridge, with request-scoped INI and web state, managed Oniguruma-backed mbregex, MIME and mail handling, and by-reference `mb_convert_variables()` across nested arrays, object properties, and references on every supported target.
 - Added broader PHP compatibility across Core builtins and `eval()`, object casts, class constants, control-flow and declaration syntax, property defaults, arrays, IPv6, and filesystem APIs; also hardened compiler artifacts, archives, and web request handling.
@@ -724,7 +747,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.1...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.2...HEAD
+[0.27.2]: https://github.com/illegalstudio/elephc/compare/v0.27.1...v0.27.2
 [0.27.1]: https://github.com/illegalstudio/elephc/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/illegalstudio/elephc/compare/v0.26.6...v0.27.0
 [0.26.6]: https://github.com/illegalstudio/elephc/compare/v0.26.5...v0.26.6

@@ -46,6 +46,8 @@ pub(super) fn check(
             }
             if let Some(arg) = args.first() {
                 let ty = checker.infer_type(arg, env)?;
+                // Not relaxed for `int|float`: `exit status for PHP type Mixed` is what the
+                // backend answers for any boxed status, so the checker keeps the clearer word.
                 if ty != PhpType::Int {
                     return Err(CompileError::new(span, "exit() argument must be integer"));
                 }

@@ -290,3 +290,63 @@ echo ($a[$hit_i][$miss_j] ?? 'dflt');
     );
     assert!(out.success, "program should exit successfully");
 }
+
+/// A nullable TYPED array flowing through `??` must unbox, not be stored as a cell.
+///
+/// `?array<int>` is a boxed nullable cell, and the `??` merge temp is a raw `array<int>`. The
+/// coercion that fills that temp only ever ran for a `mixed`-payload target, because before
+/// `array<T>` existed a container merge target could not be typed — so a typed one took an early
+/// return and stored the CELL into the raw slot. `g([1, 2, 3])` then printed `0` and dumped four
+/// zeros where php prints `1` and `[1, 2, 3]`.
+///
+/// A ternary was correct, and a bare `?array` was correct: only the typed element type through
+/// `??` was wrong, which is why the suite never caught it. Found by an external review that ran
+/// it.
+#[test]
+fn test_nullable_typed_array_through_null_coalesce_unboxes() {
+    let out = compile_and_run(
+        "<?php \
+         function g(?array<int> $a): string { \
+           $r = $a ?? [4, 5]; \
+           return $r[0] . '/' . count($r); \
+         } \
+         echo g([1, 2, 3]), '|', g(null);",
+    );
+    assert_eq!(out, "1/3|4/2");
+}
+
+/// The same for string elements, and from a CALL RESULT rather than a parameter.
+#[test]
+fn test_nullable_typed_array_from_a_call_through_null_coalesce() {
+    let out = compile_and_run(
+        "<?php \
+         function src(bool $empty): ?array<string> { return $empty ? null : ['a', 'b']; } \
+         function pick(bool $empty): string { $r = src($empty) ?? ['z']; return $r[0]; } \
+         echo pick(false), pick(true);",
+    );
+    assert_eq!(out, "az");
+}
+
+/// The caller's array stays intact and the ledger stays balanced.
+///
+/// The unbox takes its own reference to the payload rather than consuming the cell's, so the
+/// live array a caller still holds must not be rewritten in place — and 200 round trips must
+/// free everything they allocate.
+#[test]
+fn test_nullable_typed_array_merge_preserves_the_caller_array() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php \
+         function g(?array<int> $a): int { $r = $a ?? [9]; return $r[1]; } \
+         $src = [1, 2, 3]; \
+         $t = 0; \
+         for ($i = 0; $i < 200; $i++) { $t = $t + g($src); } \
+         echo $t, '|', $src[1], '|', count($src);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "400|2|3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "the unbox takes its own payload reference, so nothing may be left live: {}",
+        out.stderr
+    );
+}

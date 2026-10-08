@@ -89,6 +89,9 @@ pub(crate) fn min_max_array_element_type(
     match ty {
         PhpType::Array(element) => Ok(*element),
         PhpType::AssocArray { value, .. } => Ok(*value),
+        // A bare `array` reaches the runtime as the `array<mixed>` list of its values
+        // (`BuiltinArgumentLowering::BareArrayValues`), so its element type is `mixed`.
+        other if other.is_php_array() => Ok(PhpType::Mixed),
         other => Err(CompileError::new(
             cx.span,
             &format!(

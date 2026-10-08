@@ -30023,6 +30023,7 @@ echo get_resource_type($evaluated["STDOUT"]);
 /// second collector, while validating visible arity would reject the physical argument array.
 #[test]
 fn test_eval_method_bridge_enters_physical_collector_methods_through_raw_symbols() {
+    /// Detects an exact AArch64 or x86_64 call to the requested symbol in generated assembly.
     fn calls_symbol(assembly: &str, symbol: &str) -> bool {
         assembly.lines().any(|line| {
             let line = line.trim();

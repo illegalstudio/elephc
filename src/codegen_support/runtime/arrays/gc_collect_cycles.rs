@@ -479,6 +479,7 @@ mod tests {
     use crate::codegen_support::platform::Target;
 
     #[test]
+    /// Verifies suppressed collection leaves the active flag unset on every AArch64 target.
     fn suppressed_aarch64_collection_does_not_set_active_flag() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
@@ -493,6 +494,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies AArch64 cycle-collector counters and cleanup state use distinct frame slots.
     fn aarch64_collector_keeps_count_rescan_and_cleanup_in_separate_frame_slots() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());

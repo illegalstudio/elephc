@@ -58,7 +58,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [System & I/O](php/system-and-io.md) — system functions, date/time, JSON, filesystem, exec, debugging
 - [Streams](php/streams.md) — stream resources, wrappers, contexts, filters, sockets, TLS, process pipes
 - [Sessions](php/sessions.md) — `session_start()`, `$_SESSION`, session ID and cookie management, file-based storage under `--web`
-- [OPcache](php/opcache.md) — the observable Zend OPcache API over elephc's compile-time script manifest: `opcache_get_status()`/`opcache_get_configuration()`, the `opcache.*` directive matrix, `ini_get`/`ini_get_all`, `extension_loaded()`
+- [OPcache](php/opcache.md): the Zend OPcache API over compiled scripts and the runtime cache for dynamic include/require, optional file caching, live statistics, and the `opcache.*` directive matrix
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
 - [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, stackful coroutine codegen
@@ -76,6 +76,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [LFC Source Files](beyond-php/lfc-source-files.md) — tagless source, mixed PHP/LFC projects, and per-file strict-mode behavior
 - [Pointers](beyond-php/pointers.md) — ptr(), ptr_get(), ptr_set(), pointer arithmetic, typed casting
 - [Buffers](beyond-php/buffers.md) — buffer&lt;T&gt; for fixed-size contiguous arrays, hot-path data
+- [Generics](beyond-php/generics.md) — array&lt;T&gt; pins an element type, and function f&lt;T&gt;(), class Box&lt;T&gt; and interface Repository&lt;T&gt; each monomorphize per type argument; all keep register-width storage instead of collapsing to boxed mixed
 - [Packed Classes](beyond-php/packed-classes.md) — flat POD records with compile-time field offsets
 - [FFI & Extern](beyond-php/extern.md) — calling C libraries, extern functions/globals/classes, callbacks
 - [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags

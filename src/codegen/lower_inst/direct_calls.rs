@@ -368,11 +368,12 @@ pub(super) fn materialize_called_class_id(
 /// The `__rt_incref` is what stops a widening conversion from rewriting the CALLER's array.
 /// `__rt_array_to_mixed` consumes an owner slot — it splits through
 /// `__rt_array_ensure_unique`, which only clones when the refcount says the array is shared —
-/// so a borrowed array reached it looking unique and had its element slots rewritten in place.
-/// Making it visibly shared first forces the clone; the reserved cleanup slot then releases
-/// that clone once the callee returns.
+/// so a borrowed array reached it looking unique and had its element slots rewritten in place,
+/// and an owned operand that was in fact shared lost its reference to the clone. Making it
+/// visibly shared first forces the clone; the reserved cleanup slot then releases that clone
+/// once the callee returns.
 ///
-/// The planner reserves that slot for exactly the borrowed widening arguments, so the presence
+/// The planner reserves that slot for exactly the widening arguments, so the presence
 /// of a cleanup is the same decision as the incref and the two cannot drift: an incref with no
 /// cleanup would leak the clone, and a cleanup with no incref would release the caller's array.
 pub(super) fn materialize_plain_call_arg(

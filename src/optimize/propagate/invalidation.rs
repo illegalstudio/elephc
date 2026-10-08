@@ -141,6 +141,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         ExprKind::InstanceOf { value, target } => {
             let target_inv = match target {
                 InstanceOfTarget::Name(_) => Invalidation::none(),
+                InstanceOfTarget::Generic(_) => Invalidation::none(),
                 InstanceOfTarget::Expr(expr) => expr_invalidation(expr),
             };
             expr_invalidation(value).union(target_inv)
@@ -342,6 +343,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                 .union(top_level_globals_guard(expr_call_effect(callable)))
         }
         ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewDynamic { args, .. }
         | ExprKind::NewDynamicObject { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {

@@ -55,6 +55,7 @@ pub fn lookup_constant(name: &str) -> Option<&'static ConstantContract> {
     constant_index().get(name.trim_start_matches('\\')).copied()
 }
 
+/// Builds and validates the case-insensitive class index once, rejecting duplicate names or IDs.
 fn class_index() -> &'static HashMap<String, &'static ClassContract> {
     static INDEX: OnceLock<HashMap<String, &'static ClassContract>> = OnceLock::new();
     INDEX.get_or_init(|| {
@@ -98,6 +99,7 @@ fn class_index() -> &'static HashMap<String, &'static ClassContract> {
     })
 }
 
+/// Builds and validates the exact-name constant index once, rejecting duplicate names or IDs.
 fn constant_index() -> &'static HashMap<&'static str, &'static ConstantContract> {
     static INDEX: OnceLock<HashMap<&'static str, &'static ConstantContract>> = OnceLock::new();
     INDEX.get_or_init(|| {

@@ -171,6 +171,7 @@ fn native_function_binding_releases_named_args_when_an_earlier_required_slot_is_
 }
 
 #[test]
+/// Verifies failed native variadic binding releases named-argument temporaries without releasing caller values.
 fn variadic_native_function_binding_releases_named_args_with_an_earlier_required_hole() {
     let mut values = FakeOps::default();
     let mut context = ElephcEvalContext::new();

@@ -41,7 +41,19 @@ pub(super) fn lower_static_array_map(
         return None;
     }
     let elem_type = static_callable_return_type(ctx, &callback);
+
     let array_type = PhpType::Array(Box::new(elem_type.clone()));
+
+    // A callback that returns nothing has no element representation, and this path builds the
+    // result array from the callback's OWN return type rather than from the checker's answer.
+    // `array_map(nop(...), [1, 2])` is `[null, null]` in php-src; here it reached `array_push`
+    // with a `Void` operand, which has no lowering, so a program php accepts was refused.
+    // Declining hands it to the ordinary runtime path, which boxes each result — the same answer
+    // the closure-literal form already gave, since only this static shape took the shortcut.
+    if matches!(elem_type.codegen_repr(), PhpType::Void) {
+        return None;
+    }
+
     let array = ctx.emit_value(
         Op::ArrayNew,
         Vec::new(),

@@ -27,8 +27,14 @@ use crate::types::PhpType;
 builtin! {
     contract: "array_chunk",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayChunk,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(
+            crate::ir::RuntimeFnId::ArrayChunk,
+        ),
+        crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues {
+            arg: 0,
+            sole: false,
+        },
     ),
 }
 
@@ -63,6 +69,17 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_chunk() preserve_keys argument must be a literal bool in AOT mode",
         )
     })?;
+    // Without `preserve_keys` the chunks are lists of values, so a bare `array` reaches the runtime
+    // as the `array<mixed>` list of its values (`BuiltinArgumentLowering::BareArrayValues`). WITH it,
+    // the chunks keep the source keys, which that list has thrown away — so that form still needs a
+    // typed array and is refused below with the message that says so.
+    let ty = if ty.is_php_array() && !preserve { PhpType::Array(Box::new(PhpType::Mixed)) } else { ty };
+    if ty.is_php_array() {
+        return Err(CompileError::new(
+            cx.span,
+            "array_chunk() with preserve_keys needs the array's key type, which a bare `array` does not state",
+        ));
+    }
     match ty {
         PhpType::Array(elem_ty) if preserve => Ok(PhpType::Array(Box::new(PhpType::AssocArray {
             key: Box::new(PhpType::Int),

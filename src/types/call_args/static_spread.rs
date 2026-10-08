@@ -77,6 +77,42 @@ pub(crate) fn expand_static_assoc_spread_args_with_origins(
     }
 }
 
+/// Rejects a statically known unpack that supplies a positional entry after a named one.
+///
+/// php walks each unpacked array in order and throws "Cannot use positional argument after named
+/// argument during unpacking" at the first integer key that follows a string key IN THAT ARRAY
+/// (`...["a" => "x", 1 => 2]`). A later, separate unpack may still supply positional values:
+/// `f(...["a" => 10], ...[20])` binds `20` to the next parameter. The expansion below hoists
+/// positional entries ahead of named ones, so this has to run on the source order first; without
+/// it the call bound `$a` by name and `2` to the next free slot. Only literal keys are judged.
+pub(crate) fn validate_static_unpack_order(
+    args: &[Expr],
+) -> Result<(), super::plan::CallArgPlanError> {
+    for arg in args {
+        let ExprKind::Spread(inner) = &arg.kind else {
+            continue;
+        };
+        let ExprKind::ArrayLiteralAssoc(pairs) = &inner.kind else {
+            continue;
+        };
+        let mut seen_named = false;
+        for (key, _) in pairs {
+            match static_assoc_spread_key(key) {
+                Some(StaticAssocSpreadKey::Named(_)) => seen_named = true,
+                Some(StaticAssocSpreadKey::Positional) if seen_named => {
+                    return Err(super::plan::CallArgPlanError::PositionalAfterNamedUnpack {
+                        span: arg.span,
+                    });
+                }
+                Some(StaticAssocSpreadKey::Positional) => {}
+                // A key that is not a literal says nothing about this array.
+                None => break,
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Projects a planned positional call into values for builtin signature checking.
 /// Only fully static indexed unpacks are flattened; callers must validate source
 /// ordering first. General planning retains spread nodes for runtime arity guards.

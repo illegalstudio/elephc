@@ -76,11 +76,17 @@ unsafe extern "C" {
     /// Collects native cycles and transfers an escaping Throwable as an owned boxed output.
     #[link_name = "__elephc_eval_gc_collect_cycles_v2"]
     pub(super) fn __elephc_eval_gc_collect_cycles(throwable_out: *mut *mut RuntimeCell) -> i64;
+    /// Disables native automatic cycle collection and returns the internal void-result placeholder.
     pub(super) fn __elephc_eval_gc_disable() -> i64;
+    /// Enables native automatic cycle collection and returns the internal void-result placeholder.
     pub(super) fn __elephc_eval_gc_enable() -> i64;
+    /// Reports whether native cycle collection is enabled.
     pub(super) fn __elephc_eval_gc_enabled() -> i64;
+    /// Returns the native allocator-cache reclamation result.
     pub(super) fn __elephc_eval_gc_mem_caches() -> i64;
+    /// Reads one native cycle-collector status metric selected by its ABI identifier.
     pub(super) fn __elephc_eval_gc_status_metric(metric: u64) -> i64;
+    /// Allocates an owned boxed indexed array with the requested initial capacity.
     pub(super) fn __elephc_eval_value_array_new(capacity: u64) -> *mut RuntimeCell;
     /// Allocates boxed array storage specialized for string elements.
     pub(super) fn __elephc_eval_value_string_array_new(capacity: u64) -> *mut RuntimeCell;
@@ -140,12 +146,14 @@ unsafe extern "C" {
         scope_ptr: *const u8,
         scope_len: u64,
     ) -> u64;
+    /// Registers a receiver/property guard and reports whether the magic setter may be entered.
     pub(super) fn __elephc_eval_magic_set_guard_push(
         object_identity: u64,
         name_ptr: *const u8,
         name_len: u64,
         node: *mut u64,
     ) -> u64;
+    /// Removes the supplied magic-setter guard from the native guard chain.
     pub(super) fn __elephc_eval_magic_set_guard_pop(node: *mut u64);
     /// Clears a native typed slot and returns any escaping exception through the owned output box.
     #[link_name = "__elephc_eval_value_typed_property_unset_v2"]
@@ -157,6 +165,7 @@ unsafe extern "C" {
         scope_len: u64,
         throwable_out: *mut *mut RuntimeCell,
     ) -> u64;
+    /// Returns an owned boxed native static-property value using the supplied access scope.
     pub(super) fn __elephc_eval_value_static_property_get(
         class_ptr: *const u8,
         class_len: u64,
@@ -209,11 +218,13 @@ unsafe extern "C" {
         position: u64,
     ) -> *mut RuntimeCell;
 
+    /// Reports whether the native object stores the named dynamic property.
     pub(super) fn __elephc_eval_value_dynamic_property_exists(
         object: *mut RuntimeCell,
         property_ptr: *const u8,
         property_len: u64,
     ) -> u64;
+    /// Invokes a scoped native instance method over the boxed argument array.
     pub(super) fn __elephc_eval_value_method_call(
         object: *mut RuntimeCell,
         name_ptr: *const u8,
@@ -367,6 +378,7 @@ unsafe extern "C" {
         context: *const c_void,
     ) -> u64;
     #[link_name = "__elephc_eval_value_take_pending_throwable_v2"]
+    /// Transfers the pending native Throwable box to the caller, clearing its pending slot.
     pub(super) fn __elephc_eval_value_take_pending_throwable() -> *mut RuntimeCell;
     /// Consumes an owned Mixed value and returns a contained native exception status.
     pub(super) fn __elephc_eval_value_release_protected(value: *mut RuntimeCell) -> u64;
@@ -603,6 +615,7 @@ unsafe extern "C" {
     /// Consumes a boxed owner, preserving or chaining the owned Throwable already held by the slot.
     /// Returns nonzero only if this release caught a new exception.
     pub(super) fn __elephc_eval_value_release_v3(value: *mut RuntimeCell, throwable: *mut *mut RuntimeCell) -> i32;
+    /// Retains a boxed native value and returns the same pointer.
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Retains the original boxed handler value installed by compiled AOT code.
     pub(super) fn __elephc_eval_pcntl_aot_signal_handler(signal: i64) -> *mut RuntimeCell;

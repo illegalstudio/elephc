@@ -397,10 +397,11 @@ Dead stripping removes unreachable *code*. Stripping removes the *names* of the
 code that stays. The two are independent: the first changes what runs, the
 second changes only what the file says about itself.
 
-A linked **executable** is stripped of its symbol table. Nothing in a compiled
-program reads those names — `Throwable::getTrace()` and `getTraceAsString()` are
-not implemented, and the uncaught-exception report prints no stack trace — so
-they are dead weight at run time, and they are roughly a quarter of the file:
+A linked **executable** is stripped of its symbol table. Runtime introspection
+uses compiler-emitted descriptors rather than linker symbol names.
+`Throwable::getTrace()` and `getTraceAsString()` currently return an empty array
+and string, and the uncaught-exception report prints no stack trace. The linker
+names are unnecessary at run time and are roughly a quarter of the file:
 
 | program | linked | stripped |
 |---|--:|--:|

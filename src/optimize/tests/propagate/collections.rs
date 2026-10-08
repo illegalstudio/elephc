@@ -347,6 +347,7 @@ fn test_array_fact_survives_by_value_user_call() {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: "reader".to_string(),
+                type_params: Vec::new(),
                 params: vec![("arr".to_string(), None, None, false)],
                 param_attributes: Vec::new(),
                 variadic: None,

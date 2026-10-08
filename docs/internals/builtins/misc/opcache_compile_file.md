@@ -38,7 +38,7 @@ function opcache_compile_file(mixed $filename): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+Calls prefer the program's native OPcache prelude declarations, which carry the configured directives, live cache, and API restrictions. Dedicated interpreter handlers cover programs without those declarations ([`crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs)). This route does not use an `eval_builtin!` binding.
 
 ## Cross-references
 

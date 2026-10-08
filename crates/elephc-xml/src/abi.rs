@@ -1351,6 +1351,7 @@ mod tests {
 
     #[cfg(elephc_xml_native)]
     #[test]
+    /// Verifies native XML parser options can be set and read through the bridge ABI.
     fn parser_options_round_trip() {
         let handle = unsafe { elephc_xml_parser_create(0, std::ptr::null()) };
         assert!(handle > 0);

@@ -82,6 +82,18 @@ pub(super) fn lower_array_map_identity(
     array: ValueId,
 ) -> Result<()> {
     let source_ty = ctx.load_value_to_result(array)?.codegen_repr();
+    // A raw-array result slot is the checker typing the identity as its source: share it. The
+    // array is copy-on-write, so one more reference is exactly php's "returns `$a`", and boxing
+    // it here would hand a Mixed cell to a slot that reads an array header.
+    if inst.result_php_type.codegen_repr() == source_ty
+        && matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+    {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+        abi::emit_pop_reg(ctx.emitter, result_reg);
+        return store_if_result(ctx, inst);
+    }
     if source_ty == PhpType::Mixed {
         abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
     } else {
