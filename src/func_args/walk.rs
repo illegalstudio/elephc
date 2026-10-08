@@ -513,6 +513,7 @@ impl Rewriter {
             ExprKind::StaticMethodCall { args, .. }
             | ExprKind::NewScopedObject { args, .. }
             | ExprKind::NewObject { args, .. }
+            | ExprKind::NewGeneric { args, .. }
             | ExprKind::ClosureCall { args, .. } => self.walk_exprs(args),
             ExprKind::NewDynamic { name_expr, args } => {
                 self.walk_expr(name_expr);

@@ -88,6 +88,8 @@ fn expr_uses_backing_slot(value: &Expr, property: &str) -> bool {
     let expr = |value: &Expr| expr_uses_backing_slot(value, property);
     let args = |values: &[Expr]| values.iter().any(expr);
     match &value.kind {
+        // `new Box<int>(…)`: its arguments are ordinary expressions and can read the backing slot.
+        ExprKind::NewGeneric { args: values, .. } => args(values),
         ExprKind::PropertyAccess { object, property: name }
         | ExprKind::NullsafePropertyAccess { object, property: name } => {
             is_backing_property(object, name, property) || expr(object)
@@ -108,7 +110,8 @@ fn expr_uses_backing_slot(value: &Expr, property: &str) -> bool {
         }
         ExprKind::InstanceOf { value, target } => {
             expr(value) || match target {
-                InstanceOfTarget::Name(_) => false,
+                // A type names no value, so neither spelling can read the backing slot.
+                InstanceOfTarget::Name(_) | InstanceOfTarget::Generic(_) => false,
                 InstanceOfTarget::Expr(target) => expr(target),
             }
         }

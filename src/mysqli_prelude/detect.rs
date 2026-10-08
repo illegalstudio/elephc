@@ -98,6 +98,7 @@ fn receiver_refs_mysqli(receiver: &StaticReceiver) -> bool {
 fn instanceof_target_refs_mysqli(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(name) => name_is_mysqli_class(name),
+        InstanceOfTarget::Generic(class_type) => type_refs_mysqli(class_type),
         InstanceOfTarget::Expr(expr) => expr_refs_mysqli(expr),
     }
 }
@@ -129,7 +130,16 @@ fn type_refs_mysqli(type_expr: &TypeExpr) -> bool {
         TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => {
             type_refs_mysqli(inner)
         }
+        TypeExpr::AssocArray { key, value } => type_refs_mysqli(key) || type_refs_mysqli(value),
+        // A declared signature can name one of these classes, and a program
+        // that mentions it only through a callback still needs the prelude.
+        TypeExpr::CallableSig { params, ret } => {
+            params.iter().any(type_refs_mysqli) || type_refs_mysqli(ret)
+        }
         TypeExpr::Named(name) => name_is_mysqli_class(name),
+        TypeExpr::GenericClass { name, args } => {
+            name_is_mysqli_class(name) || args.iter().any(type_refs_mysqli)
+        }
         TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
             members.iter().any(type_refs_mysqli)
         }
@@ -316,6 +326,9 @@ fn expr_refs_mysqli(expr: &Expr) -> bool {
         }
         ExprKind::NewObject { class_name, args } => {
             name_is_mysqli_class(class_name) || args.iter().any(expr_refs_mysqli)
+        }
+        ExprKind::NewGeneric { class_type, args } => {
+            type_refs_mysqli(class_type) || args.iter().any(expr_refs_mysqli)
         }
         ExprKind::NewDynamic { name_expr, args } => {
             expr_refs_mysqli(name_expr) || args.iter().any(expr_refs_mysqli)

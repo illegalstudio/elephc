@@ -231,6 +231,7 @@ pub(crate) fn prepare_scoped_addressable_ref_array_receiver(
     Some((receiver, aliases))
 }
 
+/// Creates reference-bound aliases for nested array receivers, preserving COW and optional call-scoped leases.
 fn prepare_addressable_ref_array_receiver_impl(
     ctx: &mut LoweringContext<'_, '_>,
     source: &Expr,

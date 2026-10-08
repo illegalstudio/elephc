@@ -15,9 +15,13 @@ use crate::variables::{LiveFailure, VariablePlan, hash_child, host::{HostAdapter
 use elephc_builtin_contract::mbstring_abi::variables::{MbInvokeHostV6, MbVariableHandleV1};
 
 unsafe extern "C" {
+    /// Creates an owned native copy of the supplied boxed variable value.
     fn elephc_mbstring_variable_clone_v1(value: *const u8) -> *mut u8;
+    /// Allocates a native boxed value from its runtime tag and payload words.
     fn elephc_mbstring_variable_box_v1(tag: u64, low: u64, high: u64) -> *mut u8;
+    /// Allocates native reference storage for the requested payload tag.
     fn elephc_mbstring_variable_reference_new_v1(tag: u64) -> *mut u8;
+    /// Releases one owner of the supplied native boxed or reference value.
     fn elephc_mbstring_variable_release_v1(value: *mut u8);
 }
 
@@ -25,6 +29,7 @@ unsafe extern "C" {
 struct TemporaryRoots(Vec<*mut u8>);
 
 impl Drop for TemporaryRoots {
+    /// Releases temporary native variable roots after conversion and host callbacks finish.
     fn drop(&mut self) {
         for reference in self.0.drain(..) {
             unsafe { elephc_mbstring_variable_release_v1(reference); }

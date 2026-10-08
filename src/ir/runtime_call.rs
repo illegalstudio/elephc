@@ -276,4 +276,15 @@ impl UnaryStringRuntime {
             UnaryStringRuntime::UrlEncode => "string.url_encode",
         }
     }
+
+    /// Whether the helper hands back an owned heap string rather than a view into the concat
+    /// scratch buffer.
+    ///
+    /// The ASCII case transforms persist their result before returning (see
+    /// `codegen_support::runtime::strings::ascii_case`); every other transform here answers in
+    /// scratch. A caller that copies the result to keep it would leak an owned one, which is what
+    /// the callable invoker did for `array_map(strtoupper(...), $a)` — one string per element.
+    pub const fn returns_owned_string(self) -> bool {
+        matches!(self, UnaryStringRuntime::StrToLower | UnaryStringRuntime::StrToUpper)
+    }
 }

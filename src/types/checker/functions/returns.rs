@@ -385,11 +385,113 @@ impl Checker {
         if matches!(actual, PhpType::Void) && !Self::declared_type_accepts_null(expected) {
             return Err(CompileError::new(
                 span,
-                &format!("{} expects {:?}, got Void", context, expected),
+                &format!("{} expects {}, got null", context, expected),
             ));
         }
 
+        Self::require_matching_array_element_storage(expected, actual, span, context)?;
+
         self.require_compatible_arg_type(expected, actual, span, context)
+    }
+
+    /// Rejects a declared `array<T>` return whose body produces an array with a DIFFERENT
+    /// element representation.
+    ///
+    /// Assignability alone cannot catch this: `Mixed` is compatible with every type, so
+    /// `require_compatible_arg_type` accepts an `array<mixed>` body for a declared
+    /// `array<int>`. Their STORAGE is not interchangeable, though — an `array<int>` holds raw
+    /// 64-bit values while an `array<mixed>` holds pointers to boxed cells, and the element
+    /// layout lives in the array header tag rather than in the static type. Letting the
+    /// declaration through unchecked makes every caller read the callee's boxed pointers as
+    /// integers; measured, `function squares(int $n): array<int>` built with
+    /// `$out = []; $out[] = $i * $i;` returned pointer values instead of squares.
+    ///
+    /// A declared bare `array` is `Array(Mixed)` and imposes no element contract, so it is
+    /// exempt. Only a CONCRETE declared element type is enforced here.
+    fn require_matching_array_element_storage(
+        expected: &PhpType,
+        actual: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        // A declared bare `array` is `Array(Mixed)` and imposes no element contract.
+        if Self::is_generic_array_hint(expected) {
+            return Ok(());
+        }
+        let (expected_elem, actual_elem) = match (expected, actual) {
+            (PhpType::Array(expected_elem), PhpType::Array(actual_elem)) => {
+                (expected_elem, actual_elem)
+            }
+            // Hash storage: only the VALUE is compared. The key is a runtime-tagged hash key
+            // either way, so `array<string, int>` and `array<int, int>` share a layout, while
+            // `array<string, int>` and `array<string, mixed>` do not.
+            (
+                PhpType::AssocArray {
+                    value: expected_value,
+                    ..
+                },
+                PhpType::AssocArray {
+                    value: actual_value,
+                    ..
+                },
+            ) => (expected_value, actual_value),
+            // A packed element vector and a hash table are not interchangeable at all, so a
+            // declared form that disagrees with the body's is rejected outright — unless the
+            // body returns an empty literal, which carries no storage to disagree with.
+            (PhpType::Array(_), PhpType::AssocArray { .. })
+            | (PhpType::AssocArray { .. }, PhpType::Array(_))
+                if !Self::returns_empty_array_literal_inner(actual) =>
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "{} declares {} but returns {}; the storage differs",
+                        context, expected, actual
+                    ),
+                ));
+            }
+            _ => return Ok(()),
+        };
+        let expected_repr = expected_elem.codegen_repr();
+        let actual_repr = actual_elem.codegen_repr();
+        if expected_repr == actual_repr || matches!(**actual_elem, PhpType::Never) {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            span,
+            &format!(
+                "{} declares {} but returns {}; the element storage differs{}",
+                context,
+                expected,
+                actual,
+                Self::element_storage_hint(expected_elem, actual_elem)
+            ),
+        ))
+    }
+
+    /// Returns the way out of an element-storage mismatch, when there is a known one.
+    ///
+    /// `int|float` elements are almost always a loop counter: PHP promotes an integer at the
+    /// overflow boundary, so `for ($i = 0; …) { $out[] = $i; }` builds a list of numbers that
+    /// are each an int OR a float, and that is boxed storage rather than a packed `int` vector.
+    /// A cast at the append pins the element type and costs nothing at runtime for a value that
+    /// is already an int, which is the fix a reader would otherwise have to guess.
+    fn element_storage_hint(expected_elem: &PhpType, actual_elem: &PhpType) -> String {
+        if actual_elem.is_int_float_union() && matches!(expected_elem, PhpType::Int) {
+            return ". A loop counter is `int|float` after `++`, because PHP promotes it at the \
+                    overflow boundary; write `(int) $counter` at the append to pin the element \
+                    type"
+                .to_string();
+        }
+        String::new()
+    }
+
+    /// Returns true when `ty` is the element type an EMPTY array literal infers.
+    ///
+    /// `return [];` carries no element storage, so it satisfies any declared container form,
+    /// indexed or associative. The checker types it `Array(Never)`.
+    fn returns_empty_array_literal_inner(ty: &PhpType) -> bool {
+        matches!(ty, PhpType::Array(elem) if matches!(**elem, PhpType::Never))
     }
 
     /// Returns true if `ty` can accept a null/void value — covers PhpType::Mixed,

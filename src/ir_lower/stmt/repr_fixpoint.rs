@@ -218,7 +218,7 @@ fn discovered_conversions(
 /// re-reads as a hash. The decision is `array_storage_conversion` — the SAME predicate the checker
 /// applies to the type environment — so the element type a callee is compiled for cannot drift from
 /// the one the caller actually passes.
-fn conversion_op(entry: &PhpType, target: &PhpType) -> Option<Op> {
+pub(in crate::ir_lower) fn conversion_op(entry: &PhpType, target: &PhpType) -> Option<Op> {
     match array_storage_conversion(Some(entry), target)? {
         PhpType::Array(_) => Some(Op::ArrayToMixed),
         PhpType::AssocArray { .. } => Some(Op::ArrayToHash),
@@ -548,7 +548,7 @@ impl<'a> ConversionScan<'a> {
                 // A handler is reachable from every point in the try, including above a conversion.
                 self.hiding();
                 self.block(try_body);
-                for CatchClause { exception_types: _, variable, body } in catches {
+                for CatchClause { exception_type_args: _, exception_types: _, variable, body } in catches {
                     if let Some(variable) = variable {
                         self.name(variable);
                     }
@@ -661,7 +661,8 @@ impl<'a> ConversionScan<'a> {
                 self.expr(value);
                 self.expr(callable);
             }
-            ExprKind::NewObject { class_name: _, args } => {
+            ExprKind::NewObject { class_name: _, args }
+            | ExprKind::NewGeneric { class_type: _, args } => {
                 self.mutation();
                 self.exprs(args);
             }

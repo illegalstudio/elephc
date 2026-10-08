@@ -531,7 +531,7 @@ fn test_error_enum_trait_with_property() {
 fn test_error_enum_method_return_type_mismatch() {
     expect_error(
         "<?php enum E { case A; public function f(): int { return \"nope\"; } }",
-        "return type expects Int, got Str",
+        "Method 'E::f' return type expects int, got string",
     );
 }
 

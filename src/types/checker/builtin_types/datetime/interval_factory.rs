@@ -56,6 +56,7 @@ return $iv;
 pub(super) fn date_interval_create_from_date_string() -> ClassMethod {
     let body = super::bodies::create_from_date_string();
     ClassMethod {
+        type_params: Vec::new(),
         name: "createFromDateString".to_string(),
         visibility: Visibility::Public,
         is_static: true,

@@ -262,6 +262,10 @@ fn rewrite_expr(
             class_name: class_name.clone(),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type: class_type.clone(),
+            args: rewrite_expr_list(args, class_name, parent_name)?,
+        },
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
             name_expr: Box::new(rewrite_expr(name_expr, class_name, parent_name)?),
             args: rewrite_expr_list(args, class_name, parent_name)?,
@@ -423,6 +427,9 @@ fn rewrite_instanceof_target(
 ) -> Result<InstanceOfTarget, CompileError> {
     match target {
         InstanceOfTarget::Name(name) => Ok(InstanceOfTarget::Name(name.clone())),
+        InstanceOfTarget::Generic(class_type) => {
+            Ok(InstanceOfTarget::Generic(class_type.clone()))
+        }
         InstanceOfTarget::Expr(expr) => Ok(InstanceOfTarget::Expr(Box::new(rewrite_expr(
             expr,
             class_name,
@@ -462,7 +469,16 @@ fn rewrite_constant_receiver(
     span: Span,
     class_name_resolution: bool,
 ) -> Result<StaticReceiver, CompileError> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Ok(StaticReceiver::Named(name.clone())),
         StaticReceiver::Self_ => Ok(StaticReceiver::Named(fqn_name(class_name))),
         StaticReceiver::Parent => parent_name

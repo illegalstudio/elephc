@@ -19,6 +19,7 @@ pub(crate) const COMPACT_NATIVE_DEFAULT_MAX_DEPTH: usize = 16;
 
 /// Returns whether a finite literal default exceeds compact metadata's recursion bound.
 pub(crate) fn literal_default_exceeds_compact_depth(expr: &Expr) -> bool {
+    /// Recursively checks literal-default nesting against the compact native metadata depth bound.
     fn exceeds(expr: &Expr, depth: usize) -> bool {
         if depth > COMPACT_NATIVE_DEFAULT_MAX_DEPTH {
             return true;

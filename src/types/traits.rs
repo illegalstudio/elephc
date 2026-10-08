@@ -95,6 +95,9 @@ pub fn flatten_classes(
         match &stmt.kind {
             StmtKind::TraitDecl {
                 name,
+                // Always `None` here: `crate::generics::classes` strips every trait template
+                // before the checker runs, and each instantiation is an ordinary trait.
+                generics: _,
                 trait_uses,
                 properties,
                 methods,
@@ -143,6 +146,7 @@ pub fn flatten_classes(
     for stmt in program {
         match &stmt.kind {
             StmtKind::ClassDecl {
+                generics: _,
                 name,
                 extends,
                 implements,

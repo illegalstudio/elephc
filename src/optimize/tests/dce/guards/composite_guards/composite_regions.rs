@@ -25,6 +25,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_demorgan_equivalent_gua
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -75,6 +76,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_loose_comparison_guard(
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -124,6 +126,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_relational_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -173,6 +176,7 @@ fn test_eliminate_dead_code_prunes_nested_elseif_from_composite_guard_refinement
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -238,6 +242,7 @@ fn test_eliminate_dead_code_prunes_nested_subexpr_from_composite_guard_refinemen
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

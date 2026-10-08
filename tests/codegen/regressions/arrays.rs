@@ -1639,6 +1639,7 @@ unset($items);
 /// iterations, and nothing else can.
 #[test]
 fn test_mixed_key_probe_and_read_do_not_leak_per_evaluation() {
+    /// Compiles the requested mixed-key workload and reads its remaining live-block counter.
     fn live_blocks(iterations: usize) -> u64 {
         let source = format!(
             r#"<?php
@@ -1856,6 +1857,7 @@ echo count($groups[0]), ":", count($copy), "\n";
 /// increase for 4x the rows; linear growth stays near 4x.
 #[test]
 fn test_nested_append_into_one_bucket_is_linear_not_quadratic() {
+    /// Compiles the requested nested-append workload and reads its allocation counter.
     fn allocs(rows: usize) -> u64 {
         let source = format!(
             r#"<?php

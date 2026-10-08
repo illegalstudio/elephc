@@ -10,6 +10,21 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Instantiated generic constant receivers survive method and reflected parameter defaults.
+#[test]
+fn test_property_default_generic_receiver_keeps_type_arguments() {
+    let out = crate::support::compile_and_run(r#"<?php
+class Value<T> { public const int DEFAULT_VALUE = 7; }
+function useDefault(int $value = Value<int>::DEFAULT_VALUE): int { return $value; }
+class Holder {
+    public function number(int $value = Value<int>::DEFAULT_VALUE): int { return $value; }
+}
+$parameter = new ReflectionParameter(['Holder', 'number'], 'value');
+echo useDefault(), ':', (new Holder())->number(), ':', $parameter->getDefaultValue();
+"#);
+    assert_eq!(out, "7:7:7");
+}
+
 /// Deferred method and promoted defaults remain available with their source constant name.
 #[test]
 fn test_property_default_followup_reflection_parameter_deferred_constant() {

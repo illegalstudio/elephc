@@ -5845,6 +5845,7 @@ mod tests {
 
         struct Returned(i64, Option<&'static str>);
         impl Drop for Returned {
+            /// Returns the borrowed statement fixture to its handle table when the guard is dropped.
             fn drop(&mut self) {
                 if let Some(value) = self.1.take() {
                     if let Some(map) = TABLE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
@@ -5907,6 +5908,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies the C-ABI panic guard returns its documented failure sentinel.
     fn ffi_guard_converts_a_panic_into_the_documented_sentinel() {
         let minus_one = ffi_guard(-1_i64, || -> i64 {
             panic!("deliberate panic (F-QUAL-02 test) — expected");

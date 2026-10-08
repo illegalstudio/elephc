@@ -56,8 +56,8 @@ mod defined;
 mod warnings;
 
 pub(crate) use array_keys::{
-    array_key_type_from_value_type, is_php_integer_array_key, merge_array_key_types,
-    normalized_array_key_type, parse_php_string_offset_literal,
+    array_key_contiguity_is_unproven, array_key_type_from_value_type, is_php_integer_array_key,
+    merge_array_key_types, normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
@@ -72,7 +72,7 @@ pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
 // production compile path; it stays public for tests that don't need `CheckOptions`.
 #[allow(unused_imports)]
-pub use result::check_with_target;
+pub use result::{check_with_options_and_bounds, check_with_target, check_with_target_and_bounds};
 pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
 pub use schema::{

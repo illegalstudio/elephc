@@ -92,6 +92,7 @@ fn test_normalize_control_flow_inlines_empty_try_finally_body() {
         StmtKind::Try {
             try_body: Vec::new(),
             catches: vec![crate::parser::ast::CatchClause {
+                exception_type_args: Vec::new(),
                 exception_types: vec![Name::unqualified("Exception")],
                 variable: Some("e".into()),
                 body: vec![Stmt::echo(Expr::int_lit(7))],
@@ -176,6 +177,7 @@ fn test_normalize_control_flow_inlines_non_throwing_try_catch() {
         StmtKind::Try {
             try_body: vec![Stmt::echo(Expr::int_lit(7))],
             catches: vec![crate::parser::ast::CatchClause {
+                exception_type_args: Vec::new(),
                 exception_types: vec![Name::unqualified("Exception")],
                 variable: Some("e".into()),
                 body: vec![Stmt::echo(Expr::int_lit(9))],
@@ -252,6 +254,7 @@ fn test_normalize_control_flow_folds_outer_finally_into_single_inner_try() {
                         Span::dummy(),
                     )],
                     catches: vec![crate::parser::ast::CatchClause {
+                        exception_type_args: Vec::new(),
                         exception_types: vec![Name::unqualified("A")],
                         variable: Some("e".into()),
                         body: vec![Stmt::echo(Expr::int_lit(7))],
@@ -314,6 +317,7 @@ fn test_normalize_control_flow_hoists_non_throwing_try_prefix() {
                 Stmt::new(StmtKind::Throw(Expr::var("boom")), Span::dummy()),
             ],
             catches: vec![crate::parser::ast::CatchClause {
+                exception_type_args: Vec::new(),
                 exception_types: vec![Name::unqualified("Exception")],
                 variable: Some("e".into()),
                 body: vec![Stmt::echo(Expr::int_lit(9))],

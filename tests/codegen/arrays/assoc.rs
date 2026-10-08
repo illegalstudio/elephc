@@ -9,6 +9,56 @@
 
 use crate::support::*;
 
+/// A reference created in the loop can advance the counter through another local.
+#[test]
+fn test_reference_counter_alias_inside_loop_takes_hash_storage() {
+    let source = r#"<?php
+$a = [];
+for ($i = 0; $i < 4; $i++) {
+    $r = &$i;
+    $r += 2;
+    $a[$i] = $i;
+}
+echo json_encode($a);
+"#;
+    assert_eq!(compile_and_run(source), "{\"2\":2,\"5\":5}");
+}
+
+/// References established before the loop invalidate the counter's packed-storage proof.
+#[test]
+fn test_reference_counter_alias_before_loop_takes_hash_storage() {
+    let source = r#"<?php
+$i = 0;
+$r = &$i;
+$a = [];
+for ($i = 0; $i < 4; $i++) {
+    $r += 2;
+    $a[$i] = $i;
+}
+echo json_encode($a);
+"#;
+    assert_eq!(compile_and_run(source), "{\"2\":2,\"5\":5}");
+}
+
+/// Foreach key and value variables can each overwrite the surrounding loop's counter.
+#[test]
+fn test_foreach_counter_rebinding_takes_hash_storage() {
+    let source = r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) {
+    foreach ([7] as $i) {}
+    $a[$i] = $i;
+}
+$b = [];
+for ($j = 0; $j < 3; $j++) {
+    foreach ([7 => 1] as $j => $value) {}
+    $b[$j] = $j;
+}
+echo json_encode($a), "|", json_encode($b);
+"#;
+    assert_eq!(compile_and_run(source), "{\"7\":7}|{\"7\":7}");
+}
+
 // --- Phase 12: v0.6 — Associative arrays, switch, match ---
 
 /// Compiles a PHP script with two static string-keyed entries and verifies the first value is echoed.
@@ -1026,4 +1076,261 @@ fn test_array_slice_builtin_types_do_not_collide_across_included_files() {
         "main.php",
     );
     assert_eq!(out, "12|tf");
+}
+
+/// A variable index into a still-empty array makes it a hash, exactly as php does.
+///
+/// Packed storage has no keys — slot `n` IS key `n` — so writing slot 205 into an array of
+/// length 2 used to zero-fill 203 slots and answer `count($rows) === 206`. php promotes the
+/// array to a hash the moment an integer key skips, and answers 3.
+#[test]
+fn test_gapped_variable_index_counts_entries_not_slots() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [];
+foreach ([101, 102, 205] as $id) { $rows[$id] = "row$id"; }
+echo count($rows), "|";
+foreach ($rows as $k => $v) { echo $k, "=", $v, ","; }
+echo json_encode($rows);
+"#,
+    );
+    assert_eq!(
+        out,
+        "3|101=row101,102=row102,205=row205,{\"101\":\"row101\",\"102\":\"row102\",\"205\":\"row205\"}"
+    );
+}
+
+/// The counter of the enclosing `for` loop is the one index that keeps packed storage.
+///
+/// It is `0` at the first write into the empty array and advances one slot per iteration, so it
+/// can never run ahead of the length and no gap is reachable. `array_filter` is in here on
+/// purpose: it is one of the 25 array builtins that accept only an indexed array, so the program
+/// stops compiling altogether if the loop leaves packed storage.
+///
+/// Three elements, not five: a FOURTH string write into an array that started empty frees slot
+/// 0's payload. That reproduces on committed `main` with no loop in sight, and is a separate
+/// defect from anything this test is about.
+#[test]
+fn test_for_counter_index_keeps_packed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) { $a[$i] = "v$i"; }
+echo implode(",", $a), "|", count($a), "|", json_encode($a), "|";
+echo count(array_filter($a, fn($x) => $x !== "v2"));
+"#,
+    );
+    assert_eq!(out, "v0,v1,v2|3|[\"v0\",\"v1\",\"v2\"]|2");
+}
+
+/// A write the loop can SKIP is not covered by the counter exception, because a skipped
+/// iteration is exactly how a gap appears.
+///
+/// php keys this array 0, 2, 4 and counts 3; packed storage would have zero-filled slots 1 and 3
+/// and counted 5.
+#[test]
+fn test_conditional_write_under_a_for_counter_still_uses_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 5; $i++) { if ($i % 2 === 0) { $a[$i] = $i; } }
+echo count($a), "|", json_encode($a);
+"#,
+    );
+    assert_eq!(out, "3|{\"0\":0,\"2\":2,\"4\":4}");
+}
+
+/// A `continue` can skip the write just as an `if` can, so the counter exception drops there too.
+#[test]
+fn test_continue_in_a_for_body_still_uses_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 5; $i++) { if ($i === 2) { continue; } $a[$i] = $i; }
+echo count($a), "|", json_encode($a);
+"#,
+    );
+    assert_eq!(out, "4|{\"0\":0,\"1\":1,\"3\":3,\"4\":4}");
+}
+
+
+/// A `for` counter the loop CONDITION rewrites is not a counter that tracks the array's length.
+///
+/// `packed_for_counter` was never given the condition, on the reasoning that a condition can only
+/// stop the loop earlier. It can also assign: `($i = 3) < 4` puts the counter at 3 before the
+/// first write, and packed storage has no keys, so the write zero-filled slots 0..2 and invented
+/// three entries php never has.
+#[test]
+fn test_a_for_condition_that_writes_the_counter_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; ($i = 3) < 4; $i++) {
+    $a[$i] = 9;
+    break;
+}
+echo count($a), ":", json_encode($a);
+"#,
+    );
+    assert_eq!(out, "1:{\"3\":9}");
+}
+
+/// The same write, one level down: a counter advanced inside a larger expression.
+///
+/// `$z = $i++;` binds `$z`, so the statement's own shape says nothing about the counter — the
+/// increment is buried in its value, where a check that matched only the outermost node never
+/// looked. php promotes to a hash and keeps two entries; packed storage gapped to three.
+#[test]
+fn test_a_counter_advanced_inside_an_assigned_expression_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 4; $i++) {
+    $a[$i] = 1;
+    $z = $i++;
+}
+echo count($a), ":", json_encode($a);
+"#,
+    );
+    assert_eq!(out, "2:{\"0\":1,\"2\":1}");
+}
+
+/// The counter exception itself, which must survive both of the above: a plain `for` that grows
+/// an array one slot at a time still keeps PACKED storage, which `json_encode` shows as a list
+/// rather than an object.
+#[test]
+fn test_a_plain_for_counter_still_keeps_packed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$src = [10, 20, 30];
+$b = [];
+for ($j = 0; $j < count($src); $j++) {
+    $b[$j] = $src[$j] * 2;
+}
+echo json_encode($b), "|";
+$limit = 3;
+$c = [];
+for ($k = 0; $k < $limit; $k++) {
+    $c[$k] = $k;
+}
+echo json_encode($c);
+"#,
+    );
+    assert_eq!(out, "[20,40,60]|[0,1,2]");
+}
+
+/// A call can advance the counter through a reference without an assignment at the call site.
+#[test]
+fn test_by_ref_counter_function_calls_take_hash_storage() {
+    for call in ["bump($i)", "bump(value: $i)"] {
+        let source = format!(
+            r#"<?php
+function bump(&$value) {{ $value += 2; }}
+$a = [];
+for ($i = 0; $i < 4; $i++) {{
+    {call};
+    $a[$i] = $i;
+}}
+echo count($a), ":", json_encode($a);
+"#,
+        );
+        assert_eq!(compile_and_run(&source), "2:{\"2\":2,\"5\":5}", "{call}");
+    }
+}
+
+/// Instance, static and closure calls can all bind the counter to a reference parameter.
+#[test]
+fn test_by_ref_counter_method_and_closure_calls_take_hash_storage() {
+    for call in ["$b->bump($i)", "Bump::advance($i)", "$f($i)"] {
+        let source = format!(
+            r#"<?php
+class Bump {{
+    public function bump(&$value): void {{ $value += 2; }}
+    public static function advance(&$value): void {{ $value += 2; }}
+}}
+$b = new Bump();
+$f = function (&$value): void {{ $value += 2; }};
+$a = [];
+for ($i = 0; $i < 4; $i++) {{
+    {call};
+    $a[$i] = $i;
+}}
+echo json_encode($a);
+"#,
+        );
+        assert_eq!(compile_and_run(&source), "{\"2\":2,\"5\":5}", "{call}");
+    }
+}
+
+/// A reference mutation in the condition runs before the first indexed write too.
+#[test]
+fn test_by_ref_counter_condition_call_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function advance(&$value): bool { $value += 2; return $value < 7; }
+$a = [];
+for ($i = 0; advance($i); $i++) { $a[$i] = $i; }
+echo json_encode($a);
+"#,
+    );
+    assert_eq!(out, "{\"2\":2,\"5\":5}");
+}
+
+/// A reference alias can advance the counter with nothing in the body naming it.
+///
+/// `$r = &$i` inside the body and the same alias made before the loop both let `$r += 2` skip
+/// slots; the proof only saw assignments to `$i`, kept packed storage, and zero-filled the gaps.
+#[test]
+fn test_reference_aliased_counter_takes_hash_storage() {
+    for (setup, step) in [("", "$r = &$i; $r += 2;"), ("$i = 0; $r = &$i;", "$r += 2;")] {
+        let source = format!(
+            r#"<?php
+$a = [];
+{setup}
+for ($i = 0; $i < 4; $i++) {{
+    {step}
+    $a[$i] = $i;
+}}
+echo json_encode($a);
+"#,
+        );
+        assert_eq!(compile_and_run(&source), "{\"2\":2,\"5\":5}", "{setup} {step}");
+    }
+}
+
+/// A `foreach` value is any element of its iterable, so indexing a still-empty array by it inside
+/// a loop takes hash storage, whether or not it rebinds the `for` counter.
+#[test]
+fn test_foreach_value_index_inside_a_loop_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) { foreach ([7] as $i) {} $a[$i] = $i; }
+$b = [];
+$n = 0;
+while ($n < 1) { foreach ([7] as $k) {} $b[$k] = $k; $n++; }
+echo json_encode($a), "|", json_encode($b);
+"#,
+    );
+    assert_eq!(out, "{\"7\":7}|{\"7\":7}");
+}
+
+/// A `foreach` value written inside the `foreach` body takes hash storage too.
+///
+/// That write is marked skippable, and the skippable writes were exempt from the unbounded-key
+/// rule, so `foreach ([7] as $k) { $a[$k] = $k; }` inside a `for` or `while` built a packed array
+/// zero-filled up to 7.
+#[test]
+fn test_foreach_value_written_in_the_foreach_body_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 1; $i++) { foreach ([7] as $k) { $a[$k] = $k; } }
+$b = [];
+$n = 0;
+while ($n < 1) { foreach ([7] as $k) { $b[$k] = $k; } $n++; }
+echo json_encode($a), "|", json_encode($b);
+"#,
+    );
+    assert_eq!(out, "{\"7\":7}|{\"7\":7}");
 }

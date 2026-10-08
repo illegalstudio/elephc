@@ -428,6 +428,7 @@ fn guard_initialized_chain_property(
     true
 }
 
+/// Branches null receivers to the chain exit and releases an owning temporary on that path.
 fn guard_nullsafe_chain_receiver(
     ctx: &mut LoweringContext<'_, '_>,
     current: LoweredValue,

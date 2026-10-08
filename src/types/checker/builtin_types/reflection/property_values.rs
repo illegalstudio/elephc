@@ -36,6 +36,7 @@ pub(super) fn builtin_reflection_property_get_value_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     let object = variable_expr("object", dummy_span);
     ClassMethod {
+        type_params: Vec::new(),
         name: "getValue".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -68,6 +69,7 @@ pub(super) fn builtin_reflection_property_set_value_method() -> ClassMethod {
     let object = variable_expr("object", dummy_span);
     let value = variable_expr("value", dummy_span);
     ClassMethod {
+        type_params: Vec::new(),
         name: "setValue".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -129,6 +131,7 @@ pub(super) fn builtin_reflection_property_is_initialized_method() -> ClassMethod
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "isInitialized".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -273,6 +276,7 @@ pub(super) fn reflection_dynamic_object_property(object: Expr, span: crate::span
 pub(super) fn builtin_reflection_property_is_lazy_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "isLazy".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -307,6 +311,7 @@ pub(super) fn builtin_reflection_property_skip_lazy_initialization_method() -> C
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "skipLazyInitialization".to_string(),
         visibility: Visibility::Public,
         is_static: false,

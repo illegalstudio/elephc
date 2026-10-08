@@ -189,6 +189,15 @@ def _check_backend_contracts(
         if (record.get("eval") or {}).get("kind") != "registry":
             errors.append(f"{name} must be eval-supported by a Magician registry binding")
 
+    # OPcache's existing native-prelude/fallback route has no eval_builtin! home.
+    # Generated availability must still reflect that the APIs are callable in eval.
+    for record in by_name.values():
+        if record.get("module") != "zend opcache":
+            continue
+        support = record.get("eval") or {}
+        if not support.get("supported") or support.get("kind") != "opcache-dispatch":
+            errors.append(f"{record['name']} must document its dedicated OPcache eval route")
+
     hash_init = by_name.get("hash_init") or {}
     if (hash_init.get("aot") or {}).get("signature_override_reason") != "prelude-signature-subset":
         errors.append("hash_init must document its narrower AOT prelude signature")

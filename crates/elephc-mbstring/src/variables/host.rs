@@ -138,6 +138,7 @@ mod tests {
     /// Host storage deliberately reallocates after inspection to prove the adapter owns bytes.
     struct Fixture { bytes: Vec<u8>, written: Vec<u8> }
 
+    /// Exposes the fixture string view so the adapter must copy it before later host mutations.
     unsafe extern "C" fn inspect(
         context: *mut c_void, _: *const MbVariableHandleV1, view: *mut MbVariableViewV1,
     ) -> i32 {
@@ -149,6 +150,7 @@ mod tests {
         0
     }
 
+    /// Reports the end of child traversal for the scalar fixture.
     unsafe extern "C" fn child(
         _: *mut c_void, _: u64, _: u64, _: *mut u64, child: *mut MbVariableChildV1,
     ) -> i32 {
@@ -156,6 +158,7 @@ mod tests {
         0
     }
 
+    /// Returns the fixture identity used to prepare a writable variable handle.
     unsafe extern "C" fn prepare(
         _: *mut c_void, _: *const MbVariableHandleV1, _: u64, identity: u64, output: *mut u64,
     ) -> i32 {
@@ -163,6 +166,7 @@ mod tests {
         0
     }
 
+    /// Writes converted bytes into the fixture and exercises host-side storage replacement.
     unsafe extern "C" fn write(
         context: *mut c_void, _: *const MbVariableHandleV1, bytes: *const u8, len: u64,
     ) -> i32 {

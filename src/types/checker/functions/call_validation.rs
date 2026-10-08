@@ -60,6 +60,13 @@ fn call_arg_plan_error(
                 callee_desc
             ),
         ),
+        CallArgPlanError::PositionalAfterNamedUnpack { span } => CompileError::new(
+            span,
+            &format!(
+                "{} cannot use positional argument after named argument during unpacking",
+                callee_desc
+            ),
+        ),
         CallArgPlanError::SpreadAfterNamed { span } => {
             spread_after_named_error(span, callee_desc)
         }
@@ -152,6 +159,7 @@ impl Checker {
             | CallArgPlanError::Duplicate { span, .. }
             | CallArgPlanError::PositionalAfterNamed { span }
             | CallArgPlanError::PositionalAfterSpread { span }
+            | CallArgPlanError::PositionalAfterNamedUnpack { span }
             | CallArgPlanError::MissingRequired { span, .. } => {
                 CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
             }
@@ -526,10 +534,12 @@ impl Checker {
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             Ok(())
         } else {
-            Err(CompileError::new(
-                span,
-                &format!("{} expects {:?}, got {:?}", context, expected, actual),
-            ))
+            let mut message = format!("{} expects {}, got {}", context, expected, actual);
+            if let Some(hint) = self.variance_refusal_hint(expected, actual) {
+                message.push_str(" — ");
+                message.push_str(&hint);
+            }
+            Err(CompileError::new(span, &message))
         }
     }
 

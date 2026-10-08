@@ -676,9 +676,10 @@ fn test_htmlspecialchars_ent_flags() {
     );
 }
 
-/// Regression: the shared `lower_html_escape` emitter must name the builtin that was actually
-/// called in its argument-coercion diagnostic. `htmlentities()` with an uncoercible (array)
-/// subject previously reported "htmlspecialchars string coercion ..." instead of htmlentities.
+/// Regression: an uncoercible (array) subject must be reported against the builtin that was
+/// actually called. `htmlentities()` previously reported "htmlspecialchars string coercion ..."
+/// from the shared `lower_html_escape` emitter; the checker now refuses the array first, in
+/// php's own TypeError wording, and that message must name htmlentities just the same.
 #[test]
 fn test_htmlentities_coercion_error_names_htmlentities() {
     let dir = make_cli_test_dir("elephc_htmlentities_diag");
@@ -696,7 +697,7 @@ fn test_htmlentities_coercion_error_names_htmlentities() {
         "expected the compile to fail on an array subject, got success; stderr={stderr}"
     );
     assert!(
-        stderr.contains("htmlentities string coercion"),
+        stderr.contains("htmlentities(): Argument #1 ($string) must be of type string, array given"),
         "coercion diagnostic must name htmlentities, got stderr={stderr}"
     );
 

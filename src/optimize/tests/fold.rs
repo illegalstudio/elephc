@@ -103,6 +103,7 @@ fn test_fold_string_concat_and_property_default() {
 
     let folded = fold_constants(vec![Stmt::new(
         StmtKind::ClassDecl {
+            generics: None,
             name: "Greeter".to_string(),
             extends: None,
             implements: Vec::new(),

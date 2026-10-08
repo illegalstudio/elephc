@@ -1,31 +1,33 @@
 ---
 title: "OPcache"
-description: "The observable Zend OPcache API emulated over elephc's compile-time script manifest."
+description: "The Zend OPcache API over compiled scripts and the runtime cache for dynamic include and require."
 sidebar:
   order: 20
 ---
 
-elephc is an ahead-of-time compiler. There is no opcode cache, no runtime
-compiler, and no shared-memory segment: the binary **is** the cache. Every PHP
-source file that ends up in the executable was compiled once, at build time, and
-stays resident for the life of the process.
+elephc compiles ordinary PHP source ahead of time. Its **script manifest** records
+the PHP files baked into the executable, which stay resident for the life of the
+process. Programs that reach the eval interpreter also have a
+[runtime script cache](#the-runtime-script-cache) for dynamic `include` and
+`require`: it stores parsed scripts in process memory and can persist them in an
+optional file cache. There is no shared-memory cache or tracing JIT.
 
-What elephc provides is an emulation of OPcache's *observable API* over that
-fact. The cache it reports is virtual and compile-time-known — the **script
-manifest**, the exact set of PHP files baked into this binary. Queries against
-it (`opcache_get_status()`, `opcache_is_script_cached()`,
-`opcache_compile_file()`) answer from the manifest; the configuration surface
-(`opcache_get_configuration()`, `ini_get()`, `ini_get_all()`) answers from a
-per-version directive matrix compiled into the binary.
+The observable OPcache API reports both tiers. `opcache_get_status()` combines
+the compiled manifest with live runtime entries and statistics;
+`opcache_is_script_cached()` checks both, and `opcache_compile_file()` can parse
+and cache a dynamic file without executing it. Programs with no interpreter tier
+report only their compiled manifest. The configuration surface
+(`opcache_get_configuration()`, `ini_get()`, `ini_get_all()`) uses a per-version
+directive matrix compiled into the binary.
 
 The `Zend OPcache` *extension* is always reported present, on every target.
 Only the *cache* has an enabled state, and it follows the SAPI exactly as
 reference PHP does.
 
-Each OPcache function is a real declared PHP function injected into the program
-only when it is referenced, so `function_exists('opcache_reset')` reports
-`true`, an unrelated program pays nothing, and a program that declares its own
-`opcache_reset()` keeps it.
+OPcache functions are real PHP declarations injected when referenced, or when
+configured dynamic eval needs the complete API. `function_exists('opcache_reset')`
+can therefore see the injected declaration, an unrelated program pays nothing,
+and a program that declares its own `opcache_reset()` keeps it.
 
 ## Enabled state
 
@@ -82,7 +84,7 @@ provided: `opcache_get_configuration`, `opcache_get_status`, `opcache_reset`,
 ### `opcache_get_configuration()`
 
 ```php
-opcache_get_configuration(): array
+opcache_get_configuration(): array|false
 ```
 
 Returns the compile-time configuration in both the enabled and the disabled
@@ -150,13 +152,16 @@ order:
 empty). `preload_statistics` is unaffected by that flag and still precedes
 `jit`, matching reference PHP.
 
-`num_cached_scripts` and `num_cached_keys` are the manifest size, plus one for the
-synthetic `$PRELOAD$` entry when [preloading](#opcachepreload) is configured.
+`num_cached_scripts` and `num_cached_keys` count the combined scripts map:
+manifest entries, runtime entries, and the synthetic `$PRELOAD$` entry when
+[preloading](#opcachepreload) is configured. A canonical path present in both
+tiers counts once.
 `max_cached_keys` is the first prime `>=` `opcache.max_accelerated_files` from
 php-src's own table (`223, 463, 983, 1979, 3907, 7963, 16229, 32531, 65407,
 130987, 262237, 524521, 1048793`), so the default `10000` reports `16229` and
 `--ini opcache.max_accelerated_files=1000` reports `1979`. Memory figures are
-synthetic but internally coherent: `free_memory = memory_consumption -
+synthetic for the manifest, with live runtime-cache usage added, and internally
+coherent: `free_memory = memory_consumption -
 used_memory - wasted_memory` with `wasted_memory = 0`, and
 `free_memory = buffer_size - used_memory` (with `used_memory` strictly below
 `buffer_size`, so `free_memory` is never zero or negative) for the
@@ -1419,13 +1424,13 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`opcache_compile_file()`](./builtins/misc/opcache_compile_file.md) | `(mixed $filename): bool` | `bool` | ✓ | - |
-| [`opcache_get_configuration()`](./builtins/misc/opcache_get_configuration.md) | `(): array` | `array` | ✓ | - |
-| [`opcache_get_status()`](./builtins/misc/opcache_get_status.md) | `(mixed $include_scripts = true): mixed` | `mixed` | ✓ | - |
-| [`opcache_invalidate()`](./builtins/misc/opcache_invalidate.md) | `(mixed $filename, mixed $force = false): bool` | `bool` | ✓ | - |
-| [`opcache_is_script_cached()`](./builtins/misc/opcache_is_script_cached.md) | `(mixed $filename): bool` | `bool` | ✓ | - |
-| [`opcache_is_script_cached_in_file_cache()`](./builtins/misc/opcache_is_script_cached_in_file_cache.md) | `(mixed $filename): bool` | `bool` | ✓ | - |
-| [`opcache_jit_blacklist()`](./builtins/misc/opcache_jit_blacklist.md) | `(mixed $closure): void` | `void` | ✓ | - |
-| [`opcache_reset()`](./builtins/misc/opcache_reset.md) | `(): bool` | `bool` | ✓ | - |
+| [`opcache_compile_file()`](./builtins/misc/opcache_compile_file.md) | `(mixed $filename): bool` | `bool` | ✓ | ✓ |
+| [`opcache_get_configuration()`](./builtins/misc/opcache_get_configuration.md) | `(): array|false` | `array|false` | ✓ | ✓ |
+| [`opcache_get_status()`](./builtins/misc/opcache_get_status.md) | `(mixed $include_scripts = true): mixed` | `mixed` | ✓ | ✓ |
+| [`opcache_invalidate()`](./builtins/misc/opcache_invalidate.md) | `(mixed $filename, mixed $force = false): bool` | `bool` | ✓ | ✓ |
+| [`opcache_is_script_cached()`](./builtins/misc/opcache_is_script_cached.md) | `(mixed $filename): bool` | `bool` | ✓ | ✓ |
+| [`opcache_is_script_cached_in_file_cache()`](./builtins/misc/opcache_is_script_cached_in_file_cache.md) | `(mixed $filename): bool` | `bool` | ✓ | ✓ |
+| [`opcache_jit_blacklist()`](./builtins/misc/opcache_jit_blacklist.md) | `(mixed $closure): void` | `void` | ✓ | ✓ |
+| [`opcache_reset()`](./builtins/misc/opcache_reset.md) | `(): bool` | `bool` | ✓ | ✓ |
 
 <!-- elephc:generated:symbols:end -->
