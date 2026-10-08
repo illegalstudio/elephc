@@ -10,9 +10,8 @@
 
 use crate::ir::{Immediate, Op, Ownership};
 
-/// Catch predicates retire their native-object adapter boxes before branching on every target.
-#[test]
-fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_on_all_targets() {
+/// Verifies catch adapter cleanup for one independently scheduled target compilation.
+fn assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes(name: &str) {
     let source = r#"<?php
 function inspectCatchPredicateOwners(string $source): void {
     try { eval($source); }
@@ -21,23 +20,51 @@ function inspectCatchPredicateOwners(string $source): void {
 }
 inspectCatchPredicateOwners('throw new RuntimeException("right"); // ' . $argc);
 "#;
-    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let target = crate::codegen::platform::Target::parse(name).unwrap();
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
-        );
-        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        let symbol = target.extern_symbol("__elephc_eval_object_is_a");
-        let mut probes = 0;
-        for path in asm.split(&format!("{symbol}\n")).skip(1) {
-            let restore = if name == "linux-x86_64" { "add rsp, 96" } else { "add sp, sp, #96" };
-            let cleanup = path.split_once(restore).expect("predicate scratch restoration").0;
-            assert!(cleanup.contains("retire temporary eval metadata operand box"), "{name}: {cleanup}");
-            assert!(cleanup.contains("__rt_decref_mixed"), "{name}: {cleanup}");
-            probes += 1;
-        }
-        assert!(probes >= 2, "{name}: both failed and matched catch predicates need coverage");
+    let target = crate::codegen::platform::Target::parse(name).unwrap();
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+    );
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let symbol = target.extern_symbol("__elephc_eval_object_is_a");
+    let mut probes = 0;
+    for path in asm.split(&format!("{symbol}\n")).skip(1) {
+        let restore = if name == "linux-x86_64" { "add rsp, 96" } else { "add sp, sp, #96" };
+        let cleanup = path.split_once(restore).expect("predicate scratch restoration").0;
+        assert!(cleanup.contains("retire temporary eval metadata operand box"), "{name}: {cleanup}");
+        assert!(cleanup.contains("__rt_decref_mixed"), "{name}: {cleanup}");
+        probes += 1;
     }
+    assert!(probes >= 2, "{name}: both failed and matched catch predicates need coverage");
+}
+
+/// Catch predicates retire native-object adapter boxes on macOS ARM64.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_macos_aarch64() {
+    assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("macos-aarch64");
+}
+
+/// Catch predicates retire native-object adapter boxes on iOS device ARM64.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_ios_arm64() {
+    assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("ios-arm64");
+}
+
+/// Catch predicates retire native-object adapter boxes on iOS Simulator ARM64.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_ios_sim_arm64() {
+    assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("ios-sim-arm64");
+}
+
+/// Catch predicates retire native-object adapter boxes on Linux ARM64.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_aarch64() {
+    assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("linux-aarch64");
+}
+
+/// Catch predicates retire native-object adapter boxes on Linux x86_64.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_x86_64() {
+    assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("linux-x86_64");
 }
 
 /// Every ABI publishes eval scope writes before propagating an exception, with bounded cleanup.
