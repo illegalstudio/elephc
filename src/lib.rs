@@ -114,6 +114,8 @@ pub mod tz_prelude;
 pub mod xml_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
+/// Conditionally-injected `http_build_query` prelude (elephc-PHP query-string builder).
+pub mod http_build_query_prelude;
 /// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,
 /// `ini_restore`).
 pub mod version_prelude;

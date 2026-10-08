@@ -2,7 +2,7 @@
 title: "xmlwriter_start_element()"
 description: "Starts an element."
 sidebar:
-  order: 1053
+  order: 1054
 ---
 
 ## xmlwriter_start_element()

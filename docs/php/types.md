@@ -507,6 +507,10 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   Catch `PDOException`, or after the `instanceof` check pass the exception to a parameter
   declared `PDOException`: through that receiver both `getCode()` and `$e->errorInfo[0]` give the
   SQLSTATE. See [PDO](./pdo.md#pdoexception-shape).
+- `http_build_query()` uses `&` when `$arg_separator` is `null`; it does not read the
+  `arg_separator.output` INI directive. Object data and object values contribute their public
+  properties only, even when the call is made inside the object's own class (PHP uses the calling
+  scope there).
 
 ### Filesystem functions not implemented
 

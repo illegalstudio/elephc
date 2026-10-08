@@ -376,6 +376,30 @@ return htmlspecialchars("'\"", ENT_QUOTES, "UTF-8");"#,
     );
     assert_eq!(values.get(result), FakeValue::String("&#039;&quot;".to_string()));
 }
+/// Verifies eval `http_build_query()` matches PHP for nesting, nulls, booleans, the raw numeric
+/// prefix, separators, RFC 3986 encoding, named and callable calls, and the `$data` TypeError.
+#[test]
+fn execute_program_dispatches_http_build_query() {
+    let program = parse_fragment(
+        br#"echo http_build_query(["a" => 1, "b" => "x y", "c" => null, "d" => true, "e" => false, "j" => [1, ["k" => "v~"]], 5 => "five"], "p_", ";"); echo ":";
+echo http_build_query(data: ["k y" => "~"], encoding_type: PHP_QUERY_RFC3986); echo ":";
+echo call_user_func("http_build_query", [3 => 4], "n"); echo ":";
+try { http_build_query(5); } catch (TypeError $e) { echo $e->getMessage(); } echo ":";
+return function_exists("http_build_query");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "a=1;b=x+y;d=1;e=0;j%5B0%5D=1;j%5B1%5D%5Bk%5D=v%7E;p_5=five:k%20y=~:n3=4:\
+http_build_query(): Argument #1 ($data) must be of type array, int given:"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval URL codec builtins dispatch through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_url_codec_builtins() {

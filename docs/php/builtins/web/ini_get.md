@@ -2,7 +2,7 @@
 title: "ini_get()"
 description: "Returns the value of a configuration directive."
 sidebar:
-  order: 977
+  order: 978
 ---
 
 ## ini_get()

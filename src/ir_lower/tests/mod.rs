@@ -135,6 +135,7 @@ fn try_lower_source_at_for_target(
     let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::http_build_query_prelude::inject_if_used(ast, &mut prelude_inventory);
     let (ast, _) = crate::opcache_prelude::inject_if_used(
         ast,
         crate::php_version::PhpVersion::default(),

@@ -2,7 +2,7 @@
 title: "mb_str_split() - internals"
 description: "Compiler internals for mb_str_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 873
+  order: 874
 ---
 
 ## `mb_str_split()` - internals

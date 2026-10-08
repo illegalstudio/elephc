@@ -284,6 +284,14 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("var-export-prelude", phase_started);
 
+    // Inject the http_build_query prelude (pure elephc-PHP functions over the URL encoders)
+    // only when the program references it and does not declare its own. Same placement
+    // rules as var_export: after include resolution, before name resolution.
+    crate::progress::phase("http-build-query-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::http_build_query_prelude::inject_if_used(ast, &mut prelude_inventory);
+    timings.record_since("http-build-query-prelude", phase_started);
+
     // Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
     // returns a compile-time array literal built from the version-keyed OPcache
     // directive matrix, and `opcache_reset()` returns the compile-time cache-enabled

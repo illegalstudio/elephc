@@ -298,6 +298,7 @@ routing and web transport verification remain open.
 | `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
 | `urldecode()` | `urldecode($str): string` | URL-decode |
 | `rawurlencode()` | `rawurlencode($str): string` | URL-encode (spaces as %20) |
+| `http_build_query()` | `http_build_query($data, $numeric_prefix = "", $arg_separator = null, $encoding_type = PHP_QUERY_RFC1738): string` | Build a URL-encoded query string from an array or object (nested keys as `a%5B0%5D`, `null` skipped, `PHP_QUERY_RFC3986` uses `%20`) |
 | `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
 | `base64_encode()` | `base64_encode($str): string` | Base64 encode |
 | `base64_decode()` | `base64_decode($string, $strict = false): string\|false` | Base64 decode. Whitespace inside the payload is skipped and missing padding is tolerated; the default (lax) mode also drops any other character outside the Base64 alphabet, while `$strict = true` returns `false` for such a character, for data after a padding character, for a truncated final group, and for an invalid amount of padding |

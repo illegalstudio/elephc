@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **982 / 2169** (45%), classes **142 / 329** (43%), constants **1114 / 3180** (35%).
+Overall coverage: functions **983 / 2169** (45%), classes **142 / 329** (43%), constants **1116 / 3180** (35%).
 
 ## Coverage by PHP module
 
@@ -70,7 +70,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 384 / 545 · 70% | 2 / 6 · 33% | 163 / 400 · 41% |
+| `standard` | 385 / 545 · 71% | 2 / 6 · 33% | 165 / 400 · 41% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
@@ -96,8 +96,8 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
 - `session` functions: 23 / 0
-- `standard` functions: 384 / 344
-- `standard` constants: 163 / 142
+- `standard` functions: 385 / 345
+- `standard` constants: 165 / 144
 - `zend opcache` functions: 8 / 0
 
 Most of that is one gap rather than several. 203 of those functions — every one missing from `exif`, `gd`, `mysqli`, `pdo`, `session`, `zend opcache` — are implemented by a PHP prelude the compiler injects into the program it is compiling. The interpreter dispatches through the shared builtin registry, and a prelude function has no registry binding there, so it is not that these surfaces were skipped one by one: none of them has an entry point `eval()` can reach. Closing it means an `eval_builtin!` binding per surface; see **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.

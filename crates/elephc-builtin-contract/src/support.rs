@@ -171,8 +171,14 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 }
 
 /// Prelude-provided surfaces outside `ext/curl` that Magician binds with its own eval homes.
-const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] =
-    &["hash_copy", "hash_final", "hash_init", "hash_update", "zend_version"];
+const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
+    "hash_copy",
+    "hash_final",
+    "hash_init",
+    "hash_update",
+    "http_build_query",
+    "zend_version",
+];
 
 /// Returns the documented execution route for an eval-supported contract.
 pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
@@ -371,8 +377,9 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // The shared INI helper is internal but participates in both runtime registries.
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
-        // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 682 + curl_surface);
+        // through forwarding homes (see `eval_support`); `http_build_query` is a prelude
+        // surface Magician binds with its own home.
+        assert_eq!(eval_registry, 683 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -399,8 +406,9 @@ mod tests {
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
         assert_eq!(aot_registry, 737);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
-        // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 409 + curl_surface);
+        // name-resolver rewrites remain outside the ordinary AOT registry
+        // (including the `http_build_query` prelude).
+        assert_eq!(aot_external, 410 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -447,7 +455,7 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 85);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 595 + curl_surface);
+        assert_eq!(interpreter_adapter, 596 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own.
         assert_eq!(unsupported, 464);

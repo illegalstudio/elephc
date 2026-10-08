@@ -525,6 +525,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'html_entity_decode': ['string'],
     'htmlentities': ['string', 'int', 'string'],
     'htmlspecialchars': ['string', 'int', 'string'],
+    'http_build_query': ['array|object', None, None, None],
     'hypot': ['float', 'float'],
     'implode': ['string', 'array'],
     'in_array': ['mixed', 'array', 'bool'],

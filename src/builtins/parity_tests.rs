@@ -57,6 +57,10 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             crate::list_id_prelude::list_id_declarations(),
         ),
         (
+            "http_build_query_prelude",
+            crate::http_build_query_prelude::http_build_query_declarations(),
+        ),
+        (
             "pdo_prelude",
             crate::pdo_prelude::build::pdo_declarations(
                 crate::php_version::PhpVersion::default(),

@@ -1081,6 +1081,10 @@ mod tests {
             ),
         );
         round_trip("list_id", &crate::list_id_prelude::list_id_declarations());
+        round_trip(
+            "http_build_query",
+            &crate::http_build_query_prelude::http_build_query_declarations(),
+        );
         for version in PhpVersion::ALL {
             round_trip(
                 "pdo",

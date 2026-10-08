@@ -381,6 +381,24 @@ fn test_error_urlencode_wrong_args() {
     expect_error("<?php urlencode();", "urlencode() takes exactly 1 argument");
 }
 
+/// Verifies `http_build_query()` (an injected prelude function) rejects a wrong argument count
+/// and a non-numeric string `$encoding_type` at compile time.
+#[test]
+fn test_error_http_build_query_wrong_args() {
+    expect_error(
+        "<?php echo http_build_query();",
+        "Function 'http_build_query' expects 1 to 4 arguments, got 0",
+    );
+    expect_error(
+        "<?php echo http_build_query([], '', '&', 1, 5);",
+        "Function 'http_build_query' expects 1 to 4 arguments, got 5",
+    );
+    expect_error(
+        "<?php echo http_build_query([], '', '&', 'x');",
+        "parameter $encoding_type expects Int, got Str",
+    );
+}
+
 /// Verifies that `base64_encode()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_base64_encode_wrong_args() {

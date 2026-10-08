@@ -21067,6 +21067,42 @@
       },
       "extension": false,
       "internal": false,
+      "module": "standard",
+      "name": "PHP_QUERY_RFC1738",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PHP_QUERY_RFC3986",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "core",
       "name": "PHP_RELEASE_VERSION",
       "route": "predefined",

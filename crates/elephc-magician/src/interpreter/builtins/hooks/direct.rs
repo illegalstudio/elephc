@@ -581,6 +581,7 @@ impl EvalDirectHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::UrlEncode => match name {
+                "http_build_query" => eval_builtin_http_build_query(args, context, scope, values),
                 "rawurlencode" => eval_builtin_rawurlencode(args, context, scope, values),
                 "urlencode" => eval_builtin_urlencode(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),

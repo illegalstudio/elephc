@@ -2,7 +2,7 @@
 title: "strtolower() - internals"
 description: "Compiler internals for strtolower(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 932
+  order: 933
 ---
 
 ## `strtolower()` - internals

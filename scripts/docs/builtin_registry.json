@@ -58674,6 +58674,155 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "numeric_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "arg_separator",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": {
+            "constant": "PHP_QUERY_RFC1738"
+          },
+          "name": "encoding_type",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "http_build_query",
+    "description": "Generates a URL-encoded query string from an array or object.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/http_build_query.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\"",
+          "name": "numeric_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "arg_separator",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "1",
+          "name": "encoding_type",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/http_build_query_prelude.rs",
+      "codegen_function": "http_build_query",
+      "codegen_line": 221,
+      "notes": [
+        "Implemented by the compiler-injected http_build_query prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "http_build_query",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "array|object"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "numeric_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "arg_separator",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "PHP_QUERY_RFC1738",
+          "name": "encoding_type",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "http_build_query",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {

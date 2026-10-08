@@ -2,7 +2,7 @@
 title: "parse_url() - internals"
 description: "Compiler internals for parse_url(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 901
+  order: 902
 ---
 
 ## `parse_url()` - internals

@@ -601,6 +601,18 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
 }
 
 
+# Prelude-provided builtins whose prelude is not the one their contract area maps to in
+# PRELUDE_SOURCES. `http_build_query` is `Area::String` like the hash_* contracts, but its
+# own prelude declares it and its contract lives in catalog_data.rs.
+PRELUDE_NAME_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "http_build_query": (
+        "http_build_query_prelude.rs",
+        "http_build_query",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+}
+
+
 def find_prelude_declaration(source: str, canonical: str):
     """Locate where an injected prelude declares ``canonical``, in either prelude form.
 
@@ -656,7 +668,7 @@ def resolve_non_registry_lowering(
     kind = aot_support.get("kind")
     if kind == "prelude":
         try:
-            source, label, sig_file = PRELUDE_SOURCES[area]
+            source, label, sig_file = PRELUDE_NAME_SOURCES.get(canonical) or PRELUDE_SOURCES[area]
         except KeyError:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "

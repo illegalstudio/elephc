@@ -144,6 +144,7 @@ pub(crate) fn phase_label(name: &str) -> &str {
         "tz-prelude" => "Configuring timezone support",
         "list-id-prelude" => "Loading timezone identifiers",
         "var-export-prelude" => "Configuring var_export()",
+        "http-build-query-prelude" => "Configuring http_build_query()",
         "opcache-prelude" => "Configuring OPcache",
         "image-prelude" => "Configuring image support",
         "hash-prelude" => "Configuring hash support",

@@ -821,6 +821,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`html_entity_decode()`](./builtins/string/html_entity_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`htmlentities()`](./builtins/string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
 | [`htmlspecialchars()`](./builtins/string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
+| [`http_build_query()`](./builtins/string/http_build_query.md) | `(array|object $data, string $numeric_prefix = '', ?string $arg_separator = null, int $encoding_type = PHP_QUERY_RFC1738): string` | `string` | ✓ | ✓ |
 | [`iconv()`](./builtins/string/iconv.md) | `(string $from_encoding, string $to_encoding, string $string): mixed` | `mixed` | ✓ | ✓ |
 | [`iconv_get_encoding()`](./builtins/string/iconv_get_encoding.md) | `(string $type = 'all'): mixed` | `mixed` | ✓ | ✓ |
 | [`iconv_mime_decode()`](./builtins/string/iconv_mime_decode.md) | `(string $string, int $mode = 0, ?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |

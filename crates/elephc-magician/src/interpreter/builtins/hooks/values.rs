@@ -798,6 +798,9 @@ impl EvalValuesHook {
                 "urldecode" => eval_urldecode_result(value, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             }),
+            Self::UrlEncode if name == "http_build_query" => {
+                eval_http_build_query_result(evaluated_args, context, values)
+            }
             Self::UrlEncode => one_arg(evaluated_args, values, |value, values| match name {
                 "rawurlencode" => eval_rawurlencode_result(value, values),
                 "urlencode" => eval_urlencode_result(value, values),

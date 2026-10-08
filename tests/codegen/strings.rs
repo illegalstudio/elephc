@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for search, transform, encoding, iconv, formatting, interpolation and hashes, and related suites.
+//! - Submodules group focused fixtures for search, transform, encoding, `http_build_query()`, iconv, formatting, interpolation and hashes, and related suites.
 
 use crate::support::*;
 
@@ -50,6 +50,8 @@ mod misc;
 mod openssl;
 #[path = "strings/parse_url.rs"]
 mod parse_url;
+#[path = "strings/http_build_query.rs"]
+mod http_build_query;
 #[path = "strings/offset_warnings.rs"]
 mod offset_warnings;
 
