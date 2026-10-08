@@ -79,10 +79,18 @@ fn lower_interface_adapter(
         &module.class_infos, &module.enum_infos, &module.interface_infos,
         &module.declared_trait_names, &module.declared_trait_methods,
         &module.declared_trait_properties, &module.packed_class_infos,
-        &Default::default(), &Default::default(), &Default::default(),
-        &Default::default(), &Default::default(), &Default::default(),
-        &Default::default(), &Default::default(), &Default::default(),
-        &Default::default(), name.to_string(), &module.global_constants,
+        &Default::default(), // throw access sites
+        &Default::default(), // builtin call types
+        &Default::default(), // boxed reference promotions
+        &Default::default(), // first-class builtin call types
+        &Default::default(), // synthesized calls have no written generic arguments
+        &Default::default(), // loop storage types
+        &Default::default(), // string increment/decrement locals
+        &Default::default(), // killed binding sites
+        &Default::default(), // detached reference sites
+        &Default::default(), // retyped binding sites
+        &Default::default(), // mixed storage store sites
+        name.to_string(), &module.global_constants,
         Some(owner.to_string()), return_type, signature.declared_return,
         &signature.params, None, false, Default::default(), None,
         module.source_path.clone(), None, module.web,

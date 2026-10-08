@@ -18,6 +18,7 @@ fn test_program_function_effects_track_closure_alias_locals() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -88,6 +89,7 @@ fn test_program_function_effects_track_callable_alias_through_ternary() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: vec![("flag".to_string(), None, None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -151,6 +153,7 @@ fn test_program_function_effects_track_callable_alias_through_match() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: vec![("flag".to_string(), None, None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -217,6 +220,7 @@ fn test_program_function_effects_track_callable_alias_through_null_coalesce() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -279,6 +283,7 @@ fn test_program_function_effects_track_callable_alias_locals() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

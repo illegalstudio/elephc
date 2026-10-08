@@ -37,6 +37,11 @@ pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType) -> PhpType
         // PHP normalizes a null array key to the empty string "", so it is a
         // string key (never an integer key), and forces associative storage.
         ExprKind::Null => PhpType::Str,
+        // `int|float` is the arithmetic union a `$i++` counter carries, and php casts either
+        // member to the same integer key, so it normalizes exactly like `Int` does. Leaving it
+        // whole reached the key merge as a foreign type and widened the whole array's key to
+        // `Mixed`, which no `array_keys` lowering accepts.
+        _ if raw_ty.is_int_float_union() => PhpType::Int,
         _ => match raw_ty {
             PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float => PhpType::Int,
             PhpType::Str => PhpType::Mixed,
@@ -159,4 +164,31 @@ pub(crate) fn parse_php_string_offset_literal(value: &str) -> Option<i64> {
         return None;
     }
     trimmed.parse::<i64>().ok()
+}
+
+/// Returns true if a write through this key leaves packed storage's contiguity unproven.
+///
+/// Packed (indexed) storage has no keys: slot `n` IS key `n`, so a write past the logical
+/// end must zero-fill every slot in between. That is only PHP's answer when the gap is
+/// zero, because php promotes a packed array to a hash the moment an integer key skips:
+///
+/// ```php
+/// $rows = [];
+/// foreach ([101, 102, 205] as $id) { $rows[$id] = "row$id"; }
+/// echo count($rows);   // php: 3
+/// ```
+///
+/// A literal key is decided exactly by `static_array_key_forces_hash_storage`. Anything
+/// else — a variable, a call, an arithmetic expression, a constant — is a value this pass
+/// cannot bound against the array's length, so the array takes hash storage, where a gap
+/// costs nothing and `count()` answers 3.
+pub(crate) fn array_key_contiguity_is_unproven(expr: &Expr) -> bool {
+    !matches!(
+        &expr.kind,
+        ExprKind::IntLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::Null
+    )
 }

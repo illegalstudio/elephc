@@ -33,6 +33,7 @@ fn optimized_foreach_body(value_by_ref: bool) -> Vec<Stmt> {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "run".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -89,6 +90,7 @@ fn optimized_post_foreach_guard_body() -> Vec<Stmt> {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "run".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

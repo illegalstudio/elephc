@@ -56,6 +56,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
     let span = crate::span::Span::dummy();
     let null_default = || Some(Expr::new(ExprKind::Null, span));
     let is_state_predicate = |name: &str| ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -77,6 +78,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
     vec![
         // __construct(callable $callback): void
         ClassMethod {
+            type_params: Vec::new(),
             name: "__construct".to_string(),
             visibility: Visibility::Public,
             is_static: false,
@@ -99,6 +101,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
         // the generated Fiber entry wrapper adapts those cells to the callback
         // ABI and keeps `use(...)` captures in reserved Fiber slots.
         ClassMethod {
+            type_params: Vec::new(),
             name: "start".to_string(),
             visibility: Visibility::Public,
             is_static: false,
@@ -118,6 +121,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
         },
         // resume(?$value = null): mixed
         ClassMethod {
+            type_params: Vec::new(),
             name: "resume".to_string(),
             visibility: Visibility::Public,
             is_static: false,
@@ -137,6 +141,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
         },
         // throw(Throwable $exception): mixed
         ClassMethod {
+            type_params: Vec::new(),
             name: "throw".to_string(),
             visibility: Visibility::Public,
             is_static: false,
@@ -156,6 +161,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
         },
         // getReturn(): mixed
         ClassMethod {
+            type_params: Vec::new(),
             name: "getReturn".to_string(),
             visibility: Visibility::Public,
             is_static: false,
@@ -180,6 +186,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
         is_state_predicate("isTerminated"),
         // static suspend($value = null): mixed
         ClassMethod {
+            type_params: Vec::new(),
             name: "suspend".to_string(),
             visibility: Visibility::Public,
             is_static: true,
@@ -199,6 +206,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
         },
         // static getCurrent(): ?Fiber
         ClassMethod {
+            type_params: Vec::new(),
             name: "getCurrent".to_string(),
             visibility: Visibility::Public,
             is_static: true,

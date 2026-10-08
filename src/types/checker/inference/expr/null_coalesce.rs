@@ -181,6 +181,9 @@ fn static_call_declares_non_null_return(
             .as_ref()
             .and_then(|current| checker.classes.get(current))
             .and_then(|class_info| class_info.parent.clone()),
+        // `generics::classes` rewrites every generic receiver before the checker runs; should one
+        // survive, "may return null" is the answer that cannot fold anything away wrongly.
+        StaticReceiver::Generic(_) => None,
     };
     let Some(class_name) = class_name else {
         return false;

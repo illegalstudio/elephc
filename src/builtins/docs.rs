@@ -201,6 +201,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::OpensslEncrypt => "openssl_encrypt",
         BuiltinArgumentLowering::ArraySplice => "array_splice",
         BuiltinArgumentLowering::XmlHandlerSetter => "xml_handler_setter",
+        BuiltinArgumentLowering::BareArrayValues { .. } => "bare_array_values",
         BuiltinArgumentLowering::ArrayInternalPointer(_) => "array_internal_pointer",
     };
     let callable = match semantics.callable {

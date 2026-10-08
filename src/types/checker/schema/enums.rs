@@ -443,6 +443,11 @@ pub(crate) fn insert_enum_metadata(
     let mut method_attribute_names = HashMap::new();
     let mut method_attribute_args = HashMap::new();
     for method in user_methods {
+        // A generic method is a template with no signature of its own, exactly as on a class
+        // (`schema::classes::methods`): its instantiations are ordinary methods of this enum.
+        if !method.type_params.is_empty() {
+            continue;
+        }
         // Clone + rewrite self/static on this enum method (enums have no parent).
         // Must happen before build_method_sig because bare "self" is rejected later.
         let mut method = method.clone();

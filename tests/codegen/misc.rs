@@ -421,6 +421,7 @@ fn bug0_cli_read_of_server_superglobal_before_assignment_does_not_crash() {
 /// has made. What `unset` must not do is add to it.
 #[test]
 fn unsetting_a_filled_superglobal_abandons_nothing_extra() {
+    /// Reads the runtime live-block counter from the workload diagnostics.
     fn live_blocks(stderr: &str) -> i64 {
         stderr
             .lines()

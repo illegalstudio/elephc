@@ -335,6 +335,7 @@ if ($__micro < 0) {
 $__ts = $__ts + $__carry;
 "#;
 
+/// Builds DateTime modification with microsecond carry and mutable or immutable result semantics.
 pub(super) fn make_modify(mutable: bool, class_name: &str) -> ClassMethod {
     // Parsed-PHP preamble (parsing lives in static helpers to keep this frame
     // small): pull any `<±N> microsecond[s]|usec[s]` clauses out of the modifier,

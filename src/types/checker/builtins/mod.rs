@@ -292,6 +292,7 @@ impl Checker {
                 for arg in args {
                     arg_types.push(self.infer_type(arg, env)?);
                 }
+                reject_array_at_string_param(name, &def.params, def.variadic.is_some(), args, &arg_types)?;
                 let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
                     name: &builtin_key,
                     args,
@@ -366,4 +367,57 @@ impl Checker {
         }
         Ok(None)
     }
+}
+
+/// Refuses a statically-known ARRAY at a builtin parameter declared `string`.
+///
+/// A builtin with no checker hook is validated for arity only, and its arguments then meet their
+/// parameters in the IR, where `string <- mixed` is a runtime cast. A bare `array` declaration is
+/// `array<mixed>|array<mixed, mixed>`, whose codegen form is `mixed`, so it took that cast and
+/// became the string "Array": `str_replace($a, "z", "xyx")` returned `xyx`, searching for "Array",
+/// silently. php throws `TypeError` for an array at a string parameter, and a typed `array<int>` was
+/// already refused further down; this gives the bare declaration the same answer, at compile time,
+/// in php's own words.
+///
+/// Some of these builtins accept `array|string` in php-src (`str_replace`, `substr_replace`,
+/// `preg_replace`) where elephc's contract narrows the parameter to `string`. For those this is the
+/// honest refusal of a form elephc does not implement, instead of a wrong answer.
+fn reject_array_at_string_param(
+    name: &str,
+    params: &[(String, PhpType)],
+    variadic: bool,
+    args: &[Expr],
+    arg_types: &[PhpType],
+) -> Result<(), CompileError> {
+    let fixed = if variadic { params.len().saturating_sub(1) } else { params.len() };
+    for (index, (arg, ty)) in args.iter().zip(arg_types).enumerate() {
+        // A named argument reaches the same parameter by name, and php numbers it by that
+        // parameter's position; a spread's targets are unknown until it is unpacked.
+        let index = match &arg.kind {
+            ExprKind::Spread(_) => return Ok(()),
+            ExprKind::NamedArg { name: written, .. } => {
+                match params[..fixed].iter().position(|(param, _)| param == written) {
+                    Some(position) => position,
+                    None => continue,
+                }
+            }
+            _ if index >= fixed => break,
+            _ => index,
+        };
+        let (param, param_ty) = &params[index];
+        let is_array = ty.is_php_array()
+            || matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. });
+        if *param_ty == PhpType::Str && is_array {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{}(): Argument #{} (${}) must be of type string, array given",
+                    name,
+                    index + 1,
+                    param
+                ),
+            ));
+        }
+    }
+    Ok(())
 }

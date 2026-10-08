@@ -21,6 +21,7 @@ fn function_with_params(name: &str, params: Vec<(&str, bool)>) -> Stmt {
     Stmt::new(
         StmtKind::FunctionDecl {
             name: name.to_string(),
+            type_params: Vec::new(),
             params: params
                 .into_iter()
                 .map(|(param, is_ref)| (param.to_string(), None, None, is_ref))
@@ -40,6 +41,7 @@ fn function_with_params(name: &str, params: Vec<(&str, bool)>) -> Stmt {
 /// Builds a public non-static method with the given `(name, is_ref)` params.
 fn method_with_params(name: &str, params: Vec<(&str, bool)>) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -66,6 +68,7 @@ fn method_with_params(name: &str, params: Vec<(&str, bool)>) -> ClassMethod {
 fn class_with(name: &str, methods: Vec<ClassMethod>, properties: Vec<ClassProperty>) -> Stmt {
     Stmt::new(
         StmtKind::ClassDecl {
+            generics: None,
             name: name.to_string(),
             extends: None,
             implements: Vec::new(),
@@ -151,6 +154,7 @@ fn test_method_by_ref_params_union_across_declarations() {
         Stmt::new(
             StmtKind::TraitDecl {
                 name: "T".to_string(),
+                generics: None,
                 trait_uses: Vec::new(),
                 properties: Vec::new(),
                 methods: vec![method_with_params("m", vec![("x", false), ("y", true)])],

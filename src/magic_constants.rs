@@ -24,7 +24,7 @@
 mod file_pass;
 mod scope_pass;
 mod trait_binding;
-mod walker;
+pub(crate) mod walker;
 
 use std::path::Path;
 

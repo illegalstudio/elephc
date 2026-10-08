@@ -18,8 +18,14 @@ use crate::types::PhpType;
 builtin! {
     contract: "min",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Min,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(
+            crate::ir::RuntimeFnId::Min,
+        ),
+        crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues {
+            arg: 0,
+            sole: true,
+        },
     ),
 }
 

@@ -871,6 +871,7 @@ var_dump(opcache_jit_blacklist(function () {}));
 }
 
 #[test]
+/// Verifies the file-cache query and JIT-blacklist OPcache declarations expose reference-shaped results.
 fn the_two_missing_functions_exist_and_match_reference() {
     let dir = make_test_dir("opcache_new_fns");
     fs::write(

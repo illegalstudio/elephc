@@ -1214,7 +1214,16 @@ fn resolve_exception_receiver(
     receiver: &crate::parser::ast::StaticReceiver,
     class_context: Option<&ExceptionClassContext>,
 ) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        crate::parser::ast::StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         crate::parser::ast::StaticReceiver::Named(name) => Some(name.as_str().to_string()),
         crate::parser::ast::StaticReceiver::Self_ => {
             class_context.map(|context| context.class_name.clone())
