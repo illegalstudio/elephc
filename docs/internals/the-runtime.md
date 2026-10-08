@@ -159,7 +159,14 @@ Converts a signed 64-bit integer in `x0` to a decimal string.
 
 The digits are written **right-to-left** because division gives us the least significant digit first. The result is written into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad).
 
-### `__rt_resource_to_string` — Resource to string
+`__rt_itoa_into` formats the same signed integer directly into a caller-owned
+21-byte window, returning its right-aligned pointer/length slice without changing
+`_concat_buf` or `_concat_off`. AArch64 takes the integer in `x0` and destination
+in `x1`, returning pointer/length in `x0`/`x1`; x86_64 takes `rdi`/`rsi` and
+returns `rax`/`rdx`. `implode()` uses this path after reserving its destination so
+integer formatting cannot overwrite its live scratch-buffer output.
+
+### `__rt_resource_to_string` - Resource to string
 
 **File:** `strings/resource_to_string.rs`
 
@@ -182,6 +189,12 @@ applying the two fixups where C's `%G` differs from `zend_gcvt`: exponential for
 keeps a mantissa fraction (`1.0E+300`, not `1E+300`) and the exponent is written without
 zero padding (`1.0E-7`, not `1E-07`). `NAN` is emitted unsigned, since glibc renders a
 negative quiet NaN as `-NAN` and PHP never does. `INF` / `-INF` pass through unchanged.
+
+`__rt_ftoa_into` uses the same formatter with a caller-provided destination
+(`x1` on AArch64, `rsi` on x86_64), preserving the shared concat cursor. It returns
+the usual string pointer/length pair. Both entry points branch to
+`__rt_ftoa_body`, a global shared body whose symbol keeps it reachable when
+Mach-O dead stripping separates the two entry points into distinct atoms.
 
 **Input:** `d0` = float value
 **Output:** `x1` = pointer to string, `x2` = length

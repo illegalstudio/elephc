@@ -378,6 +378,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -390,6 +391,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                 StmtKind::FunctionDecl {
                     by_ref_return,
                     name,
+                    type_params,
                     params: propagate_params(params),
                     param_attributes,
                     variadic,
@@ -450,6 +452,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             )
         }
         StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -463,6 +466,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         } => (
             Stmt::new(
                 StmtKind::ClassDecl {
+                    generics,
                     name,
                     extends,
                     implements,
@@ -480,6 +484,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         ),
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -490,6 +495,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             Stmt::new(
                 StmtKind::EnumDecl {
                     name,
+                    generics,
                     backing_type,
                     implements,
                     trait_uses,
@@ -505,6 +511,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             (Stmt::new(StmtKind::PackedClassDecl { name, fields }, span), env)
         }
         StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties,
@@ -513,6 +520,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         } => (
             Stmt::new(
                 StmtKind::InterfaceDecl {
+                    generics,
                     name,
                     extends,
                     properties: properties.into_iter().map(propagate_property).collect(),
@@ -525,6 +533,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         ),
         StmtKind::TraitDecl {
             name,
+            generics,
             trait_uses,
             properties,
             methods,
@@ -533,6 +542,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             Stmt::new(
                 StmtKind::TraitDecl {
                     name,
+                    generics,
                     trait_uses,
                     properties: properties.into_iter().map(propagate_property).collect(),
                     methods: methods.into_iter().map(propagate_method).collect(),

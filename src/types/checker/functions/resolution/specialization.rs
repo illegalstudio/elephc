@@ -104,8 +104,10 @@ impl Checker {
                 )
             })?;
             if sig != first_sig {
+                let conflict_span = self.fn_decls.get(variant)
+                    .map_or(crate::span::Span::dummy(), |decl| decl.span);
                 return Err(CompileError::new(
-                    crate::span::Span::dummy(),
+                    conflict_span,
                     &format!(
                         "Function variants for '{}' must have identical signatures",
                         name

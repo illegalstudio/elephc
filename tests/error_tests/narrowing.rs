@@ -24,7 +24,7 @@ fn test_guarded_union_assignment_preserves_declared_boundaries() {
 fn test_literal_false_parameter_rejects_true() {
     expect_error(
         "<?php function onlyFalse(false $value): void {} onlyFalse(true);",
-        "expects False, got Bool",
+        "Function 'onlyFalse' parameter $value expects false, got bool",
     );
 }
 
@@ -34,7 +34,7 @@ fn test_literal_false_parameter_rejects_true() {
 fn test_strict_false_guard_keeps_full_bool_member() {
     expect_error(
         "<?php function requireInt(int|bool $value): int { if ($value === false) { throw new Exception('false'); } return $value; }",
-        "got Union([Int, Bool])",
+        "Function 'requireInt' return type expects int, got int|bool",
     );
 }
 
@@ -43,7 +43,7 @@ fn test_strict_false_guard_keeps_full_bool_member() {
 fn test_property_write_invalidates_narrowing() {
     expect_error(
         "<?php class W {} class Box { public function __construct(public ?W $value) {} } function read(Box $box): W { if (!$box->value instanceof W) { throw new Exception('missing'); } $box->value = null; return $box->value; }",
-        "return type expects Object(\"W\"), got Union",
+        "Function 'read' return type expects W, got W|null",
     );
 }
 
@@ -52,7 +52,7 @@ fn test_property_write_invalidates_narrowing() {
 fn test_property_receiver_rebinding_invalidates_narrowing() {
     expect_error(
         "<?php class W {} class Box { public function __construct(public ?W $value) {} } function read(Box $box, Box $replacement): W { if (!$box->value instanceof W) { throw new Exception('missing'); } $box = $replacement; return $box->value; }",
-        "return type expects Object(\"W\"), got Union",
+        "Function 'read' return type expects W, got W|null",
     );
 }
 
@@ -61,7 +61,7 @@ fn test_property_receiver_rebinding_invalidates_narrowing() {
 fn test_property_get_hook_is_not_persistently_narrowed() {
     expect_error(
         "<?php class W {} class Box { private ?W $stored; public function __construct(?W $stored) { $this->stored = $stored; } public ?W $value { get { $result = $this->stored; $this->stored = null; return $result; } } } function read(Box $box): W { if (!$box->value instanceof W) { throw new Exception('missing'); } return $box->value; }",
-        "return type expects Object(\"W\"), got Union",
+        "Function 'read' return type expects W, got W|null",
     );
 }
 
@@ -70,7 +70,7 @@ fn test_property_get_hook_is_not_persistently_narrowed() {
 fn test_magic_get_property_is_not_persistently_narrowed() {
     expect_error(
         "<?php class W {} class Box { private ?W $stored; public function __construct(?W $stored) { $this->stored = $stored; } public function __get(string $name): ?W { $result = $this->stored; $this->stored = null; return $result; } } function read(Box $box): W { if (!$box->value instanceof W) { throw new Exception('missing'); } return $box->value; }",
-        "return type expects Object(\"W\"), got Union",
+        "Function 'read' return type expects W, got W|null",
     );
 }
 
@@ -129,7 +129,7 @@ class S {
     }
 }
 "#,
-        "return type expects Object(\"S\")",
+        "Method 'S::get' return type expects S, got S|null",
     );
 }
 
@@ -148,7 +148,7 @@ class A {
     }
 }
 "#,
-        "return type expects Object(\"A\")",
+        "Method 'A::f' return type expects A, got A|null",
     );
 }
 
@@ -162,7 +162,7 @@ class S {
     public static function get(): S { return self::$inst; }
 }
 "#,
-        "return type expects Object(\"S\")",
+        "Method 'S::get' return type expects S, got S|null",
     );
 }
 
@@ -180,7 +180,7 @@ class S {
     }
 }
 "#,
-        "return type expects Object(\"S\")",
+        "Method 'S::get' return type expects S, got S|null",
     );
 }
 

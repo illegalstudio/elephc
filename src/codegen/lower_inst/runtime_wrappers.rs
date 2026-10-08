@@ -36,11 +36,13 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         }
     });
     let Some(operation) = operation else {
-        return emit_runtime_callable_invoker_inline(ctx, sig, &[]);
+        // A transform that persists its result (`strtoupper`) must not be copied again here.
+        let owns_string_return = sig.return_type.codegen_repr() == PhpType::Str
+            && super::builtin_returns_owned_string(name);
+        return emit_runtime_callable_invoker_with_string_owner(ctx, sig, &[], owns_string_return, false);
     };
     if operation == elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables {
         let label = ctx.next_global_label("callable_invoker");
-        let done_label = ctx.next_label("callable_invoker_done");
         let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
             ctx.module, None, sig,
         );
@@ -54,17 +56,16 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
             php_return_status: false,
             defaults: &defaults,
         };
-        let enclosing = ctx.emitter.current_text_section();
-        abi::emit_jump(ctx.emitter, &done_label);
+        // Out of line, not spliced into the function that first needed it: see
+        // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+        let scope = ctx.emitter.begin_out_of_line();
         super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
             ctx.emitter, ctx.data, &invoker,
         );
-        ctx.emitter.reopen_text_section(enclosing);
-        ctx.emitter.label(&done_label);
+        ctx.emitter.end_out_of_line(scope);
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
-    let done_label = ctx.next_label("callable_invoker_done");
     let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
         ctx.module, None, sig,
     );
@@ -78,13 +79,13 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         php_return_status: false,
         defaults: &defaults,
     };
-    let enclosing = ctx.emitter.current_text_section();
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Out of line, not spliced into the function that first needed it: see
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
     super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
         ctx.emitter, ctx.data, &invoker,
     );
-    ctx.emitter.reopen_text_section(enclosing);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     label
 }
 
@@ -125,7 +126,6 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
-    let done_label = ctx.next_label("callable_invoker_done");
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
         label: &label,
         sig,
@@ -136,13 +136,11 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         php_return_status,
         defaults: &defaults,
     };
-    // The thunk's global entry opens its own `.text` section on ELF; put the
-    // enclosing function back before continuing it, or its tail lands in there.
-    let enclosing = ctx.emitter.current_text_section();
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Out of line, not spliced into the function that first needed it: see
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
     super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
-    ctx.emitter.reopen_text_section(enclosing);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     ctx.shared
         .cache_runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults, &label);
     label
@@ -213,7 +211,6 @@ fn emit_runtime_call_wrapper_inline(
         RuntimeCallWrapperKind::Extern => "callable_extern",
     };
     let label = ctx.next_global_label(label_prefix);
-    let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     // Reserve the label before lowering the synthetic body. A callable-taking builtin
     // can itself require the open runtime callable table while its wrapper is being
     // emitted. Publishing the reservation here makes that recursion reuse this entry
@@ -230,9 +227,10 @@ fn emit_runtime_call_wrapper_inline(
     let mut wrapper_module = ctx.module.clone();
     let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
     ctx.shared.record_generated_runtime_features(&wrapper);
-    let enclosing = ctx.emitter.current_text_section();
-    abi::emit_jump(ctx.emitter, &done_label);
-    super::super::block_emit::emit_synthetic_function_with_label(
+    // Out of line, not spliced into the function that first needed it: see
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
+    let emitted = super::super::block_emit::emit_synthetic_function_with_label(
         &wrapper_module,
         &wrapper,
         &label,
@@ -240,9 +238,11 @@ fn emit_runtime_call_wrapper_inline(
         ctx.data,
         ctx.shared,
         false,
-    )?;
-    ctx.emitter.reopen_text_section(enclosing);
-    ctx.emitter.label(&done_label);
+    );
+    // Closed on the error path too: the scope holds the caller's text, and returning early with
+    // it would drop everything the caller had emitted so far.
+    ctx.emitter.end_out_of_line(scope);
+    emitted?;
     Ok(label)
 }
 

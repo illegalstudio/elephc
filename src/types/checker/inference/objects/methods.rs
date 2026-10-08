@@ -517,6 +517,12 @@ impl Checker {
                 }
                 magic_return_ty = Some(effective_sig.return_type.clone());
                 magic_original_args = Some(args.to_vec());
+            } else if let Some(return_ty) =
+                self.infer_generic_method_call(class_name, method, args, expr, env)?
+            {
+                // A generic method has no signature, so every lookup above has already missed.
+                // It is resolved here, one round before its instantiation exists.
+                return Ok(return_ty);
             } else {
                 return Err(CompileError::new(
                     expr.span,
@@ -569,7 +575,7 @@ impl Checker {
                             &impl_class_name,
                             &method_key,
                         )
-                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
                         // Sharpen a declared generic `array` parameter to the call-site array
@@ -865,9 +871,28 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
+        // `Box::of(5)` on a generic class, BEFORE the receiver is resolved against the class
+        // table: a template is stripped from the program, so the table has no entry for it and
+        // the ordinary path reports it as an undefined class.
+        if let StaticReceiver::Named(class_name) = receiver {
+            if let Some(inferred) =
+                self.infer_generic_static_call(class_name.as_str(), method, args, expr, env)?
+            {
+                return Ok(inferred);
+            }
+        }
         let parent_call = matches!(receiver, StaticReceiver::Parent);
         let self_call = matches!(receiver, StaticReceiver::Self_);
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         let resolved_class_name = match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
             StaticReceiver::Self_ => self.current_class.as_ref().cloned().ok_or_else(|| {
                 CompileError::new(expr.span, "Cannot use self:: outside class method scope")
@@ -901,6 +926,13 @@ impl Checker {
             return Ok(PhpType::Callable);
         }
         if let Some(enum_info) = self.enums.get(class_name).cloned() {
+            let has_signature = self.classes.get(class_name)
+                .is_some_and(|info| info.static_methods.contains_key(&php_symbol_key(method)));
+            if !has_signature {
+                if let Some(return_ty) = self.infer_generic_method_call(class_name, method, args, expr, env)? {
+                    return Ok(return_ty);
+                }
+            }
             return self
                 .check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
         }
@@ -1135,6 +1167,16 @@ impl Checker {
                 magic_return_ty = Some(effective_sig.return_type.clone());
                 magic_original_args = Some(args.to_vec());
             } else {
+                // A generic method called STATICALLY (`C::id(42)`). The generic-class attempt at
+                // the top of this function answers for `Box<int>::of()`, where the CLASS carries
+                // the type parameters; a method's own parameters are a different template, and it
+                // is not in the class table either — so like the instance form, every ordinary
+                // lookup has already missed by the time this runs.
+                if let Some(inferred) =
+                    self.infer_generic_method_call(class_name, method, args, expr, env)?
+                {
+                    return Ok(inferred);
+                }
                 return Err(CompileError::new(
                     expr.span,
                     &format!("Undefined method: {}::{}", class_name, method),
@@ -1203,7 +1245,7 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && static_declared_flags.get(i).copied().unwrap_or(false)
-                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
                         // Sharpen a declared generic `array` parameter to the call-site array
@@ -1286,7 +1328,7 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && instance_declared_flags.get(i).copied().unwrap_or(false)
-                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
                         // Sharpen a declared generic `array` parameter to the call-site array

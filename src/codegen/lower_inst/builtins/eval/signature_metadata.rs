@@ -160,6 +160,9 @@ pub(super) fn eval_native_callable_return_type_spec(signature: &FunctionSig) -> 
 /// Formats one parsed PHP type expression for eval native metadata registration.
 pub(super) fn eval_native_type_expr_spec(type_expr: &TypeExpr) -> Option<String> {
     match type_expr {
+        // `eval` sees the runtime shape, and that is a bare callable: a declared signature is
+        // checked ahead of time and leaves nothing for a runtime fragment to verify.
+        TypeExpr::CallableSig { .. } => Some("callable".to_string()),
         TypeExpr::Int => Some("int".to_string()),
         TypeExpr::Float => Some("float".to_string()),
         TypeExpr::Bool => Some("bool".to_string()),
@@ -168,9 +171,15 @@ pub(super) fn eval_native_type_expr_spec(type_expr: &TypeExpr) -> Option<String>
         TypeExpr::Void => Some("null".to_string()),
         TypeExpr::Never => None,
         TypeExpr::Iterable => Some("iterable".to_string()),
-        TypeExpr::Array(_) => Some("array".to_string()),
+        // Both array forms report the PHP-visible name. A type argument is an elephc
+        // extension with no PHP reflection equivalent, so `array<string, Foo>` is `array`
+        // here, exactly as `array<int>` is.
+        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => Some("array".to_string()),
         TypeExpr::Ptr(_) | TypeExpr::Buffer(_) => None,
         TypeExpr::Named(name) => Some(name.as_str().to_string()),
+        // The instantiated class is an ordinary class by the time reflection runs; should
+        // one reach here uninstantiated, its head is the name PHP would print.
+        TypeExpr::GenericClass { name, .. } => Some(name.as_str().to_string()),
         TypeExpr::Nullable(inner) => {
             let inner = eval_native_type_expr_spec(inner)?;
             Some(format!("?{}", inner))

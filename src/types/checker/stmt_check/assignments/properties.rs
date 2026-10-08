@@ -720,8 +720,13 @@ fn check_pointer_property_write(
         // runtime narrowing there (int tag → raw payload, anything else → TypeError). This
         // is what lets int arithmetic — typed Mixed for its overflow-to-float promotion —
         // feed packed fields without either a false compile error or a silent truncation.
-        let guarded_mixed_int =
-            field_ty == PhpType::Int && matches!(val_ty, PhpType::Mixed);
+        // `int|float` is admitted by the same reasoning and the same lowering: it IS "int
+        // arithmetic typed for its overflow-to-float promotion", now that the checker says so
+        // precisely instead of saying `mixed`. Leaving it out made the narrower type the
+        // stricter one — `$i = 0; $i++; $thing->id = $i;` was refused where `$i = $i + 1` was
+        // accepted, for two spellings of one value.
+        let guarded_mixed_int = field_ty == PhpType::Int
+            && (matches!(val_ty, PhpType::Mixed) || val_ty.is_int_float_union());
         if &field_ty != val_ty
             && !matches!((&field_ty, val_ty), (PhpType::Bool, PhpType::False))
             && !guarded_mixed_int
@@ -729,7 +734,7 @@ fn check_pointer_property_write(
             return Err(CompileError::new(
                 span,
                 &format!(
-                    "Type error: cannot assign {:?} to packed field {}::{} of type {:?}",
+                    "Type error: cannot assign {} to packed field {}::{} of type {}",
                     val_ty, class_name, property, field_ty
                 ),
             ));
@@ -929,6 +934,10 @@ fn updated_array_property_assign_type(
 
 /// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).
 fn is_php_array_key_type(ty: &PhpType) -> bool {
+    // `int|float` stays out, unlike the plain-local subscript which accepts it: an element write
+    // through a PROPERTY lowers to `array_set` with a boxed index, and the backend has no arm
+    // for one — `array_set index PHP type Mixed`, the same answer a `mixed` index gets. Letting
+    // it past here would trade the checker's message for that one.
     matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed)
 }
 

@@ -85,7 +85,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `zip` | 0 / 10 · 0% | 0 / 1 · 0% | - |
 | `zlib` | 4 / 30 · 13% | 0 / 2 · 0% | 0 / 27 · 0% |
 
-The counts above are what a compiled program has. Code run through `eval()` sees a different set in these modules (compiled / eval()):
+The counts above are what a compiled program has. Exported backend support differs in these modules (compiled / eval()):
 
 - `core` constants: 37 / 34
 - `exif` functions: 4 / 0
@@ -98,9 +98,8 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `session` functions: 23 / 0
 - `standard` functions: 384 / 344
 - `standard` constants: 163 / 142
-- `zend opcache` functions: 8 / 0
 
-Most of that is one gap rather than several. 203 of those functions — every one missing from `exif`, `gd`, `mysqli`, `pdo`, `session`, `zend opcache` — are implemented by a PHP prelude the compiler injects into the program it is compiling. The interpreter dispatches through the shared builtin registry, and a prelude function has no registry binding there, so it is not that these surfaces were skipped one by one: none of them has an entry point `eval()` can reach. Closing it means an `eval_builtin!` binding per surface; see **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
+Of those functions, 195 from `exif`, `gd`, `mysqli`, `pdo`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 
@@ -158,7 +157,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [XML](./xml.md) ([PHP](https://www.php.net/manual/en/book.xml.php)) | ✅ Supported | ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost |
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
-| [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |
+| [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT |
 
 ## Beyond PHP
 
@@ -204,7 +203,7 @@ Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli
 
 ## Known limitations
 
-**eval() coverage of the prelude-implemented modules.** The modules whose eval() column is zero — gd, exif, mysqli, PDO, session, OPcache — are all implemented by a PHP prelude the compiler injects, and the interpreter dispatches through the shared builtin registry, where a prelude function has no binding. Closing it is one `eval_builtin!` surface at a time, tracked per module: mysqli #746, PDO #748, session #1211, gd and exif #1212, OPcache #1213, with #906 as the umbrella. Until then, call those functions from compiled code and pass the results into the fragment.
+**eval() coverage of the prelude-implemented modules.** The generated eval() counts are zero for gd, exif, mysqli, PDO, and session because their functions use injected PHP preludes without interpreter bindings. OPcache has a separate supported route through native prelude declarations or dedicated interpreter handlers, including the live script cache and API restrictions. The remaining module gaps are tracked by mysqli #746, PDO #748, session #1211, gd and exif #1212, with #906 as the umbrella; call those functions from compiled code and pass the results into the fragment until their eval() surfaces are implemented.
 
 **Static subset, AOT only.** Ordinary source is compiled ahead of time with no opcode fallback; runtime code loading exists only through the experimental eval() interpreter bridge.
 

@@ -133,9 +133,22 @@ You can see the effect with [`--emit-ir`](output-and-diagnostics.md#--emit-ir):
 `$x = $argc; echo $x;` forwards the load so the `echo` reads the stored value and
 the `load_local` becomes a `nop`.
 
+### Scalar local promotion
+
+The third registered pass (`mem2reg`) replaces loads and stores of eligible
+`int`, `bool`, and `float` PHP locals with SSA values. Block parameters carry
+values across branch joins and loop back edges, so register allocation can keep
+loop counters and accumulators in registers.
+
+Promotion requires plain local loads and stores, a value initialized before every
+read, and no escaping reference. Parameters, globals, static locals, heap-backed
+values, and volatile slots stay in memory. Functions using generators, exception
+handlers, or dynamic eval are skipped. See
+[Scalar Local Promotion](../internals/the-ir.md#scalar-local-promotion).
+
 ### Immutable local loads
 
-The third registered pass marks `load_local` instructions that read a
+The fourth registered pass marks `load_local` instructions that read a
 proven-immutable concrete integer slot as pure, so later passes (CSE, LICM) may
 deduplicate or move them. A slot qualifies when it is a read-only incoming
 parameter (such as `main`'s `$argc`) or has a single entry-block store that
@@ -143,7 +156,7 @@ dominates every load. The pass changes only effect metadata, never values.
 
 ### Checked-integer sinking
 
-The fourth registered pass specializes a boxed checked-arithmetic operation
+The fifth registered pass specializes a boxed checked-arithmetic operation
 (`ICheckedAdd`/`ICheckedSub`/`ICheckedMul`) to its `IChecked*ToInt` form when
 every use of its result observes only the integer payload, removing the
 transient boxed `Mixed` allocation without changing overflow semantics.
@@ -151,9 +164,24 @@ The same proof removes numeric local-slot retirement immediately before an
 overwrite. Retirement remains intact when a read, reference alias, or a value
 with a possible destructor prevents proving that the clear is unobservable.
 
+### Integer range and induction-variable analysis
+
+The sixth registered pass propagates signed 64-bit integer intervals through
+constants, branch comparisons, block parameters, and arithmetic. Constant-step
+loop counters can inherit bounds from their initial values and loop conditions.
+When every possible result stays within the integer range, checked addition,
+subtraction, and multiplication become ordinary scalar operations.
+
+Boxed numeric results can also become scalar values when all consumers preserve
+their storage and conversion semantics. Unknown ranges, unsupported control flow,
+exception handlers, and ambiguous null-sentinel payloads retain the checked or
+boxed path, including PHP's overflow-to-float behavior. The shared
+`boxed_narrowing` helper also constrains constant folding; it is not a separate
+registered pass. See [The Optimizer](../internals/the-optimizer.md).
+
 ### Checked numeric-chain fusion
 
-The fifth registered pass fuses a left-associated chain of boxed checked
+The seventh registered pass fuses a left-associated chain of boxed checked
 addition, subtraction, or multiplication when its only observable result is an
 integer cast. The chain must stay within one basic block, and every boxed
 intermediate may be used only by the next arithmetic operation plus removable
@@ -164,7 +192,7 @@ remaining suffix in order, and applies the normal float-to-int conversion once.
 
 ### Constant folding
 
-The sixth registered pass folds operations whose operands are all compile-time
+The eighth registered pass folds operations whose operands are all compile-time
 constants into a single constant, in place. It covers integer arithmetic
 (`iadd`, `isub`, `imul`), bitwise ops, in-range shifts, unary `ineg`/`ibit_not`,
 float `fadd`/`fsub`/`fmul`/`fneg`, signed integer comparisons (`icmp`), and the
@@ -188,7 +216,7 @@ the three `imul`s eliminated.
 
 ### Common subexpression elimination
 
-The seventh registered pass removes a pure computation when an identical one is
+The ninth registered pass removes a pure computation when an identical one is
 already available on every path to it, redirecting its uses to the earlier
 value. It does both per-block and cross-block elimination in one dominator-tree
 value-numbering traversal: a scoped table maps each pure instruction's
@@ -214,7 +242,7 @@ dead operands that dead-instruction elimination then removes.
 
 ### Loop-invariant code motion
 
-The eighth registered pass moves a pure computation whose operands do not change
+The tenth registered pass moves a pure computation whose operands do not change
 across a loop out of the loop body and into the loop's preheader, so it runs once
 instead of every iteration. It builds the loop forest on the dominator tree, then
 for each loop grows an invariant set to a fixed point: an instruction is invariant
@@ -229,14 +257,13 @@ Loops are processed innermost-first, so a value invariant in several nested loop
 moves all the way to the outermost preheader. Loops without a detected preheader,
 and functions using exception handling, are skipped.
 
-Because PHP loop variables live in local slots and are reloaded through impure
-`load_local` each iteration, an invariant *source* expression is not yet a
-pure-operand computation this pass can hoist; its reach grows as more values flow
-as SSA across loops.
+Scalar local promotion exposes invariant source expressions as SSA computations,
+and immutable integer-local loads can also become pure operands. Expressions
+that still read mutable or aliased slots remain in the loop.
 
 ### Dead instruction elimination
 
-The ninth registered pass computes CFG liveness and neutralizes unused
+The eleventh registered pass computes CFG liveness and neutralizes unused
 result-producing instructions whose effect metadata says they are pure. This
 cleans up dead values exposed by earlier EIR rewrites. For example, identity
 folding can turn `$argc + 0` into `$argc`; dead-instruction elimination then
@@ -257,7 +284,7 @@ elephc --emit-ir --no-ir-opt app.php
 
 ### Dead store elimination
 
-The tenth registered pass removes `store_local` writes whose value is never read
+The twelfth registered pass removes `store_local` writes whose value is never read
 before the slot is overwritten or the function exits. It computes backward,
 CFG-aware liveness over local slots (a `load_local` makes a slot live, a
 `store_local` kills it) so a dead store is dropped even when the overwrite is in a
@@ -273,7 +300,7 @@ left untouched to keep reference counting and aliasing semantics intact.
 
 ### Branch simplification
 
-The eleventh registered pass prunes the control-flow graph three ways:
+The thirteenth registered pass prunes the control-flow graph three ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition is a constant
   (`const_bool`, non-zero `const_i64`, or `const_null`) becomes an unconditional

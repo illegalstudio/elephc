@@ -34,6 +34,7 @@ impl Checker {
         decl: &FnDecl,
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
+        self.completed_function_signatures.remove(name);
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
@@ -91,6 +92,17 @@ impl Checker {
                 .get(&(function_key.clone(), pname.clone()))
                 .cloned()
             {
+                self.closure_return_types
+                    .insert(pname.clone(), sig.return_type.clone());
+                self.callable_sigs.insert(pname.clone(), sig);
+            } else if let Some(sig) = param_types
+                .iter()
+                .position(|(name, _)| name == pname)
+                .and_then(|index| decl.param_types.get(index))
+                .and_then(|type_ann| type_ann.as_ref())
+                .and_then(|type_ann| self.declared_callable_signature(type_ann, decl.span))
+            {
+                // No call site told us what this callable is, but the DECLARATION did.
                 self.closure_return_types
                     .insert(pname.clone(), sig.return_type.clone());
                 self.callable_sigs.insert(pname.clone(), sig);
@@ -309,6 +321,7 @@ impl Checker {
             self.callable_array_return_sigs.remove(name);
         }
 
+        self.completed_function_signatures.insert(name.to_string());
         Ok(return_type)
     }
 
