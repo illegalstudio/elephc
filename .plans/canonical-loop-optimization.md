@@ -9,6 +9,9 @@
 - [x] Reproduce and profile the widespread eval compilation timeouts from CI run 37912270881.
 - [x] Fix the measured scaling regression and add focused regression coverage.
 - [x] Validate affected tests and build hygiene before committing or pushing.
+- [x] Reproduce the five remaining multi-compile eval timeouts from CI run 37925824323.
+- [x] Validate the scoped CI configuration repair before committing and pushing.
+- [x] Audit every test shard in CI run 37925824323 before publishing the fixture-budget repair.
 
 ## Implementation
 
@@ -101,3 +104,33 @@ was changed. The earlier baseline and repaired stress-test binaries ran the
 same reversed-layout fixture in 38.38 and 0.46 seconds respectively; those
 microbenchmark runs shared the container with a Rust build, so the isolated
 end-to-end measurement above is the primary performance comparison.
+
+
+## Remaining CI fixture budgets
+
+CI run 37925824323 at `abeef56f` reduced the original widespread failures to
+five multi-compile eval fixtures in three Linux x86_64 codegen shards. Every
+failure was the 60-second outer timeout on both attempts. These same fixtures
+already receive the 180-second eval budget on Linux ARM64 and macOS.
+
+Extend the existing Linux family override to x86_64 in both nextest profiles.
+Keep fixture sources, repetition counts, ownership assertions, the default
+60-second timeout, and the independent compiled-program watchdog unchanged.
+
+Validate with the exact Linux x86_64 archive from that CI run, its Ubuntu CI
+image and nextest 0.9.140, in a container capped at 2 CPUs and 12 GiB. With
+profile `ci`, two concurrent tests, and zero retries, all five pass:
+
+- Disabled output handler: 99.752 seconds.
+- Constructor Mixed references: 100.075 seconds.
+- Constructor temporary arguments: 118.364 seconds.
+- Native eval argument-array keys: 118.227 seconds.
+- Invalid Mixed throw ownership: 104.159 seconds.
+
+The run takes 322.557 seconds overall. TOML parsing, nextest configuration
+loading, and `git diff --check` pass. This is a scoped test-budget correction;
+no compiler implementation or test assertion changes in this follow-up.
+
+All remaining macOS shards subsequently passed on `abeef56f`, including the
+last eval shard at 13:59 UTC. The completed test matrix has only the three
+Linux x86_64 shard failures containing the five validated timeout fixtures.
