@@ -100,6 +100,8 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
 /// callable), and the freed block's reuse by the persisted key string then walked that string as a
 /// hash on the next release.
 /// Concrete fetch-for-write ensures use the same consuming convention during COW and growth.
+/// An ensure may consume an ArrayToHash result rather than the original load directly;
+/// follow that consuming chain so the static slot's old array is still retired only once.
 fn value_is_consuming_conversion_of_ref_cell(
     ctx: &FunctionContext<'_>,
     value: ValueId,
@@ -119,9 +121,10 @@ fn value_is_consuming_conversion_of_ref_cell(
     let Some(source) = conversion.operands.first().copied() else {
         return Ok(false);
     };
-    Ok(instruction_for_value(ctx, source)?.is_some_and(|load| {
+    if instruction_for_value(ctx, source)?.is_some_and(|load| {
         load.op == Op::LoadRefCell && load.immediate == Some(Immediate::LocalSlot(slot))
-    }))
+    }) { return Ok(true); }
+    value_is_consuming_conversion_of_ref_cell(ctx, source, slot)
 }
 
 /// Retires what a still-raw slot holds before a ref-cell store overwrites it.

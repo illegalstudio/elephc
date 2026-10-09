@@ -38,13 +38,19 @@ pub(super) fn lower_nested_array_assign(
             }
             lower_nested_array_assign_inner(ctx, &write, &value, span, true);
         }
-        let null = LoweredValue { value: ctx.builder.emit_const_null(), ir_type: IrType::I64 };
         for name in snapshots {
-            ctx.unset_local(&name, null, Some(span));
+            // Null assignment would widen the entire frame slot, turning earlier String
+            // reloads into detached backend casts that lowering never had a chance to release.
+            let slot = ctx.local_slots[&name];
+            ctx.release_stored_local_value(&name, slot, Some(span));
+            ctx.emit_void(Op::ZeroLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                Op::ZeroLocalSlot.default_effects(), Some(span));
         }
         return;
     }
-    lower_nested_array_assign_inner(ctx, target, value, span, false);
+    if let Some((_, write)) = bind_concrete_static_update_root(ctx, target, target) {
+        lower_nested_array_assign_inner(ctx, &write, value, span, false);
+    } else { lower_nested_array_assign_inner(ctx, target, value, span, false); }
 }
 
 /// Gives a concrete mixed-element root the existing relocating local writeback protocol.
@@ -55,12 +61,21 @@ fn bind_concrete_static_update_root(
     while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
     let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else { return None; };
     let ty = static_property_type(ctx, receiver, property)?;
-    if !matches!(ty.codegen_repr(), PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed) {
+    if !static_root_has_mixed_elements(&ty) {
         return None;
     }
     let name = ctx.declare_synthetic_php_local(ty);
     crate::ir_lower::expr::lower_ref_assign_static_property(ctx, &name, root, root.span);
     Some((replace_static_update_root(read, &name), replace_static_update_root(write, &name)))
+}
+
+/// Includes both indexed and associative concrete storage with boxed element cells.
+fn static_root_has_mixed_elements(ty: &PhpType) -> bool {
+    match ty.codegen_repr() {
+        PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => false,
+    }
 }
 
 /// Replaces only the static root while preserving captured dimensions and source spans.
@@ -264,7 +279,8 @@ fn nested_target_has_static_array_root(ctx: &LoweringContext<'_, '_>, target: &E
         ExprKind::ArrayAccess { array, .. } => nested_target_has_static_array_root(ctx, array),
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_type(ctx, receiver, property)
-                .is_some_and(|ty| ty.is_php_array() || is_indexed_array_type(&ty))
+                .is_some_and(|ty| ty.is_php_array() || is_indexed_array_type(&ty)
+                    || static_root_has_mixed_elements(&ty))
         }
         _ => false,
     }
@@ -441,7 +457,11 @@ fn lower_local_parent_fetch_for_write_inner(
             if elem_ty.codegen_repr() == PhpType::Mixed
                 || is_empty_indexed_array_element(elem_ty.as_ref()) =>
         {
-            match index_expr_key_type(ctx, index) {
+            let key_ty = match &index.kind {
+                ExprKind::Variable(name) if ctx.local_type(name).codegen_repr() == PhpType::Str => PhpType::Str,
+                _ => index_expr_key_type(ctx, index),
+            };
+            match key_ty {
                 PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void => {
                     let array_value = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);

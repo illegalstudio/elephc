@@ -9,6 +9,51 @@
 
 use super::*;
 
+/// Captured variable string keys release each projected string on parent and leaf updates.
+#[test]
+fn test_static_prefix_second_review_variable_string_key_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = ['k' => [5]]; }
+$key = 'k';
+++H::$items[$key][0];
+echo json_encode(H::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"k\":[6]}", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Declared mixed-valued hash roots publish nested incdec and plain stores with COW.
+#[test]
+fn test_static_prefix_second_review_declared_assoc_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<string, mixed> $items = ['k' => [5]]; }
+$alias = H::$items;
+++H::$items['k'][0]; echo json_encode(H::$items), '|';
+H::$items['k'][0] = 9;
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"k\":[6]}|{\"k\":[9]}|{\"k\":[5]}", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// String variable dimensions on declared mixed arrays promote storage instead of selecting zero.
+#[test]
+fn test_static_prefix_second_review_declared_mixed_string_key() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [[5], [7]]; }
+$alias = H::$items; $key = 'k';
+set_error_handler(function($level, $message) { echo 'W:', $message, '|'; return true; });
+++H::$items[$key][0];
+restore_error_handler();
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "W:Undefined array key \"k\"|W:Undefined array key 0|{\"0\":[5],\"1\":[7],\"k\":[1]}|[[5],[7]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// All direct static incdec expression forms evaluate and diagnose their float key once.
 #[test]
 fn test_static_prefix_ci_float_expression_forms() {

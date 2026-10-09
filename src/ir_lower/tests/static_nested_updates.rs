@@ -19,6 +19,9 @@ fn check_static_nested_updates(target: &str) {
 class NestedUpdate { public static array $items = [[null]]; }
 class ConcreteUpdate { public static $items = [1, [5]]; }
 class DeclaredMixedUpdate { public static array<mixed> $items = [1, [5]]; }
+class DeclaredAssocUpdate { public static array<string, mixed> $items = ["k" => [5]]; }
+function variableStringKey(string $key): void { ++DeclaredAssocUpdate::$items[$key][0]; }
+function promotedStringKey(string $key): void { ++DeclaredMixedUpdate::$items[$key][0]; }
 function fail(): int { throw new Error("stop"); }
 function finalKey(): int { echo "key"; return 0; }
 function scalarUpdate(): void { ++NestedUpdate::$items[0][0][finalKey()]; }
@@ -26,6 +29,10 @@ set_error_handler(function($level, $message) { return true; });
 ++NestedUpdate::$items[0][0]["before"];
 ++ConcreteUpdate::$items[1][0];
 ++DeclaredMixedUpdate::$items[1][0];
+++DeclaredAssocUpdate::$items["k"][0];
+DeclaredAssocUpdate::$items["k"][0] = 9;
+variableStringKey("k");
+promotedStringKey("k");
 echo ++NestedUpdate::$items[1.5], NestedUpdate::$items[2.5]++;
 echo ++NestedUpdate::$items[0][0]["before"];
 try { scalarUpdate(); } catch (Error $e) { echo "scalar"; }
@@ -63,6 +70,13 @@ echo json_encode(NestedUpdate::$items);
     let key = scalar.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
     let guard = scalar.instructions.iter().rposition(|inst| inst.op == Op::TypePredicate).unwrap();
     assert!(key < guard, "{target}: final computed key runs before the scalar-parent guard");
+    for name in ["variableStringKey", "promotedStringKey"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::ZeroLocalSlot),
+            "{target}: {name} retires snapshots without widening string storage");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::HashGetForWrite),
+            "{target}: {name} obtains the stored string-key parent instead of index zero");
+    }
     crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
 
