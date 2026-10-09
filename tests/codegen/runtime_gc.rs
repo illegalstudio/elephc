@@ -22,6 +22,8 @@ mod ini_lookup_arguments;
 mod mixed_string_cast_return;
 #[path = "runtime_gc/object_cast.rs"]
 mod object_cast;
+#[path = "runtime_gc/array_cast.rs"]
+mod array_cast;
 #[path = "runtime_gc/nullable_string_return.rs"]
 mod nullable_string_return;
 #[path = "runtime_gc/iconv.rs"]
