@@ -632,7 +632,7 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
 /// same extraction `array_values()` uses. Boxed packed values are widened to Mixed slots;
 /// potentially promoted Mixed arrays are retained or copied after checking their heap kind.
 /// Every normalization result must be released once the join has read it.
-fn implode_normalized_value_type(
+pub(super) fn implode_normalized_value_type(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
     array_index: usize,
@@ -699,7 +699,7 @@ pub(super) fn lower_implode_x86_64(
 }
 
 /// Loads or normalizes an array into the dense payload required by the join renderers.
-fn load_implode_array(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+pub(super) fn load_implode_array(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
     ctx.load_value_to_result(array)?;
     match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => emit_boxed_implode_array_source(ctx),
