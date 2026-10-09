@@ -468,6 +468,9 @@ pub(in crate::codegen) fn resolve_array_const_default(
     context: &ConstDefaultContext<'_>,
     depth: usize,
 ) -> Option<ConstDefaultValue> {
+    if let Some(folded) = crate::codegen::mixed_array_literals::fold_spreadless_mixed_array_literal(&expr.kind) {
+        return resolve_array_const_default(&Expr::new(folded, expr.span), context, depth);
+    }
     match &expr.kind {
         ExprKind::ArrayLiteral(elements) => {
             let mut default_elements = Vec::with_capacity(elements.len());

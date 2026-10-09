@@ -31,6 +31,54 @@ pub(super) fn emit_reflection_constant_value_as_mixed(
             crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(enum_name.clone()));
         }
+        ReflectionConstantValue::Array(elements) => {
+            emit_reflection_constant_array_to_result(ctx, elements);
+            emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+        }
+        ReflectionConstantValue::AssocArray(entries) => {
+            emit_reflection_constant_assoc_array_to_result(ctx, entries);
+            emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                },
+            );
+        }
+    }
+}
+
+/// Allocates and populates an indexed array whose slots hold boxed constant values.
+pub(super) fn emit_reflection_constant_array_to_result(
+    ctx: &mut FunctionContext<'_>,
+    elements: &[ReflectionConstantValue],
+) {
+    emit_reflection_mixed_array_allocation(ctx, elements.len());
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    for element in elements {
+        emit_reflection_constant_value_as_mixed(ctx, element);
+        append_reflection_mixed_array_default_element(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+}
+
+/// Allocates and populates an associative array whose values hold boxed constant values.
+///
+/// The per-entry push is consumed by `emit_reflection_assoc_array_default_insert` (it pops
+/// the stacked array pointer into the hash-set register), so the loop is stack-balanced
+/// without a final pop, unlike the indexed emitter whose append helper re-pushes.
+pub(super) fn emit_reflection_constant_assoc_array_to_result(
+    ctx: &mut FunctionContext<'_>,
+    entries: &[ReflectionConstantAssocEntry],
+) {
+    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    for entry in entries {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_reflection_constant_value_as_mixed(ctx, &entry.value);
+        emit_reflection_assoc_array_default_insert(ctx, &entry.key);
     }
 }
 
