@@ -478,3 +478,55 @@ fn test_array_slice_str_is_emitted_for_every_supported_target() {
         );
     }
 }
+
+/// The six string-array helpers behind `array_reverse`, `array_merge`, `array_pad`,
+/// `array_chunk`, `array_diff` and `shuffle` are emitted for EVERY supported target.
+///
+/// Each exists because an indexed `array<string>` stores 16-byte `{pointer, length}` slots that
+/// the 8-byte siblings cannot carry (issue #675). As for `__rt_array_slice_str`, the iOS targets
+/// are only covered by emission tests. The five copying helpers must duplicate through the
+/// persisting string append helper; `__rt_shuffle_str` moves whole pairs in place instead.
+#[test]
+fn test_string_array_helpers_are_emitted_for_every_supported_target() {
+    let targets = [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ];
+    let copying = [
+        "__rt_array_reverse_str",
+        "__rt_array_merge_str",
+        "__rt_array_pad_str",
+        "__rt_array_chunk_str",
+        "__rt_array_diff_str",
+    ];
+
+    for target in targets {
+        let mut emitter = Emitter::new(target);
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
+        let asm = emitter.output();
+        for helper in copying.iter().chain(["__rt_shuffle_str"].iter()) {
+            let directive = format!(".globl {helper}\n");
+            let start = asm
+                .find(&directive)
+                .unwrap_or_else(|| panic!("{} did not emit {helper}", target.as_str()));
+            let rest = &asm[start + directive.len()..];
+            let body = rest.find(".globl ").map_or(rest, |end| &rest[..end]);
+            if copying.contains(helper) {
+                assert!(
+                    body.contains("__rt_array_push_str"),
+                    "{}: {helper} must copy through the persisting string append helper",
+                    target.as_str()
+                );
+            } else {
+                assert!(
+                    body.contains("__rt_random_uniform"),
+                    "{}: {helper} must draw partners from the shared random helper",
+                    target.as_str()
+                );
+            }
+        }
+    }
+}

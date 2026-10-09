@@ -21,8 +21,10 @@ use super::*;
 /// - `array_unique([1,"b",1,4])` answered `1,b,1,4`, PHP answers `1,b,4`
 ///
 /// All three silent. PHP compares these elements by their STRING rendering, which needs a
-/// by-value comparison in the runtime; until that exists the calls are refused, exactly as
-/// `array<string>` already is — its 16-byte slots do not fit these helpers either.
+/// by-value comparison in the runtime; until that exists the calls are refused. An
+/// `array<string>` is not refused: its 16-byte slots have their own by-value helpers
+/// (`__rt_array_diff_str` compares with `__rt_str_eq`, issue #675; `array_unique` already
+/// handled strings). `array_intersect` on strings still has no such helper.
 #[test]
 fn test_value_comparing_builtins_refuse_boxed_elements() {
     for (source, message) in [
