@@ -727,19 +727,57 @@ pub(super) fn validate_eval_class_does_not_implement_enum_interfaces(
     }
 }
 
-/// Rejects eval classes and enums that directly implement PHP's Throwable contract.
+/// Rejects eval classes and enums that implement PHP's Throwable contract without a throwable
+/// ancestor. A class extending `Exception`/`Error` already is a Throwable, so implementing an
+/// interface that extends `Throwable` is legal for it (issue #1736).
 pub(super) fn validate_eval_class_does_not_implement_throwable_interfaces(
     class: &EvalClass,
     context: &ElephcEvalContext,
 ) -> Result<(), EvalStatus> {
-    if pending_class_interface_names(class, context)
+    let implements_throwable = pending_class_interface_names(class, context)
         .iter()
-        .any(|interface| eval_builtin_throwable_interface_name(interface))
-    {
+        .any(|interface| eval_builtin_throwable_interface_name(interface));
+    // PHP only rejects a class that implements Throwable WITHOUT a throwable ancestor:
+    // `class Good extends PDOException implements UserThrowable {}` (where `UserThrowable
+    // extends Throwable`) is legal because `Good` is already a Throwable through its parent.
+    // `pending_class_interface_names` lists transitive interface parents, so the interface test
+    // alone would wrongly reject that legal class.
+    if implements_throwable && !eval_class_extends_throwable(class, context) {
         Err(EvalStatus::RuntimeFatal)
     } else {
         Ok(())
     }
+}
+
+/// Returns whether an eval class's ancestor chain reaches PHP's `Exception` or `Error`.
+///
+/// Every throwable in PHP descends from one of those two roots, so a chain that reaches either
+/// makes the class itself a Throwable (and lets it legally implement an interface extending
+/// `Throwable`). The class is not registered in the context yet when this runs, so the walk
+/// starts from the declared parent: a direct `Exception`/`Error` parent is throwable, and any
+/// other parent (an eval class or a builtin like `PDOException`) is walked through
+/// `class_parent_names`.
+fn eval_class_extends_throwable(class: &EvalClass, context: &ElephcEvalContext) -> bool {
+    let is_throwable_root = |name: &str| {
+        let name = name.trim_start_matches('\\');
+        name.eq_ignore_ascii_case("Exception") || name.eq_ignore_ascii_case("Error")
+    };
+    let Some(parent) = class.parent() else {
+        return false;
+    };
+    // An alias of a throwable (`class_alias('RuntimeException', 'AliasRE')`) is not itself a
+    // class, so resolve it to its target before the root check and the ancestry walk; otherwise
+    // `class Good extends AliasRE implements UserThrowable {}` is wrongly rejected.
+    let parent = context
+        .resolve_class_name(parent)
+        .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+    if is_throwable_root(&parent) {
+        return true;
+    }
+    context
+        .class_parent_names(&parent)
+        .iter()
+        .any(|ancestor| is_throwable_root(ancestor))
 }
 
 /// Validates abstract/final modifiers on an eval-declared class and its methods.

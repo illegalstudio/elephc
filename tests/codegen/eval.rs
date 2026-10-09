@@ -30504,3 +30504,63 @@ if ($w instanceof Wide) { echo readwide($w); }
     );
     assert_eq!(out, "2|7s");
 }
+
+/// Verifies that eval allows an exception subclass implementing a throwable interface.
+#[test]
+fn test_eval_allows_exception_subclass_implementing_throwable_interface() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface UserThrowable extends Throwable {} class Good extends RuntimeException implements UserThrowable {}');
+$e = new Good('boom');
+echo $e instanceof Throwable ? "throwable" : "no", "|", $e->getMessage(), "\n";
+"#,
+    );
+    assert_eq!(out, "throwable|boom\n");
+}
+
+/// An eval exception chain with TWO eval parents still resolves the inherited AOT `Throwable`
+/// methods through the nearest native ancestor (review follow-up for #1736).
+#[test]
+fn test_eval_resolves_inherited_aot_methods_through_two_eval_parents() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface UserThrowable extends Throwable {} class Mid extends RuntimeException implements UserThrowable {} class Lower extends Mid {} class Grand extends Lower {}');
+$g = new Grand('boom');
+echo $g instanceof Throwable ? "throwable" : "no", "|", $g->getMessage(), "\n";
+"#,
+    );
+    assert_eq!(out, "throwable|boom\n");
+}
+
+/// An eval class whose DIRECT parent is already native resolves the interface method the parent
+/// declares: the AOT walk must start at that parent, not step past it to the grandparent
+/// (review follow-up for #1736).
+#[test]
+fn test_eval_resolves_an_aot_interface_method_declared_on_the_native_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {}
+class Service extends Base { public function ping(): int { return 7; } }
+interface Marker { public function ping(): int; }
+eval('class Child extends Service implements Marker {}');
+$c = new Child();
+echo $c->ping(), "\n";
+"#,
+    );
+    assert_eq!(out, "7\n");
+}
+
+/// `class_alias()` of a throwable is a throwable ancestor: an eval class extending the alias may
+/// implement a `Throwable`-extending interface, because the alias resolves to `RuntimeException`
+/// before the ancestry walk (review follow-up for #1736).
+#[test]
+fn test_eval_class_alias_of_a_throwable_is_a_throwable_ancestor() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class_alias("RuntimeException", "AliasRE"); interface UserThrowable extends Throwable {} class Good extends AliasRE implements UserThrowable {}');
+$e = new Good('boom');
+echo $e instanceof Throwable ? "throwable" : "no", "|", $e->getMessage(), "\n";
+"#,
+    );
+    assert_eq!(out, "throwable|boom\n");
+}
