@@ -10,6 +10,27 @@
 
 use super::*;
 
+/// Ordinary method defaults reject late-static class names and constants on all class-like owners.
+#[test]
+fn test_property_default_second_review_method_late_static() {
+    for (default, message) in [
+        ("static::class", "static::class cannot be used for compile-time class name resolution"),
+        ("static::A", "\"static::\" is not allowed in compile-time constants"),
+        ("[static::class]", "static::class cannot be used for compile-time class name resolution"),
+        ("[parent::A, static::class]", "static::class cannot be used for compile-time class name resolution"),
+    ] {
+        for source in [
+            format!("<?php class Probe {{ const A = 1; public function value($name = {default}) {{}} }}"),
+            format!("<?php interface Probe {{ const A = 1; public function value($name = {default}); }}"),
+            format!("<?php enum Probe {{ case Item; const A = 1; public static function value($name = {default}) {{}} }}"),
+            format!("<?php trait Probe {{ const A = 1; public function value($name = {default}) {{}} }}"),
+            format!("<?php namespace Named {{ class Probe {{ const A = 1; public static function value($name = {default}) {{}} }} }}"),
+        ] {
+            expect_error(&source, message);
+        }
+    }
+}
+
 /// Direct interface and enum defaults cannot bind a nonexistent parent class.
 #[test]
 fn test_property_default_oct9_classlike_method_parent() {

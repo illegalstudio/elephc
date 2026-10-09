@@ -93,13 +93,15 @@ pub(crate) fn validate_deferred_declaration_defaults(
     errors
 }
 
-/// Missing-parent class names in direct class-like methods are compile errors, not lazy defaults.
+/// Direct method defaults reject late-static receivers and unbound parent class names.
 fn validate_direct_class_name_defaults(program: &Program, errors: &mut Vec<CompileError>) {
     for statement in program {
         let (name, parent, methods) = match &statement.kind {
             StmtKind::ClassDecl { name, extends, methods, .. } => (name, extends.as_deref(), methods),
             StmtKind::InterfaceDecl { name, methods, .. }
             | StmtKind::EnumDecl { name, methods, .. } => (name, None, methods),
+            // A trait parent is a discarded validation placeholder, not a binding.
+            StmtKind::TraitDecl { name, methods, .. } => (name, Some(name.as_str()), methods),
             StmtKind::NamespaceBlock { body, .. } => {
                 validate_direct_class_name_defaults(body, errors);
                 continue;
@@ -112,7 +114,17 @@ fn validate_direct_class_name_defaults(program: &Program, errors: &mut Vec<Compi
                 if let Err(error) = super::classes::normalize_property_default_in_scope(
                     default, name, parent,
                 ) {
-                    if error.message == "Cannot use \"parent\" when current class scope has no parent" {
+                    // A lazy parent constant must not hide a later forbidden static
+                    // receiver in the same default tree. Discard this placeholder tree.
+                    let error = if error.message == "Cannot access \"parent\" when current class scope has no parent" {
+                        super::classes::normalize_property_default_in_scope(default, name, Some(name))
+                            .err().unwrap_or(error)
+                    } else { error };
+                    if matches!(error.message.as_str(),
+                        "Cannot use \"parent\" when current class scope has no parent"
+                        | "static::class cannot be used for compile-time class name resolution"
+                        | "\"static::\" is not allowed in compile-time constants")
+                    {
                         errors.push(error);
                     }
                 }
@@ -213,7 +225,8 @@ fn normalize_default_tree(default: &mut Option<Expr>, owner_class: &str, parent_
                 "written_class_receiver leaves no generic receiver behind"
             ),
             StaticReceiver::Named(_) => None,
-            StaticReceiver::Self_ | StaticReceiver::Static => Some(owner_class),
+            StaticReceiver::Self_ => Some(owner_class),
+            StaticReceiver::Static => None,
             StaticReceiver::Parent => parent_class,
         };
         if let Some(class_name) = resolved {

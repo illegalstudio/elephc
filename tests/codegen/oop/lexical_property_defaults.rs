@@ -10,6 +10,34 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Trait declaration order determines the first instance-default error instead of error wording.
+#[test]
+fn test_property_default_second_review_trait_error_order() {
+    for (traits, diagnostic) in [
+        ("Names, Numbers", "Cannot use"), ("Numbers, Names", "Cannot access"),
+    ] {
+        let out = crate::support::compile_and_run(&format!(r#"<?php
+trait Names {{ public string $name = parent::class; }}
+trait Numbers {{ public int $number = parent::A; }}
+class Probe {{ use {traits}; }}
+try {{ new Probe(); }} catch (Error $error) {{ echo $error->getMessage(); }}
+"#));
+        assert_eq!(out, format!("{diagnostic} \"parent\" when current class scope has no parent"));
+    }
+}
+
+/// Instance-default errors precede static-default errors for both construction and static access.
+#[test]
+fn test_property_default_second_review_instance_before_static() {
+    let out = crate::support::compile_and_run(r#"<?php
+trait Names { public string $name = parent::class; }
+class Probe { use Names; public static int $number = parent::A; }
+try { new Probe(); } catch (Error $error) { echo $error->getMessage(), '|'; }
+try { echo Probe::$number; } catch (Error $error) { echo $error->getMessage(), '|'; }
+"#);
+    assert_eq!(out, "Cannot use \"parent\" when current class scope has no parent|Cannot use \"parent\" when current class scope has no parent|");
+}
+
 /// Class initialization prioritizes missing parent constants without changing per-slot reflection.
 #[test]
 fn test_property_default_oct9_mixed_parent_errors() {

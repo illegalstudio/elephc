@@ -37,6 +37,7 @@ pub(super) fn apply_properties(
             checker.trait_imported_constructors.contains(&class.name).then_some(class.name.as_str())
         }),
     )?;
+    let mut default_errors: [Option<String>; 4] = [None, None, None, None];
     for prop in &class.properties {
         let normalized = prop.default.as_ref().map(|default| {
             super::constants::normalize_property_default_in_scope(
@@ -51,14 +52,12 @@ pub(super) fn apply_properties(
                         && checker.trait_imported_properties.get(&class.name)
                             .is_some_and(|names| names.contains(&prop.name)))) =>
             {
-                // Class initialization and individual default reflection have distinct boundaries.
-                // A missing parent constant invalidates initialization before a trait's
-                // missing parent class name, regardless of flattened property order.
-                if state.deferred_property_default_error.is_none()
-                    || error.message == "Cannot access \"parent\" when current class scope has no parent"
-                {
-                    state.deferred_property_default_error = Some(error.message.clone());
-                }
+                // PHP resolves instance before static defaults, and each class's own
+                // declarations before imported traits. Preserve order within each group.
+                let imported = checker.trait_imported_properties.get(&class.name)
+                    .is_some_and(|names| names.contains(&prop.name));
+                let priority = usize::from(prop.is_static) * 2 + usize::from(imported);
+                default_errors[priority].get_or_insert_with(|| error.message.clone());
                 Some(super::constants::deferred_default_error(error.message, error.span))
             }
             Err(error) => return Err(error),
@@ -92,6 +91,9 @@ pub(super) fn apply_properties(
                 state.defaults[slot] = normalized;
             }
         }
+    }
+    if state.deferred_property_default_error.is_none() {
+        state.deferred_property_default_error = default_errors.into_iter().flatten().next();
     }
     Ok(())
 }
