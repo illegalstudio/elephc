@@ -2320,3 +2320,27 @@ echo show(...[0 => "x", "b" => 2]), "|", show(...["0" => "y", "b" => 3]), "|",
     );
     assert_eq!(out, "x:2|y:3|z:4|w:5");
 }
+
+/// `--report-generics` prints the instantiations a program reached, grouped by template, and
+/// prints nothing unless the flag is passed.
+#[test]
+fn test_report_generics_lists_instantiations() {
+    let source = r#"<?php
+function idf<T>(T $x): T { return $x; }
+class Box<T> { public function __construct(public T $v) {} }
+echo idf(1), idf("s");
+$b = new Box<int>(7);
+echo get_class($b);
+"#;
+    let reported =
+        compile_cli_file_with_flags_capturing_stderr(source, &["--report-generics"]);
+    assert!(reported.contains("generics:"), "{reported}");
+    assert!(reported.contains("idf<int>"), "{reported}");
+    assert!(reported.contains("idf<string>"), "{reported}");
+    assert!(reported.contains("Box<int>"), "{reported}");
+    let quiet = compile_cli_file_with_flags_capturing_stderr(source, &[]);
+    assert!(
+        !quiet.contains("generics:"),
+        "report must be opt-in: {quiet}"
+    );
+}

@@ -23,10 +23,12 @@ pub mod classes;
 mod constructors;
 pub(crate) use constructors::parameter_name;
 pub mod methods;
+mod report;
 mod site_scope;
 mod splice;
 pub mod variance;
 
+pub use report::report as instantiation_report;
 pub use splice::{
     instantiation_roots, splice_instantiations, strip_templates, substitute_in_body,
 };

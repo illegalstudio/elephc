@@ -59,6 +59,7 @@ pub(crate) fn compile(config: CliConfig) {
         check_only,
         emit_timings,
         emit_source_map,
+        report_generics,
         emit_debug_info,
         keep_symbols,
         regalloc_linear,
@@ -604,6 +605,12 @@ pub(crate) fn compile(config: CliConfig) {
     timings.record_since("typecheck", phase_started);
     for warning in &check_result.warnings {
         errors::report_warning(warning);
+    }
+    // The instantiation report is printed here, before declaration pruning and codegen: every
+    // template is already gone and every remaining `<...>` name is a concrete instantiation, so
+    // this is the complete monomorphization set. It is diagnostic only and changes nothing.
+    if report_generics {
+        eprintln!("{}", crate::generics::instantiation_report(&ast));
     }
     if !target.supports_current_backend() {
         crate::progress::clear();
