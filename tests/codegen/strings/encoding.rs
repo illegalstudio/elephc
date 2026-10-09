@@ -573,6 +573,53 @@ fn test_ctype_space_false() {
     assert_eq!(out, "");
 }
 
+/// Verifies the `ctype_*` predicates classify a non-string the way php-src does.
+///
+/// php takes `mixed`: an int in -128..=255 is ONE character code, any other int is checked as its
+/// decimal string, and every other type is false. elephc coerced every argument to a string, so
+/// `ctype_digit(7)` was true where php checks the bell character, and `ctype_digit(true)` was
+/// true where php answers false. Statically typed ints and boxed values from an array take
+/// different paths, so both are covered; the `eval` interpreter is the next test. Bytes above 127
+/// are left out on purpose: php classifies them through the platform's locale.
+#[test]
+fn test_ctype_predicates_classify_non_string_arguments_like_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function row(mixed $v): string {
+    return (ctype_digit($v) ? "d" : "-") . (ctype_alpha($v) ? "a" : "-")
+        . (ctype_alnum($v) ? "n" : "-") . (ctype_space($v) ? "s" : "-");
+}
+$out = [];
+foreach (["12", "ab", " ", "", 7, 55, 65, 32, -128, -129, 256, 300, 2.5, null, true, false, [1]] as $v) {
+    $out[] = row($v);
+}
+echo implode(",", $out), "|";
+$i = 55; $j = 7; $k = 300;
+echo ctype_digit($i) ? "y" : "n", ctype_digit($j) ? "y" : "n", ctype_digit($k) ? "y" : "n", ctype_space(32) ? "y" : "n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "d-n-,-an-,---s,----,----,d-n-,-an-,---s,----,----,d-n-,d-n-,----,----,----,----,----|ynyy",
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The `eval` interpreter classifies non-strings the same way. Heap state is not asserted here:
+/// a program that runs `eval` keeps the interpreter's own state alive at exit.
+#[test]
+fn test_eval_ctype_predicates_classify_non_string_arguments_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('$r = ""; foreach ([7, 55, 65, 32, 300, "12", 2.5, null, true] as $v) { $r .= (ctype_digit($v) ? "d" : "-") . (ctype_alpha($v) ? "a" : "-") . (ctype_space($v) ? "s" : "-") . ","; } return $r;');
+"#,
+    );
+    assert_eq!(out, "---,d--,-a-,--s,d--,d--,---,---,---,");
+}
+
 // --- sprintf / printf ---
 
 /// Verifies `sprintf()` with `%x` format produces lowercase hex output for decimal 255.
