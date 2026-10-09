@@ -26,6 +26,7 @@ set_error_handler(function($level, $message) { return true; });
 ++NestedUpdate::$items[0][0]["before"];
 ++ConcreteUpdate::$items[1][0];
 ++DeclaredMixedUpdate::$items[1][0];
+echo ++NestedUpdate::$items[1.5], NestedUpdate::$items[2.5]++;
 echo ++NestedUpdate::$items[0][0]["before"];
 try { scalarUpdate(); } catch (Error $e) { echo "scalar"; }
 try { NestedUpdate::$items[0][0]["before"] += fail(); } catch (Error $e) { echo "caught"; }
@@ -51,6 +52,10 @@ echo json_encode(NestedUpdate::$items);
     }), "{target}: immutable literal keys do not become string-owning capture locals");
     assert!(main.instructions.iter().any(|inst| inst.op == Op::StrIncDec),
         "{target}: static incdec uses the PHP string/null kernel");
+    assert!(main.instructions.iter().filter(|inst| {
+        inst.op == Op::RuntimeCall && inst.result.is_none()
+            && inst.immediate == Some(Immediate::Bool(true))
+    }).count() >= 2, "{target}: captured static expression stores reuse diagnosed keys");
     let scalar = module.functions.iter().find(|function| function.name == "scalarUpdate").unwrap();
     assert!(scalar.blocks.iter().any(|block| block.name.starts_with("static.update.scalar")
         && matches!(block.terminator, Some(crate::ir::Terminator::Throw { .. }))),

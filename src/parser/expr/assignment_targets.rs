@@ -55,14 +55,15 @@ pub(super) fn desugar_lvalue_incdec(
         return None;
     }
     let mut prelude = lowerer.finish();
-    // One dimension of a local or instance-property array is read once into `old`,
-    // and the write stores `old ± 1`, so the element is fetched and its key converted a single
-    // time, as in PHP. Deeper places keep the statement write below.
+    // Capture one-dimensional elements once, including the expression result, so neither
+    // prefix nor postfix needs another key diagnosis. Static elements use the PHP local
+    // incdec kernel; local and instance-property numeric lowering stays unchanged below.
     if let ExprKind::ArrayAccess { array, .. } = &target.kind {
         if matches!(
             &array.kind,
             ExprKind::Variable(_)
                 | ExprKind::PropertyAccess { .. }
+                | ExprKind::StaticPropertyAccess { .. }
         ) {
             let old_name = crate::names::generated_local_name(&format!(
                 "__elephc_incdec_old_{}_{}", span.line, span.col
@@ -74,6 +75,23 @@ pub(super) fn desugar_lvalue_incdec(
                 name: old_name.clone(),
                 value: target.clone(),
             }, span));
+            if matches!(array.kind, ExprKind::StaticPropertyAccess { .. }) {
+                let operation = match (increment, prefix) {
+                    (true, true) => ExprKind::PreIncrement(old_name.clone()),
+                    (true, false) => ExprKind::PostIncrement(old_name.clone()),
+                    (false, true) => ExprKind::PreDecrement(old_name.clone()),
+                    (false, false) => ExprKind::PostDecrement(old_name.clone()),
+                };
+                prelude.push(Stmt::new(StmtKind::Assign {
+                    name: new_name.clone(), value: Expr::new(operation, span),
+                }, span));
+                return Some(Expr::new(ExprKind::Assignment {
+                    target: Box::new(target),
+                    value: Box::new(Expr::new(ExprKind::Variable(old_name), span)),
+                    result_target: Some(Box::new(Expr::new(ExprKind::Variable(new_name), span))),
+                    prelude, conditional_value_temp: None,
+                }, span));
+            }
             let old_value = Expr::new(ExprKind::Variable(old_name.clone()), span);
             let next_value = Expr::new(ExprKind::BinaryOp {
                 left: Box::new(old_value),

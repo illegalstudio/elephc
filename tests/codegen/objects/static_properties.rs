@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// All direct static incdec expression forms evaluate and diagnose their float key once.
+#[test]
+fn test_static_prefix_ci_float_expression_forms() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = [null, 10, 20, 30, 40]; }
+function dimensionKey(float $value): float { echo 'K'; return $value; }
+set_error_handler(function($level, $message) { echo 'W'; return true; });
+echo ++H::$items[dimensionKey(1.5)], '|';
+echo H::$items[dimensionKey(2.5)]++, '|';
+echo --H::$items[dimensionKey(3.5)], '|';
+echo H::$items[dimensionKey(4.5)]--, '|';
+echo json_encode(H::$items);
+restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "KW11|KW20|KW29|KW40|[null,11,21,29,39]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Explicit mixed-element static roots keep nested writes attached without mutating aliases.
 #[test]
 fn test_static_prefix_oct9_declared_mixed_nested_writeback() {

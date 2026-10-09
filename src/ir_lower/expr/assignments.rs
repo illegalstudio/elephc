@@ -351,6 +351,15 @@ fn compound_array_key_diagnosed_in_prelude(
         if read_value != target {
             return false;
         }
+        if old_name == value_name && prelude.iter().any(|next| {
+            matches!(&next.kind, StmtKind::Assign { value, .. }
+                if matches!(&value.kind,
+                    ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name)
+                        | ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name)
+                        if name == old_name))
+        }) {
+            return true;
+        }
         prelude.iter().any(|next| {
             matches!(
                 &next.kind,
