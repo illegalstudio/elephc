@@ -10,6 +10,8 @@
 //! - The spliced declaration is an ORDINARY `FunctionDecl` with no type parameters, so every
 //!   pass after this one handles it without knowing generics exist.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::generics::{instantiated_name, Bindings};
 use crate::parser::ast::{Program, Stmt, StmtKind};
 
@@ -18,6 +20,10 @@ use crate::parser::ast::{Program, Stmt, StmtKind};
 ///
 /// A zero count is the fixpoint signal: no call site asked for anything the program does not
 /// already declare, so re-checking would find nothing new.
+///
+/// The template table and the declared-name set are hashed once per round: the whole-program walk
+/// that builds them is the same, but membership is then O(1) instead of a scan per instantiation,
+/// which matters on a template instantiated many times.
 pub fn splice_instantiations(
     program: Program,
     requested: &[(String, Bindings)],
@@ -25,19 +31,23 @@ pub fn splice_instantiations(
     if requested.is_empty() {
         return (program, 0);
     }
-    let templates: Vec<(String, Stmt)> = program
-        .iter()
-        .filter_map(|stmt| match &stmt.kind {
-            StmtKind::FunctionDecl {
-                name, type_params, ..
-            } if !type_params.is_empty() => Some((name.clone(), stmt.clone())),
-            _ => None,
-        })
-        .collect();
+    let mut templates: HashMap<String, Stmt> = HashMap::new();
+    for stmt in &program {
+        if let StmtKind::FunctionDecl {
+            name, type_params, ..
+        } = &stmt.kind
+        {
+            if !type_params.is_empty() {
+                // First wins, as the previous linear scan did: a program cannot declare two
+                // templates of one name, but keep the behaviour explicit rather than incidental.
+                templates.entry(name.clone()).or_insert_with(|| stmt.clone());
+            }
+        }
+    }
     if templates.is_empty() {
         return (program, 0);
     }
-    let mut declared: Vec<String> = program
+    let mut declared: HashSet<String> = program
         .iter()
         .filter_map(|stmt| match &stmt.kind {
             StmtKind::FunctionDecl { name, .. } => Some(name.clone()),
@@ -49,16 +59,16 @@ pub fn splice_instantiations(
     let mut added = 0usize;
     for (base, bindings) in requested {
         let target = instantiated_name(base, bindings);
-        if declared.iter().any(|name| name == &target) {
+        if declared.contains(&target) {
             continue;
         }
-        let Some((_, template)) = templates.iter().find(|(name, _)| name == base) else {
+        let Some(template) = templates.get(base) else {
             continue;
         };
         let Some(instance) = instantiate_declaration(template, &target, bindings) else {
             continue;
         };
-        declared.push(target);
+        declared.insert(target);
         program.push(instance);
         added += 1;
     }
@@ -120,13 +130,19 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
         variadic_type,
         return_type,
         by_ref_return,
-        body,
         ..
     } = &template.kind
     else {
         return None;
     };
     let mut instance = template.clone();
+    // Reuse the body the clone already carries instead of cloning it a second time from the
+    // template: each instantiation copied the same statement list twice before the substitution
+    // walk rebuilt it once.
+    let body = match instance.kind {
+        StmtKind::FunctionDecl { body, .. } => body,
+        _ => return None,
+    };
     instance.kind = StmtKind::FunctionDecl {
         name: target.to_string(),
         type_params: Vec::new(),
@@ -156,7 +172,7 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
         // The body goes through the exhaustive walker, so a type parameter named in a typed
         // local, a `buffer<T>`, or a nested closure's signature is substituted too — not only
         // the ones in this declaration's own parameter and return types.
-        body: substitute_in_body(body.clone(), bindings),
+        body: substitute_in_body(body, bindings),
     };
     Some(instance)
 }
@@ -192,4 +208,77 @@ pub fn strip_templates(program: Program) -> Program {
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::TypeExpr;
+
+    /// Parses a program carrying one generic function template as a fixture.
+    fn template_program() -> Program {
+        let tokens = crate::lexer::tokenize("<?php function identity<T>(T $x): T { return $x; }")
+            .expect("tokens");
+        crate::parser::parse(&tokens).expect("program")
+    }
+
+    /// Returns every top-level function name in source order.
+    fn function_names(program: &Program) -> Vec<&str> {
+        program
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::FunctionDecl { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Reads the first declared parameter type of the function named `target`.
+    fn param_type(program: &Program, target: &str) -> Option<TypeExpr> {
+        program.iter().find_map(|stmt| match &stmt.kind {
+            StmtKind::FunctionDecl { name, params, .. } if name == target => {
+                params.first().and_then(|(_, ty, _, _)| ty.clone())
+            }
+            _ => None,
+        })
+    }
+
+    /// One declaration is added per request, and its parameter carries the concrete type: reusing
+    /// the clone's body must not skip the substitution of the signature.
+    #[test]
+    fn splices_one_declaration_per_instantiation() {
+        let requested = vec![(
+            "identity".to_string(),
+            vec![("T".to_string(), TypeExpr::Int)],
+        )];
+        let (program, added) = splice_instantiations(template_program(), &requested);
+        assert_eq!(added, 1);
+        assert_eq!(function_names(&program), vec!["identity", "identity<int>"]);
+        assert_eq!(param_type(&program, "identity<int>"), Some(TypeExpr::Int));
+    }
+
+    /// A duplicate request inside one call is one declaration, and a second splice of the same
+    /// request adds nothing — the hashed declared-name set is what terminates the fixpoint.
+    #[test]
+    fn splicing_is_idempotent_and_deduplicates() {
+        let requested = vec![
+            ("identity".to_string(), vec![("T".to_string(), TypeExpr::Int)]),
+            ("identity".to_string(), vec![("T".to_string(), TypeExpr::Int)]),
+        ];
+        let (program, added) = splice_instantiations(template_program(), &requested);
+        assert_eq!(added, 1, "a repeated request is one declaration");
+        assert_eq!(function_names(&program), vec!["identity", "identity<int>"]);
+        let (program, added_again) = splice_instantiations(program, &requested);
+        assert_eq!(added_again, 0, "the fixpoint adds nothing on a second pass");
+        assert_eq!(function_names(&program), vec!["identity", "identity<int>"]);
+    }
+
+    /// A request naming no declared template is skipped rather than invented.
+    #[test]
+    fn an_unknown_template_is_ignored() {
+        let requested = vec![("missing".to_string(), vec![("T".to_string(), TypeExpr::Int)])];
+        let (program, added) = splice_instantiations(template_program(), &requested);
+        assert_eq!(added, 0);
+        assert_eq!(function_names(&program), vec!["identity"]);
+    }
 }
