@@ -13,6 +13,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+use super::offset_convert::SPL_OFFSET_MODE_FIXED;
 use super::SPL_FIXED_STORAGE_OFFSET;
 
 const SPL_FIXED_OBJECT_SIZE: i64 = 16;
@@ -22,8 +23,8 @@ const SPL_FIXED_CONSTRUCT_SIZE_MSG_LEN: usize =
     "SplFixedArray::__construct(): Argument #1 ($size) must be greater than or equal to 0".len();
 const SPL_FIXED_SET_SIZE_MSG_LEN: usize =
     "SplFixedArray::setSize(): Argument #1 ($size) must be greater than or equal to 0".len();
-const SPL_FIXED_OFFSET_TYPE_MSG_LEN: usize =
-    "Cannot access offset of type non-int on SplFixedArray".len();
+const SPL_FIXED_OFFSET_TYPE_PREFIX_LEN: usize = "Cannot access offset of type ".len();
+const SPL_FIXED_OFFSET_TYPE_SUFFIX_LEN: usize = " on SplFixedArray".len();
 const SPL_FIXED_OFFSET_RANGE_MSG_LEN: usize = "Index invalid or out of range".len();
 const SPL_FIXED_FROM_ARRAY_KEYS_MSG_LEN: usize =
     "array must contain only positive integer keys".len();
@@ -222,14 +223,10 @@ fn emit_offset_exists_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release offset frame
     emitter.instruction("ret");                                                 // return false
     emitter.label("__rt_spl_fixed_offset_exists_type_throw");
+    emitter.instruction("ldr x2, [sp, #32]");                                   // the rejected offset's type-name row
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer before throwing
     emitter.instruction("add sp, sp, #64");                                     // release offset frame before throwing
-    emit_throw_exception_aarch64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_fixed_offset_type_msg",
-        SPL_FIXED_OFFSET_TYPE_MSG_LEN,
-    );
+    emit_fixed_offset_type_throw_aarch64(emitter);
 }
 
 /// Emits `__rt_spl_fixed_offset_get` on aarch64: ArrayAccess `offsetGet`.
@@ -256,14 +253,10 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release offset frame before null return
     emit_tail_boxed_null_aarch64(emitter);
     emitter.label("__rt_spl_fixed_offset_get_type_throw");
+    emitter.instruction("ldr x2, [sp, #32]");                                   // the rejected offset's type-name row
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer before throwing
     emitter.instruction("add sp, sp, #64");                                     // release offset frame before throwing
-    emit_throw_exception_aarch64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_fixed_offset_type_msg",
-        SPL_FIXED_OFFSET_TYPE_MSG_LEN,
-    );
+    emit_fixed_offset_type_throw_aarch64(emitter);
     emitter.label("__rt_spl_fixed_offset_get_range_throw");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer before throwing
     emitter.instruction("add sp, sp, #64");                                     // release offset frame before throwing
@@ -281,13 +274,16 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
-    emitter.instruction("sub sp, sp, #80");                                     // reserve offset-set frame
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish offset-set frame
+    emitter.instruction("sub sp, sp, #112");                                    // reserve offset-set frame
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish offset-set frame
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver
     emitter.instruction("str x1, [sp, #8]");                                    // save boxed offset
     emitter.instruction("str x2, [sp, #16]");                                   // save owned Mixed value
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the owned value, guarded while the offset converts
+    super::super::exceptions::guards::guard(emitter, 64, 96);
     emit_unbox_saved_offset_aarch64(emitter);
+    super::super::exceptions::guards::unguard(emitter, 64, 96);
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload offset tag
     emitter.instruction(&format!("cmp x12, #{}", INT_TAG));                     // fixed-array offsets must be integers
     emitter.instruction("b.ne __rt_spl_fixed_offset_set_type_throw");           // reject non-integer offsets
@@ -313,19 +309,15 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_offset_set_type_throw");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload rejected owned Mixed value
     emitter.instruction("bl __rt_decref_mixed");                                // release rejected value before throwing
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer before throwing
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set frame before throwing
-    emit_throw_exception_aarch64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_fixed_offset_type_msg",
-        SPL_FIXED_OFFSET_TYPE_MSG_LEN,
-    );
+    emitter.instruction("ldr x2, [sp, #32]");                                   // the rejected offset's type-name row
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer before throwing
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set frame before throwing
+    emit_fixed_offset_type_throw_aarch64(emitter);
     emitter.label("__rt_spl_fixed_offset_set_range_throw");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload rejected owned Mixed value
     emitter.instruction("bl __rt_decref_mixed");                                // release rejected value
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer before throwing
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set frame before throwing
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer before throwing
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set frame before throwing
     emit_throw_exception_aarch64(
         emitter,
         "_spl_out_of_bounds_exception_class_id",
@@ -333,8 +325,8 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
         SPL_FIXED_OFFSET_RANGE_MSG_LEN,
     );
     emitter.label("__rt_spl_fixed_offset_set_done");
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set frame
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set frame
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -362,14 +354,10 @@ fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release offset frame
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_fixed_offset_unset_type_throw");
+    emitter.instruction("ldr x2, [sp, #32]");                                   // the rejected offset's type-name row
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer before throwing
     emitter.instruction("add sp, sp, #64");                                     // release offset frame before throwing
-    emit_throw_exception_aarch64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_fixed_offset_type_msg",
-        SPL_FIXED_OFFSET_TYPE_MSG_LEN,
-    );
+    emit_fixed_offset_type_throw_aarch64(emitter);
     emitter.label("__rt_spl_fixed_offset_unset_range_throw");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer before throwing
     emitter.instruction("add sp, sp, #64");                                     // release offset frame before throwing
@@ -406,17 +394,16 @@ fn emit_offset_prefix_aarch64(emitter: &mut Emitter, type_label: &str, range_lab
     emitter.instruction(&format!("b.hs {}", range_label));                      // reject offsets outside fixed range
 }
 
-/// Emits the aarch64 helper that unboxes the saved boxed offset argument.
-/// Loads the boxed offset from [sp+#8], calls `__rt_mixed_unbox` to produce tag (x0) and
-/// integer payload candidate (x1), saves them to [sp+#24] and [sp+#32], then releases
-/// the boxed offset via `__rt_decref_mixed`. Result: offset tag at [sp+#24], integer at [sp+#32].
+/// Emits the aarch64 helper that converts the saved boxed offset argument.
+/// Hands the owned box at [sp+#8] to `__rt_spl_offset_convert` under SplFixedArray's rules and
+/// saves the status to [sp+#24] (0, the int tag, when the offset is an index) and the integer
+/// index or the rejected type's name row to [sp+#32].
 fn emit_unbox_saved_offset_aarch64(emitter: &mut Emitter) {
-    emitter.instruction("ldr x0, [sp, #8]");                                    // reload boxed offset argument
-    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox offset into tag and payload words
-    emitter.instruction("str x0, [sp, #24]");                                   // save unboxed offset tag
-    emitter.instruction("str x1, [sp, #32]");                                   // save unboxed integer payload candidate
-    emitter.instruction("ldr x0, [sp, #8]");                                    // reload boxed offset argument
-    emitter.instruction("bl __rt_decref_mixed");                                // release owned boxed offset argument
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the owned boxed offset argument
+    emitter.instruction(&format!("mov x1, #{}", SPL_OFFSET_MODE_FIXED));        // SplFixedArray offset rules
+    emitter.instruction("bl __rt_spl_offset_convert");                          // convert the offset and release its box
+    emitter.instruction("str x0, [sp, #24]");                                   // save the status (0, like the int tag, when converted)
+    emitter.instruction("str x1, [sp, #32]");                                   // save the integer index or the rejected type's name row
 }
 
 /// Emits `__rt_spl_fixed_to_array` on aarch64: converts the SplFixedArray to a PHP array.
@@ -905,14 +892,10 @@ fn emit_offset_exists_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return false
     emitter.label("__rt_spl_fixed_offset_exists_type_throw");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // the rejected offset's type-name row
     emitter.instruction("add rsp, 48");                                         // release offset frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
-    emit_throw_exception_x86_64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_fixed_offset_type_msg",
-        SPL_FIXED_OFFSET_TYPE_MSG_LEN,
-    );
+    emit_fixed_offset_type_throw_x86_64(emitter);
 }
 
 /// Emits `__rt_spl_fixed_offset_get` on x86_64: ArrayAccess `offsetGet`.
@@ -940,14 +923,10 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before null return
     emit_tail_boxed_null_x86_64(emitter);
     emitter.label("__rt_spl_fixed_offset_get_type_throw");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // the rejected offset's type-name row
     emitter.instruction("add rsp, 48");                                         // release offset frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
-    emit_throw_exception_x86_64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_fixed_offset_type_msg",
-        SPL_FIXED_OFFSET_TYPE_MSG_LEN,
-    );
+    emit_fixed_offset_type_throw_x86_64(emitter);
     emitter.label("__rt_spl_fixed_offset_get_range_throw");
     emitter.instruction("add rsp, 48");                                         // release offset frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
@@ -967,11 +946,14 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offsetSet
     emitter.instruction("mov rbp, rsp");                                        // establish offsetSet frame
-    emitter.instruction("sub rsp, 64");                                         // reserve receiver, offset, value, tag, payload, and cursor spills
+    emitter.instruction("sub rsp, 96");                                         // reserve receiver, offset, value, tag, payload, and cursor spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save boxed offset
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save owned Mixed value
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the owned value, guarded while the offset converts
+    super::super::exceptions::guards::guard(emitter, 64, 96);
     emit_unbox_saved_offset_x86_64(emitter);
+    super::super::exceptions::guards::unguard(emitter, 64, 96);
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload offset tag
     emitter.instruction(&format!("cmp r12, {}", INT_TAG));                      // fixed-array offsets must be integers
     emitter.instruction("jne __rt_spl_fixed_offset_set_type_throw");            // reject non-integer offsets
@@ -997,18 +979,14 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_offset_set_type_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected owned Mixed value
     emitter.instruction("call __rt_decref_mixed");                              // release rejected value before throwing
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame before throwing
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // the rejected offset's type-name row
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
-    emit_throw_exception_x86_64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_fixed_offset_type_msg",
-        SPL_FIXED_OFFSET_TYPE_MSG_LEN,
-    );
+    emit_fixed_offset_type_throw_x86_64(emitter);
     emitter.label("__rt_spl_fixed_offset_set_range_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected owned Mixed value
     emitter.instruction("call __rt_decref_mixed");                              // release rejected value
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame before throwing
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emit_throw_exception_x86_64(
         emitter,
@@ -1017,7 +995,7 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
         SPL_FIXED_OFFSET_RANGE_MSG_LEN,
     );
     emitter.label("__rt_spl_fixed_offset_set_done");
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return void
 }
@@ -1046,14 +1024,10 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_fixed_offset_unset_type_throw");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // the rejected offset's type-name row
     emitter.instruction("add rsp, 48");                                         // release offset frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
-    emit_throw_exception_x86_64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_fixed_offset_type_msg",
-        SPL_FIXED_OFFSET_TYPE_MSG_LEN,
-    );
+    emit_fixed_offset_type_throw_x86_64(emitter);
     emitter.label("__rt_spl_fixed_offset_unset_range_throw");
     emitter.instruction("add rsp, 48");                                         // release offset frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
@@ -1090,17 +1064,16 @@ fn emit_offset_prefix_x86_64(emitter: &mut Emitter, type_label: &str, range_labe
     emitter.instruction(&format!("jae {}", range_label));                       // reject offsets outside fixed range
 }
 
-/// Emits the x86_64 helper that unboxes the saved boxed offset argument.
-/// Loads the boxed offset from [rbp-16], calls `__rt_mixed_unbox` to produce tag (rax) and
-/// integer payload candidate (rdi), saves them to [rbp-32] and [rbp-40], then releases
-/// the boxed offset via `__rt_decref_mixed`. Result: offset tag at [rbp-32], integer at [rbp-40].
+/// Emits the x86_64 helper that converts the saved boxed offset argument.
+/// Hands the owned box at [rbp-16] to `__rt_spl_offset_convert` under SplFixedArray's rules and
+/// saves the status to [rbp-32] (0, the int tag, when the offset is an index) and the integer
+/// index or the rejected type's name row to [rbp-40].
 fn emit_unbox_saved_offset_x86_64(emitter: &mut Emitter) {
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload boxed offset argument
-    emitter.instruction("call __rt_mixed_unbox");                               // unbox offset into tag and payload words
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save unboxed offset tag
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save unboxed integer payload candidate
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload boxed offset argument
-    emitter.instruction("call __rt_decref_mixed");                              // release owned boxed offset argument
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the owned boxed offset argument
+    emitter.instruction(&format!("mov rsi, {}", SPL_OFFSET_MODE_FIXED));        // SplFixedArray offset rules
+    emitter.instruction("call __rt_spl_offset_convert");                        // convert the offset and release its box
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the status (0, like the int tag, when converted)
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the integer index or the rejected type's name row
 }
 
 /// Emits `__rt_spl_fixed_to_array` on x86_64: converts the SplFixedArray to a PHP array.
@@ -1464,4 +1437,24 @@ fn emit_throw_exception_x86_64(
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emitter.instruction("jmp __rt_throw_current");                              // enter the standard exception unwinder
+}
+
+/// Branches to `__rt_spl_throw_offset_type` with SplFixedArray's message around the name row the
+/// caller left in `x2`: `TypeError("Cannot access offset of type <type> on SplFixedArray")`.
+fn emit_fixed_offset_type_throw_aarch64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "x0", "_spl_fixed_offset_type_prefix");
+    emitter.instruction(&format!("mov x1, #{}", SPL_FIXED_OFFSET_TYPE_PREFIX_LEN)); // message prefix length
+    abi::emit_symbol_address(emitter, "x3", "_spl_fixed_offset_type_suffix");
+    emitter.instruction(&format!("mov x4, #{}", SPL_FIXED_OFFSET_TYPE_SUFFIX_LEN)); // message suffix length
+    emitter.instruction("b __rt_spl_throw_offset_type");                        // raise the TypeError naming the offset's type
+}
+
+/// Jumps to `__rt_spl_throw_offset_type` with SplFixedArray's message around the name row the
+/// caller left in `rdx`: `TypeError("Cannot access offset of type <type> on SplFixedArray")`.
+fn emit_fixed_offset_type_throw_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("lea rdi, [rip + _spl_fixed_offset_type_prefix]");      // message prefix pointer
+    emitter.instruction(&format!("mov rsi, {}", SPL_FIXED_OFFSET_TYPE_PREFIX_LEN)); // message prefix length
+    emitter.instruction("lea rcx, [rip + _spl_fixed_offset_type_suffix]");      // message suffix pointer
+    emitter.instruction(&format!("mov r8, {}", SPL_FIXED_OFFSET_TYPE_SUFFIX_LEN)); // message suffix length
+    emitter.instruction("jmp __rt_spl_throw_offset_type");                      // raise the TypeError naming the offset's type
 }
