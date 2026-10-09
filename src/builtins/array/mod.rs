@@ -80,6 +80,7 @@ pub mod range;
 pub mod reset;
 pub mod rsort;
 mod set_comparator;
+mod set_result;
 pub mod shuffle;
 pub mod sizeof;
 pub mod sort;

@@ -152,6 +152,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_replace(emitter);
     arrays::emit_array_replace_recursive(emitter);
     arrays::emit_assoc_diff_intersect(emitter);
+    arrays::emit_hash_value_diff_intersect(emitter);
     arrays::emit_amr_box_value(emitter);
     arrays::emit_array_merge_recursive(emitter);
     arrays::emit_array_multisort(emitter);
