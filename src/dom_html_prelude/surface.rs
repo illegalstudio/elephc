@@ -35,6 +35,30 @@ function __elephc_dom_is_ws(string $c): bool {
     return $c === " " || $c === "\t" || $c === "\n" || $c === "\r";
 }
 
+function __elephc_dom_is_letter(string $c): bool {
+    if ($c === "") {
+        return false;
+    }
+    $_o = ord($c);
+    return ($_o >= 65 && $_o <= 90) || ($_o >= 97 && $_o <= 122);
+}
+
+function __elephc_dom_starts_markup(string $html, int $i): bool {
+    if (__elephc_dom_char($html, $i) !== "<") {
+        return false;
+    }
+    $_next = __elephc_dom_char($html, $i + 1);
+    return __elephc_dom_is_letter($_next) || $_next === "/" || $_next === "!" || $_next === "?";
+}
+
+function __elephc_dom_is_boolean_attr(string $name): bool {
+    return $name === "checked" || $name === "compact" || $name === "declare"
+        || $name === "defer" || $name === "disabled" || $name === "ismap"
+        || $name === "multiple" || $name === "nohref" || $name === "noresize"
+        || $name === "noshade" || $name === "nowrap" || $name === "readonly"
+        || $name === "selected";
+}
+
 function __elephc_dom_is_name(string $c): bool {
     if ($c === "" ) {
         return false;
@@ -95,7 +119,7 @@ function __elephc_dom_read_attr_value(string $html, int $i): mixed {
     $_start = $i;
     while ($i < $_len) {
         $_c = __elephc_dom_char($html, $i);
-        if (__elephc_dom_is_ws($_c) || $_c === ">" || $_c === "/") {
+        if (__elephc_dom_is_ws($_c) || $_c === ">") {
             break;
         }
         $i = $i + 1;
@@ -117,13 +141,14 @@ function __elephc_dom_read_attrs(string $html, int $i): mixed {
             break;
         }
         if ($_c === "/") {
-            $_self = 1;
             $i = $i + 1;
             $i = __elephc_dom_skip_ws($html, $i);
             if (__elephc_dom_char($html, $i) === ">") {
+                $_self = 1;
                 $i = $i + 1;
+                break;
             }
-            break;
+            continue;
         }
         $_pair = __elephc_dom_read_name($html, $i);
         $_name = (string) $_pair[0];
@@ -139,6 +164,8 @@ function __elephc_dom_read_attrs(string $html, int $i): mixed {
             $_av = __elephc_dom_read_attr_value($html, $i);
             $_val = (string) $_av[0];
             $i = (int) $_av[1];
+        } elseif (__elephc_dom_is_boolean_attr($_name)) {
+            $_val = $_name;
         }
         // Indexed [name, value] pairs: nested string-keyed maps lose their
         // keys when stored through mixed tree/token slots.
@@ -166,10 +193,9 @@ function __elephc_dom_tokenize(string $html, int $flags): mixed {
     $_len = strlen($html);
     $_noblanks = ($flags & 256) !== 0;
     while ($_i < $_len) {
-        $_c = __elephc_dom_char($html, $_i);
-        if ($_c !== "<") {
+        if (!__elephc_dom_starts_markup($html, $_i)) {
             $_start = $_i;
-            while ($_i < $_len && __elephc_dom_char($html, $_i) !== "<") {
+            while ($_i < $_len && !__elephc_dom_starts_markup($html, $_i)) {
                 $_i = $_i + 1;
             }
             $_text = html_entity_decode(substr($html, $_start, $_i - $_start));
@@ -398,7 +424,7 @@ function __elephc_dom_serialize_node(mixed $node): string {
             $_inner = $_inner . __elephc_dom_serialize_node($_child);
         }
     }
-    if ($_inner === "" && __elephc_dom_is_void($node->nodeName)) {
+    if ($node->childNodes === null || $node->childNodes->length === 0) {
         return $_out . "/>";
     }
     return $_out . ">" . $_inner . "</" . $node->nodeName . ">";

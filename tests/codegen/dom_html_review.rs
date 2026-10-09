@@ -11,6 +11,65 @@
 
 use crate::support::*;
 
+/// Slashes in unquoted values remain data, while a standalone closing slash ends the tag.
+#[test]
+fn dom_html_token_review_unquoted_slashes() {
+    let out = compile_and_run(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<a href=http://example.com title=ok>x</a><div class=foo/bar>z</div><span / title=kept>t</span><b data=x />');
+$a = $dom->getElementsByTagName('a')->item(0);
+$div = $dom->getElementsByTagName('div')->item(0);
+$span = $dom->getElementsByTagName('span')->item(0);
+$b = $dom->getElementsByTagName('b')->item(0);
+echo $a->getAttribute('href'), '|', $a->getAttribute('title'), '|', $a->nodeValue, '|',
+    $div->getAttribute('class'), '|', $div->nodeValue, '|', $span->getAttribute('title'), '|',
+    $span->nodeValue, '|', $dom->saveXML($b);
+"#);
+    assert_eq!(out, "http://example.com|ok|x|foo/bar|z|kept|t|<b data=\"x\"/>");
+}
+
+/// A less-than sign followed by a non-letter stays text rather than becoming a tag.
+#[test]
+fn dom_html_token_review_nonletter_start() {
+    let out = compile_and_run(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<div>1<2</div><span>x<_y</span><b>3<-4</b>');
+foreach (['div', 'span', 'b'] as $name) {
+    $node = $dom->getElementsByTagName($name)->item(0);
+    echo $node->nodeValue, '|', $node->childNodes->length, '|', $dom->saveXML($node), ';';
+}
+"#);
+    assert_eq!(out, "1<2|1|<div>1&lt;2</div>;x<_y|1|<span>x&lt;_y</span>;3<-4|1|<b>3&lt;-4</b>;");
+}
+
+/// Libxml's HTML boolean names use their name for an omitted value, unlike other attributes.
+#[test]
+fn dom_html_token_review_boolean_attributes() {
+    let out = compile_and_run(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<input CHECKED compact declare defer disabled ismap multiple nohref noresize noshade nowrap readonly selected hidden required title><input disabled="" checked=no>');
+$input = $dom->getElementsByTagName('input')->item(0);
+foreach (['checked', 'compact', 'declare', 'defer', 'disabled', 'ismap', 'multiple', 'nohref', 'noresize', 'noshade', 'nowrap', 'readonly', 'selected', 'hidden', 'required', 'title'] as $name) {
+    echo $name, '=', $input->getAttribute($name), ';';
+}
+$explicit = $dom->getElementsByTagName('input')->item(1);
+echo '|', $explicit->getAttribute('disabled'), '|', $explicit->getAttribute('checked');
+"#);
+    assert_eq!(out, "checked=checked;compact=compact;declare=declare;defer=defer;disabled=disabled;ismap=ismap;multiple=multiple;nohref=nohref;noresize=noresize;noshade=noshade;nowrap=nowrap;readonly=readonly;selected=selected;hidden=;required=;title=;||no");
+}
+
+/// XML serialization uses empty-element syntax for ordinary elements as well as void tags.
+#[test]
+fn dom_html_token_review_empty_elements() {
+    let out = compile_and_run(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<div class="a"></div><span></span><p> </p><i><!--comment--></i><br>');
+$body = $dom->getElementsByTagName('body')->item(0);
+foreach ($body->childNodes as $node) { echo $dom->saveXML($node); }
+"#);
+    assert_eq!(out, "<div class=\"a\"/><span/><p> </p><i><!--comment--></i><br/>");
+}
+
 /// A generic function's bound keeps the namespace ownership of a user-defined DOM class.
 #[test]
 fn dom_html_review_generic_function_bound_uses_namespace() {
