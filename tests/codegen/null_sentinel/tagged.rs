@@ -39,6 +39,52 @@ fn test_tagged_int_at_sentinel_in_array_roundtrips() {
     assert_eq!(out, "9223372036854775806|int(9223372036854775806)\n");
 }
 
+/// A `?int` value in an ASSOCIATIVE literal is stored as Mixed: an inline tagged scalar has no
+/// static hash value type, and asking for one panicked the compiler (#1561). The hash must then
+/// read back, answer `isset`, and accept a concrete overwrite like any other Mixed entry.
+#[test]
+fn test_tagged_nullable_int_in_associative_literal_roundtrips() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function f(?int $n): array { return ["k" => $n]; }
+$a = f(3); $b = f(null);
+var_dump($a["k"], $b["k"]);
+var_dump(isset($a["k"]), isset($b["k"]));
+var_dump($a["k"] ?? "dflt", $b["k"] ?? "dflt");
+$a["k"] = 5;
+var_dump($a["k"]);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(3)\n",
+            "NULL\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "int(3)\n",
+            "string(4) \"dflt\"\n",
+            "int(5)\n",
+        )
+    );
+}
+
+/// Returning a `?int` element READ from an associative literal must unbox the Mixed entry into the
+/// tagged-scalar return shape: the declared return (`f`) and the inferred return (`g`) both used to
+/// be rejected by `lower_runtime_call` with `runtime_call from PHP type Mixed to PHP type
+/// TaggedScalar` (#1561 review).
+#[test]
+fn test_tagged_nullable_int_returned_from_an_associative_literal() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+function f(?int $n): ?int { return ["k" => $n]["k"]; }
+function g(?int $n) { return ["k" => $n]["k"]; }
+var_dump(f(3), f(null), g(4), g(null));
+"#,
+    );
+    assert_eq!(out, "int(3)\nNULL\nint(4)\nNULL\n");
+}
+
 /// A nullable-int function returning the sentinel-valued integer var_dumps as int(...).
 #[test]
 fn test_tagged_int_at_sentinel_nullable_return_is_not_null() {
