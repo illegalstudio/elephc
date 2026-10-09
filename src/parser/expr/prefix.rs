@@ -456,12 +456,7 @@ fn parse_prefix_inc_dec(
     // original error stands for anything the desugaring declines (a call, for instance,
     // which cannot be read twice).
     let rewind = *pos;
-    let operand = if increment {
-        super::pratt::parse_prefix_increment_operand(tokens, pos)
-    } else {
-        parse_expr_bp(tokens, pos, 35)
-            .map(|target| (target, super::pratt::PrefixIncrementTarget::Regular))
-    };
+    let operand = super::pratt::parse_prefix_increment_operand(tokens, pos);
     if let Err(error) = &operand {
         if !increment && error.message == "Cannot use [] for reading" {
             return Err(CompileError::new(span,
@@ -470,6 +465,10 @@ fn parse_prefix_inc_dec(
     }
     if let Ok((target, append_kind)) = operand {
         if matches!(append_kind, super::pratt::PrefixIncrementTarget::Append) {
+            if !increment {
+                return Err(CompileError::new(span,
+                    "Pre-decrement on an append dimension is not supported"));
+            }
             return Ok(target);
         }
         if matches!(append_kind, super::pratt::PrefixIncrementTarget::AppendProperty) {

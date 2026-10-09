@@ -10,6 +10,36 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// Prefix decrement of an append's property appends null before a catchable property Error.
+#[test]
+fn test_append_oct9_property_prefix_decrement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [];
+try { --$items[]->x; } catch (Error $error) { echo $error->getMessage(), '|'; }
+try { echo --$items[]->x->y; } catch (Error $error) { echo $error->getMessage(), '|'; }
+echo json_encode($items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Attempt to increment/decrement property \"x\" on null|Attempt to modify property \"x\" on null|[null,null]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Provably zero keys preserve caller references when their new value is already boxed Mixed.
+#[test]
+fn test_append_oct9_variadic_zero_mixed_write() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function integer(&...$items): void { $items[0] = $items[1]; echo $items[0], '|'; }
+function boolean(&...$items): void { $items[false] = $items[1]; echo $items[0], '|'; }
+function floating(&...$items): void { $alias =& $items; $alias[0.0] = $alias[1]; echo $items[0], '|'; }
+$a = 'A'; $b = 'B'; integer($a, $b); echo $a, ':', $b, ';';
+$a = 'A'; boolean($a, $b); echo $a, ':', $b, ';';
+$a = 'A'; floating($a, $b); echo $a, ':', $b;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "B|B:B;B|B:B;B|B:B");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// JSON reads scalar, heap and boxed caller values without consuming their variadic references.
 #[test]
 fn test_append_latest_variadic_json_value_types() {

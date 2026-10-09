@@ -196,13 +196,16 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     }
     // Contextual storage may already have widened an empty destination to Mixed slots.
     // A scalar key can still be negative or sparse, even when arithmetic lowering
-    // produced an unboxed integer for a checker-facing Mixed expression.
+    // produced an unboxed integer for a checker-facing Mixed expression. Even a
+    // literal zero must preserve an existing invoker marker through the shared writer.
     if op == Op::ArraySet
         && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
             PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed)
         && !index_is_boxed_mixed_key(index_value.ir_type)
         && !index_is_foreach_int_key(ctx, index)
-        && crate::types::empty_array_key_requires_hash_storage(index)
+        && (crate::types::empty_array_key_requires_hash_storage(index)
+            || matches!(value_value.ir_type,
+                IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)))
     {
         let key = ctx.box_value_as_mixed(index_value, PhpType::Mixed, Some(index.span));
         lower_mixed_key_array_set(
@@ -385,6 +388,7 @@ pub(super) fn lower_mixed_key_array_set(
         Some(span),
     );
     ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
+    release_indexed_array_write_operand(ctx, Some(&PhpType::Mixed), value, span);
 }
 
 /// Returns the associative type produced by a string-key write to an indexed array.
