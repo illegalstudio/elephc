@@ -34,7 +34,7 @@ impl PropertyWriteReceiver {
     }
 
     /// Guards an array mutation after its keys and RHS have run, rooting their owners on Error.
-    pub(super) fn narrow_for_array(
+    pub(crate) fn narrow_for_array(
         &mut self, ctx: &mut LoweringContext<'_, '_>, property: &str, operands: &[crate::ir::ValueId], span: Span,
     ) {
         self.narrow_for_write(ctx, WritePropertyName::Literal(property), "modify", operands, span);

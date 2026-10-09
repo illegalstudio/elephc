@@ -17,6 +17,7 @@ use crate::span::Span;
 
 use super::assignment_targets::{
     AssignmentExpressionLowerer, is_assignment_expression_target, is_non_local_assignment_target,
+    static_property_receiver_chain,
 };
 use super::calls::parse_first_class_callable_parens;
 use super::parse_args;
@@ -433,8 +434,7 @@ fn parse_expr_bp_inner(
                 let conditional_value_temp =
                     null_coalesce_assign.then(|| lowerer.reserve_value_temp());
                 let static_object_write = matches!(&target.kind,
-                    ExprKind::PropertyAccess { object, .. }
-                        if matches!(object.kind, ExprKind::StaticPropertyAccess { .. }));
+                    ExprKind::PropertyAccess { object, .. } if static_property_receiver_chain(object));
                 let rhs = if null_coalesce_assign {
                     rhs
                 } else if static_object_write {

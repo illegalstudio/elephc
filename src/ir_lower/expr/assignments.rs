@@ -20,10 +20,15 @@ pub(super) fn lower_assignment_expr(
     expr: &Expr,
 ) -> LoweredValue {
     let key_already_diagnosed = compound_array_key_diagnosed_in_prelude(target, value, prelude, expr.span);
+    let mut compound_receiver = None;
     for stmt in prelude {
-        guard_static_compound_property_read(ctx, target, value, stmt, expr.span);
+        if let Some(receiver) = guard_static_compound_property_read(ctx, target, value, stmt, expr.span) {
+            compound_receiver = Some(receiver);
+            continue;
+        }
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
+    let target = compound_receiver.as_ref().map(|receiver| &receiver.target).unwrap_or(target);
     if let Some(temp_name) = conditional_value_temp {
         if let Some(result) = lower_conditional_non_local_null_coalesce_assignment(
             ctx,
@@ -56,7 +61,9 @@ pub(super) fn lower_assignment_expr(
             lower_non_local_assignment_write_with_diagnosed_key(
                 ctx, target, value, expr.span, key_already_diagnosed,
             );
-            return lower_expr(ctx, result_target);
+            let result = lower_expr(ctx, result_target);
+            finish_static_compound_receiver(ctx, compound_receiver, expr.span);
+            return result;
         }
     }
     let static_callable = assigned_name.and_then(|_| static_callable_binding_for_expr(ctx, value));
@@ -125,26 +132,12 @@ pub(super) fn lower_assignment_expr(
         lower_non_local_assignment_write_with_diagnosed_key(ctx, target, value, expr.span, key_already_diagnosed);
     }
     if let Some(result_target) = result_target {
-        return lower_expr(ctx, result_target);
+        let result = lower_expr(ctx, result_target);
+        finish_static_compound_receiver(ctx, compound_receiver, expr.span);
+        return result;
     }
+    finish_static_compound_receiver(ctx, compound_receiver, expr.span);
     result
-}
-
-/// Checks a delayed static receiver after the captured RHS and before the compound read.
-fn guard_static_compound_property_read(
-    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, stmt: &Stmt, span: Span,
-) {
-    let ExprKind::PropertyAccess { object, property } = &target.kind else { return; };
-    if !matches!(object.kind, ExprKind::StaticPropertyAccess { .. }) { return; }
-    let ExprKind::Variable(result) = &value.kind else { return; };
-    let StmtKind::Assign { name, value } = &stmt.kind else { return; };
-    let ExprKind::BinaryOp { left, right, .. } = &value.kind else { return; };
-    if name != result || left.as_ref() != target { return; }
-    let rhs = ctx.with_borrowed_write_operand(|ctx| lower_expr(ctx, right));
-    let object = lower_expr(ctx, object);
-    let mut receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-    receiver.narrow_for_assignment(ctx, property, rhs, span);
-    receiver.finish(ctx, span);
 }
 
 /// Lowers a non-local `??=` assignment expression with lazy RHS evaluation.

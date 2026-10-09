@@ -18,6 +18,111 @@ fn verify(source: &str, expected: &str) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Computed keys run before the RHS, but nested writes fetch its replacement static array.
+#[test]
+fn test_static_receiver_second_review_computed_nested_keys() {
+    verify(r#"<?php
+class C { public static array $items = [[1]]; }
+function pickKey(): int { echo 'K'; return 0; }
+function replace(): int { echo 'R'; C::$items = [[7]]; return 9; }
+C::$items[pickKey()][0] = replace(); echo json_encode(C::$items), '|';
+C::$items[0][pickKey()] = replace(); echo json_encode(C::$items), '|';
+C::$items[0.0][0] = replace(); echo json_encode(C::$items), '|';
+C::$items[strval(0)][0] = replace(); echo json_encode(C::$items);
+"#, "KR[[9]]|KR[[9]]|R[[9]]|R[[9]]");
+}
+
+/// Nested compound writes read the replacement element after the RHS, with keys evaluated once.
+#[test]
+fn test_static_receiver_second_review_nested_compound_order() {
+    verify(r#"<?php
+class C { public static array $items = [[1]]; }
+function pickKey(): int { echo 'K'; return 0; }
+function replace(): int { echo 'R'; C::$items = [[7]]; return 9; }
+C::$items[0][0] += replace(); echo json_encode(C::$items), '|';
+C::$items[pickKey()][0] += replace(); echo json_encode(C::$items), '|';
+C::$items[0][pickKey()] += replace(); echo json_encode(C::$items);
+"#, "R[[16]]|KR[[16]]|KR[[16]]");
+}
+
+/// Fractional static parent keys are diagnosed after the RHS and once per compound access.
+#[test]
+fn test_static_receiver_second_review_nested_float_diagnosis() {
+    verify(r#"<?php
+class C { public static array $items = [[1], [2]]; }
+function rhs(): int { echo 'R'; C::$items = [[7], [8]]; return 9; }
+set_error_handler(function($level, $message) { echo 'W'; return true; });
+C::$items[1.5][0] = rhs(); echo json_encode(C::$items), '|';
+C::$items[1.5][0] += rhs(); echo json_encode(C::$items);
+restore_error_handler();
+"#, "RW[[7],[9]]|RW[[7],[17]]");
+}
+
+/// Null write chains fail at their first missing property without emitting read warnings.
+#[test]
+fn test_static_receiver_second_review_null_property_chain() {
+    verify(r#"<?php
+class Leaf { public int $v = 1; public string $text = ''; }
+class O { public Leaf $child; }
+class C { public static ?O $o = null; }
+try { C::$o->child->v = (print 'rhs'); }
+catch (Error $e) { echo ':', $e->getMessage(), '|'; }
+try { C::$o->child->v += (print 'rhs'); }
+catch (Error $e) { echo ':', $e->getMessage(), '|'; }
+for ($i = 0; $i < 4; $i++) {
+    try { C::$o->child->text = str_repeat('x', 24); }
+    catch (Error $e) { echo 'c'; }
+}
+"#, "rhs:Attempt to modify property \"child\" on null|rhs:Attempt to modify property \"child\" on null|cccc");
+}
+
+/// A present chain retains the child lease and calls its get hook only once for a compound read.
+#[test]
+fn test_static_receiver_second_review_present_property_chain() {
+    verify(r#"<?php
+class Leaf { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class O {
+    public Leaf $storage;
+    public Leaf $child { get { echo 'G'; return $this->storage; } }
+    public function __construct() { $this->storage = new Leaf(); }
+}
+class C { public static ?O $o = null; }
+function rhs(): int { echo 'R'; return 9; }
+C::$o = new O();
+C::$o->child->v += rhs();
+echo ':', C::$o->storage->v;
+"#, "RG:10D10");
+}
+
+/// Nullable children are checked as write-context parents without reading their later property.
+#[test]
+fn test_static_receiver_second_review_nullable_child() {
+    verify(r#"<?php
+class Leaf { public int $v = 1; }
+class O { public ?Leaf $child = null; }
+class C { public static O $o; }
+C::$o = new O();
+try { C::$o->child->v = (print 'rhs'); }
+catch (Error $e) { echo ':', $e->getMessage(); }
+"#, "rhs:Attempt to assign property \"v\" on null");
+}
+
+/// Captured owned String keys are retired when the RHS throws before any static traversal.
+#[test]
+fn test_static_receiver_second_review_throwing_nested_rhs() {
+    verify(r#"<?php
+class C { public static array $items = [[1]]; }
+function fail(): int { throw new Error('rhs'); }
+for ($i = 0; $i < 4; $i++) {
+    try { C::$items[strval(0)][0] = fail(); }
+    catch (Error $e) { echo 'a'; }
+    try { C::$items[strval(0)][0] += fail(); }
+    catch (Error $e) { echo 'b'; }
+}
+echo '|', json_encode(C::$items);
+"#, "abababab|[[1]]");
+}
+
 /// Nullable local array writes evaluate computed keys and values before the null Error.
 #[test]
 fn test_static_receiver_followup_local_null_array_order() {

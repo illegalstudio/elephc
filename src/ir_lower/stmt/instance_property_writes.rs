@@ -27,10 +27,17 @@ pub(super) fn lower_property_assign(
             None
         }
     });
-    let object = lower_expr(ctx, object);
-    let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
     let value_expr = value;
-    let lowered_value = lower_expr(ctx, value_expr);
+    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+        let rhs = lower_expr(ctx, value_expr);
+        let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, rhs, span);
+        (receiver, rhs)
+    } else {
+        let object = lower_expr(ctx, object);
+        let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        let rhs = lower_expr(ctx, value_expr);
+        (receiver, rhs)
+    };
     let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
     if let Some(message) = throw_access_message {
         receiver.finish(ctx, span);

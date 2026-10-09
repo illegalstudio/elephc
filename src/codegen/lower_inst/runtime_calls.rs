@@ -27,7 +27,7 @@ pub(super) fn lower(
     match target {
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
-        RuntimeCallTarget::ArrayFetchForWrite => {
+        RuntimeCallTarget::ArrayFetchForWrite | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
         RuntimeCallTarget::MixedCellPromoteToHash(sort) => {

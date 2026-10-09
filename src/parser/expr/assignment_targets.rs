@@ -18,6 +18,15 @@ use crate::parser::stmt::{
 };
 use crate::span::Span;
 
+/// Recognizes pure property traversal rooted in a delayed static-property load.
+pub(super) fn static_property_receiver_chain(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => static_property_receiver_chain(object),
+        _ => false,
+    }
+}
+
 /// Builds a plain assignment with the same capture and result rules for parsed and built ASTs.
 pub(crate) fn plain_assignment_expression(target: Expr, value: Expr, span: Span) -> Expr {
     if !is_non_local_assignment_target(&target) {
