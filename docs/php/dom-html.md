@@ -41,11 +41,11 @@ foreach ($body->childNodes as $node) {
 | `loadHTML(string $source, int $options = 0): bool` | Forgiving HTML fragment parse. Wraps content in `html`/`body`; unmatched closing tags are ignored, and a matching ancestor closes its open descendants. This is not full HTML tree-repair semantics. |
 | `getElementsByTagName(string $name): DOMNodeList` | Document-order descendant elements. `*` matches every element. |
 | `DOMNodeList::item(int $index)` / `$length` / `foreach` | Indexed access and `Iterator` traversal. |
-| `nodeName`, `nodeValue` | HTML tag names are lowercased. Element `nodeValue` is concatenated descendant text, excluding comments. A `DOMComment` retains its own comment body and serializes normally. |
+| `nodeName`, `nodeValue` | HTML tag names are lowercased. Element `nodeValue` is concatenated descendant text, excluding comments. Document `nodeValue` remains `null`. A `DOMComment` retains its own comment body and serializes normally. |
 | `childNodes`, `previousSibling`, `nextSibling`, `parentNode`, `ownerDocument` | Wired after parse. The tree is treated as immutable. |
 | `DOMElement::getAttribute(string $name): string` | Attribute names are lowercased on parse. Missing attributes return `""`. |
 | `instanceof DOMElement` / `DOMText` / `DOMComment` / `DOMDocument` | Class hierarchy matches PHP (`DOMText`/`DOMComment` extend `DOMCharacterData` extend `DOMNode`). |
-| `saveXML(?DOMNode $node = null): string` | Serializes a node or the whole document. No XML declaration (Termwind passes `LIBXML_NOXMLDECL`). |
+| `saveXML(?DOMNode $node = null): string` | Serializes a node or the whole document. Text escapes `&`, `<`, and `>`; double-quoted attributes also escape `"`, but not `'`. No XML declaration (Termwind passes `LIBXML_NOXMLDECL`). |
 
 ### `LIBXML_*` flags Termwind uses
 
@@ -57,12 +57,16 @@ These constants are always available (including inside a namespace, and in
 | `LIBXML_NOXMLDECL` | 2 | Save flag; parse ignores it. `saveXML()` never emits `<?xml …?>`. |
 | `LIBXML_HTML_NODEFDTD` | 4 | No default doctype is added (none is added anyway). |
 | `LIBXML_NOERROR` | 32 | Parse is silent and forgiving. |
-| `LIBXML_NOBLANKS` | 256 | Whitespace-only text nodes are dropped. |
+| `LIBXML_NOBLANKS` | 256 | Accepted without removing HTML whitespace-only text nodes. XML blank-node filtering is outside this HTML-only subset. |
 | `LIBXML_COMPACT` | 65536 | Accepted and ignored (libxml compaction is an optimizer hint). |
 
 ## Remaining gaps versus full PHP DOM
 
 Tracked against PHP's `ext/dom` / `ext/libxml` and against #654:
+
+Unknown `<!...>` markup stays text, while a doctype is ignored. This follows
+the legacy libxml HTML tokenizer used by PHP with libxml 2.9.14; newer libxml
+versions can tokenize malformed declarations differently.
 
 - No libxml2 or Lexbor engine, no `elephc-dom` crate, no XML `load()` / `loadXML()`.
 - No modern `Dom\` HTML API (`Dom\HTMLDocument`, `Dom\Element`, …).

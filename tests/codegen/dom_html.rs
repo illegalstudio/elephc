@@ -103,9 +103,9 @@ echo $first->previousSibling === null ? 'N' : 'x';
     assert_eq!(out, "ACcBPN");
 }
 
-/// Verifies `LIBXML_NOBLANKS` drops whitespace-only text nodes between elements.
+/// Verifies HTML whitespace remains visible even when `LIBXML_NOBLANKS` is requested.
 #[test]
-fn test_noblanks_drops_whitespace_text() {
+fn test_noblanks_preserves_html_whitespace_text() {
     let out = compile_and_run(
         r#"<?php
 $dom = new DOMDocument();
@@ -116,7 +116,7 @@ echo ':';
 echo $div->childNodes->item(0)->nodeName;
 "#,
     );
-    assert_eq!(out, "1:span");
+    assert_eq!(out, "3:#text");
 }
 
 /// Verifies `saveXML` on a child and `ownerDocument` identity for Termwind `getHtml`.

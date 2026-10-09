@@ -11,6 +11,61 @@
 
 use crate::support::*;
 
+/// HTML parsing retains whitespace-only siblings even when NOBLANKS is requested.
+#[test]
+fn dom_html_second_review_noblanks_preserves_whitespace() {
+    let out = compile_and_run(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<span>a</span> <span>b</span>', LIBXML_NOERROR | LIBXML_NOBLANKS);
+$body = $dom->getElementsByTagName('body')->item(0);
+echo $body->nodeValue, '|', $body->childNodes->length, '|';
+$dom->loadHTML("<div>\n  <span>x</span>\n</div>", LIBXML_NOERROR | LIBXML_NOBLANKS);
+$div = $dom->getElementsByTagName('div')->item(0);
+echo json_encode($div->nodeValue), '|', $div->childNodes->length;
+"#);
+    assert_eq!(out, "a b|3|\"\\n  x\\n\"|3");
+}
+
+/// Legacy libxml declaration handling preserves unknown bang markup as one text run.
+#[test]
+fn dom_html_second_review_unknown_declaration_is_text() {
+    let out = compile_and_run(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<!DOCTYPE html><div>a<!not>b</div>');
+$div = $dom->getElementsByTagName('div')->item(0);
+echo $div->nodeValue, '|', $div->childNodes->length, '|', $dom->saveXML($div);
+"#);
+    assert_eq!(out, "a<!not>b|1|<div>a&lt;!not&gt;b</div>");
+}
+
+/// XML escaping differs between text and double-quoted attribute values.
+#[test]
+fn dom_html_second_review_contextual_xml_escaping() {
+    let out = compile_and_run(r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML("<div title=\"it's &quot;ok&quot; &amp; &lt;&gt;\">say \"hi\" &amp; &lt;&gt; 'yes'</div>");
+$div = $dom->getElementsByTagName('div')->item(0);
+echo $dom->saveXML($div);
+"#);
+    assert_eq!(out, "<div title=\"it's &quot;ok&quot; &amp; &lt;&gt;\">say \"hi\" &amp; &lt;&gt; 'yes'</div>");
+}
+
+/// Loading or reloading a document never changes its null nodeValue.
+#[test]
+fn dom_html_second_review_document_value_is_null() {
+    let out = compile_and_run(r#"<?php
+$dom = new DOMDocument();
+echo $dom->nodeValue === null ? 'N' : 'bad';
+$dom->loadHTML('<div>Hi</div>');
+echo $dom->nodeValue === null ? 'N' : 'bad';
+echo '|', $dom->getElementsByTagName('html')->item(0)->nodeValue;
+$dom->loadHTML('<span>Bye</span>');
+echo '|', $dom->nodeValue === null ? 'N' : 'bad';
+echo '|', $dom->getElementsByTagName('html')->item(0)->nodeValue;
+"#);
+    assert_eq!(out, "NN|Hi|N|Bye");
+}
+
 /// Slashes in unquoted values remain data, while a standalone closing slash ends the tag.
 #[test]
 fn dom_html_token_review_unquoted_slashes() {

@@ -48,7 +48,13 @@ function __elephc_dom_starts_markup(string $html, int $i): bool {
         return false;
     }
     $_next = __elephc_dom_char($html, $i + 1);
-    return __elephc_dom_is_letter($_next) || $_next === "/" || $_next === "!" || $_next === "?";
+    if ($_next === "!") {
+        return substr($html, $i, 4) === "<!--"
+            || (strtoupper(substr($html, $i, 9)) === "<!DOCTYPE"
+                && (__elephc_dom_is_ws(__elephc_dom_char($html, $i + 9))
+                    || __elephc_dom_char($html, $i + 9) === ">"));
+    }
+    return __elephc_dom_is_letter($_next) || $_next === "/" || $_next === "?";
 }
 
 function __elephc_dom_is_boolean_attr(string $name): bool {
@@ -189,9 +195,9 @@ function __elephc_dom_attr_get(mixed $attrs, string $name): string {
 
 function __elephc_dom_tokenize(string $html, int $flags): mixed {
     $_tokens = [];
-    $_i = 0;
+    $_i = __elephc_dom_skip_ws($html, 0);
     $_len = strlen($html);
-    $_noblanks = ($flags & 256) !== 0;
+    $_unused_flags = $flags;
     while ($_i < $_len) {
         if (!__elephc_dom_starts_markup($html, $_i)) {
             $_start = $_i;
@@ -199,9 +205,6 @@ function __elephc_dom_tokenize(string $html, int $flags): mixed {
                 $_i = $_i + 1;
             }
             $_text = html_entity_decode(substr($html, $_start, $_i - $_start));
-            if ($_noblanks && trim($_text) === "") {
-                continue;
-            }
             if ($_text !== "") {
                 $_tokens[] = ["k" => "text", "v" => $_text];
             }
@@ -390,7 +393,11 @@ function __elephc_dom_parse_html(string $html, int $flags): mixed {
 }
 
 function __elephc_dom_escape(string $s): string {
-    return htmlspecialchars($s);
+    return htmlspecialchars($s, ENT_NOQUOTES);
+}
+
+function __elephc_dom_escape_attr(string $s): string {
+    return htmlspecialchars($s, ENT_COMPAT);
 }
 
 function __elephc_dom_serialize_node(mixed $node): string {
@@ -414,7 +421,7 @@ function __elephc_dom_serialize_node(mixed $node): string {
     if (is_array($_attrs)) {
         foreach ($_attrs as $_pair) {
             if (is_array($_pair)) {
-                $_out = $_out . " " . (string) $_pair[0] . "=\"" . __elephc_dom_escape((string) $_pair[1]) . "\"";
+                $_out = $_out . " " . (string) $_pair[0] . "=\"" . __elephc_dom_escape_attr((string) $_pair[1]) . "\"";
             }
         }
     }
@@ -627,7 +634,7 @@ class DOMDocument extends DOMNode {
         $this->ownerDocument = $this;
         $_kids = __elephc_dom_make_children($this, $this, $_tree["children"]);
         $this->childNodes = new DOMNodeList($_kids);
-        $this->nodeValue = (string) $_tree["value"];
+        $this->nodeValue = null;
         return true;
     }
 

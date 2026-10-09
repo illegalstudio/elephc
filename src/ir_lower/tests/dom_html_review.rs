@@ -16,10 +16,11 @@ $doc = new DOMDocument();
 class HtmlBox<T> { public function __construct(public T $node) {} }
 $boxed = new HtmlBox<DOMDocument>($doc);
 echo $boxed->node->nodeName;
-$doc->loadHTML('<div>A<!--hidden--><span>B</span><b>C</b></div>');
+$doc->loadHTML('<!DOCTYPE html><div title="it\'s">A<!not><!--hidden--> <span>B</span><b>C</b></div>', LIBXML_NOBLANKS);
 $div = $doc->getElementsByTagName('div')->item(0);
 foreach ($div->childNodes as $child) { echo $child->nodeValue; }
 echo $doc->saveXML($div);
+echo $doc->nodeValue === null ? 'N' : 'bad';
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen_support::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
