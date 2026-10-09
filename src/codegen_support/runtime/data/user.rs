@@ -19,6 +19,7 @@ use crate::names::{
     method_symbol, php_symbol_key, static_method_symbol, static_property_symbol,
 };
 use crate::parser::ast::Visibility;
+use crate::types::checker::REFLECTION_CLASS_NAMES;
 use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::{escaped_ascii, escaped_bytes};
@@ -3284,6 +3285,12 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
         return projection
             .into_iter()
             .filter_map(|(key, prop_name)| {
+                // A projection that reads a compiler-only backing slot (`return ['n' => $this->__name]`
+                // in a Reflection subclass) must not publish that slot either: PHP answers the
+                // inaccessible name as an undefined property, not the compiler storage.
+                if is_reflection_backing_slot(class_info, class_name, &prop_name) {
+                    return None;
+                }
                 let (layout_index, (_, prop_ty)) = class_info
                     .properties
                     .iter()
@@ -3311,6 +3318,7 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
         .properties
         .iter()
         .enumerate()
+        .filter(|(_, (prop_name, _))| !is_reflection_backing_slot(class_info, class_name, prop_name))
         .map(|(layout_index, (prop_name, prop_ty))| VarDumpRow {
             key: var_dump_property_key(class_info, class_name, prop_name),
             print_r_key: print_r_property_key(class_info, class_name, prop_name),
@@ -3324,6 +3332,40 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
             type_name: var_dump_property_type_name(prop_ty),
         })
         .collect()
+}
+
+/// Returns whether `prop_name` is one of the compiler-only private backing slots elephc
+/// declares on PHP's builtin Reflection classes (`__name`, `__attrs`, `__position`, ...).
+///
+/// WHY THESE MUST BE HIDDEN. PHP's Reflection classes expose no private properties: each
+/// `__`-prefixed slot is compiler storage that backs an accessor (`getName()` reads
+/// `__name`). Every object renderer that walks the full declared-property list must
+/// therefore omit them. This is the renderer-side counterpart of the cast-path filter
+/// `_class_reflection_parameter_cast_public_flags` in `runtime/objects/object_vars.rs`,
+/// which today covers only `ReflectionParameter`; `var_dump`, `print_r` and `var_export`
+/// all read the rows filtered here, so the three renderers stay in agreement.
+///
+/// WHY THE DECLARING CLASS. A user class may legitimately declare its own private
+/// `__`-prefixed property, and PHP's `var_dump` shows it. The skip is therefore gated on
+/// the property's DECLARING class — the same source `var_dump_property_key` uses for the
+/// `:private` annotation — rather than the instance class, so an instance of a user
+/// subclass of a Reflection class still hides the slots it inherits. `class_name` is only
+/// the fallback when the declaring class is unknown.
+fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> bool {
+    if !prop_name.starts_with("__")
+        || !matches!(
+            class_info.property_visibilities.get(prop_name),
+            Some(Visibility::Private)
+        )
+    {
+        return false;
+    }
+    let declaring_class = class_info
+        .property_declaring_classes
+        .get(prop_name)
+        .map(String::as_str)
+        .unwrap_or(class_name);
+    REFLECTION_CLASS_NAMES.contains(&declaring_class)
 }
 
 /// Folds a class's `__debugInfo()` into the `(array key, property name)` pairs
