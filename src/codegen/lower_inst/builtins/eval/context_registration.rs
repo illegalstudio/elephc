@@ -437,7 +437,8 @@ const OPCACHE_DIRECTIVE_FILE_UPDATE_PROTECTION: i64 = 2;
 /// Whether `opcache.restrict_api` denies this binary's OPcache API calls, as the bridge's
 /// `swap_directive` addresses it. A compile-time verdict (see
 /// `opcache_prelude::restrict_api_denies`), never an `ini_set()` target — reference makes the
-/// directive `PHP_INI_SYSTEM`, and the prelude only maps the three `PHP_INI_ALL` ones to ids.
+/// directive `PHP_INI_SYSTEM`, and the prelude maps the `PHP_INI_ALL` numerics plus
+/// `opcache.enable` (id 4) to ids.
 const OPCACHE_DIRECTIVE_API_RESTRICTED: i64 = 3;
 
 /// Carries the settings that did not fit either configure call's argument budget.

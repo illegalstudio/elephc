@@ -9,6 +9,8 @@
 
 #[allow(unused_imports)]
 use super::*;
+use crate::parser::ast::CastType;
+use crate::synthetic_class::e_cast;
 
 /// First `version_id` whose `opcache_get_status()` script entries carry a `revalidate` key.
 ///
@@ -184,6 +186,29 @@ pub(super) fn cache_enabled(php_version: PhpVersion, web: bool, overrides: &[(St
     opcache_cache_enabled_with_overrides(php_version.version_id(), web, overrides)
 }
 
+/// The live `opcache.enable` gate, for the API functions php-src disables mid-request.
+///
+/// `ini_set('opcache.enable', 0)` stores the raw argument in the override store, so
+/// `__elephc_opcache_ini_string('opcache.enable')` reads it back — or the compiled default when
+/// no `ini_set()` ran. `__elephc_ini_bool_val` normalizes the raw spelling, so `'off'` and
+/// `'garbage'` read as disabled and `'yes'` as enabled — the same table php-src's
+/// `zend_ini_parse_bool` uses (the `true`/`yes`/`on` barewords, else `atoi(...) != 0`).
+///
+/// Referenced only when `ini_set` is injected: only then can an override exist AND the
+/// override-store helpers be declared.
+pub(super) fn runtime_enabled_expr() -> Expr {
+    e_call(
+        "__elephc_ini_bool_val",
+        vec![e_cast(
+            CastType::String,
+            e_call(
+                "__elephc_opcache_ini_string",
+                vec![e_str("opcache.enable")],
+            ),
+        )],
+    )
+}
+
 /// The `opcache_is_script_cached()` declaration: disabled → always `false`; enabled →
 /// `realpath`-normalized membership in the baked manifest.
 pub(super) fn is_script_cached_declaration(
@@ -191,9 +216,11 @@ pub(super) fn is_script_cached_declaration(
     web: bool,
     manifest: &[ScriptEntry],
     overrides: &[(String, String)],
+    runtime_gate: Option<Expr>,
 ) -> Stmt {
     build::is_script_cached_decl(
         cache_enabled(php_version, web, overrides),
+        runtime_gate,
         manifest_paths_expr(manifest),
     )
 }
@@ -207,9 +234,11 @@ pub(super) fn invalidate_declaration(
     manifest: &[ScriptEntry],
     overrides: &[(String, String)],
     strict: bool,
+    runtime_gate: Option<Expr>,
 ) -> Stmt {
     build::invalidate_decl(
         cache_enabled(php_version, web, overrides),
+        runtime_gate,
         manifest_paths_expr(manifest),
         strict,
     )

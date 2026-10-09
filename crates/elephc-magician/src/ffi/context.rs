@@ -155,7 +155,9 @@ pub unsafe extern "C" fn __elephc_eval_configure_opcache_file_cache(
     // SAFETY: as above.
     let error_log = unsafe { borrow_configured_string(error_log_ptr, error_log_len) };
     crate::script_cache::set_accel_log_config(crate::script_cache::AccelLogConfig {
-        verbosity: i32::try_from(log_verbosity_level).unwrap_or(i32::MAX),
+        // Clamp, do not `unwrap_or(i32::MAX)`: `opcache.log_verbosity_level` is a signed long,
+        // so a value below `i32::MIN` must SILENCE the channel, matching the compiler side.
+        verbosity: log_verbosity_level.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
         error_log,
     });
     let file_cache = crate::script_cache::FileCacheConfig {
@@ -203,13 +205,13 @@ pub unsafe extern "C" fn __elephc_eval_opcache_load_blacklist(
 /// Two callers, one symbol, told apart by `as_override`. Generated code emits it with `0`
 /// at eval-context setup to carry the COMPILED settings that did not fit the two configure
 /// calls above — both of which already spend all six integer argument registers x86_64
-/// provides — and `ini_set()` emits it with `1` at run time for the three directives
-/// php-src registers as `PHP_INI_ALL`.
+/// provides — and `ini_set()` emits it with `1` at run time for the directives php-src
+/// registers as `PHP_INI_ALL` that elephc's cache can move.
 ///
 /// THE FLAG IS NOT COSMETIC. The compiled install runs when the eval context is first
 /// built, which is the program's FIRST eval — after any `ini_set()` that precedes it. An
 /// override is therefore kept in its own table and applied on read, so the later install
-/// cannot clobber the earlier `ini_set()`. The runtime cache reads all three on every
+/// cannot clobber the earlier `ini_set()`. The runtime cache reads them on every
 /// lookup, so either write applies to the next include.
 ///
 /// Returning the PREVIOUS value is what lets `ini_set()` answer with it, as PHP requires.

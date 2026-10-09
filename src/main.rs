@@ -179,11 +179,35 @@ fn run_native(command: native_deps::NativeCommand) {
 /// elephc's source of the value is a command-line flag, which the compiler's own stderr voice
 /// already implies. Nothing is emitted when there are no `--ini` overrides, so the default
 /// compile path is byte-identical on stderr.
+///
+/// ONE PASS, IN REGISTRATION ORDER. Both families come from one iteration of the directive table,
+/// so a compile that mixes a quantity / JIT-range refusal (`Warning: …`) with an accelerator-range
+/// one (`<asctime> (<pid>): Warning …`) emits them exactly as reference's single INI-registration
+/// pass does — see [`crate::opcache::directives::startup_diagnostics`].
 fn emit_ini_override_warnings(config: &cli::CliConfig) {
-    for warning in opcache::directives::ini_override_warnings(
+    // The accelerator channel's gate and destination, from the effective directives. Sharing
+    // `accel_log` with Magician keeps the line shape and the verbosity gate identical to the
+    // runtime channel the compiled binary uses for its `file_cache` fatals.
+    let accel_config = opcache::runtime_cache::accel_log_config(
+        config.php_version.version_id(),
+        config.web,
+        &config.ini_overrides,
+    );
+    for event in opcache::directives::startup_diagnostics(
         config.php_version.version_id(),
         &config.ini_overrides,
     ) {
-        eprintln!("Warning: {warning}");
+        match event.channel {
+            opcache::directives::StartupDiagnosticChannel::EWarning => {
+                eprintln!("Warning: {}", event.message);
+            }
+            opcache::directives::StartupDiagnosticChannel::AccelError => {
+                opcache::accel_log::emit_with_config(
+                    opcache::accel_log::AccelLogLevel::Warning,
+                    &event.message,
+                    &accel_config,
+                );
+            }
+        }
     }
 }

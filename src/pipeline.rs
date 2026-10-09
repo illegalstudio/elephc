@@ -557,6 +557,33 @@ pub(crate) fn compile(config: CliConfig) {
     );
     // The manifest's scripts hold hash slots, so the runtime tier gets what they leave.
     codegen::set_opcache_manifest_len(opcache_manifest.len());
+    // The manifest's per-script `Message Cached script '<path>'` lines — the compile-time
+    // analogue of php-src storing each script at startup (INFO, gated on verbosity >= 3 and the
+    // cache being enabled), through the shared accelerator channel. Emitting them here, where the
+    // COMPLETE manifest exists, is the only point in an AOT pipeline that corresponds to the cache
+    // actually being populated. A pure-native binary has no other channel for them; see
+    // `opcache_prelude::reset_decl`'s docblock for the run-time sibling.
+    {
+        let accel = crate::opcache::runtime_cache::runtime_cache_config(
+            php_version.version_id(),
+            web,
+            &ini_overrides,
+        );
+        if accel.enabled {
+            let accel_config = crate::opcache::runtime_cache::accel_log_config(
+                php_version.version_id(),
+                web,
+                &ini_overrides,
+            );
+            for entry in &opcache_manifest {
+                crate::opcache::accel_log::emit_with_config(
+                    crate::opcache::accel_log::AccelLogLevel::Info,
+                    &format!("Cached script '{}'", entry.path),
+                    &accel_config,
+                );
+            }
+        }
+    }
     // Re-decide `opcache.preload` against the COMPLETE manifest, which is the set
     // `preload_statistics` reports. Only the `in_manifest` arm can differ from the verdict taken
     // above (the directive, the SAPI gate and the path resolution are all manifest-independent).

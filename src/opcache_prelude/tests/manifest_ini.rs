@@ -105,7 +105,7 @@ pub(super) fn renders_scripts_map_literal() {
     #[test]
 pub(super) fn get_status_bakes_manifest_counts_and_scripts() {
         let manifest = sample_manifest();
-        let body = rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, None));
+        let body = rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, None, None));
         // Two cached scripts / keys — COUNTED FROM THE MAP, not baked as a constant plus the
         // runtime count. The two tiers share a key space, so a manifest file that is also
         // dynamically included must occupy one slot; summing counted it twice and disagreed
@@ -139,7 +139,7 @@ pub(super) fn get_status_bakes_manifest_counts_and_scripts() {
     /// so an empty manifest decides the SEED — `[]` — rather than the reported figure.
     #[test]
 pub(super) fn get_status_empty_manifest_is_valid() {
-        let body = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &[], false, None));
+        let body = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &[], false, None, None));
         assert!(body.contains("'num_cached_scripts' => count($__elephc_scripts)"));
         assert!(body.contains("'num_cached_keys' => count($__elephc_scripts)"));
         // The manifest map seeds the local the runtime entries are appended to, and the
