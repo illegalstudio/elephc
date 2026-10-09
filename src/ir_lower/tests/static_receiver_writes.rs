@@ -21,6 +21,7 @@ function write(): void { C::$o->v = replace(); }
 function writeNested(): void { C::$o->nested[0][] = replace(); }
 function writeChild(): void { R::$root->child->items[] = replace(); }
 function writeNull(): void { C::$nullable->v = replace(); }
+function writeCompoundNull(): void { C::$nullable->v += replace(); }
 function writeLocalAppend(?O $object): void { $object->items[] = (print 'rhs'); }
 function writeLocalIndexed(?O $object): void { $object->items[(print 'i')] = (print 'v'); }
 function writeDynamicLocal(?O $object, string $name): void { $object->$name = (print 'rhs'); }
@@ -29,6 +30,9 @@ function writeCoalesce(): void { C::$nullable->v ??= replace(); }
 class StaticBuckets { public static array $items = []; }
 function writeStaticNested(): void { StaticBuckets::$items[0][] = replace(); }
 function writeStaticAppend(): void { StaticBuckets::$items[] = replace(); }
+function writeStaticElement(): void { StaticBuckets::$items[0] = replace(); }
+function writeStaticCompound(): void { StaticBuckets::$items[0] += replace(); }
+function writeStaticNestedElement(): void { StaticBuckets::$items[0][0] = replace(); }
 interface Store { public function get(): string; }
 interface Named { public function name(): string; }
 class Both implements Store, Named {
@@ -36,6 +40,7 @@ class Both implements Store, Named {
     public function name(): string { return 'N'; }
 }
 class InterfaceHolder { public static ?Store $value = null; }
+function writeInterface(): void { InterfaceHolder::$value->x = replace(); }
 function dispatch(): void {
     $value = InterfaceHolder::$value;
     if ($value !== null) {
@@ -55,7 +60,8 @@ C::$nullable->items[] = 3;
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-    for name in ["write", "writeNested", "writeChild", "writeNull", "writeStaticNested", "writeStaticAppend"] {
+    for name in ["write", "writeNested", "writeChild", "writeNull", "writeStaticNested", "writeStaticAppend",
+        "writeStaticElement", "writeStaticCompound", "writeStaticNestedElement", "writeInterface", "writeCompoundNull"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let rhs = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
         let receiver = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
@@ -77,6 +83,17 @@ C::$nullable->items[] = 3;
                     inst.op == crate::ir::Op::Release && inst.operands == [load.result.unwrap()]),
                     "{target}: a static-array probe borrows the published class slot");
             }
+        }
+    }
+    for name in ["writeInterface", "writeCompoundNull"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
+        if name == "writeInterface" {
+            assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::MixedUnbox),
+                "{target}: interfaces retain boxed dispatch after the null guard");
+        } else {
+            let read = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PropGet).unwrap();
+            assert!(guard < read, "{target}: null is rejected before the compound property read");
         }
     }
     for name in ["writeLocalAppend", "writeLocalIndexed", "writeDynamicLocal", "writeDynamicStatic"] {

@@ -14,6 +14,7 @@ use super::*;
 /// One receiver lease covering RHS evaluation, coercion and the eventual property mutation.
 pub(crate) struct PropertyWriteReceiver {
     pub(crate) value: LoweredValue,
+    nullable_class: Option<String>,
     pins: Vec<crate::ir_lower::expr::PinnedInFlightOwner>,
     owners: Vec<LoweredValue>,
 }
@@ -21,13 +22,14 @@ pub(crate) struct PropertyWriteReceiver {
 impl PropertyWriteReceiver {
     /// Acquires borrowed static storage and parks any independently owned receiver for unwind.
     pub(crate) fn new(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> Self {
+        let nullable_class = nullable_write_class(ctx, value);
         ctx.with_independent_write_receiver(|ctx| {
             let value = if ctx.builder.value_defining_op(value.value) == Some(Op::LoadStaticProperty) {
                 crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span))
             } else { value };
             let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
             let owners = if ctx.value_is_owning_temporary(value) { vec![value] } else { Vec::new() };
-            Self { value, pins, owners }
+            Self { value, nullable_class, pins, owners }
         })
     }
 
@@ -39,7 +41,7 @@ impl PropertyWriteReceiver {
     }
 
     /// Guards a direct write after its RHS runs and retires that RHS if the null Error unwinds.
-    pub(super) fn narrow_for_assignment(
+    pub(crate) fn narrow_for_assignment(
         &mut self, ctx: &mut LoweringContext<'_, '_>, property: &str, value: LoweredValue, span: Span,
     ) {
         self.narrow_for_write(ctx, WritePropertyName::Literal(property), "assign", &[value.value], span);
@@ -57,13 +59,10 @@ impl PropertyWriteReceiver {
         &mut self, ctx: &mut LoweringContext<'_, '_>, property: WritePropertyName<'_>, verb: &str,
         operands: &[crate::ir::ValueId], span: Span,
     ) {
-        let ty = ctx.builder.value_php_type(self.value.value);
-        if !crate::ir_lower::expr::singular_object_class(&ty).is_some_and(|(_, nullable)| nullable) {
-            return;
-        }
+        let Some(class) = self.nullable_class.clone() else { return; };
         let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, operands, span);
         let object = ctx.with_independent_write_receiver(|ctx|
-            narrow_nullable_write_receiver(ctx, self.value, property, verb, span));
+            narrow_nullable_write_receiver(ctx, self.value, &class, property, verb, span));
         crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
         // The runtime unwind stack is LIFO. Detach the RHS record before publishing the
         // narrowed object's lease, which must outlive all subsequent coercion/store work.
@@ -97,15 +96,33 @@ enum WritePropertyName<'a> {
     Runtime(LoweredValue),
 }
 
+/// Recovers nullable interface metadata only for writes, leaving ordinary reads boxed.
+fn nullable_write_class(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> Option<String> {
+    let ty = ctx.builder.value_php_type(value.value);
+    if let Some((class, true)) = crate::ir_lower::expr::singular_object_class(&ty) {
+        return Some(class.to_string());
+    }
+    let load = ctx.builder.value_defining_instruction(value.value)?;
+    if load.op != Op::LoadStaticProperty { return None; }
+    let Some(Immediate::Data(data)) = load.immediate else { return None; };
+    let (class, property) = ctx.data.strings.get(data.as_raw() as usize)?.rsplit_once("::")?;
+    let receiver = match class {
+        "self" => StaticReceiver::Self_, "static" => StaticReceiver::Static,
+        "parent" => StaticReceiver::Parent,
+        name => StaticReceiver::Named(crate::names::Name::unqualified(name)),
+    };
+    let class = static_receiver_class_name(ctx, &receiver)?;
+    let (_, ty) = ctx.classes.get(&class)?.static_properties.iter().find(|(name, _)| name == property)?;
+    let (interface, nullable) = crate::ir_lower::expr::singular_object_class(ty)?;
+    (nullable && ctx.interfaces.contains_key(interface.trim_start_matches('\\')))
+        .then(|| interface.to_string())
+}
+
 /// Narrows a known nullable class for fixed-slot mutation, with PHP's operation-specific null Error.
 fn narrow_nullable_write_receiver(
-    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: WritePropertyName<'_>, verb: &str, span: Span,
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, class: &str,
+    property: WritePropertyName<'_>, verb: &str, span: Span,
 ) -> LoweredValue {
-    let ty = ctx.builder.value_php_type(value.value);
-    let Some((class, true)) = crate::ir_lower::expr::singular_object_class(&ty) else {
-        return value;
-    };
-    let class = class.to_string();
     let is_null = ctx.emit_value(Op::IsNull, vec![value.value], None, PhpType::Bool,
         Op::IsNull.default_effects(), Some(span));
     let null = ctx.builder.create_named_block("property.write.null", Vec::new());
@@ -121,7 +138,13 @@ fn narrow_nullable_write_receiver(
         WritePropertyName::Runtime(property) => lower_dynamic_null_error(ctx, property, verb, span),
     }
     ctx.builder.position_at_end(present);
-    let target = PhpType::Object(class);
+    if ctx.interfaces.contains_key(class.trim_start_matches('\\')) {
+        let boxed = ctx.emit_value(Op::Borrow, vec![value.value], None, PhpType::Mixed,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(boxed.value, Ownership::Borrowed);
+        return boxed;
+    }
+    let target = PhpType::Object(class.to_string());
     ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, target.clone(),
         Op::mixed_unbox_effects(&target), Some(span))
 }

@@ -432,8 +432,13 @@ fn parse_expr_bp_inner(
                 let target = lowerer.stabilize_non_local_target(lhs, &rhs);
                 let conditional_value_temp =
                     null_coalesce_assign.then(|| lowerer.reserve_value_temp());
+                let static_object_write = matches!(&target.kind,
+                    ExprKind::PropertyAccess { object, .. }
+                        if matches!(object.kind, ExprKind::StaticPropertyAccess { .. }));
                 let rhs = if null_coalesce_assign {
                     rhs
+                } else if static_object_write {
+                    lowerer.bind_result_value(rhs)
                 } else {
                     lowerer.bind_value(&target, rhs)
                 };

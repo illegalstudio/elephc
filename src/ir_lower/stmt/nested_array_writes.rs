@@ -34,7 +34,8 @@ pub(super) fn lower_nested_array_assign(
         // so the shape is checked and anything else keeps the original order. Constant
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
-        let deferred = nested_target_is_all_bare_variables(target);
+        let deferred = nested_target_is_all_bare_variables(target)
+            || nested_target_has_static_literal_root(target);
         let value_first = deferred.then(|| lower_expr(ctx, value));
         let parent = lower_nested_assign_parent(ctx, array, span);
         let key = lower_expr(ctx, index);
@@ -71,6 +72,17 @@ pub(super) fn lower_nested_array_assign(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Pure static chains and literal dimensions can be fetched after an effectful RHS.
+fn nested_target_has_static_literal_root(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, index } =>
+            matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::Variable(_))
+                && nested_target_has_static_literal_root(array),
+        _ => false,
+    }
 }
 
 /// Lowers the parent chain of a nested array assignment with write-context
