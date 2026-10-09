@@ -69,19 +69,13 @@ pub(crate) fn validate_enum_interface_contracts(
                 let implementation = actual.get(name).expect("validated implementation");
                 let actual = SourceVisibleShape::of(implementation);
                 let required = SourceVisibleShape::of(contract);
-                for (index, (actual_ty, required_ty)) in actual.param_types
-                    .iter().zip(&required.param_types).enumerate()
-                {
-                    let actual_ty = if actual.declared_params.get(index).copied().unwrap_or(false) {
-                        actual_ty
-                    } else { &crate::types::PhpType::Mixed };
-                    let required_ty = if required.declared_params.get(index).copied().unwrap_or(false) {
-                        required_ty
-                    } else { &crate::types::PhpType::Mixed };
+                for index in 0..actual.param_count.max(required.param_count) {
+                    let Some(((actual_ty, _), (required_ty, _))) =
+                        actual.parameter_at(index).zip(required.parameter_at(index)) else { continue; };
                     if !super::super::class_constants::strict_type_accepts(checker, actual_ty, required_ty, false) {
                         return Err(CompileError::new(enum_unit.span, &format!(
                             "Cannot narrow interface parameter ${}: {}::{name}",
-                            actual.param_names[index], enum_unit.name,
+                            actual.param_names[index.min(actual.param_count - 1)], enum_unit.name,
                         )));
                     }
                 }

@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Variadic widening still rejects narrowed element types, changed references and required tails.
+#[test]
+fn test_error_enum_second_review_variadic_narrowing() {
+    for requirement in ["interface I { public function f(int ...$values): int; }",
+        "trait T { abstract public function f(int ...$values): int; }"] {
+        let usage = if requirement.starts_with("interface") { "implements I" } else { "" };
+        let trait_use = if usage.is_empty() { "use T;" } else { "" };
+        for implementation in [
+            "public function f(string $first = 'x', int ...$values): int { return 1; }",
+            "public function f(int &$first = 7, int ...$values): int { return 1; }",
+            "public function f(int $first, int ...$values): int { return 1; }",
+        ] {
+            let source = format!("<?php {requirement} enum E {usage} {{ {trait_use} case A; {implementation} }}");
+            expect_error(&source, if implementation.contains("string") { "Cannot narrow" }
+                else { "Incompatible parameter shape" });
+        }
+    }
+    expect_error("<?php interface I { public function f(int $x): int; } trait T { abstract public function f(int $first = 7, string ...$values): int; } enum E implements I { use T; case A; public function f(int $first = 7, int ...$values): int { return $first; } } debug_print_backtrace();", "Cannot narrow parameter");
+}
+
 /// Covariant returns see every enum's transitive interfaces regardless of HashMap order.
 #[test]
 fn test_enum_followup_cross_enum_transitive_return() {

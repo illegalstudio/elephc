@@ -118,21 +118,22 @@ fn needs_eir_call_adapter(caller: &FunctionSig, physical: &FunctionSig) -> bool 
     let added_reference = !caller.by_ref_return && physical.by_ref_return;
     let source_variadic = caller.variadic.is_some()
         && !crate::func_args::sig_collects_surplus_args(caller);
-    if source_variadic && !added_reference {
-        return false;
-    }
     let visible = |sig: &FunctionSig| sig.params.iter().enumerate()
         .filter(|(_, (name, _))| name != crate::func_args::HIDDEN_ARGS_PARAM
             && name != crate::func_args::HIDDEN_ARGC_PARAM)
         .map(|(index, _)| index).collect::<Vec<_>>();
-    let source = visible(caller);
+    let mut source = visible(caller);
     let target = visible(physical);
-    if target.len() < source.len() { return false; }
-    if source_variadic && (target.len() != source.len()
-        || physical.variadic.is_none() || crate::func_args::sig_collects_surplus_args(physical))
-    {
-        return false;
+    if source_variadic {
+        if physical.variadic.is_none() || crate::func_args::sig_collects_surplus_args(physical) {
+            return false;
+        }
+        if !added_reference && source.len() == target.len() {
+            return false;
+        }
+        source.retain(|index| caller.variadic.as_deref() != Some(caller.params[*index].0.as_str()));
     }
+    if target.len() < source.len() { return false; }
     if target.len() == source.len() && !added_reference { return false; }
     let prefix = source.iter().zip(&target).all(|(&source, &target)| {
         let source_ref = caller.ref_params.get(source).copied().unwrap_or(false);

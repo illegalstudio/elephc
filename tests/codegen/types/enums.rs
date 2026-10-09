@@ -9,6 +9,122 @@
 
 use super::*;
 
+/// Captured optional adapters forward written arguments, never hidden collector addresses.
+#[test]
+fn test_enum_second_review_captured_optional_defaults() {
+    for hook in ["eval('echo 1;');", "debug_print_backtrace();"] {
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(int $x = 1): int; }}
+enum E implements I {{ case A; public function f(int $x = 10, int $y = 2): int {{
+    echo $x, ':', $y, '|'; return $x + $y;
+}} }}
+function invoke(I $value): int {{ return $value->f(); }}
+{hook}
+echo invoke(E::A);
+"#));
+        assert_eq!(out, if hook.starts_with("eval") { "110:2|12" } else { "10:2|12" });
+    }
+}
+
+/// Uncaptured interface calls use the implementation's defaults and optional widening.
+#[test]
+fn test_enum_second_review_implementation_defaults() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x = 1): int; }
+interface Required { public function f(int $x): int; }
+enum E implements I, Required {
+    case A; public function f(int $x = 10, int $y = 2): int { return $x + $y; }
+}
+function optional(I $value): int { return $value->f(); }
+function required(Required $value): int { return $value->f(); }
+echo optional(E::A), ':', required(E::A);
+"#);
+    assert_eq!(out, "12:12");
+}
+
+/// Runtime selection retains each enum's defaults and evaluates supplied arguments once.
+#[test]
+fn test_enum_second_review_runtime_defaults_and_source_order() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x = 1): int; }
+enum E implements I { case A; public function f(int $x = 10, int $y = 2): int { return $x + $y; } }
+enum F implements I { case A; public function f(int $x = 20, int $y = 3): int { return $x + $y; } }
+function argument(string $label, int $value): int { echo $label; return $value; }
+function invoke(I $value): string {
+    return $value->f() . ':' . $value->f(y: argument('Y', 5), x: argument('X', 4))
+        . ':' . $value->f(...[6, 7]);
+}
+echo invoke(E::A), '|', invoke(F::A);
+"#);
+    assert_eq!(out, "YX12:9:13|YX23:9:13");
+}
+
+/// Enum selection leaves a known ordinary class on its unchanged interface fallback path.
+#[test]
+fn test_enum_second_review_class_interface_fallback() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x = 1): int; }
+enum E implements I { case A; public function f(int $x = 10, int $y = 2): int { return $x + $y; } }
+class C implements I { public function f(int $x = 1): int { return $x; } }
+function invoke(I $value): string { return $value->f() . ':' . $value->f(3); }
+echo invoke(E::A), '|', invoke(new C());
+"#);
+    assert_eq!(out, "12:5|1:3");
+}
+
+/// Guarded nullable enum interface calls retain void result and implementation-default behavior.
+#[test]
+fn test_enum_second_review_nullsafe_void_defaults() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x = 1): void; }
+enum E implements I { case A; public function f(int $x = 10, int $y = 2): void { echo $x, ':', $y; } }
+function invoke(?I $value): void { $value?->f(); }
+invoke(null); invoke(E::A);
+"#);
+    assert_eq!(out, "10:2");
+}
+
+/// An optional scalar prefix can consume a required interface's variadic element.
+#[test]
+fn test_enum_second_review_variadic_optional_prefix() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x, int ...$rest): int; }
+enum E implements I { case A; public function f(int $x, int $y = 4, int ...$rest): int {
+    foreach ($rest as $value) { $x += $value; } return $x + $y;
+} }
+function invoke(I $value): string { return $value->f(1) . ':' . $value->f(1, 2, 3); }
+echo invoke(E::A);
+"#);
+    assert_eq!(out, "5:6");
+}
+
+/// A pure variadic interface can widen to an optional scalar and a remaining variadic tail.
+#[test]
+fn test_enum_second_review_variadic_scalar_default() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int ...$values): int; }
+enum E implements I { case A; public function f(int $first = 7, int ...$values): int {
+    foreach ($values as $value) { $first += $value; } return $first;
+} }
+function invoke(I $value): string { return $value->f(1, 2) . ':' . $value->f(); }
+echo invoke(E::A);
+"#);
+    assert_eq!(out, "3:7");
+}
+
+/// Trait variadic requirements compare scalar element hints rather than collector storage.
+#[test]
+fn test_enum_second_review_trait_variadic_scalar_default() {
+    let out = compile_and_run(r#"<?php
+trait T { abstract public function f(int ...$values): int; }
+enum E { use T; case A; public function f(int $first = 7, int ...$values): int {
+    foreach ($values as $value) { $first += $value; } return $first;
+} }
+echo E::A->f(1, 2), ':', E::A->f();
+"#);
+    assert_eq!(out, "3:7");
+}
+
 /// Captured frames compare declared parameters and still materialize optional defaults.
 #[test]
 fn test_enum_oct9_captured_optional_interface() {

@@ -81,6 +81,29 @@ enum VariadicRefValue implements VariadicRefContract {
 }
 function read_variadic(VariadicRefContract $value): int { $values = $value->values(1, 2); return $values[1]; }
 echo read_variadic(VariadicRefValue::A);
+interface DefaultContract { public function f(int $x): int; }
+enum DefaultValue implements DefaultContract {
+    case A;
+    public function f(int $x = 10, int $y = 2): int { return $x + $y; }
+}
+function read_default(DefaultContract $value): int { return $value->f(); }
+echo read_default(DefaultValue::A);
+interface CapturedOptionalContract { public function f(int $x = 1): int; }
+enum CapturedOptionalValue implements CapturedOptionalContract {
+    case A;
+    public function f(int $x = 10, int $y = 2): int { return $x + $y; }
+}
+function read_optional(CapturedOptionalContract $value): int { return $value->f(); }
+echo read_optional(CapturedOptionalValue::A);
+interface PrefixContract { public function f(int ...$values): int; }
+enum PrefixValue implements PrefixContract {
+    case A;
+    public function f(int $first = 7, int ...$values): int {
+        foreach ($values as $value) { $first += $value; } return $first;
+    }
+}
+function read_prefix(PrefixContract $value): int { return $value->f(1, 2); }
+echo read_prefix(PrefixValue::A);
 debug_print_backtrace();
 "#;
     let module = super::lower_source_at_for_target(

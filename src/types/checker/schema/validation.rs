@@ -212,7 +212,7 @@ pub(crate) fn visibility_rank(visibility: &Visibility) -> u8 {
 /// declared parameters, so comparing them against a compiler-injected parent signature, which
 /// can never carry one, would report a difference the source never wrote.
 pub(crate) struct SourceVisibleShape {
-    param_count: usize,
+    pub(crate) param_count: usize,
     pub(crate) param_names: Vec<String>,
     pub(crate) param_types: Vec<PhpType>,
     pub(crate) declared_params: Vec<bool>,
@@ -296,13 +296,35 @@ impl SourceVisibleShape {
 
     /// Accepts calls admitted by `required`, permitting extra optional parameters and defaults.
     fn widens_parameter_shape(&self, required: &Self) -> bool {
-        self.param_count >= required.param_count
+        (self.param_count >= required.param_count || self.variadic.is_some())
             && self.required_param_count() <= required.required_param_count()
-            && self.ref_params.iter().take(required.param_count).eq(required.ref_params.iter())
-            && self.has_defaults.iter().enumerate().skip(required.param_count)
+            && (0..self.param_count.max(required.param_count)).all(|index| {
+                self.parameter_at(index).zip(required.parameter_at(index))
+                    .is_none_or(|((_, actual_ref), (_, required_ref))| actual_ref == required_ref)
+            })
+            && self.has_defaults.iter().enumerate().skip(required.regular_param_count())
                 .all(|(index, default)| *default
                     || (self.variadic.is_some() && index + 1 == self.param_count))
             && (required.variadic.is_none() || self.variadic.is_some())
+    }
+
+    /// Counts scalar parameters before a source variadic's repeatable element contract.
+    pub(crate) fn regular_param_count(&self) -> usize {
+        self.param_count.saturating_sub(usize::from(self.variadic.is_some()))
+    }
+
+    /// Resolves one source argument position, extending variadics by their element type.
+    pub(crate) fn parameter_at(&self, position: usize) -> Option<(&PhpType, bool)> {
+        let regular = self.regular_param_count();
+        let index = if position < regular { position }
+            else if self.variadic.is_some() { regular } else { return None; };
+        let ty = if self.declared_params.get(index).copied().unwrap_or(false) {
+            self.param_types.get(index)?
+        } else { &PhpType::Mixed };
+        let ty = if index == regular && self.variadic.is_some() {
+            match ty { PhpType::Array(element) => element.as_ref(), _ => ty }
+        } else { ty };
+        Some((ty, self.ref_params.get(index).copied().unwrap_or(false)))
     }
 }
 
@@ -453,19 +475,13 @@ pub(crate) fn validate_abstract_trait_signature(
             "Incompatible parameter shape when implementing trait method: {owner}::{method}",
         )));
     }
-    for (index, (actual_ty, required_ty)) in actual.param_types.iter()
-        .zip(&required.param_types).enumerate()
-    {
-        let actual_ty = if actual.declared_params.get(index).copied().unwrap_or(false) {
-            actual_ty
-        } else { &PhpType::Mixed };
-        let required_ty = if required.declared_params.get(index).copied().unwrap_or(false) {
-            required_ty
-        } else { &PhpType::Mixed };
+    for index in 0..actual.param_count.max(required.param_count) {
+        let Some(((actual_ty, _), (required_ty, _))) =
+            actual.parameter_at(index).zip(required.parameter_at(index)) else { continue; };
         if !super::class_constants::strict_type_accepts(checker, actual_ty, required_ty, false) {
             return Err(CompileError::new(span, &format!(
                 "Cannot narrow parameter ${} when implementing trait method: {owner}::{method}",
-                actual.param_names[index],
+                actual.param_names[index.min(actual.param_count - 1)],
             )));
         }
     }

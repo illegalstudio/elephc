@@ -66,15 +66,30 @@ fn lower_interface_adapter(
                 Expr::new(ExprKind::Spread(Box::new(value)), span)
             }).collect(),
     }, span);
-    let body = if matches!(caller.return_type, PhpType::Void | PhpType::Never) {
-        vec![Stmt::new(StmtKind::ExprStmt(call), span)]
-    } else if caller.by_ref_return {
-        let result = crate::names::generated_local_name("__elephc_interface_result");
-        vec![
-            Stmt::new(StmtKind::RefAssign { target: result.clone(), source: call }, span),
-            Stmt::new(StmtKind::Return(Some(Expr::new(ExprKind::Variable(result), span))), span),
-        ]
-    } else { vec![Stmt::new(StmtKind::Return(Some(call)), span)] };
+    let mut body = adapter_return_body(caller, call.clone(), span);
+    if crate::func_args::sig_collects_optional_arg_count(caller) {
+        let count = Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(ExprKind::Variable(crate::func_args::HIDDEN_ARGS_PARAM.into()), span)),
+            index: Box::new(Expr::new(ExprKind::IntLiteral(0), span)),
+        }, span);
+        let ExprKind::MethodCall { args, .. } = &call.kind else { unreachable!() };
+        let regular = crate::types::call_args::regular_param_count(caller);
+        let mut branches = Vec::new();
+        for supplied in 0..=regular {
+            let condition = Expr::new(ExprKind::BinaryOp {
+                left: Box::new(count.clone()), op: crate::parser::ast::BinOp::Eq,
+                right: Box::new(Expr::new(ExprKind::IntLiteral(supplied as i64), span)),
+            }, span);
+            let mut supplied_call = call.clone();
+            let ExprKind::MethodCall { args: forwarded, .. } = &mut supplied_call.kind else { unreachable!() };
+            *forwarded = args[..supplied].to_vec();
+            branches.push((condition, adapter_return_body(caller, supplied_call, span)));
+        }
+        let (condition, then_body) = branches.remove(0);
+        body = vec![Stmt::new(StmtKind::If {
+            condition, then_body, elseif_clauses: branches, else_body: Some(body),
+        }, span)];
+    }
     let return_type = signature.return_type.clone();
     let mut function = Function::new(name.to_string(), return_ir_type(&return_type), return_type.clone());
     function.params = function_params(&signature);
@@ -107,4 +122,17 @@ fn lower_interface_adapter(
     );
     debug_assert!(closures.is_empty(), "interface defaults must not create closures");
     function
+}
+
+/// Returns one concrete call through the adapter's existing value or managed-reference contract.
+fn adapter_return_body(caller: &FunctionSig, call: Expr, span: Span) -> Vec<Stmt> {
+    if matches!(caller.return_type, PhpType::Void | PhpType::Never) {
+        vec![Stmt::new(StmtKind::ExprStmt(call), span), Stmt::new(StmtKind::Return(None), span)]
+    } else if caller.by_ref_return {
+        let result = crate::names::generated_local_name("__elephc_interface_result");
+        vec![
+            Stmt::new(StmtKind::RefAssign { target: result.clone(), source: call }, span),
+            Stmt::new(StmtKind::Return(Some(Expr::new(ExprKind::Variable(result), span))), span),
+        ]
+    } else { vec![Stmt::new(StmtKind::Return(Some(call)), span)] }
 }
