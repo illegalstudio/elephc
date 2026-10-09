@@ -326,7 +326,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_unshift()` | `array_unshift($arr, ...$values): int` | Prepend one or more elements, in source order, and return the new count |
 | `array_sum()` | `array_sum($arr): int\|float` | Sum of values |
 | `array_product()` | `array_product($arr): int\|float` | Product of values |
-| `array_column()` | `array_column($arr, $column_key): array` | Extract column from array of assoc rows |
+| `array_column()` | `array_column($arr, $column_key, $index_key = null): array` | Extract a column (or whole rows when `$column_key` is `null`) from array or object rows, optionally keyed by `$index_key` |
 | `array_is_list()` | `array_is_list($arr): bool` | `true` if the keys are exactly `0..count-1` in order (the empty array is a list) |
 | `array_key_first()` | `array_key_first($arr): int\|string\|null` | First key in insertion order, or `null` if the array is empty |
 | `array_key_last()` | `array_key_last($arr): int\|string\|null` | Last key in insertion order, or `null` if the array is empty |

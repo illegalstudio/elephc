@@ -87,6 +87,8 @@ pub(crate) use emitters::emit_runtime;
 /// The PHP 8.5 NAN-to-bool coercion probe, reached from `src/codegen/lower_inst` float
 /// truthiness lowering as well as from the boxed-Mixed runtime helpers.
 pub(crate) use arrays::{emit_nan_bool_coercion_probe, nan_bool_coercion_warning_enabled};
+/// Static `array_column()` key-block flag shared by the lowering and the runtime walker.
+pub(crate) use arrays::ARRAY_COLUMN_FLAG_HASH_RESULT;
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
 /// The call-stack overflow guard's shared symbol name. Codegen's prologue check and the

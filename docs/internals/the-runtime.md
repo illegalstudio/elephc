@@ -866,6 +866,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_column_ref` | Extract column of retained heap-backed values (arrays / hashes / objects) |
 | `__rt_array_column_str` | Extract column from array of assoc arrays (string values) |
 | `__rt_array_column_mixed` | Extract column values as boxed Mixed cells for heterogeneous input payloads |
+| `__rt_array_column_any` | General `array_column()` walker: any row layout, int/string/null column keys, optional index key (hash result), public object properties |
 | `__rt_range` | Generate integer range array |
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
 | `__rt_random_u32` / `__rt_random_uniform` / `__rt_random_u64` / `__rt_random_uniform64` | Target-aware random primitives used by `rand()`, `random_int()`, `shuffle()`, and `array_rand()` |

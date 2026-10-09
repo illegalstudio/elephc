@@ -8,14 +8,15 @@ sidebar:
 ## array_column()
 
 ```php
-function array_column(array $array, string $column_key): array
+function array_column(array $array, int|string|null $column_key, int|string|null $index_key = null): array
 ```
 
 Returns the values from a single column of an array of arrays.
 
 **Parameters**:
 - `$array` (`array`)
-- `$column_key` (`string`)
+- `$column_key` (`int|string|null`)
+- `$index_key` (`int|string|null`), default `null`, optional
 
 **Returns**: `array`
 

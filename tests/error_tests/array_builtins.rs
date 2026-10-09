@@ -651,7 +651,24 @@ fn test_error_natcasesort_wrong_args() {
 fn test_error_array_column_wrong_args() {
     expect_error(
         r#"<?php array_column([]);"#,
-        "array_column() takes exactly 2 arguments",
+        "array_column() takes 2 or 3 arguments",
+    );
+    expect_error(
+        r#"<?php array_column([], 'a', 'b', 'c');"#,
+        "array_column() takes 2 or 3 arguments",
+    );
+}
+
+/// Statically array- or object-typed key arguments are PHP TypeErrors, reported at compile time.
+#[test]
+fn test_error_array_column_rejects_array_and_object_keys() {
+    expect_error(
+        "<?php array_column([['a' => 1]], ['a']);",
+        "array_column(): Argument #2 ($column_key) must be of type string|int|null, array given",
+    );
+    expect_error(
+        "<?php class K {} array_column([['a' => 1]], 'a', new K());",
+        "array_column(): Argument #3 ($index_key) must be of type string|int|null, K given",
     );
 }
 

@@ -507,6 +507,14 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   Catch `PDOException`, or after the `instanceof` check pass the exception to a parameter
   declared `PDOException`: through that receiver both `getCode()` and `$e->errorInfo[0]` give the
   SQLSTATE. See [PDO](./pdo.md#pdoexception-shape).
+- `array_column()` follows PHP 8 for array rows, `null` and integer column keys, and `$index_key`
+  (converted like an array key, missing values appended). For **object rows** it reads public
+  declared and dynamic properties only: it does not consult `__get()`/`__isset()`, it does not see
+  protected or private properties even when called from inside the class (PHP uses the calling
+  scope), and an integer column or index key never matches an object property (PHP looks up the
+  property named by its decimal spelling). A `null` index value becomes the `""` key without PHP 8.5's
+  `Using null as an array offset is deprecated` notice, the same as any other array offset in
+  elephc. A `mixed` first argument is rejected at compile time unless it is a declared `array`.
 
 ### Filesystem functions not implemented
 

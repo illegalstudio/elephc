@@ -222,7 +222,7 @@ pub use array_chunk_to_hash::emit_array_chunk_to_hash;
 pub use call_argument_unpack::emit_call_argument_unpack;
 /// Emit key-preserving array chunk helper (array_chunk preserve_keys).
 pub use array_column::emit_array_column;
-pub use array_column_boxed::emit_array_column_boxed;
+pub use array_column_boxed::{emit_array_column_boxed, ARRAY_COLUMN_FLAG_HASH_RESULT};
 pub use array_count_values::{emit_array_count_values, ARRAY_COUNT_VALUES_SKIPPED_MESSAGES};
 /// Emit array column extraction helper.
 pub use array_column_mixed::emit_array_column_mixed;

@@ -14294,6 +14294,13 @@
           "name": "column_key",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "index_key",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -14327,6 +14334,13 @@
           "default": null,
           "name": "column_key",
           "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "index_key",
+          "optional": true,
           "type": "mixed"
         }
       ],
@@ -14367,7 +14381,26 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -14413,7 +14446,14 @@
           "default": null,
           "name": "column_key",
           "optional": false,
-          "type": "string"
+          "type": "int|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "index_key",
+          "optional": true,
+          "type": "int|string|null"
         }
       ],
       "return_type": "array",
