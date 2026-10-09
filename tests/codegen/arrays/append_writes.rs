@@ -10,6 +10,27 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// Ordinary String-key writes keep associative return storage and independent COW aliases.
+#[test]
+fn test_append_mixed_string_key_hash_return_contract() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function build(string $key, mixed $value): array {
+    $items = [$value];
+    $items[$key] = $value;
+    return $items;
+}
+for ($i = 0; $i < 4; $i++) {
+    $items = build('key', str_repeat('x', 4));
+    $alias = $items;
+    $items['key'] = 'changed';
+    echo json_encode($alias), '/', json_encode($items), '|';
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"0\":\"xxxx\",\"key\":\"xxxx\"}/{\"0\":\"xxxx\",\"key\":\"changed\"}|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Numeric string keys preserve variadic reference markers for ordinary reads as well as JSON.
 #[test]
 fn test_append_second_review_variadic_string_keys() {

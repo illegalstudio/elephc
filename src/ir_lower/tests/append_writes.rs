@@ -46,11 +46,20 @@ function writeStringKey(&...$values): void {
     $values["1"] = 'Q'; echo strlen($values[1]), $values[0], $values[1];
 }
 $a = 'A'; $b = 'B'; writeStringKey($a, $b); echo $b;
+function hashReturn(string $key, mixed $value): array {
+    $items = [$value]; $items[$key] = $value; return $items;
+}
+echo json_encode(hashReturn('key', $argc));
 "#;
     let module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap(),
     );
+    let returning = module.functions.iter().find(|function| function.name == "hashReturn")
+        .expect("missing hash-return fixture");
+    assert!(returning.blocks.iter().flat_map(|block| &block.instructions)
+        .any(|inst| returning.instruction(*inst).is_some_and(|inst| inst.op == crate::ir::Op::ArrayToHash)),
+        "ordinary String-key writes must retain their associative storage contract");
     crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));
 }
