@@ -548,7 +548,7 @@ pub use int_pow_checked::emit_int_pow_checked;
 pub use mixed_numeric_pow::emit_mixed_numeric_pow;
 /// Emit checked integer add/sub/mul helpers with overflow-to-float promotion.
 pub use mixed_strict_eq::emit_mixed_strict_eq;
-pub use in_array_boxed::emit_in_array_boxed;
+pub use in_array_boxed::{emit_array_search_boxed, emit_in_array_boxed};
 /// Emit Mixed strict equality check helper.
 pub use mixed_unbox::emit_mixed_unbox;
 /// Emit Mixed unbox helper.
