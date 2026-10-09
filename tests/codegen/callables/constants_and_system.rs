@@ -110,7 +110,7 @@ fn test_error_control_suppresses_duplicate_define_warning() {
 
 // Tests that a duplicate `define()` call without `@` emits a PHP warning at runtime.
 // The second `define("DUPLICATE_WARN", 2)` returns `false`, so "ok" is echoed,
-// and stderr must contain "Warning: define()".
+// and stderr must carry PHP's "Constant DUPLICATE_WARN already defined" warning.
 /// Verifies that duplicate define emits runtime warning.
 #[test]
 fn test_duplicate_define_emits_runtime_warning() {
@@ -120,7 +120,9 @@ fn test_duplicate_define_emits_runtime_warning() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ok1");
     assert!(
-        out.stderr.contains("Warning: define()"),
+        out.stderr.contains(
+            "Warning: Constant DUPLICATE_WARN already defined, this will be an error in PHP 9"
+        ),
         "expected duplicate define warning, got stderr={}",
         out.stderr
     );

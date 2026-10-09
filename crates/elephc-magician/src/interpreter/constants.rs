@@ -177,8 +177,23 @@ pub(super) const EVAL_PHP_EXTRA_VERSION: &str = "";
 /// version surface uses.
 pub(super) const EVAL_PHP_SAPI: &str = "cli";
 
-pub(super) const DEFINE_ALREADY_DEFINED_WARNING: &str =
-    "Warning: define(): Constant already defined\n";
+/// Returns PHP's warning line for redefining the constant `name`. PHP 8.5 adds that it will
+/// become an error in PHP 9; earlier profiles print the bare sentence. The namespace part of a
+/// namespaced name prints lowercased, as PHP stores it (`app\X`); the constant's own name keeps
+/// its case.
+pub(super) fn define_already_defined_warning(name: &str) -> String {
+    let suffix = if crate::eval_php_profile::eval_php_version_id() >= 80_500 {
+        ", this will be an error in PHP 9"
+    } else {
+        ""
+    };
+    let name = name.trim_start_matches('\\');
+    let shown = match name.rfind('\\') {
+        Some(split) => format!("{}{}", name[..split].to_ascii_lowercase(), &name[split..]),
+        None => name.to_string(),
+    };
+    format!("Warning: Constant {shown} already defined{suffix}\n")
+}
 pub(super) const HEX2BIN_ODD_LENGTH_WARNING: &str =
     "Warning: hex2bin(): Hexadecimal input string must have an even length\n";
 pub(super) const HEX2BIN_INVALID_WARNING: &str =

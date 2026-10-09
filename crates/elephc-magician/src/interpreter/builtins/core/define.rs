@@ -62,7 +62,7 @@ fn eval_define_name(
         || eval_predefined_constant_value(&name).is_some()
         || context.has_constant(&name)
     {
-        values.warning(DEFINE_ALREADY_DEFINED_WARNING)?;
+        values.warning(&define_already_defined_warning(&name))?;
         return Ok(false);
     }
     let value = values.retain(value)?;

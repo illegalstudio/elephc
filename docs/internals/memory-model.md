@@ -936,7 +936,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
 - `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
 - `_fiber_msg_*` — Fiber state-error message strings used when constructing `FiberError`
-- `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
+- `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg` — runtime warning suppression depth and warning strings used by `@` (the `Constant X already defined` warning is a per-constant string in the program's own data)
 - `_resource_id_prefix` — prefix used by resource display helpers
 - `_obj_handle_index`, `_obj_handle_free`, `_obj_handle_free_top` — direct heap-granule-to-object-handle index plus the LIFO pool of reusable PHP object handles
 - `_web_heap_guard_enabled` — enables per-request live-block accounting for persistent `--web` workers
