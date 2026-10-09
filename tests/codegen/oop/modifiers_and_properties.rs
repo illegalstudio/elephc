@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Private-set readonly clone refusals omit the readonly word and retain the source value.
+#[test]
+fn test_asymmetric_second_review_private_readonly_clone_message() {
+    for eval in [false, true] {
+        let body = r#"class V {
+    public private(set) readonly int $ro;
+    public function __construct() { $this->ro = 1; }
+}
+$source = new V();
+try { clone($source, ["ro" => 9]); }
+catch (Error $error) { echo $error->getMessage(), "|", $source->ro; }
+unset($source);"#;
+        let source = if eval { format!("<?php eval('{body}');") }
+            else { format!("<?php {body}") };
+        let out = compile_and_run_with_heap_debug(&source);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "Cannot modify private(set) property V::$ro from global scope|1");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}
+
 /// Eval child readonly redeclarations discard parent defaults before constructor initialization.
 #[test]
 fn test_asymmetric_followup_eval_redeclared_readonly_initialization() {
