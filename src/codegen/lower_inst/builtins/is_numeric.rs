@@ -7,13 +7,12 @@
 //! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
-//! - The string case delegates to `__rt_str_to_number`, whose numeric flag is
-//!   `__rt_php_num_scan`'s implementation of PHP's `is_numeric_string()` grammar:
+//! - The string case delegates to the length-aware `__rt_str_numeric_ex`, whose numeric flag
+//!   implements PHP's `is_numeric_string()` grammar and rejects embedded NUL bytes:
 //!   optional leading/trailing PHP whitespace, optional sign, a mantissa with at least
 //!   one digit (`12`, `.5`, `5.`), and an exponent only when a digit follows it. Hex,
-//!   underscore separators, `INF` and `NAN` are NOT numeric. Sharing that one scanner is
-//!   what keeps `is_numeric($s)` and `(float) $s` / `(int) $s` consistent with each other
-//!   and with the compile-time folder in `crate::optimize::fold::compare`.
+//!   underscore separators, `INF` and `NAN` are NOT numeric. Numeric classification uses
+//!   the whole PHP byte string; casts may instead consume its leading numeric prefix.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -112,9 +111,8 @@ fn emit_static_bool(ctx: &mut FunctionContext<'_>, value: bool) {
 
 /// Emits PHP's numeric-string test for a string in the string-result registers.
 ///
-/// Delegates to `__rt_str_to_number`, which clips the string to PHP's leading numeric run
-/// and reports in the integer result register whether the WHOLE string was numeric. The
-/// parsed double it also leaves in the float result register is unused here.
+/// Delegates to `__rt_str_numeric_ex`, which checks the PHP byte length before classification
+/// and returns the fully-numeric flag in the integer result register on every target.
 fn emit_string_is_numeric(ctx: &mut FunctionContext<'_>) {
-    abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
+    abi::emit_call_label(ctx.emitter, "__rt_str_numeric_ex");
 }
