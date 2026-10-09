@@ -83,7 +83,9 @@ pub fn emit_array_diff_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload this entry's runtime value_tag
     emitter.instruction("cmp x9, #1");                                          // is the borrowed value a string?
     emitter.instruction("b.eq __rt_array_diff_key_retain");                     // strings need retain via the uniform dispatcher
-    emitter.instruction("cmp x9, #4");                                          // is the borrowed value heap-backed?
+    emitter.instruction("cmp x9, #10");                                         // is the copied value an owned callable descriptor?
+    emitter.instruction("b.eq __rt_array_diff_key_retain");                     // retain callable descriptors for the result owner
+    emitter.instruction("cmp x9, #4");                                          // is the borrowed value in the remaining heap-backed range?
     emitter.instruction("b.lt __rt_array_diff_key_copy");                       // scalar values need no retain
     emitter.instruction("cmp x9, #7");                                          // do heap-backed tags stay within range?
     emitter.instruction("b.gt __rt_array_diff_key_copy");                       // unknown tags are ignored here
@@ -112,6 +114,38 @@ pub fn emit_array_diff_key(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = result hash table
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every supported target retains a kept callable before inserting it into either key-set result.
+    #[test]
+    fn key_set_emitters_retain_callables_on_all_supported_targets() {
+        for name in ["linux-x86_64", "linux-aarch64", "macos-aarch64", "ios-arm64", "ios-sim-arm64"] {
+            let target = Target::parse(name).unwrap();
+            for (emit, label) in [
+                (emit_array_diff_key as fn(&mut Emitter), "__rt_array_diff_key_retain"),
+                (super::super::array_intersect_key::emit_array_intersect_key, "__rt_array_isect_key_retain"),
+            ] {
+                let mut emitter = Emitter::new(target);
+                emit(&mut emitter);
+                let assembly = emitter.output();
+                let (compare, branch, retain) = if target.arch == Arch::X86_64 {
+                    ("cmp r10, 10", format!("je {label}"), "call __rt_incref")
+                } else {
+                    ("cmp x9, #10", format!("b.eq {label}"), "bl __rt_incref")
+                };
+                let compare_at = assembly.find(compare).expect("missing callable tag comparison");
+                let after_compare = &assembly[compare_at..];
+                assert!(after_compare.contains(&branch), "{name}: {assembly}");
+                let retain_at = after_compare.find(&format!("{label}:")).expect("missing retain label");
+                assert!(after_compare[retain_at..].contains(retain), "{name}: {assembly}");
+            }
+        }
+    }
 }
 
 /// Emits the x86_64 Linux variant of `__rt_array_diff_key`.
@@ -155,7 +189,9 @@ fn emit_array_diff_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // reload the saved runtime value tag for the source associative-array entry
     emitter.instruction("cmp r10, 1");                                          // is the copied associative-array value a string?
     emitter.instruction("je __rt_array_diff_key_retain");                       // strings need a retain because the filtered result becomes a new owner
-    emitter.instruction("cmp r10, 4");                                          // is the copied associative-array value heap-backed?
+    emitter.instruction("cmp r10, 10");                                         // is the copied value an owned callable descriptor?
+    emitter.instruction("je __rt_array_diff_key_retain");                       // retain callable descriptors for the result owner
+    emitter.instruction("cmp r10, 4");                                          // is the copied value in the remaining heap-backed range?
     emitter.instruction("jl __rt_array_diff_key_copy");                         // scalar payloads can be copied directly into the filtered result
     emitter.instruction("cmp r10, 7");                                          // do heap-backed associative-array value tags stay within the supported retainable range?
     emitter.instruction("jg __rt_array_diff_key_copy");                         // unsupported tags fall back to raw copy without an extra retain

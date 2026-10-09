@@ -2396,6 +2396,14 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayColumn
                 | RuntimeFnId::ArrayCombine
                 | RuntimeFnId::ArrayDiff
+                // The key and assoc set operations build their result with `__rt_hash_new`,
+                // exactly like `array_diff`/`array_intersect`, so it never aliases an operand.
+                // In the default `MayAliasArguments` bucket an owned literal operand was never
+                // released: `array_diff_key([5 => 1, 6 => 2], [5 => 0])` leaked 4 blocks a call.
+                | RuntimeFnId::ArrayDiffAssoc
+                | RuntimeFnId::ArrayDiffKey
+                | RuntimeFnId::ArrayIntersectAssoc
+                | RuntimeFnId::ArrayIntersectKey
                 | RuntimeFnId::ArrayFill
                 | RuntimeFnId::ArrayFillKeys
                 // Every `array_flip` lowering allocates its destination table before writing a

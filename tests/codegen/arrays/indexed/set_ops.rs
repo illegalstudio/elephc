@@ -198,3 +198,86 @@ echo $saved[0] . "|" . $saved[1];
     );
     assert_eq!(out, "5|6");
 }
+
+/// `array_diff()`, `array_intersect()`, `array_diff_key()` and `array_intersect_key()` keep each
+/// survivor's ORIGINAL key, as PHP does: an indexed first operand yields an integer-keyed hash
+/// rather than a renumbered list. Covers int, float, string and numeric-string elements,
+/// associative operands on either side, an int operand against a string one (string-cast
+/// equality), and `json_encode` (a sparse array encodes as an object). Regression for #1645.
+#[test]
+fn test_set_operations_keep_the_surviving_keys() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(array_diff([1, 2, 3], [2])), "\n";
+echo json_encode(array_diff([1.5, 2.5, 3.5], [2.5])), "\n";
+echo json_encode(array_diff(["a", "b", "c", "d"], ["b", "d"])), "\n";
+echo json_encode(array_diff(["1", "01", "2"], ["1"])), "\n";
+echo json_encode(array_diff([1, 2, 3], ["2"])), "\n";
+echo json_encode(array_diff(["x" => 1, "y" => 2, "z" => 3], [2])), "\n";
+echo json_encode(array_diff([1, 2, 3], ["k" => 2])), "\n";
+echo json_encode(array_intersect([1, 2, 3, 4], [2, 4])), "\n";
+echo json_encode(array_intersect(["a", "b", "c"], ["c", "a"])), "\n";
+echo json_encode(array_diff_key([10, 20, 30], [1 => 0])), "\n";
+echo json_encode(array_intersect_key([10, 20, 30], [0 => 0, 2 => 0])), "\n";
+echo json_encode(array_diff([1, 2], [1, 2])), json_encode(array_diff([1, 2], [9])), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"0\":1,\"2\":3}\n",
+            "{\"0\":1.5,\"2\":3.5}\n",
+            "{\"0\":\"a\",\"2\":\"c\"}\n",
+            "{\"1\":\"01\",\"2\":\"2\"}\n",
+            "{\"0\":1,\"2\":3}\n",
+            "{\"x\":1,\"z\":3}\n",
+            "{\"0\":1,\"2\":3}\n",
+            "{\"1\":2,\"3\":4}\n",
+            "{\"0\":\"a\",\"2\":\"c\"}\n",
+            "{\"0\":10,\"2\":30}\n",
+            "{\"0\":10,\"2\":30}\n",
+            "[][1,2]\n",
+        )
+    );
+}
+
+/// The kept keys are real keys: `$d[2]` reads the survivor, `isset($d[1])` sees the hole, a
+/// `foreach` walks the original keys and `array_values()` renumbers them. Regression for #1645.
+#[test]
+fn test_array_diff_result_is_indexed_by_the_original_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$d = array_diff([1, 2, 3], [2]);
+echo $d[2] ?? "missing", "|", isset($d[1]) ? "has1" : "no1", "|", count($d), "\n";
+foreach (array_intersect(["p", "q", "r"], ["r", "p"]) as $k => $v) { echo $k, "=", $v, ","; }
+echo "\n", json_encode(array_values(array_diff([5, 6, 7, 8], [6, 8]))), "\n";
+"#,
+    );
+    assert_eq!(out, "3|no1|2\n0=p,2=r,\n[5,7]\n");
+}
+
+/// The key-preserving set operations leave the heap clean, including string survivors (persisted
+/// into the result), string-cast comparisons between an int and a string operand (the casts are
+/// freed and the concat scratch rewound), and the key operations whose literal operands used to
+/// stay alive (they were not marked as returning fresh storage). Regression for #1645.
+#[test]
+fn test_key_preserving_set_operations_heap_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$t = 0;
+for ($i = 0; $i < 40 + ($argc > 5 ? 1 : 0); $i++) {
+    $t += count(array_diff(["a", "b" . $i, "c"], ["c", "x"]));
+    $t += count(array_diff([1, 2, 3], ["2", "x" . $i]));
+    $t += count(array_intersect(["a", "b" . $i, "c"], ["c", "a"]));
+    $t += count(array_diff(["x" => "p" . $i, "y" => "q"], ["q"]));
+    $t += count(array_diff_key(["a" . $i, "b", "c"], [1 => 0]));
+    $t += count(array_intersect_key([10, 20, 30], [0 => 0, 2 => 0]));
+    $t += count(array_diff_key([5 => 1, 6 => 2], [5 => 0]));
+}
+echo $t, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "480\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

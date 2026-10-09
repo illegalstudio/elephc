@@ -49,33 +49,6 @@ pub(super) fn lower_indexed_array_set_op(
     store_if_result(ctx, inst)
 }
 
-/// Calls a key set-operation helper after validating associative-array hash operands.
-pub(super) fn lower_assoc_array_key_set_op(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    helper: &str,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 2)?;
-    let first = expect_operand(inst, 0)?;
-    let second = expect_operand(inst, 1)?;
-    let first_ty = assoc_array_key_set_operand_type(ctx.value_php_type(first)?, name, "first")?;
-    let _second_ty = assoc_array_key_set_operand_type(ctx.value_php_type(second)?, name, "second")?;
-    require_assoc_array_key_set_result_type(name, &first_ty, &inst.result_php_type.codegen_repr())?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(first, "x0")?;
-            ctx.load_value_to_reg(second, "x1")?;
-        }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(first, "rdi")?;
-            ctx.load_value_to_reg(second, "rsi")?;
-        }
-    }
-    abi::emit_call_label(ctx.emitter, helper);
-    store_if_result(ctx, inst)
-}
-
 /// Sorts a hash receiver by value and republishes it re-keyed `0..n-1`, the way `sort()` does.
 ///
 /// `sort()` and `rsort()` DISCARD keys: PHP renumbers the result from zero, which is what makes

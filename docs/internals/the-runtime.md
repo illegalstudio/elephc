@@ -856,6 +856,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_splice_insert` / `_refcounted` / `_boxed` / `_unboxed` / `_str` | Write `array_splice()`'s `$replacement` into the gap the removal opened, growing the destination first. The five variants differ in what one replacement slot becomes: copied verbatim, retained, wrapped in a fresh boxed `Mixed` cell, read back out of one as a plain integer, or duplicated with `__rt_str_persist` into a 16-byte string slot |
 | `__rt_array_to_hash_unique` / `__rt_hash_to_hash_unique` | `array_unique()` for indexed and associative sources: dedupe by value through a second hash while preserving each survivor's original key (an indexed source therefore returns a sparse hash) |
 | `__rt_array_diff` / `__rt_array_intersect` | Set difference/intersection by value |
+| `__rt_hash_value_diff_intersect` | `array_diff()` / `array_intersect()` over two hashes (indexed operands are converted first): keeps each first-operand entry whose value is absent (mode 0) or present (mode 1) in the second, under its original key. Values compare as strings; int/bool pairs and string pairs take a direct fast path |
 | `__rt_array_diff_key` / `__rt_array_intersect_key` | Set operations by key |
 | `__rt_array_flip` | Swap indexed integer values into associative-array keys |
 | `__rt_array_flip_string` | Swap indexed string values into associative-array keys, normalizing numeric-string keys |
