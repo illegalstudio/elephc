@@ -31,7 +31,7 @@ builtin! {
 /// Arity (exactly 2 args) is pre-validated by `check_arity`. The hook re-infers both
 /// argument types to derive the precise result type: when the left operand is an empty
 /// indexed array (element type `Void`), the result adopts the right operand's element
-/// type if it is a scalar-merge-compatible type.
+/// type when an indexed merge helper can copy it.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
@@ -57,13 +57,19 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 /// Infers the return type for `array_merge(first, second)`.
 ///
 /// When `first` is an empty indexed array (element type `Void`), the merged result
-/// adopts `second`'s element type if it is a scalar-merge-compatible type; otherwise
-/// the result keeps `first`'s type. For non-empty indexed arrays, the left operand
-/// type is returned unchanged (matching legacy checker behavior).
+/// adopts `second`'s element type if an indexed merge helper copies it; otherwise the
+/// result keeps `first`'s type. For non-empty indexed arrays, the left operand type is
+/// returned unchanged (matching legacy checker behavior).
+///
+/// Keeping the empty placeholder for a second operand the backend DOES merge was a silent
+/// miscompile: the helper filled and stamped the result, but every read through the static
+/// `array<never>` type answered the missing-element sentinel. `array_merge([], $strings)`
+/// printed `NULL` per element, `array_merge([], [1, "two"])` printed nothing, and object or
+/// nested-array results were refused by the checker for member access or `count()`.
 fn array_merge_return_type(first: PhpType, second: PhpType) -> PhpType {
     match first {
         PhpType::Array(elem) if is_empty_array_element_type(elem.as_ref()) => match second {
-            PhpType::Array(right) if is_scalar_merge_element_type(right.as_ref()) => {
+            PhpType::Array(right) if is_indexed_merge_element_type(right.as_ref()) => {
                 PhpType::Array(right)
             }
             _ => PhpType::Array(elem),
@@ -77,15 +83,19 @@ fn is_empty_array_element_type(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Void)
 }
 
-/// Returns true for element types that the scalar merge runtime helper copies safely.
-fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
+/// Returns true for element types an indexed merge runtime helper copies safely: the scalar
+/// 8-byte layouts (`__rt_array_merge`), 16-byte string pairs (`__rt_array_merge_str`, issue
+/// #675), and every refcounted payload (`__rt_array_merge_refcounted`).
+fn is_indexed_merge_element_type(ty: &PhpType) -> bool {
+    let repr = ty.codegen_repr();
     matches!(
-        ty.codegen_repr(),
+        repr,
         PhpType::Int
         | PhpType::Bool
         | PhpType::False
         | PhpType::Float
         | PhpType::Callable
         | PhpType::Void
-    )
+        | PhpType::Str
+    ) || repr.is_refcounted()
 }

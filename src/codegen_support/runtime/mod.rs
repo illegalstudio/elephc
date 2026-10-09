@@ -89,6 +89,8 @@ pub(crate) use emitters::emit_runtime;
 pub(crate) use arrays::{emit_nan_bool_coercion_probe, nan_bool_coercion_warning_enabled};
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
+/// The `__rt_array_combine_boxed` mode words and its length-mismatch position.
+pub(crate) use arrays::{COMBINE_COUNT_MISMATCH, MODE_COMBINE, MODE_FILL};
 /// The call-stack overflow guard's shared symbol name. Codegen's prologue check and the
 /// runtime emitter must name the same `.comm` word or the guard silently never fires.
 pub(crate) use system::STACK_LIMIT_SYMBOL;

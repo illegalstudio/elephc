@@ -17,6 +17,7 @@ mod call_argument_unpack;
 mod array_count_values;
 mod array_column;
 mod array_column_boxed;
+mod array_combine_boxed;
 mod array_column_mixed;
 mod array_column_ref;
 mod array_column_str;
@@ -63,6 +64,7 @@ mod array_merge_refcounted;
 mod array_multisort;
 mod array_new;
 mod array_pad;
+mod array_pad_chunk_boxed;
 mod array_pad_refcounted;
 mod array_product;
 mod array_numeric_aggregate;
@@ -95,6 +97,12 @@ mod array_splice;
 mod array_splice_insert;
 mod array_splice_refcounted;
 mod array_slice_str;
+mod array_chunk_str;
+mod array_diff_str;
+mod array_merge_str;
+mod array_pad_str;
+mod array_reverse_str;
+mod shuffle_str;
 mod array_splice_str;
 mod array_strict_eq;
 mod array_sum;
@@ -223,6 +231,10 @@ pub use call_argument_unpack::emit_call_argument_unpack;
 /// Emit key-preserving array chunk helper (array_chunk preserve_keys).
 pub use array_column::emit_array_column;
 pub use array_column_boxed::emit_array_column_boxed;
+/// Emit the `array_combine()` / `array_fill_keys()` builder over any key and value layout.
+pub use array_combine_boxed::{
+    emit_array_combine_boxed, COUNT_MISMATCH as COMBINE_COUNT_MISMATCH, MODE_COMBINE, MODE_FILL,
+};
 pub use array_count_values::{emit_array_count_values, ARRAY_COUNT_VALUES_SKIPPED_MESSAGES};
 /// Emit array column extraction helper.
 pub use array_column_mixed::emit_array_column_mixed;
@@ -319,6 +331,8 @@ pub use array_new::emit_array_new;
 /// Emit new empty array helper.
 pub use array_pad::emit_array_pad;
 /// Emit array padding helper.
+pub use array_pad_chunk_boxed::{emit_array_chunk_boxed, emit_array_pad_boxed};
+/// Emit the `array_pad()` / `array_chunk()` builders over any array layout.
 pub use array_pad_refcounted::emit_array_pad_refcounted;
 /// Emit refcounted array pad helper.
 pub use array_product::emit_array_product;
@@ -381,6 +395,12 @@ pub use array_splice_insert::{
 /// Emit array splice helper.
 pub use array_splice_refcounted::emit_array_splice_refcounted;
 pub use array_slice_str::emit_array_slice_str;
+pub use array_chunk_str::emit_array_chunk_str;
+pub use array_diff_str::emit_array_diff_str;
+pub use array_merge_str::emit_array_merge_str;
+pub use array_pad_str::emit_array_pad_str;
+pub use array_reverse_str::emit_array_reverse_str;
+pub use shuffle_str::emit_shuffle_str;
 pub use array_splice_str::{emit_array_splice_insert_str, emit_array_splice_str};
 /// Emit deep array strict-equality (`===`) helper.
 pub use array_strict_eq::emit_array_strict_eq;

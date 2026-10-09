@@ -344,9 +344,25 @@ pub(super) fn eight_byte_indexed_array_element_type(ty: PhpType, name: &str) -> 
     }
 }
 
+/// Returns the element type of an indexed array the string-aware helpers can process: the
+/// 8-byte layouts `eight_byte_indexed_array_element_type` accepts, plus `Str`.
+///
+/// An indexed string array stores 16-byte `{pointer, length}` slots, which the 8-byte helpers
+/// cannot carry. The builtins that call this have a `_str` twin runtime helper (issue #675).
+pub(super) fn str_or_eight_byte_indexed_array_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
+    if let PhpType::Array(elem) = ty.codegen_repr() {
+        if elem.codegen_repr() == PhpType::Str {
+            return Ok(PhpType::Str);
+        }
+    }
+    eight_byte_indexed_array_element_type(ty, name)
+}
+
 /// Returns the runtime helper for `array_reverse()` based on element ownership.
 pub(super) fn array_reverse_runtime_helper(elem_ty: &PhpType) -> &'static str {
-    if elem_ty.is_refcounted() {
+    if elem_ty == &PhpType::Str {
+        "__rt_array_reverse_str"
+    } else if elem_ty.is_refcounted() {
         "__rt_array_reverse_refcounted"
     } else {
         "__rt_array_reverse"
@@ -355,7 +371,9 @@ pub(super) fn array_reverse_runtime_helper(elem_ty: &PhpType) -> &'static str {
 
 /// Returns the runtime helper for `array_merge()` based on element ownership.
 pub(super) fn array_merge_runtime_helper(elem_ty: &PhpType) -> &'static str {
-    if elem_ty.is_refcounted() {
+    if elem_ty == &PhpType::Str {
+        "__rt_array_merge_str"
+    } else if elem_ty.is_refcounted() {
         "__rt_array_merge_refcounted"
     } else {
         "__rt_array_merge"
@@ -479,7 +497,13 @@ pub(super) fn require_array_slice_element_layout(elem: &PhpType) -> Result<()> {
 pub(super) fn require_array_chunk_element_layout(elem: &PhpType) -> Result<()> {
     if matches!(
         elem,
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Callable
+            | PhpType::Void
+            // 16-byte `{pointer, length}` slots, copied by `__rt_array_chunk_str` (issue #675).
+            | PhpType::Str
     ) || elem.is_refcounted()
     {
         return Ok(());
@@ -494,7 +518,13 @@ pub(super) fn require_array_chunk_element_layout(elem: &PhpType) -> Result<()> {
 pub(super) fn require_array_pad_element_layout(elem: &PhpType) -> Result<()> {
     if matches!(
         elem,
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Callable
+            | PhpType::Void
+            // 16-byte `{pointer, length}` slots, copied by `__rt_array_pad_str` (issue #675).
+            | PhpType::Str
     ) || elem.is_refcounted()
     {
         return Ok(());
