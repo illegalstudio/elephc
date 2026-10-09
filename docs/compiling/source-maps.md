@@ -92,7 +92,7 @@ marker comment line, and the instruction's assembly follows it.
 | `php_line` / `php_col` | integer | 1-based user-source position (the expression's anchor: its operator or first token). The stable field name also applies to LFC. |
 | `php_end_line` / `php_end_col` | integer \| null | Exclusive end of the mapped expression (the character after it). `null` when the extent is unknown. |
 | `op` | string \| null | EIR opcode spelling (e.g. `ichecked_add`, `call`), or `null` when unknown. |
-| `origin` | string \| null | Optimization-pass provenance: `"const_fold"` when the instruction was rewritten to a constant, `"licm"` when it was hoisted out of a loop. `null` for instructions lowered directly from the source. |
+| `origin` | string \| null | Optimization-pass provenance: `"const_fold"` when the instruction was rewritten to a constant, `"integer_range"` for proven scalar arithmetic, `"licm"` when hoisted out of a loop, or `"loop_optimize"` for canonical loop tests and updates. `null` for instructions lowered directly from the source. |
 | `function` | integer \| null | Index into `functions`, or `null` outside any function. |
 
 ### `lines`

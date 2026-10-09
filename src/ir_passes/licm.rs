@@ -16,13 +16,16 @@
 //! - Only **pure** (`Effects::PURE`) instructions with a `NonHeap`/`Persistent`
 //!   result are eligible. Purity means the result depends only on immutable inputs
 //!   and the op neither reads mutable state nor faults, so evaluating it once in the
-//!   preheader — unconditionally, even if the original site was only reached on some
+//!   preheader unconditionally, even if the original site was only reached on some
 //!   iterations — is safe (no speculation hazard). The ownership bound keeps the move
-//!   refcount-neutral. Nullary constant/address materializations are moved only when
-//!   they are operands of a computation being hoisted; standalone materializations
-//!   remain in place. A `load_local` proven immutable by the dedicated analysis is also
+//!   refcount-neutral. Nullary constant/address materializations also move, including
+//!   bounds and steps consumed directly by varying comparisons and updates.
+//!   A `load_local` proven immutable by the dedicated analysis is also
 //!   eligible: moving that load is what makes local-backed invariant arithmetic
 //!   available in the preheader.
+//! - Checked integer operations feeding raw slots can fatal on overflow despite
+//!   PURE metadata. They stay in the loop unless range analysis removes the check;
+//!   explicit cast sinks have a total conversion path and may be hoisted.
 //! - Hoisting needs a preheader to move into. The loop analysis detects an
 //!   existing one (the loop init block is commonly a natural preheader even
 //!   after scalar promotion adds block arguments); loops without a detected
@@ -40,7 +43,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{BlockId, DataPool, Function, InstId, Op, Ownership, ValueDef, ValueId};
+use crate::ir::{BlockId, DataPool, Function, Immediate, InstId, Op, Ownership, ValueDef, ValueId};
 
 use super::cfg::has_exception_handlers;
 use super::dominance::{compute_dominance, DominanceInfo};
@@ -99,8 +102,8 @@ impl IrPass for Licm {
 }
 
 /// Builds the loop-invariant instruction set for one loop and returns it ordered
-/// by instruction id (a valid topological order, since SSA definitions precede
-/// their uses). The set is grown to a fixed point: an instruction joins once all
+/// by dependency discovery, independent of instruction table IDs after CFG rewrites.
+/// The set is grown to a fixed point: an instruction joins once all
 /// its operands are available at the preheader, which can be enabled by another
 /// instruction joining first.
 fn find_hoistable(
@@ -111,6 +114,7 @@ fn find_hoistable(
     def_block: &HashMap<ValueId, BlockId>,
 ) -> Vec<InstId> {
     let mut hoistable: HashSet<InstId> = HashSet::new();
+    let mut ordered = Vec::new();
     loop {
         let mut added = false;
         for &block in &loop_ref.blocks {
@@ -141,8 +145,12 @@ fn find_hoistable(
                     )
                 });
                 if ready {
-                    hoistable.extend(materializations);
-                    hoistable.insert(inst_id);
+                    let mut dependencies: Vec<_> = materializations.into_iter().collect();
+                    dependencies.sort_unstable();
+                    for dependency in dependencies {
+                        if hoistable.insert(dependency) { ordered.push(dependency); }
+                    }
+                    if hoistable.insert(inst_id) { ordered.push(inst_id); }
                     added = true;
                 }
             }
@@ -151,8 +159,6 @@ fn find_hoistable(
             break;
         }
     }
-    let mut ordered: Vec<InstId> = hoistable.into_iter().collect();
-    ordered.sort_unstable_by_key(|id| id.as_raw());
     ordered
 }
 
@@ -202,14 +208,19 @@ fn is_rematerializable_dependency(inst: &crate::ir::Instruction) -> bool {
 }
 
 /// Returns true when an instruction may be hoisted: it produces a value, is not a
-/// `nop`, is pure (no side effects, no fault, no mutable-state read), is either a
-/// computation or a proven-immutable `load_local`, and its result carries no
+/// `nop`, is pure (no side effects, no fault, no mutable-state read), and carries no
 /// owned-heap cleanup.
 fn is_hoist_eligible(inst: &crate::ir::Instruction) -> bool {
+    // Raw integer-slot overflow is fatal even though checked scalar operations
+    // carry PURE metadata. Only explicit cast sinks have a total overflow path.
+    if matches!(inst.op, Op::ICheckedAddToInt | Op::ICheckedSubToInt | Op::ICheckedMulToInt)
+        && inst.immediate != Some(Immediate::Bool(true))
+    {
+        return false;
+    }
     inst.result.is_some()
         && inst.op != Op::Nop
         && inst.effects.is_pure()
-        && (!inst.operands.is_empty() || inst.op == Op::LoadLocal)
         && matches!(inst.result_ownership, Ownership::NonHeap | Ownership::Persistent)
 }
 

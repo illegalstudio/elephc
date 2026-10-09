@@ -788,29 +788,14 @@ fn discover_induction_ranges(function: &Function) -> HashMap<ValueId, IntRange> 
     let loops = compute_loops(function, &dominance);
     let mut summaries = HashMap::new();
     for lp in loops.loops() {
-        let Some(preheader) = lp.preheader else {
-            continue;
-        };
-        let Some(header) = function.block(lp.header) else {
-            continue;
-        };
-        let Some(init_args) = branch_args_to(function, preheader, lp.header) else {
-            continue;
-        };
         let Some((condition, continue_when_true)) = loop_condition(function, lp) else {
             continue;
         };
-        for (index, &param) in header.params.iter().enumerate() {
-            if !value_is_i64(function, param) {
-                continue;
-            }
-            let Some(&init) = init_args.get(index) else {
-                continue;
-            };
-            let Some(step) = common_recurrence_step(function, lp, index, param, &summaries)
-            else {
-                continue;
-            };
+        let inductions = super::induction::basic_inductions(function, lp, |value| {
+            static_value_range(function, value, &summaries, &mut HashMap::new())?.exact()
+        });
+        for induction in inductions {
+            let (param, init, step) = (induction.parameter, induction.initial, induction.step);
             let Some((predicate, bound)) = induction_condition(
                 function,
                 condition,
@@ -854,20 +839,6 @@ fn value_def_block(function: &Function, value: ValueId) -> Option<BlockId> {
     }
 }
 
-/// Returns arguments only when every parallel edge to the target agrees.
-fn branch_args_to(
-    function: &Function,
-    from: BlockId,
-    target: BlockId,
-) -> Option<Vec<ValueId>> {
-    let term = function.block(from)?.terminator.as_ref()?;
-    let mut edges = outgoing_edges(term)
-        .into_iter()
-        .filter(|edge| edge.target == target);
-    let args = edges.next()?.args;
-    edges.all(|edge| edge.args == args).then_some(args)
-}
-
 /// Finds a loop header comparison and whether its true edge continues the loop.
 fn loop_condition(
     function: &Function,
@@ -885,80 +856,6 @@ fn loop_condition(
     match (lp.contains(*then_target), lp.contains(*else_target)) {
         (true, false) => Some((*cond, true)),
         (false, true) => Some((*cond, false)),
-        _ => None,
-    }
-}
-
-/// Requires every loop latch to pass the same constant-step recurrence for a parameter.
-fn common_recurrence_step(
-    function: &Function,
-    lp: &super::loops::NaturalLoop,
-    index: usize,
-    param: ValueId,
-    summaries: &HashMap<ValueId, IntRange>,
-) -> Option<i64> {
-    let mut common = None;
-    for &latch in &lp.latches {
-        let args = branch_args_to(function, latch, lp.header)?;
-        let recurrence = *args.get(index)?;
-        let step = recurrence_step(function, recurrence, param, summaries)?;
-        match common {
-            Some(previous) if previous != step => return None,
-            Some(_) => {}
-            None => common = Some(step),
-        }
-    }
-    common.filter(|step| *step != 0)
-}
-
-/// Matches `param + constant` or `param - constant` recurrences.
-fn recurrence_step(
-    function: &Function,
-    recurrence: ValueId,
-    param: ValueId,
-    summaries: &HashMap<ValueId, IntRange>,
-) -> Option<i64> {
-    let ValueDef::Instruction { inst, .. } = function.value(recurrence)?.def else {
-        return None;
-    };
-    let instruction = function.instruction(inst)?;
-    if !matches!(
-        instruction.op,
-        Op::IAdd | Op::ICheckedAddToInt | Op::ISub | Op::ICheckedSubToInt
-    ) || instruction.operands.len() != 2
-    {
-        return None;
-    }
-    let mut memo = HashMap::new();
-    match instruction.op {
-        Op::IAdd | Op::ICheckedAddToInt if instruction.operands[0] == param => {
-            static_value_range(
-                function,
-                instruction.operands[1],
-                summaries,
-                &mut memo,
-            )?
-            .exact()
-        }
-        Op::IAdd | Op::ICheckedAddToInt if instruction.operands[1] == param => {
-            static_value_range(
-                function,
-                instruction.operands[0],
-                summaries,
-                &mut memo,
-            )?
-            .exact()
-        }
-        Op::ISub | Op::ICheckedSubToInt if instruction.operands[0] == param => {
-            static_value_range(
-                function,
-                instruction.operands[1],
-                summaries,
-                &mut memo,
-            )?
-            .exact()?
-            .checked_neg()
-        }
         _ => None,
     }
 }

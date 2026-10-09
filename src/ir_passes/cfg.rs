@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use crate::ir::{BlockId, Function, Op, Terminator};
+use crate::ir::{BlockId, Function, Op, Terminator, ValueId};
 
 /// Returns true when the function uses any exception-handling opcode.
 ///
@@ -119,4 +119,22 @@ pub(super) fn reverse_postorder(func: &Function) -> Vec<BlockId> {
 
     postorder.reverse();
     postorder
+}
+
+/// Borrows explicit successor targets together with their parallel SSA arguments.
+pub(super) fn successor_edges(term: &mut Terminator) -> Vec<(&mut BlockId, &mut Vec<ValueId>)> {
+    match term {
+        Terminator::Br { target, args } => vec![(target, args)],
+        Terminator::CondBr { then_target, then_args, else_target, else_args, .. } => {
+            vec![(then_target, then_args), (else_target, else_args)]
+        }
+        Terminator::Switch { cases, default, default_args, .. } => {
+            let mut edges: Vec<_> = cases.iter_mut().map(|case| (&mut case.target, &mut case.args)).collect();
+            edges.push((default, default_args));
+            edges
+        }
+        Terminator::GeneratorSuspend { resume, resume_args, .. } => vec![(resume, resume_args)],
+        Terminator::Return { .. } | Terminator::Throw { .. }
+        | Terminator::Fatal { .. } | Terminator::Unreachable => Vec::new(),
+    }
 }

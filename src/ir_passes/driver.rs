@@ -35,6 +35,7 @@ use super::identity_arith::IdentityArith;
 use super::immutable_local_loads::ImmutableLocalLoads;
 use super::integer_range::IntegerRange;
 use super::licm::Licm;
+use super::loop_optimize::LoopOptimize;
 use super::mem2reg::Mem2Reg;
 use super::peephole::Peephole;
 
@@ -76,8 +77,9 @@ pub trait IrPass {
 /// Builds the ordered set of transformation passes run on every function:
 /// identity arithmetic folding, peephole rewrites, scalar local promotion,
 /// immutable-local discovery, checked-arithmetic int-sink specialization,
-/// integer range specialization, boxed numeric-chain fusion, constant folding, common-subexpression
-/// elimination, loop-invariant code motion, dead instruction elimination,
+/// canonical loop optimization, integer range specialization, boxed numeric-chain
+/// fusion, constant folding, common-subexpression elimination, loop-invariant
+/// code motion, dead instruction elimination,
 /// dead store elimination, and branch simplification.
 /// The cross-function small-function inliner is not a member here; it runs as a
 /// module-level phase in `optimize_module`, interleaved with these passes.
@@ -92,7 +94,11 @@ pub trait IrPass {
 /// `ICheckedNumericChainToInt` regions.
 /// CSE can then deduplicate those computations using canonical immutable loads,
 /// while LICM can move both the loads and their dependent arithmetic into loop
-/// preheaders. The redundant or relocated instructions these leave behind are
+/// preheaders. Canonical loop optimization shares equivalent scalar induction
+/// variables before range analysis, keeping checked updates checked, and exposes
+/// invariant header arguments plus simpler integer tests for subsequent passes. Branch cleanup composes
+/// SSA forwarding edges and merges straight-line loop update blocks.
+/// The redundant or relocated instructions these leave behind are
 /// cleaned up by dead instruction elimination, and any folded branch condition is
 /// collapsed by branch simplification — all converging through the fixed-point loop.
 fn default_passes() -> Vec<Box<dyn IrPass>> {
@@ -102,6 +108,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(Mem2Reg),
         Box::new(ImmutableLocalLoads),
         Box::new(CheckedIntSink),
+        Box::new(LoopOptimize),
         Box::new(IntegerRange),
         Box::new(CheckedNumericChain),
         Box::new(ConstFold),

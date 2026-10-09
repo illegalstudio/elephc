@@ -9,8 +9,8 @@
 //!
 //! Key details:
 //! - Functions are built by hand with `crate::ir::Builder`. Invariant operands
-//!   are produced in the preheader/entry by `iadd` of constants (constants
-//!   themselves are not hoistable), giving non-constant SSA values defined
+//!   are produced in the preheader/entry by `iadd` of constants,
+//!   giving non-constant SSA values defined
 //!   outside the loop.
 
 use crate::ir::{
@@ -140,7 +140,8 @@ fn does_not_hoist_loop_carried_value() {
         b.terminate(Terminator::Return { value: Some(a) });
     }
 
-    assert!(!run_licm(&mut function), "nothing is loop-invariant here");
+    assert!(run_licm(&mut function), "the constant condition leaves the loop");
+    assert!(!run_licm(&mut function), "the varying computation remains");
     assert_eq!(def_block_of(&function, dependent), body, "the dependent add stays in the body");
 }
 
