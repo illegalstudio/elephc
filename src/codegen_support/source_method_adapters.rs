@@ -49,6 +49,12 @@ pub(crate) fn plan_method_abi(
     caller: &FunctionSig,
     physical: &FunctionSig,
 ) -> Result<MethodAbiPlan, String> {
+    if caller.by_ref_return && !physical.by_ref_return {
+        return Err("source method ABI adaptation cannot bridge a by-reference return mismatch".to_string());
+    }
+    if needs_eir_call_adapter(caller, physical) {
+        return Ok(MethodAbiPlan::OptionalDefaults);
+    }
     if caller.by_ref_return != physical.by_ref_return {
         return Err("source method ABI adaptation cannot bridge a by-reference return mismatch".to_string());
     }
@@ -105,6 +111,47 @@ pub(crate) fn plan_method_abi(
         (true, false) => MethodAbiPlan::BoxArguments,
         (true, true) => MethodAbiPlan::BoxArgumentsAndAppendEmptyCollector,
     })
+}
+
+/// Plans ordinary EIR calls using declared parameters rather than generated frame slots.
+fn needs_eir_call_adapter(caller: &FunctionSig, physical: &FunctionSig) -> bool {
+    let added_reference = !caller.by_ref_return && physical.by_ref_return;
+    let source_variadic = caller.variadic.is_some()
+        && !crate::func_args::sig_collects_surplus_args(caller);
+    if source_variadic && !added_reference {
+        return false;
+    }
+    let visible = |sig: &FunctionSig| sig.params.iter().enumerate()
+        .filter(|(_, (name, _))| name != crate::func_args::HIDDEN_ARGS_PARAM
+            && name != crate::func_args::HIDDEN_ARGC_PARAM)
+        .map(|(index, _)| index).collect::<Vec<_>>();
+    let source = visible(caller);
+    let target = visible(physical);
+    if target.len() < source.len() { return false; }
+    if source_variadic && (target.len() != source.len()
+        || physical.variadic.is_none() || crate::func_args::sig_collects_surplus_args(physical))
+    {
+        return false;
+    }
+    if target.len() == source.len() && !added_reference { return false; }
+    let prefix = source.iter().zip(&target).all(|(&source, &target)| {
+        let source_ref = caller.ref_params.get(source).copied().unwrap_or(false);
+        let target_ref = physical.ref_params.get(target).copied().unwrap_or(false);
+        let source_ty = &caller.params[source].1;
+        let target_ty = &physical.params[target].1;
+        let transported_variadic = caller.variadic.as_deref() == Some(caller.params[source].0.as_str())
+            && physical.variadic.as_deref() == Some(physical.params[target].0.as_str())
+            && matches!(source_ty, PhpType::Array(_))
+            && matches!(target_ty, PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
+        source_ref == target_ref
+            && (same_physical_param_abi(source_ty, target_ty)
+                || (!source_ref && (can_box_param_as_mixed(source_ty, target_ty) || transported_variadic)))
+    });
+    let optional_tail = target.iter().skip(source.len()).all(|&index| {
+        physical.defaults.get(index).is_some_and(Option::is_some)
+            || physical.variadic.as_deref() == Some(physical.params[index].0.as_str())
+    });
+    prefix && optional_tail
 }
 
 /// Selects a source-vtable entry, keeping every source variadic on its raw physical entry.
@@ -558,6 +605,31 @@ mod tests {
         assert!(plan_method_abi(&source, &physical).is_err());
     }
 
+    /// Captured interface slots use declared shapes for optional and source-variadic widening.
+    #[test]
+    fn planner_routes_oct9_captured_shapes_to_eir() {
+        let hidden = crate::func_args::HIDDEN_ARGS_PARAM.to_string();
+        let source = signature(vec![
+            ("x".to_string(), PhpType::Int),
+            (hidden.clone(), PhpType::Array(Box::new(PhpType::Mixed))),
+        ], Some(hidden.clone()));
+        let mut optional = signature(vec![
+            ("x".to_string(), PhpType::Int), ("extra".to_string(), PhpType::Int),
+            (hidden.clone(), PhpType::Array(Box::new(PhpType::Mixed))),
+        ], Some(hidden));
+        optional.defaults[1] = Some(crate::parser::ast::Expr::new(
+            crate::parser::ast::ExprKind::IntLiteral(2), crate::span::Span::dummy(),
+        ));
+        assert_eq!(plan_method_abi(&source, &optional).unwrap(), MethodAbiPlan::OptionalDefaults);
+        let variadic = signature(vec![
+            ("x".to_string(), PhpType::Int),
+            ("rest".to_string(), PhpType::Array(Box::new(PhpType::Int))),
+        ], Some("rest".to_string()));
+        assert_eq!(plan_method_abi(&source, &variadic).unwrap(), MethodAbiPlan::OptionalDefaults);
+        optional.defaults[1] = None;
+        assert!(plan_method_abi(&source, &optional).is_err());
+    }
+
     /// A single generated collector difference has a dedicated target-aware adapter.
     #[test]
     /// Verifies ABI planning accepts one compiler-generated collector appended to a source signature.
@@ -719,9 +791,8 @@ mod tests {
 
         let mut mismatched_caller = caller.clone();
         mismatched_caller.by_ref_return = false;
-        assert!(plan_method_abi(&mismatched_caller, &physical)
-            .unwrap_err()
-            .contains("by-reference return mismatch"));
+        assert_eq!(plan_method_abi(&mismatched_caller, &physical).unwrap(),
+            MethodAbiPlan::OptionalDefaults);
 
         let mut emitter = Emitter::new(
             crate::codegen_support::platform::Target::parse("linux-x86_64").unwrap(),

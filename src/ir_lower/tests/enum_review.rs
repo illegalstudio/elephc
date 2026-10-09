@@ -60,11 +60,38 @@ function update_array(ArrayRefContract $enum): int {
     $r = &$enum->data(); $r[0] += 10; return $r[0];
 }
 echo update_array(ArrayRefValue::A);
+interface AddedRefContract { public function data(): array; }
+enum AddedRefValue implements AddedRefContract {
+    case A;
+    public function &data(int $extra = 1): array { $value = [1 + $extra]; return $value; }
+}
+function read_array(AddedRefContract $enum): int { $value = $enum->data(); return $value[0]; }
+echo read_array(AddedRefValue::A);
+interface VariadicContract { public function f(int $x): int; }
+enum VariadicValue implements VariadicContract {
+    case A;
+    public function f(int $x, int ...$rest): int { foreach ($rest as $value) { $x += $value; } return $x; }
+}
+function invoke(VariadicContract $value): int { return $value->f(1); }
+echo invoke(VariadicValue::A);
+interface VariadicRefContract { public function values(int ...$values): array; }
+enum VariadicRefValue implements VariadicRefContract {
+    case A;
+    public function &values(int ...$values): array { return $values; }
+}
+function read_variadic(VariadicRefContract $value): int { $values = $value->values(1, 2); return $values[1]; }
+echo read_variadic(VariadicRefValue::A);
+debug_print_backtrace();
 "#;
     let module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap(),
     );
+    let variadic = &module.class_infos["EnumReview\\VariadicValue"].methods["f"];
+    assert_eq!(crate::types::signatures::variadic_source_element_type_expr(variadic),
+        Some(&crate::parser::ast::TypeExpr::Int));
+    assert_eq!(variadic.params.last().unwrap().1,
+        crate::types::PhpType::Array(Box::new(crate::types::PhpType::Mixed)));
     crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));
 }

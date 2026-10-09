@@ -9,6 +9,93 @@
 
 use super::*;
 
+/// Captured frames compare declared parameters and still materialize optional defaults.
+#[test]
+fn test_enum_oct9_captured_optional_interface() {
+    for hook in ["eval('echo 1;');", "debug_print_backtrace();"] {
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(int $x): int; }}
+enum E implements I {{ case A; public function f(int $x, int $y = 2): int {{ return $x + $y; }} }}
+function invoke(I $value): int {{ return $value->f(1); }}
+function invoke_extra(I $value): int {{ return $value->f(1, 4); }}
+{hook}
+echo invoke(E::A), ':', invoke_extra(E::A);
+"#));
+        assert_eq!(out, if hook.starts_with("eval") { "13:5" } else { "3:5" });
+    }
+}
+
+/// A source variadic can widen a captured interface signature without exposing hidden slots.
+#[test]
+fn test_enum_oct9_captured_variadic_interface() {
+    for hook in ["eval('echo 1;');", "debug_print_backtrace();"] {
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(int $x): int; }}
+enum E implements I {{ case A; public function f(int $x, int ...$rest): int {{
+    foreach ($rest as $value) {{ $x += $value; }} return $x;
+}} }}
+function invoke(I $value): int {{ return $value->f(1); }}
+function invoke_extra(I $value): int {{ return $value->f(1, 5); }}
+{hook}
+echo E::A->f(1, 5), ':', invoke(E::A), ':', invoke_extra(E::A);
+"#));
+        assert_eq!(out, if hook.starts_with("eval") { "16:1:6" } else { "6:1:6" });
+    }
+}
+
+/// An added reference return is dereferenced for a by-value interface entry.
+#[test]
+fn test_enum_oct9_added_reference_return() {
+    for (parameters, expected) in [("", "1"), ("int $extra = 1", "2")] {
+        let setup = if parameters.is_empty() { "" } else { "$result[0] += $extra;" };
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(): array; }}
+enum E implements I {{ case A; public function &f({parameters}): array {{
+    $result = [1]; {setup} return $result;
+}} }}
+function invoke(I $value): int {{ $result = $value->f(); return $result[0]; }}
+echo invoke(E::A);
+"#));
+        assert_eq!(out, expected);
+    }
+    for hook in ["", "eval('echo 1;');", "debug_print_backtrace();"] {
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(int ...$values): array; }}
+enum E implements I {{ case A; public function &f(int ...$values): array {{ return $values; }} }}
+function invoke(I $value): string {{ $result = $value->f(1, 2); return $result[0] . ':' . $result[1]; }}
+{hook}
+echo invoke(E::A);
+"#));
+        assert_eq!(out, if hook.starts_with("eval") { "11:2" } else { "1:2" });
+    }
+}
+
+/// Value-return adapters add no retention relative to a direct reference-returning method call.
+#[test]
+fn test_enum_oct9_added_reference_value_ownership() {
+    for iterations in [1, 40] {
+        let run = |receiver: &str| compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function f(): array; }}
+enum E implements I {{ case A; public function &f(int $extra = 1): array {{
+    $result = [1 + $extra]; return $result;
+}} }}
+function invoke({receiver} $value): int {{ $result = $value->f(); return $result[0]; }}
+for ($i = 0; $i < {iterations}; $i++) {{ echo invoke(E::A); }}
+"#));
+        let direct = run("E");
+        let adapted = run("I");
+        assert!(direct.success && adapted.success, "{}\n{}", direct.stderr, adapted.stderr);
+        assert_eq!(adapted.stdout, "2".repeat(iterations));
+        assert_eq!(adapted.stdout, direct.stdout);
+        for metric in ["live_blocks=", "live_bytes="] {
+            let retained = |stderr: &str| stderr.lines().next().unwrap().split_whitespace()
+                .find_map(|field| field.strip_prefix(metric)).unwrap().parse::<usize>().unwrap();
+            assert_eq!(retained(&direct.stderr), retained(&adapted.stderr),
+                "direct: {}\nadapter: {}", direct.stderr, adapted.stderr);
+        }
+    }
+}
+
 /// Optional interface adapters preserve a returned reference and its caller mutation.
 #[test]
 fn test_enum_followup_interface_reference_return() {

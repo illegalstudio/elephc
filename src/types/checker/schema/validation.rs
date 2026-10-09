@@ -211,11 +211,11 @@ pub(crate) fn visibility_rank(visibility: &Visibility) -> u8 {
 /// of them as soon as the program contains an `eval()` or a backtrace call. Those slots are not
 /// declared parameters, so comparing them against a compiler-injected parent signature, which
 /// can never carry one, would report a difference the source never wrote.
-struct SourceVisibleShape {
+pub(crate) struct SourceVisibleShape {
     param_count: usize,
-    param_names: Vec<String>,
-    param_types: Vec<PhpType>,
-    declared_params: Vec<bool>,
+    pub(crate) param_names: Vec<String>,
+    pub(crate) param_types: Vec<PhpType>,
+    pub(crate) declared_params: Vec<bool>,
     ref_params: Vec<bool>,
     has_defaults: Vec<bool>,
     variadic: Option<String>,
@@ -223,7 +223,7 @@ struct SourceVisibleShape {
 
 impl SourceVisibleShape {
     /// Projects `sig` onto the parameters its source declared.
-    fn of(sig: &FunctionSig) -> Self {
+    pub(crate) fn of(sig: &FunctionSig) -> Self {
         let generated: Vec<bool> = sig
             .params
             .iter()
@@ -331,7 +331,7 @@ pub(crate) fn validate_signature_compatibility(
     // inherited signature that does not carry it cannot dispatch to a body that does.
     // Report that directly instead of the generic parameter-count mismatch, which names a
     // parameter the source never wrote.
-    if compare_generated_abi
+    if compare_generated_abi && !allow_optional_widening
         && (crate::func_args::sig_collects_surplus_args(child_sig)
             != crate::func_args::sig_collects_surplus_args(parent_sig)
             || crate::func_args::sig_has_hidden_argc_param(child_sig)

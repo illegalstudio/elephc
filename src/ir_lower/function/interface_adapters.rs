@@ -1,5 +1,5 @@
 //! Purpose:
-//! Builds EIR interface adapters for implementations with additional optional parameters.
+//! Builds EIR interface adapters for optional parameters and added reference returns.
 //!
 //! Called from:
 //! - `crate::ir_lower::program` after class-like methods and constructor thunks.
@@ -12,11 +12,10 @@
 use super::*;
 use crate::codegen_support::source_method_adapters::{plan_method_abi, MethodAbiPlan};
 
-/// Adds deterministic interface entry functions where the physical method has optional extras.
+/// Adds deterministic interface entries that need source-call or return adaptation.
 pub(crate) fn lower_optional_interface_adapters(module: &mut Module) {
     let mut adapters = Vec::new();
-    for (class_name, class) in &module.class_infos {
-        if !module.enum_infos.contains_key(class_name) { continue; }
+    for class in module.class_infos.values() {
         for interface_name in &class.interfaces {
             let Some(interface) = module.interface_infos.get(interface_name) else { continue; };
             for method in &interface.method_order {
@@ -54,7 +53,18 @@ fn lower_interface_adapter(
     let call = Expr::new(ExprKind::MethodCall {
         object: Box::new(Expr::new(ExprKind::Variable(receiver_name), span)),
         method: method.to_string(),
-        args: caller.params.iter().map(|(name, _)| Expr::new(ExprKind::Variable(name.clone()), span)).collect(),
+        args: caller.params.iter().filter(|(name, _)| name != crate::func_args::HIDDEN_ARGC_PARAM)
+            .map(|(name, _)| {
+                let value = Expr::new(ExprKind::Variable(name.clone()), span);
+                if caller.variadic.as_deref() != Some(name.as_str()) { return value; }
+                let value = if crate::func_args::sig_collects_optional_arg_count(caller) {
+                    Expr::new(ExprKind::FunctionCall {
+                        name: crate::names::Name::unqualified("array_slice"),
+                        args: vec![value, Expr::new(ExprKind::IntLiteral(1), span)],
+                    }, span)
+                } else { value };
+                Expr::new(ExprKind::Spread(Box::new(value)), span)
+            }).collect(),
     }, span);
     let body = if matches!(caller.return_type, PhpType::Void | PhpType::Never) {
         vec![Stmt::new(StmtKind::ExprStmt(call), span)]
