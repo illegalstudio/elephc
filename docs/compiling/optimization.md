@@ -274,6 +274,12 @@ Loops are processed innermost-first, so a value invariant in several nested loop
 moves all the way to the outermost preheader. Loops without a detected preheader,
 and functions using exception handling, are skipped.
 
+Standalone constant and address materializations move only when their block
+dominates every loop back edge. Constants used only by conditional work stay
+near their uses, avoiding extra entry work and register pressure in short or
+zero-trip loops. A constant needed by an invariant computation can still move
+with that computation, including from a conditional block.
+
 Scalar local promotion exposes invariant source expressions as SSA computations,
 and immutable integer-local loads can also become pure operands. Expressions
 that still read mutable or aliased slots remain in the loop.

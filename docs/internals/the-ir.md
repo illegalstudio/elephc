@@ -1468,11 +1468,15 @@ are eligible. Purity means the value depends only
 on the operands and the op neither reads mutable state nor faults, so evaluating
 it once in the preheader, unconditionally even when its original block ran only on
 some iterations, is safe (no speculation hazard); the ownership bound keeps the
-move refcount-neutral. Nullary constant/address materializations also move,
-including bounds and steps consumed by varying comparisons and updates. Hoisted
-instructions follow dependency order rather than instruction table IDs, which
-can differ after CFG rewrites. Loops
-are processed innermost-first with moves applied immediately, so a value invariant
+move refcount-neutral. Standalone nullary constant/address materializations move
+only from blocks that dominate every loop latch, including mandatory bounds and
+steps consumed by varying comparisons and updates. Conditional materializations
+stay near their uses to avoid inflating loop live sets and zero-trip entry work;
+dependencies of an otherwise invariant computation still accompany that computation.
+This profitability restriction does not apply to proven-immutable local loads.
+Hoisted instructions follow dependency order rather than instruction table IDs,
+which can differ after CFG rewrites. Loops are processed innermost-first with
+moves applied immediately, so a value invariant
 in several nested loops reaches the outermost preheader in one run. Instructions
 are relocated between blocks' instruction lists and their result `ValueDef`s
 (block + index) are recomputed once at the end so the value table matches the new

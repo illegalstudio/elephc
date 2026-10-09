@@ -825,9 +825,10 @@ and combines their initial value, comparison bound, and update step to constrain
 induction variables on the loop body and back edge. Basic recurrence recognition
 is shared with canonical loop optimization, which exposes invariant header values,
 coalesces counters with identical overflow semantics, and simplifies integer tests.
-LICM moves invariant bounds and step
-materializations, and branch cleanup composes SSA forwarding arguments and merges
-single-predecessor loop update blocks. See
+LICM moves invariant bounds and step materializations from blocks that dominate
+every loop latch. Conditional constants stay near varying uses unless they
+accompany an invariant computation. Branch cleanup composes SSA forwarding
+arguments and merges single-predecessor loop update blocks. See
 [Canonical Loop Optimization](the-ir.md#canonical-loop-optimization).
 
 CFG states store only nonredundant path facts. Immutable scalar literals are read

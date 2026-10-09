@@ -12,6 +12,8 @@
 //!   are produced in the preheader/entry by `iadd` of constants,
 //!   giving non-constant SSA values defined
 //!   outside the loop.
+//! - Branch-local constants stay near varying uses unless their block dominates
+//!   every latch; dependencies of invariant computations still move together.
 
 use crate::ir::{
     validate_function, Builder, BlockId, DataPool, Function, IrType, Terminator, ValueDef, ValueId,
@@ -285,4 +287,98 @@ fn cascades_to_outer_preheader() {
         "cascades past the inner preheader to the outer preheader"
     );
     assert!(validate_function(&function).is_ok());
+}
+
+/// Builds either a diamond with a common latch or two independent back edges,
+/// checking standalone materializations separately from invariant dependencies.
+fn assert_conditional_materializations_stay_local(separate_latches: bool) {
+    let mut function = Function::new("conditional_constants".to_string(), IrType::I64, PhpType::Int);
+    let (entry, left, right, bound, left_constant, right_constant, dependency, immutable_load, invariant);
+    {
+        let mut b = Builder::new(&mut function);
+        entry = b.create_named_block("entry", vec![]);
+        let header = b.create_named_block("header", vec![(IrType::I64, PhpType::Int)]);
+        let body = b.create_named_block("body", vec![]);
+        left = b.create_named_block("left", vec![]);
+        right = b.create_named_block("right", vec![]);
+        let latch = b.create_named_block("latch", vec![(IrType::I64, PhpType::Int)]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+
+        b.position_at_end(entry);
+        let initial = b.emit_const_i64(0);
+        let slot = b.add_local(Some("seed".to_string()), IrType::I64, PhpType::Int, crate::ir::LocalKind::PhpLocal);
+        b.emit_store_local(slot, initial);
+        b.terminate(Terminator::Br { target: header, args: vec![initial] });
+
+        b.position_at_end(header);
+        let counter = b.block_param(header, 0);
+        bound = b.emit_const_i64(42);
+        let condition = b.emit(
+            crate::ir::Op::ICmp, vec![counter, bound],
+            Some(crate::ir::Immediate::CmpPredicate(crate::ir::CmpPredicate::Slt)),
+            IrType::I64, PhpType::Bool, crate::ir::Ownership::NonHeap,
+        ).unwrap();
+        b.terminate(Terminator::CondBr {
+            cond: condition, then_target: body, then_args: vec![],
+            else_target: exit, else_args: vec![],
+        });
+
+        b.position_at_end(body);
+        b.terminate(Terminator::CondBr {
+            cond: counter, then_target: left, then_args: vec![],
+            else_target: right, else_args: vec![],
+        });
+
+        b.position_at_end(left);
+        left_constant = b.emit_const_i64(101);
+        let left_update = b.emit_iadd(counter, left_constant);
+        dependency = b.emit_const_i64(303);
+        immutable_load = b.emit_load_local(slot, IrType::I64, PhpType::Int);
+        invariant = b.emit_iadd(immutable_load, dependency);
+        b.terminate(Terminator::Br {
+            target: if separate_latches { header } else { latch }, args: vec![left_update],
+        });
+
+        b.position_at_end(right);
+        right_constant = b.emit_const_i64(202);
+        let right_update = b.emit_iadd(counter, right_constant);
+        b.terminate(Terminator::Br {
+            target: if separate_latches { header } else { latch }, args: vec![right_update],
+        });
+
+        b.position_at_end(latch);
+        if separate_latches {
+            b.terminate(Terminator::Unreachable);
+        } else {
+            let update = b.block_param(latch, 0);
+            b.terminate(Terminator::Br { target: header, args: vec![update] });
+        }
+        b.position_at_end(exit);
+        b.terminate(Terminator::Return { value: Some(counter) });
+    }
+
+    assert!(validate_function(&function).is_ok());
+    assert!(crate::ir_passes::immutable_local_loads::ImmutableLocalLoads.run(&mut function, &mut DataPool::default()));
+    assert!(run_licm(&mut function));
+    assert_eq!(def_block_of(&function, left_constant), left, "conditional constant stays local");
+    assert_eq!(def_block_of(&function, right_constant), right, "all latches must be dominated");
+    assert_eq!(def_block_of(&function, bound), entry, "mandatory loop bound still hoists");
+    assert_eq!(def_block_of(&function, dependency), entry, "invariant dependency accompanies its use");
+    assert_eq!(def_block_of(&function, immutable_load), entry, "immutable local loads remain eligible");
+    assert_eq!(def_block_of(&function, invariant), entry, "conditional computation still hoists");
+    assert!(validate_function(&function).is_ok(), "dependency order remains valid");
+    assert!(!run_licm(&mut function), "placement is stable across driver iterations");
+}
+
+/// A constant used by varying work in a conditional arm must not span the loop.
+#[test]
+fn conditional_materializations_stay_local() {
+    assert_conditional_materializations_stay_local(false);
+}
+
+/// Dominating one back edge is insufficient when another back edge bypasses it.
+#[test]
+fn materializations_must_dominate_every_latch() {
+    assert_conditional_materializations_stay_local(true);
 }

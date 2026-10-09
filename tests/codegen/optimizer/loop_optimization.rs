@@ -292,3 +292,61 @@ echo $i, ":", $j, ":", count($items);
         assert_eq!(fixture.run(&[]), "1:2:2");
     }
 }
+
+/// Branch-heavy short loops keep case constants local instead of extending all
+/// their live ranges through the preheader, including when the loop never runs.
+#[test]
+fn test_loop_optimization_conditional_materializations() {
+    let mut source = String::from(r#"<?php
+#[Export]
+function dispatch(string $text, int $length): int {
+    $sum = 0;
+    for ($i = 0; $i < $length; $i++) {
+        $code = ord($text[$i & 31]);
+"#);
+    for case in 0..32 {
+        let keyword = if case == 0 { "if" } else { "elseif" };
+        source.push_str(&format!(
+            "        {keyword} ($code == {}) {{ $sum = (int) ($sum + {}); }}\n",
+            65 + case, 101 + case,
+        ));
+    }
+    source.push_str(r#"
+    }
+    return $sum;
+}
+$length = $argc > 1 ? (int) $argv[1] : 0;
+echo dispatch("ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`", $length), "\n";
+"#);
+    let fixture = Fixture::new(&source);
+    let optimized = function_ir(
+        &String::from_utf8(fixture.compile(true, &["--emit-ir"]).stdout).unwrap(), "dispatch",
+    );
+    let mut case_values = std::collections::BTreeSet::new();
+    for line in optimized.lines() {
+        let Some((_, literal)) = line.split_once("= const_i64 ") else { continue; };
+        let value = literal.split_whitespace().next().unwrap().parse::<i64>().unwrap();
+        if (101..133).contains(&value) {
+            assert!(!line.contains("origin: licm"), "conditional constant spans the loop: {line}");
+            case_values.insert(value);
+        }
+    }
+    assert_eq!(case_values.len(), 32, "all conditional updates must survive: {optimized}");
+    assert!(optimized.contains("origin: licm"), "mandatory-path hoisting must remain enabled");
+    for mode in [false, true] {
+        fixture.compile(mode, &[]);
+        assert_eq!(fixture.run(&[]), "0\n");
+        assert_eq!(fixture.run(&["1"]), "101\n");
+        assert_eq!(fixture.run(&["32"]), "3728\n");
+        assert_eq!(fixture.run(&["64"]), "7456\n");
+    }
+    for target in ["linux-x86_64", "linux-aarch64", "macos-aarch64", "ios-arm64", "ios-sim-arm64"] {
+        for mode in [false, true] {
+            let mut options = vec!["--emit-asm", "--target", target];
+            if target.starts_with("ios-") { options.extend(["--emit", "staticlib"]); }
+            fixture.compile(mode, &options);
+            let assembly = fs::read_to_string(fixture.0.join("main.s")).unwrap();
+            assert!(assembly.contains("op=icmp"), "{target}, optimized={mode}: missing dispatch");
+        }
+    }
+}

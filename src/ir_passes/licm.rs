@@ -16,10 +16,12 @@
 //! - Only **pure** (`Effects::PURE`) instructions with a `NonHeap`/`Persistent`
 //!   result are eligible. Purity means the result depends only on immutable inputs
 //!   and the op neither reads mutable state nor faults, so evaluating it once in the
-//!   preheader unconditionally, even if the original site was only reached on some
-//!   iterations — is safe (no speculation hazard). The ownership bound keeps the move
-//!   refcount-neutral. Nullary constant/address materializations also move, including
-//!   bounds and steps consumed directly by varying comparisons and updates.
+//!   preheader (unconditionally, even if the original site was only reached on some
+//!   iterations) is safe (no speculation hazard). The ownership bound keeps the move
+//!   refcount-neutral. Standalone nullary constant/address materializations move
+//!   only from blocks dominating every latch, keeping conditional constants near
+//!   varying uses instead of inflating loop live sets and zero-trip entry work.
+//!   Nullary dependencies can still accompany an invariant computation.
 //!   A `load_local` proven immutable by the dedicated analysis is also
 //!   eligible: moving that load is what makes local-backed invariant arithmetic
 //!   available in the preheader.
@@ -113,11 +115,17 @@ fn find_hoistable(
     dominance: &DominanceInfo,
     def_block: &HashMap<ValueId, BlockId>,
 ) -> Vec<InstId> {
+    // Dominance walks the idom chain. Classify blocks once, not for each
+    // materialization and each invariant-discovery sweep.
+    let blocks: Vec<_> = loop_ref.blocks.iter().map(|&block| {
+        let dominates_latches = loop_ref.latches.iter().all(|&latch| dominance.dominates(block, latch));
+        (block, dominates_latches)
+    }).collect();
     let mut hoistable: HashSet<InstId> = HashSet::new();
     let mut ordered = Vec::new();
     loop {
         let mut added = false;
-        for &block in &loop_ref.blocks {
+        for &(block, dominates_latches) in &blocks {
             let Some(basic_block) = function.block(block) else {
                 continue;
             };
@@ -129,6 +137,9 @@ fn find_hoistable(
                     continue;
                 };
                 if !is_hoist_eligible(inst) {
+                    continue;
+                }
+                if is_rematerializable_dependency(inst) && !dominates_latches {
                     continue;
                 }
                 let mut materializations = HashSet::new();
@@ -197,7 +208,7 @@ fn operand_available(
     }
 }
 
-/// Returns true for a pure nullary value that may move only with a dependent computation.
+/// Returns true for a pure nullary materialization that may accompany a hoisted computation.
 fn is_rematerializable_dependency(inst: &crate::ir::Instruction) -> bool {
     inst.result.is_some()
         && inst.op != Op::Nop

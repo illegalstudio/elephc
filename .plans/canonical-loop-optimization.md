@@ -12,6 +12,10 @@
 - [x] Reproduce the five remaining multi-compile eval timeouts from CI run 37925824323.
 - [x] Validate the scoped CI configuration repair before committing and pushing.
 - [x] Audit every test shard in CI run 37925824323 before publishing the fixture-budget repair.
+- [x] Profile compiler time and generated-program performance against main.
+- [x] Restrict standalone LICM materializations to blocks dominating every latch.
+- [x] Verify conditional and multiple-latch regressions plus all target emitters.
+- [x] Remove the two profiling worktrees and branches with user authorization.
 
 ## Implementation
 
@@ -134,3 +138,39 @@ no compiler implementation or test assertion changes in this follow-up.
 All remaining macOS shards subsequently passed on `abeef56f`, including the
 last eval shard at 13:59 UTC. The completed test matrix has only the three
 Linux x86_64 shard failures containing the five validated timeout fixtures.
+
+## LICM profitability follow-up
+
+Comparison with main `5d96278997` found that unconditional standalone constant
+hoisting still inflated DateTime parser live sets: maximum live-in size rose
+from 14 to 456. Seven counterbalanced native measurements pinned to one CPU
+confirmed slowdowns of 17.4% for a one-iteration dispatch and 22.8% for the same
+zero-trip loop on Linux x86_64. Profiling evidence and reproducible fixtures are
+archived in Code Journal doc `57330abc`.
+
+Require the defining block of a standalone materialization to dominate every
+loop latch. Preserve invariant computations, their nullary dependencies, and
+proven-immutable local loads. Compute the eligible block set once per loop.
+The measured selective-hoisting experiment restored release EIR optimization
+time to baseline and removed the dispatch regressions. Add structural coverage
+instead of timing thresholds so CI detects excess hoisting deterministically.
+
+Both clean profiling worktrees and their branches were deleted with `ggw`
+after explicit user authorization. The feature worktree remains in place.
+
+The two new structural tests and the 32-branch end-to-end regression fail on
+the published LICM implementation because conditional constants reach the
+preheader. With the repair, all 237 EIR pass unit tests and 442 optimizer
+integration tests pass, with one existing ignored test. The dispatch fixture
+checks zero, one, 32 and 64 iterations in both optimizer modes, matches PHP,
+and emits assembly for all five supported targets. A separate Rust compiler
+build completes without warnings; `git diff --check` passes.
+
+A final isolated comparison against the previous PR compiler uses the committed
+dispatch fixture inside 20 million calls, with length supplied through argv.
+Seven alternating native runs pinned to CPU 4 reduce the zero-trip median from
+0.3990s to 0.1927s and the one-iteration median from 0.4994s to 0.3400s. LICM
+hoists 3 integer constants in that function instead of 66. Three alternating
+opaque-eval compilations reduce the debug assembly-emission median from 21.220s
+to 17.857s (15.8%). These compare the actual repair with the prior PR head,
+not with main; the earlier main-baseline experiment is recorded above.
