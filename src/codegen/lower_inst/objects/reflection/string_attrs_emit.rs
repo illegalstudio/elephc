@@ -42,6 +42,30 @@ pub(super) fn emit_reflection_string_property(
     abi::emit_pop_reg(ctx.emitter, result_reg);
 }
 
+/// Writes a compile-time string into a Reflection object's public mirror slot without a heap copy.
+///
+/// The public `name`/`class` properties mirror metadata the object already owns privately, and
+/// an eagerly built reflector tree holds thousands of them: reflecting a Reflection subclass
+/// alone allocates close to the default 8 MiB heap. The slot therefore points at the read-only
+/// literal, the same representation `new` gives a declared string default, and every release
+/// path skips pointers outside the heap. Expects the object in the integer result register and
+/// leaves it there.
+pub(super) fn emit_reflection_literal_string_property(
+    ctx: &mut FunctionContext<'_>,
+    value: &str,
+    low_offset: usize,
+    high_offset: usize,
+) {
+    let (label, len) = ctx.data.add_string(value.as_bytes());
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let length_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, pointer_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, length_reg, len as i64);
+    abi::emit_store_to_address(ctx.emitter, pointer_reg, object_reg, low_offset);
+    abi::emit_store_to_address(ctx.emitter, length_reg, object_reg, high_offset);
+}
+
 /// Writes a heap-persisted string into a named Reflection owner property slot.
 pub(super) fn emit_reflection_owner_string_property_by_name(
     ctx: &mut FunctionContext<'_>,
