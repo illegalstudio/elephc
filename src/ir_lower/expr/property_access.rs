@@ -644,7 +644,11 @@ pub(super) fn lower_initialized_property_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
+    // An OWNED temp: the merge below MOVES the value out with `take_owned_temp`, which clears
+    // only `OwnedTemp` slots. A plain hidden temp kept its reference after the take, so a
+    // consumer that released the value (the discarded probe of `$o->p ??= v`) and the frame's
+    // epilogue both freed the same cell.
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let uninitialized_block = ctx
         .builder
         .create_named_block("coalesce.property.uninitialized", Vec::new());
@@ -767,7 +771,11 @@ pub(super) fn lower_initialized_static_property_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
+    // An OWNED temp: the merge below MOVES the value out with `take_owned_temp`, which clears
+    // only `OwnedTemp` slots. A plain hidden temp kept its reference after the take, so a
+    // consumer that released the value (the discarded probe of `$o->p ??= v`) and the frame's
+    // epilogue both freed the same cell.
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let uninitialized_block = ctx
         .builder
         .create_named_block("coalesce.static_property.uninitialized", Vec::new());
