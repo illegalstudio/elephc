@@ -42,6 +42,10 @@ Box::$shared[] += $argc;
 echo ++$box->items[], ++Box::$shared[];
 $append = fn() => ($box->items[] += 2);
 echo $append();
+function writeStringKey(&...$values): void {
+    $values["1"] = 'Q'; echo strlen($values[1]), $values[0], $values[1];
+}
+$a = 'A'; $b = 'B'; writeStringKey($a, $b); echo $b;
 "#;
     let module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),

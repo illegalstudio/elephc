@@ -10,6 +10,61 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// Numeric string keys preserve variadic reference markers for ordinary reads as well as JSON.
+#[test]
+fn test_append_second_review_variadic_string_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function one(&...$items): void {
+    $items["1"] = 'Q';
+    echo strlen($items[1]), ':', $items[0] . '/' . $items[1] . '/' . $items[2], ':', json_encode($items), '|';
+}
+function zero(&...$items): void {
+    $alias =& $items; $alias["0"] = $alias[1];
+    echo $items[0], ':', $items[1], ':', $items[2], '|';
+}
+$a = 'A'; $b = 'B'; $c = 'C'; one($a, $b, $c); echo $a, ':', $b, ':', $c, '|';
+$a = 'A'; $b = 'B'; zero($a, $b, $c); echo $a, ':', $b, ':', $c;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:A/Q/C:[\"A\",\"Q\",\"C\"]|A:Q:C|B:B:C|B:B:C");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Computed numeric string keys also write through reference cells via first-class calls.
+#[test]
+fn test_append_second_review_variadic_computed_string_key() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function update(string $key, &...$items): void {
+    $items[$key] = 'Q';
+    echo $items[0], '/', $items[1], '/', $items[2], '|';
+}
+
+$a = 'A'; $b = 'B'; $c = 'C';
+$call = update(...); $call('1', $a, $b, $c);
+echo $a, '/', $b, '/', $c;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "A/Q/C|A/Q/C");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Real string-key promotion retains reads and caller references for preexisting entries.
+#[test]
+fn test_append_second_review_variadic_named_key_control() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function update(&...$items): void {
+    $items['key'] = 'X';
+    echo $items[0], '/', $items[1], '/', $items['key'], ':', json_encode($items), '|';
+    $items['1'] = 'Q';
+    echo $items[0], '/', $items[1], '/', $items['key'], '|';
+}
+$a = 'A'; $b = 'B'; update($a, $b); echo $a, '/', $b;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "A/B/X:{\"0\":\"A\",\"1\":\"B\",\"key\":\"X\"}|A/Q/X|A/Q");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Prefix decrement of an append's property appends null before a catchable property Error.
 #[test]
 fn test_append_oct9_property_prefix_decrement() {

@@ -175,8 +175,9 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         return;
     }
     let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
-    // A literal string index always means a hash key, so promote the destination
-    // to associative storage like PHP. A boxed Mixed/Union index may hold either
+    // Concrete string keys normally select associative storage. Mixed-slot arrays
+    // instead use the shared writer, preserving invoker markers and keeping numeric
+    // strings indexed. A boxed Mixed/Union index may hold either
     // an integer or a string key (foreach loop keys are always Mixed in EIR via
     // `Op::IterCurrentKey`), so it goes through `Op::ArraySetMixedKey`, whose
     // runtime helper keeps integer keys on indexed storage (preserving indexed
@@ -189,7 +190,11 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         PhpType::Array(element) if is_empty_indexed_array_element(&element))
         && crate::types::empty_array_key_requires_hash_storage(index)
         && !index_is_boxed_mixed_key(index_value.ir_type);
-    if op == Op::ArraySet && (index_value.ir_type == IrType::Str || empty_sparse_key) {
+    let mixed_elements = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
+    if op == Op::ArraySet && (index_value.ir_type == IrType::Str || empty_sparse_key)
+        && !(mixed_elements && index_value.ir_type == IrType::Str)
+    {
         lower_array_key_hash_promotion(ctx, array, array_value, index_value, value_value, span,
             key_already_diagnosed);
         return;
@@ -199,11 +204,11 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     // produced an unboxed integer for a checker-facing Mixed expression. Even a
     // literal zero must preserve an existing invoker marker through the shared writer.
     if op == Op::ArraySet
-        && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
-            PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed)
+        && mixed_elements
         && !index_is_boxed_mixed_key(index_value.ir_type)
         && !index_is_foreach_int_key(ctx, index)
-        && (crate::types::empty_array_key_requires_hash_storage(index)
+        && (index_value.ir_type == IrType::Str
+            || crate::types::empty_array_key_requires_hash_storage(index)
             || matches!(value_value.ir_type,
                 IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)))
     {
