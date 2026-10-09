@@ -2,7 +2,7 @@
 title: "clone() - internals"
 description: "Compiler internals for clone(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 603
+  order: 607
 ---
 
 ## `clone()` - internals

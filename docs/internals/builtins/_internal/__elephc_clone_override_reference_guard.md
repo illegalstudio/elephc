@@ -2,7 +2,7 @@
 title: "__elephc_clone_override_reference_guard() - internals"
 description: "Compiler internals for __elephc_clone_override_reference_guard(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1071
+  order: 1075
 ---
 
 ## `__elephc_clone_override_reference_guard()` - internals

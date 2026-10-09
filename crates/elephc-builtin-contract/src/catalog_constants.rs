@@ -245,6 +245,8 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("MB_CASE_UPPER", Mbstring, ConstValue::Int(0)),
     constant!("MB_CASE_UPPER_SIMPLE", Mbstring, ConstValue::Int(4)),
     constant!("MB_ONIGURUMA_VERSION", Mbstring, ConstValue::Str(crate::mbstring_abi::regex::ONIGURUMA_VERSION)),
+    constant!("MT_RAND_MT19937", Random, ConstValue::Int(0)),
+    constant!("MT_RAND_PHP", Random, ConstValue::Int(1)),
     constant!("MYSQLI_ASSOC", Mysqli, ConstValue::Int(1), route: Prelude),
     constant!("MYSQLI_BOTH", Mysqli, ConstValue::Int(3), route: Prelude),
     constant!("MYSQLI_CLIENT_COMPRESS", Mysqli, ConstValue::Int(32), route: Prelude),

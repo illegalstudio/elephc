@@ -2,7 +2,7 @@
 title: "pcntl_signal_get_handler()"
 description: "Returns the callable or integer disposition registered for one signal."
 sidebar:
-  order: 662
+  order: 666
 ---
 
 ## pcntl_signal_get_handler()

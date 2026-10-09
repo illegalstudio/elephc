@@ -43,9 +43,14 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_hash_union(emitter);
     arrays::emit_hash_array_union(emitter);
     arrays::emit_random_u32(emitter);
-    arrays::emit_random_uniform(emitter);
-    arrays::emit_random_u64(emitter);
-    arrays::emit_random_uniform64(emitter);
+    arrays::emit_mt19937(emitter);
+    // One sampler chain per source: the CSPRNG for `random_int()`, the Mersenne Twister for
+    // `mt_rand()`, `rand()`, `shuffle()` and `array_rand()`, as php-src splits them.
+    for source in ["random", "mt"] {
+        arrays::emit_random_uniform(emitter, source);
+        arrays::emit_random_u64(emitter, source);
+        arrays::emit_random_uniform64(emitter, source);
+    }
     arrays::emit_sort_int(emitter, false);
     arrays::emit_sort_int(emitter, true);
     arrays::emit_sort_str(emitter, false);
@@ -102,6 +107,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
     arrays::emit_array_rand(emitter);
+    arrays::emit_array_rand_boxed(emitter);
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_assoc(emitter);
     arrays::emit_array_fill_refcounted(emitter);

@@ -109,6 +109,100 @@ fn test_fdiv_by_zero() {
 
 // --- rand, mt_rand, random_int ---
 
+/// Verifies `mt_srand()` / `srand()` reproduce php's Mersenne Twister sequences, draw for draw.
+///
+/// `mt_srand` and `srand` did not exist, and `mt_rand()` drew from the CSPRNG with an
+/// arc4random-style reduction, so no seeded program could match php. The fixture covers raw
+/// draws, re-seeding, `srand`, negative and wider-than-32-bit seeds, every range path (one-value,
+/// power-of-two, the full 32-bit span, 64-bit spans, `PHP_INT_MIN..PHP_INT_MAX`, `rand()`'s
+/// swapped bounds), the reload after 624 draws, and `shuffle()` / `array_rand()`, which php draws
+/// from the same engine. Every value is php 8.5's own output.
+#[test]
+fn test_mt_srand_reproduces_php_sequences() {
+    let out = compile_and_run(
+        r#"<?php
+function seq(int $n): string { $o = []; for ($i = 0; $i < $n; $i++) { $o[] = mt_rand(); } return implode(",", $o); }
+function ranges(): string {
+    return implode(",", [mt_rand(1, 100), mt_rand(0, 1), mt_rand(5, 5), rand(10, 1), mt_rand(-50, 50),
+        mt_rand(0, 4294967295), mt_rand(0, PHP_INT_MAX), mt_rand(PHP_INT_MIN, PHP_INT_MAX), mt_rand(0, 4294967296), rand()]);
+}
+mt_srand(42);
+echo seq(5), "|", ranges(), "|";
+mt_srand(42);
+echo seq(3), "|";
+srand(7);
+echo seq(2), "|";
+mt_srand(-3);
+echo seq(2), "|";
+mt_srand(4294967301);
+echo seq(2), "|";
+mt_srand(1);
+$a = [1, 2, 3, 4, 5, 6, 7, 8];
+shuffle($a);
+echo implode(",", $a), "|";
+echo array_rand([10, 20, 30, 40]), array_rand([7]), array_rand([1, 2, 3]), "|";
+mt_srand(3);
+for ($i = 0; $i < 700; $i++) { mt_rand(); }
+echo mt_rand(), "|", mt_getrandmax(), getrandmax(), "|";
+mt_srand(5, MT_RAND_MT19937);
+echo mt_rand(1, 6), "|";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"804318771,1710563033,2041643438,393923207,1571945013|36,0,5,1,-20,669991378,1071453508803753174,6754757701899736522,3146465554,306804147|804318771,1710563033,2041643438|163870807,488206946|1137703825,1237383107|476726705,118498407|8,3,2,5,7,1,4,6|100|89368905|21474836472147483647|6|"#
+    );
+}
+
+/// Verifies the deprecated `MT_RAND_PHP` variant (legacy twist and float range scaling), seeds
+/// passed as `?int` and `mixed`, a null seed drawing a random one, and that `random_int()` stays
+/// on the CSPRNG whatever `mt_srand()` did, as in php.
+#[test]
+fn test_mt_srand_legacy_mode_nullable_seeds_and_csprng_isolation() {
+    let out = compile_and_run(
+        r#"<?php
+function seed_with(?int $s): string { mt_srand($s); return (string) mt_rand(1, 1000000); }
+function seed_mixed(mixed $s): string { mt_srand($s); return (string) mt_rand(1, 1000000); }
+@mt_srand(9, 1);
+$legacy = [];
+for ($i = 0; $i < 4; $i++) { $legacy[] = mt_rand(); $legacy[] = mt_rand(1, 100); $legacy[] = rand(-5, 5); }
+echo implode(",", $legacy), "|";
+echo seed_with(11), ",", seed_mixed(11), ",", seed_mixed("11"), "|";
+// a null seed draws a random one: two runs agree only by chance
+$a = seed_with(null); $b = seed_with(null); $c = seed_mixed(null);
+echo ($a === $b && $b === $c) ? "same" : "random", "|";
+mt_srand();
+$d = mt_rand(1, 1000000000); mt_srand(); $e = mt_rand(1, 1000000000);
+echo $d === $e ? "same" : "random", "|";
+mt_srand(5);
+$r1 = random_int(1, 1000000000); mt_srand(5); $r2 = random_int(1, 1000000000);
+echo $r1 === $r2 ? "seeded" : "csprng", "|";
+mt_srand(5);
+echo mt_rand(1, 6), "|";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"2115503561,65,0,1071874298,51,5,1852483083,69,4,28608800,22,4|252442,252442,252442|random|random|csprng|6|"#
+    );
+}
+
+/// Verifies `mt_rand()` and `rand()` without a range stay within `mt_getrandmax()`, seeded or not:
+/// php returns the draw shifted right by one, and elephc returned the full 32-bit word.
+#[test]
+fn test_mt_rand_without_range_stays_within_getrandmax() {
+    let out = compile_and_run(
+        r#"<?php
+$max = 0;
+for ($i = 0; $i < 4000; $i++) { $max = max($max, mt_rand(), rand()); }
+mt_srand(99);
+for ($i = 0; $i < 4000; $i++) { $max = max($max, mt_rand(), rand()); }
+echo $max <= mt_getrandmax() ? "ok" : "over", ":", mt_getrandmax(), ":", getrandmax();
+"#,
+    );
+    assert_eq!(out, "ok:2147483647:2147483647");
+}
+
 /// Verifies `rand(1, 1)` returns the degenerate single-value range: expects `1`.
 #[test]
 fn test_rand_range() {

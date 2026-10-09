@@ -43,7 +43,7 @@ pub fn emit_shuffle(emitter: &mut Emitter) {
 
     // -- generate random j in [0, i] --
     emitter.instruction("add x0, x19, #1");                                     // x0 = i + 1 (upper bound, exclusive)
-    emitter.instruction("bl __rt_random_uniform");                              // x0 = random value in [0, i]
+    emitter.instruction("bl __rt_mt_uniform");                                  // x0 = random value in [0, i]
 
     // -- swap data[i] and data[j] --
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = array pointer
@@ -88,8 +88,9 @@ fn emit_shuffle_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 1");                                          // has the Fisher-Yates cursor reached the final swap boundary?
     emitter.instruction("jb __rt_shuffle_done");                                // stop once every slot above index zero has been swapped with a random predecessor
     emitter.instruction("lea rdi, [r10 + 1]");                                  // pass the exclusive upper bound i + 1 to the uniform random helper
-    emitter.instruction("call __rt_random_uniform");                            // draw a random slot index j in the inclusive range [0, i]
+    emitter.instruction("call __rt_mt_uniform");                                // draw a random slot index j in the inclusive range [0, i]
     emitter.instruction("mov r11, rax");                                        // preserve the sampled Fisher-Yates partner index before reloading the array base pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the cursor: the twister's draw clobbers r10
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the indexed-array pointer after the random helper clobbered caller-saved registers
     emitter.instruction("lea r9, [r8 + 24]");                                   // compute the indexed-array payload base pointer so the swap can address element slots directly
     emitter.instruction("mov rax, QWORD PTR [r9 + r10 * 8]");                   // load the current Fisher-Yates tail element that will be swapped toward the sampled position

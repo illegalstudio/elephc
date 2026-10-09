@@ -2,7 +2,7 @@
 title: "hash_hmac() - internals"
 description: "Compiler internals for hash_hmac(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 804
+  order: 808
 ---
 
 ## `hash_hmac()` - internals

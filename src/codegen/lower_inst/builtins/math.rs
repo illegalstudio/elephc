@@ -29,7 +29,7 @@ pub(crate) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
 pub(crate) use libm::{
     lower_atan2, lower_deg2rad, lower_hypot, lower_log, lower_rad2deg, lower_unary_libm,
 };
-pub(crate) use random::{lower_rand, lower_random_int};
+pub(crate) use random::{lower_getrandmax, lower_mt_srand, lower_rand, lower_random_int};
 
 const CLAMP_MIN_NAN_MESSAGE: &str = "clamp(): Argument #2 ($min) must not be NAN";
 const CLAMP_MAX_NAN_MESSAGE: &str = "clamp(): Argument #3 ($max) must not be NAN";

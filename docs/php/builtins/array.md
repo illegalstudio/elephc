@@ -39,7 +39,7 @@ sidebar:
 | [`array_pop()`](./array/array_pop.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`array_product()`](./array/array_product.md) | `(array $array): int|float` | `int|float` | ✓ | ✓ |
 | [`array_push()`](./array/array_push.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
-| [`array_rand()`](./array/array_rand.md) | `(array $array): int` | `int` | ✓ | ✓ |
+| [`array_rand()`](./array/array_rand.md) | `(array $array, int $num = 1): int` | `int` | ✓ | ✓ |
 | [`array_reduce()`](./array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): mixed` | `mixed` | ✓ | ✓ |
 | [`array_replace()`](./array/array_replace.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | - |
 | [`array_replace_recursive()`](./array/array_replace_recursive.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | - |

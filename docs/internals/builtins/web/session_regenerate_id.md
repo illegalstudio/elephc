@@ -2,7 +2,7 @@
 title: "session_regenerate_id() - internals"
 description: "Compiler internals for session_regenerate_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 993
+  order: 997
 ---
 
 ## `session_regenerate_id()` - internals

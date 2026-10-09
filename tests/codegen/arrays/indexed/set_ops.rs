@@ -125,6 +125,51 @@ if ($i >= 0 && $i < 3) { echo "ok"; }
     assert_eq!(out, "ok");
 }
 
+/// Verifies `array_rand()` with `$num`, over associative, declared and literal arrays, picks
+/// php's keys for a seeded twister and raises php's ValueErrors, under `--heap-debug`.
+///
+/// Only one key from a list compiled before: a second argument, an associative array or a declared
+/// `array` was refused, and an empty list answered key 0 instead of throwing. The several-key path
+/// marks distinct positions as php-src's `php_array_pick_keys` does, inverting the marks when more
+/// than half the keys are requested, so the same seeds give the same keys in the same order.
+#[test]
+fn test_array_rand_picks_php_keys_for_every_num_and_layout() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function bare(array $a): array { return $a; }
+function picks(int $n): string { return json_encode(array_rand(["a" => 1, "b" => 2, "c" => 3, "d" => 4, 9 => 5], $n)); }
+function run(): string {
+    $out = [];
+    for ($i = 0; $i < 20; $i++) {
+        mt_srand(3 + $i);
+        $list = [10, 20, 30, 40, 50, 60];
+        $out = [
+            picks(1), picks(2), picks(3), picks(4), picks(5),
+            json_encode(array_rand($list, 4)),
+            json_encode(array_rand(bare(["x" => 1, 7 => 2]))),
+            json_encode(array_rand(["k" . $i => 1, "z" => 2])),
+            (string) array_rand($list),
+            json_encode(array_rand([5 => 1, 9 => 2, 11 => 3], 2)),
+        ];
+        foreach ([[[], 1], [[1, 2], 0], [[1, 2], 3]] as [$a, $n]) {
+            try { array_rand($a, $n); $out[] = "no error"; } catch (ValueError $e) { $out[] = $e->getMessage(); }
+        }
+    }
+    return implode("|", $out);
+}
+echo run();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        r#"9|["b",9]|["a","d",9]|["a","b","c",9]|["a","b","c","d",9]|[1,2,3,4]|"x"|"z"|4|[9,11]|array_rand(): Argument #1 ($array) must not be empty|array_rand(): Argument #2 ($num) must be between 1 and the number of elements in argument #1 ($array)|array_rand(): Argument #2 ($num) must be between 1 and the number of elements in argument #1 ($array)"#,
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies `shuffle()` permutes all elements without losing any; count stays 5, sum stays 15.
 #[test]
 fn test_shuffle() {

@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_blacklist_entry() - internals"
 description: "Compiler internals for __elephc_opcache_rt_blacklist_entry(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1129
+  order: 1133
 ---
 
 ## `__elephc_opcache_rt_blacklist_entry()` - internals
