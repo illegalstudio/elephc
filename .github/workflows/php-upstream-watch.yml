@@ -1,0 +1,114 @@
+name: PHP upstream watch
+
+# Watches php/php-src for newly published stable releases and opens one tracking
+# issue per release tag, so elephc can follow PHP's evolution between minor
+# releases without anyone polling GitHub by hand. Pre-releases (alpha/beta/RC)
+# are ignored on purpose: the signal we act on is a tagged stable release.
+#
+# State — the last seen tag per maintenance branch — is committed under
+# .github/upstream/php-src-watch.json, so a re-run never opens duplicates. The
+# first run records the branch pointers silently; pass --kickoff (or the
+# workflow's kickoff input) to also open one issue for each watched branch's
+# current latest release. Later runs open one issue per newly published tag.
+#
+# This is deliberately disjoint from the release workflows: it only reads
+# php/php-src, writes tracking issues, and commits its own state file.
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Mondays at 06:00 UTC; php-src releases roughly monthly
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Render issues without opening them or updating state"
+        type: boolean
+        default: false
+      seed_only:
+        description: "Record branch pointers without opening any issue"
+        type: boolean
+        default: false
+      kickoff:
+        description: "On a first run, open an issue for each watched branch's latest"
+        type: boolean
+        default: false
+      milestone:
+        description: "Group issues under a PHP X.Y milestone"
+        type: boolean
+        default: true
+
+# Least privilege by default; only the watch job gets write access below.
+permissions:
+  contents: read
+
+# Never cancel: a half-run leaves the state file unadvanced and the next run
+# would simply retry (already-opened issues are deduplicated by body marker).
+concurrency:
+  group: php-upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Watch php/php-src releases
+    # Scheduled workflows keep running on forks that never disable Actions;
+    # nothing here would be publishable there.
+    if: github.repository == 'illegalstudio/elephc'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The state commit is pushed with an Illegal Bot installation token, not the
+    # workflow token: `main` is protected and the App is the ruleset's only bypass
+    # actor. The workflow token only opens the issues, so it needs `issues: write`
+    # and nothing more; the App token is minted below and used for checkout/push.
+    permissions:
+      contents: read
+      issues: write   # open the tracking issues
+    steps:
+      # Pinned to a full commit SHA rather than the `v2` tag: this step receives
+      # the App private key, so a moved upstream tag would change the code that
+      # handles it without any diff to review here. Every workflow that mints a
+      # bot token pins the same SHA; bump them together.
+      - name: Mint Illegal Bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
+          private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v7
+        with:
+          # The App token is the ruleset's bypass actor, so the state commit
+          # below can land on protected `main`.
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Detect new releases and open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          SEED_ONLY: ${{ inputs.seed_only && '1' || '0' }}
+          KICKOFF: ${{ github.event_name == 'workflow_dispatch' && inputs.kickoff && '1' || '0' }}
+          MILESTONE: ${{ github.event_name == 'workflow_dispatch' && !inputs.milestone && '0' || '1' }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "1" ]; then args+=(--dry-run); fi
+          if [ "$SEED_ONLY" = "1" ]; then args+=(--seed-only); fi
+          if [ "$KICKOFF" = "1" ]; then args+=(--kickoff); fi
+          if [ "$MILESTONE" = "0" ]; then args+=(--no-milestone); fi
+          bash .github/scripts/php-upstream-watch.sh "${args[@]+"${args[@]}"}"
+
+      - name: Commit watch state
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          # Author the commit as the App that owns the pushing token.
+          BOT_ID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+          if [ -f .github/upstream/php-src-watch.json ]; then
+            git add .github/upstream/php-src-watch.json
+          fi
+          if git diff --cached --quiet; then
+            echo "No state changes"
+            exit 0
+          fi
+          git commit -m "chore: update php-src watch state [skip ci]"
+          git push
