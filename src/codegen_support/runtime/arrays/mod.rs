@@ -10,6 +10,9 @@
 //! - A hash entry that belongs to a PHP reference set carries runtime value tag 11 and a managed
 //!   reference cell in `value_lo`; `hash_entry_reference` owns that representation.
 
+#[cfg(test)]
+mod incref_register_tests;
+
 mod array_chunk;
 mod array_chunk_refcounted;
 mod array_chunk_to_hash;
