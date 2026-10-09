@@ -468,3 +468,36 @@ fn test_comment_scan_follows_the_php_lexer() {
         );
     }
 }
+
+/// Several tags on one line are all read. The short block shape PHPStan accepts puts `@template`,
+/// `@param` and `@return` on one line, and only the first was seen: the parameter then carried no
+/// type parameter, so a violating argument was accepted instead of reported.
+#[test]
+fn test_one_line_block_reads_every_tag() {
+    let bound = "/** @template T of int @param T $v @return T */\n";
+    let cases = [
+        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
+        format!(
+            "<?php\nclass R {{\n{bound}public static function id($v) {{ return $v; }}\n}}\n\
+             echo R::id(\"seven\");\n"
+        ),
+        format!(
+            "<?php\ntrait Tr {{\n{bound}public function id($v) {{ return $v; }}\n}}\n\
+             class K {{ use Tr; }}\necho (new K)->id(\"seven\");\n"
+        ),
+        format!(
+            "<?php\nenum Id {{\n    case A;\n{bound}public function id($v) {{ return $v; }}\n}}\n\
+             echo Id::A->id(\"seven\");\n"
+        ),
+    ];
+    for source in &cases {
+        let error = compile_cli_file_with_flags_expect_failure(source, &[]);
+        assert!(
+            error.contains("does not satisfy its bound int"),
+            "{source}: {error}"
+        );
+    }
+    let ok = "<?php\n/** @template T @param T $v @return T */\n\
+              function id($v) { return $v; }\necho id(7);\n";
+    assert_eq!(compile_cli_file_and_run_with_flags(ok, &[]), "7");
+}
