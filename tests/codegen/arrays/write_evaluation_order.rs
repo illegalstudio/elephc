@@ -439,3 +439,74 @@ echo $out, "\n";
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Pins that a compound write to an element READ the element AFTER the right-hand side, so an
+/// index other than a plain variable matches PHP too. `$a[0] += ($a = [10])[0]` leaves `[20]`:
+/// the reassignment installs `[10]`, the read sees it, and 10 + 10 is written back. A LITERAL
+/// index used to read the old element before the right-hand side ran, yielding `[11]`.
+#[test]
+fn test_compound_write_reads_a_literal_index_after_the_right_hand_side() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1];
+$a[0] += ($a = [10])[0];
+echo json_encode($a), ",";
+$b = ["k" => 1];
+$b["k"] += ($b = ["k" => 10])["k"];
+echo json_encode($b);
+"#,
+    );
+    assert_eq!(out, "[20],{\"k\":20}");
+}
+
+/// Pins a nested increment/decrement THROUGH-write: `$m[0] = ++$m[1][0]` must fetch the receiver
+/// AFTER the value, because the increment stores into `$m`. The increment desugars into an
+/// assignment whose element store lives in its prelude, which the receiver gate now walks.
+#[test]
+fn test_receiver_fetch_for_a_nested_increment_through_write() {
+    let prefix = compile_and_run(
+        r#"<?php
+$m = [9, [3, 4]];
+$m[0] = ++$m[1][0];
+echo json_encode($m);
+"#,
+    );
+    assert_eq!(prefix, "[4,[4,4]]");
+
+    let postfix = compile_and_run(
+        r#"<?php
+$m = [9, [3, 4]];
+$m[0] = $m[1][0]++;
+echo json_encode($m);
+"#,
+    );
+    assert_eq!(postfix, "[3,[4,4]]");
+}
+
+/// Pins a variable-index nested write whose value reassigns the root: `$m[$i][$j] = ($m = […]) ? …`
+/// must write into the array the reassignment installed (and rebox the retyped root so the
+/// Mixed-only nested writer still accepts it). It used to fail to compile entirely.
+#[test]
+fn test_variable_index_nested_write_reboxes_a_reassigned_root() {
+    let assoc = compile_and_run(
+        r#"<?php
+function v(mixed $m, string $i, string $j): string {
+    $m[$i][$j] = ($m = ["a" => ["c" => 1]]) ? 5 : 6;
+    return json_encode($m);
+}
+echo v(["a" => ["x" => 0]], "a", "b");
+"#,
+    );
+    assert_eq!(assoc, "{\"a\":{\"c\":1,\"b\":5}}");
+
+    let indexed = compile_and_run(
+        r#"<?php
+function v(mixed $m, int $i, int $j): string {
+    $m[$i][$j] = ($m = [[0, 0], [0, 0]]) ? 5 : 6;
+    return json_encode($m);
+}
+echo v([[1, 1], [2, 2]], 1, 0);
+"#,
+    );
+    assert_eq!(indexed, "[[0,0],[5,0]]");
+}

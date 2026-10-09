@@ -48,7 +48,7 @@
 //!   (`nested_array_writes::lower_nested_array_assign`).
 
 use crate::ir::LocalKind;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 
 use super::*;
 
@@ -127,13 +127,190 @@ fn calls_a_local_scope_writer(expr: &Expr) -> bool {
 /// Returns true when `expr` assigns a place rooted at the local `receiver` other than the local
 /// itself: an element, a nested element or a destructured element of it (`$m["b"] = 5`,
 /// `$m[1] += 5`, `[$m[1]] = [9]`). `expr_writes_local` covers writes to the local by name.
+///
+/// An assignment may hide its store in its `prelude`: a nested `++`/`--` desugars to an
+/// assignment whose element store (`NestedArrayAssign`) lives there, so the walk has to reach it
+/// or `$m[0] = ++$m[1][0]` fetches the receiver before the value rewrites it.
 fn expr_assigns_through_local(expr: &Expr, receiver: &str) -> bool {
-    expr_any(expr, &|node| {
-        matches!(&node.kind, ExprKind::Assignment { target, .. }
-            if place_root_is(target, &|root| {
-                matches!(&root.kind, ExprKind::Variable(name) if name == receiver)
-            }))
+    expr_any(expr, &|node| match &node.kind {
+        ExprKind::Assignment { target, prelude, .. } => {
+            place_root_is(target, &|root| is_local_named(root, receiver))
+                || prelude_assigns_through_local(prelude, receiver)
+        }
+        _ => false,
     })
+}
+
+/// Returns true when `expr` is exactly the bare local `receiver`.
+fn is_local_named(expr: &Expr, receiver: &str) -> bool {
+    matches!(&expr.kind, ExprKind::Variable(name) if name == receiver)
+}
+
+/// Returns true when any statement of an assignment prelude stores into a place rooted at the
+/// local `receiver`.
+fn prelude_assigns_through_local(prelude: &[Stmt], receiver: &str) -> bool {
+    prelude
+        .iter()
+        .any(|stmt| stmt_assigns_through_local(stmt, receiver))
+}
+
+/// Returns true when `stmt` stores into a place rooted at the local `receiver`.
+///
+/// Only stores that can reach the local are matched; a nested declaration body is a separate
+/// scope and is skipped, and every other shape answers false. The match is exhaustive so a new
+/// `StmtKind` has to decide here rather than silently staying "not a write".
+fn stmt_assigns_through_local(stmt: &Stmt, receiver: &str) -> bool {
+    let root_is_receiver = |root: &Expr| is_local_named(root, receiver);
+    match &stmt.kind {
+        StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
+            name == receiver || expr_assigns_through_local(value, receiver)
+        }
+        StmtKind::ArrayAssign { array, index, value } => {
+            array == receiver
+                || expr_assigns_through_local(index, receiver)
+                || expr_assigns_through_local(value, receiver)
+        }
+        StmtKind::ArrayPush { array, value } => {
+            array == receiver || expr_assigns_through_local(value, receiver)
+        }
+        StmtKind::NestedArrayAssign { target, value } => {
+            place_root_is(target, &root_is_receiver)
+                || expr_assigns_through_local(value, receiver)
+        }
+        StmtKind::ListUnpack { vars, value } => {
+            vars.iter().any(|var| var == receiver)
+                || expr_assigns_through_local(value, receiver)
+        }
+        StmtKind::RefAssign { target, source } => {
+            target == receiver || expr_assigns_through_local(source, receiver)
+        }
+        StmtKind::StaticVar { name, init } => {
+            name == receiver || expr_assigns_through_local(init, receiver)
+        }
+        StmtKind::Global { vars } => vars.iter().any(|var| var == receiver),
+        StmtKind::Echo(expr)
+        | StmtKind::Throw(expr)
+        | StmtKind::ExprStmt(expr)
+        | StmtKind::ConstDecl { value: expr, .. }
+        | StmtKind::StaticPropertyAssign { value: expr, .. }
+        | StmtKind::StaticPropertyArrayPush { value: expr, .. } => {
+            expr_assigns_through_local(expr, receiver)
+        }
+        StmtKind::Return(expr) => expr
+            .as_ref()
+            .is_some_and(|expr| expr_assigns_through_local(expr, receiver)),
+        StmtKind::StaticPropertyArrayAssign { index, value, .. }
+        | StmtKind::PropertyArrayAssign { index, value, .. } => {
+            expr_assigns_through_local(index, receiver)
+                || expr_assigns_through_local(value, receiver)
+        }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            expr_assigns_through_local(object, receiver)
+                || expr_assigns_through_local(value, receiver)
+        }
+        StmtKind::Include { path, .. } => expr_assigns_through_local(path, receiver),
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_assigns_through_local(condition, receiver)
+                || prelude_assigns_through_local(then_body, receiver)
+                || elseif_clauses.iter().any(|(condition, body)| {
+                    expr_assigns_through_local(condition, receiver)
+                        || prelude_assigns_through_local(body, receiver)
+                })
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| prelude_assigns_through_local(body, receiver))
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            prelude_assigns_through_local(then_body, receiver)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| prelude_assigns_through_local(body, receiver))
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
+            expr_assigns_through_local(condition, receiver)
+                || prelude_assigns_through_local(body, receiver)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref()
+                .is_some_and(|stmt| stmt_assigns_through_local(stmt, receiver))
+                || condition
+                    .as_ref()
+                    .is_some_and(|expr| expr_assigns_through_local(expr, receiver))
+                || update
+                    .as_deref()
+                    .is_some_and(|stmt| stmt_assigns_through_local(stmt, receiver))
+                || prelude_assigns_through_local(body, receiver)
+        }
+        StmtKind::Foreach { array, body, .. } => {
+            expr_assigns_through_local(array, receiver)
+                || prelude_assigns_through_local(body, receiver)
+        }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            expr_assigns_through_local(subject, receiver)
+                || cases.iter().any(|(patterns, body)| {
+                    patterns
+                        .iter()
+                        .any(|pattern| expr_assigns_through_local(pattern, receiver))
+                        || prelude_assigns_through_local(body, receiver)
+                })
+                || default
+                    .as_ref()
+                    .is_some_and(|body| prelude_assigns_through_local(body, receiver))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            prelude_assigns_through_local(try_body, receiver)
+                || catches
+                    .iter()
+                    .any(|clause| prelude_assigns_through_local(&clause.body, receiver))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| prelude_assigns_through_local(body, receiver))
+        }
+        StmtKind::Synthetic(body)
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. } => prelude_assigns_through_local(body, receiver),
+        // A nested function or class body has its own scope: the enclosing local is not visible
+        // there unless it is captured, which `ExprKind::Closure` handles on the expression side.
+        StmtKind::FunctionDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::EnumDecl { .. }
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
+        | StmtKind::NamespaceDecl { .. }
+        | StmtKind::UseDecl { .. }
+        | StmtKind::FunctionVariantGroup { .. }
+        | StmtKind::FunctionVariantMark { .. }
+        | StmtKind::IncludeOnceMark { .. }
+        | StmtKind::PackedClassDecl { .. }
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. } => false,
+    }
 }
 
 /// Returns true when evaluating `expr` makes an explicit call into code that can reach an
@@ -242,7 +419,8 @@ fn expr_any(expr: &Expr, pred: &dyn Fn(&Expr) -> bool) -> bool {
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
-        | ExprKind::NewScopedObject { args, .. } => any_of(args.iter(), pred),
+        | ExprKind::NewScopedObject { args, .. }
+        | ExprKind::NewGeneric { args, .. } => any_of(args.iter(), pred),
         ExprKind::MethodCall { object, args, .. } | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_any(object, pred) || any_of(args.iter(), pred)
         }

@@ -35,23 +35,24 @@ pub(super) fn lower_nested_array_assign(
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
         let deferred = nested_target_is_all_bare_variables(target);
-        // The same deferral holds when the right-hand side may write the chain's ROOT (a local,
+        // The value must run before the parent chain when it may write the chain's ROOT (a local,
         // a property or a static property) and every index is free of side effects:
         // `$m["a"]["b"] = ($m = [...]) ? ...` must write into the array the reassignment
-        // installed (see `element_write_order`). That value is pinned until the write, since
-        // the parent fetch may separate the container it borrows from.
-        let root_written = !deferred
-            && nested_target_keys_are_pure(target)
+        // installed, and `$m[$i][$j] = ($m = [...]) ? ...` likewise (see `element_write_order`).
+        // The value is pinned until the write, since the parent fetch may separate the container
+        // it borrows from, and a concrete root the value retyped is reboxed so the Mixed-only
+        // nested writer still accepts it.
+        let root_written = nested_target_keys_are_pure(target)
             && nested_value_may_write_root(ctx, target, value);
         let mut pinned_slot = None;
-        let value_first = if deferred {
-            Some(lower_expr(ctx, value))
-        } else if root_written {
+        let value_first = if root_written {
             let lowered = lower_expr(ctx, value);
             let (pinned, slot) = crate::ir_lower::expr::root_call_operand(ctx, lowered, span);
             pinned_slot = slot;
             rebox_nested_root_local(ctx, target, span);
             Some(pinned)
+        } else if deferred {
+            Some(lower_expr(ctx, value))
         } else {
             None
         };
