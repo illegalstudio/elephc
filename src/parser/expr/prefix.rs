@@ -658,6 +658,8 @@ fn parse_array_literal_with_terminator(
             }
         } else if is_assoc {
             if mixed_elems.is_empty() {
+                // The synthesized key keeps the element's span: the profile scan tells an
+                // implicit entry from a written key by it (`detect::assoc_pair_matches`).
                 let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
                 assoc_elems.push((key, expr));
             } else {
@@ -790,9 +792,11 @@ fn promote_indexed_array_items_to_assoc(
 
 /// Advances the automatic integer key cursor after a statically known integer key.
 ///
-/// The first integer-like key seeds the cursor unconditionally so a leading
-/// negative key continues from there (PHP 8.3 semantics); later keys only
-/// raise it.
+/// Under PHP 8.3 and later the first integer-like key seeds the cursor
+/// unconditionally, so a leading negative key continues from there; later keys
+/// only raise it. Earlier profiles start the cursor at 0 and only raise it, so a
+/// negative key never moves it (the rule `__rt_hash_next_index` applies at run
+/// time too).
 fn update_next_auto_key_from_explicit_key(
     key: &Expr,
     next_auto_key: &mut i64,
@@ -800,7 +804,12 @@ fn update_next_auto_key_from_explicit_key(
 ) {
     if let Some(value) = explicit_integer_array_key(key) {
         let candidate = value.saturating_add(1);
-        if !*auto_key_initialized || candidate > *next_auto_key {
+        // PHP 8.3 seeds the next key from the first integer key, negative ones included
+        // (`[-5 => "a", "b"]` gives "b" the key -4). Before 8.3 the next key started at 0 and
+        // only a key at or above it moved it, so "b" got 0.
+        let first_key_seeds =
+            crate::codegen_support::compile_php_version().version_id() >= 80300;
+        if (first_key_seeds && !*auto_key_initialized) || candidate > *next_auto_key {
             *next_auto_key = candidate;
         }
         *auto_key_initialized = true;

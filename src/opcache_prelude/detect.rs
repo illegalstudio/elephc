@@ -46,8 +46,8 @@
 
 use crate::names::Name;
 use crate::parser::ast::{
-    CallableTarget, CastType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    InstanceOfTarget, PackedField, Stmt, StmtKind, TraitUse, TypeExpr,
+    ArrayEntry, CallableTarget, CastType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl,
+    Expr, ExprKind, InstanceOfTarget, PackedField, Stmt, StmtKind, TraitUse, TypeExpr,
 };
 use crate::span::Span;
 
@@ -108,6 +108,18 @@ pub(crate) enum SymbolKind {
     /// summary conservative. Riding on this traversal is what makes that question answerable
     /// without a second walk that could quietly miss a new `ExprKind`/`StmtKind`.
     DestructorDeclaration,
+    /// A NEGATIVE INTEGER LITERAL used as an array key: `[-5 => ...]`, or the index of an
+    /// element write such as `$a[-5] = ...` (local, property or static property).
+    ///
+    /// [`Symbol::name`] is ignored. The profile scan pairs it with [`Self::ArrayAppend`]: from
+    /// PHP 8.3 the next implicit key continues from a negative key, where 8.2 restarts at 0.
+    /// A key reached through a variable is out of reach, which the scan documents.
+    NegativeIntKey,
+    /// An IMPLICIT-KEY insertion: `$a[] = ...` (local, property or static property), or a
+    /// bare entry of an array literal that also has keyed entries (`[-5 => "a", "b"]`).
+    ///
+    /// [`Symbol::name`] is ignored. See [`Self::NegativeIntKey`].
+    ArrayAppend,
 }
 
 /// How a call's first argument narrows a FUNCTION match.
@@ -415,7 +427,9 @@ fn name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::AsymmetricVisibility
         | SymbolKind::TypedClassConst
         | SymbolKind::ObjectCast
-        | SymbolKind::DestructorDeclaration => false,
+        | SymbolKind::DestructorDeclaration
+        | SymbolKind::NegativeIntKey
+        | SymbolKind::ArrayAppend => false,
     }
 }
 
@@ -438,7 +452,9 @@ fn const_name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::AsymmetricVisibility
         | SymbolKind::TypedClassConst
         | SymbolKind::ObjectCast
-        | SymbolKind::DestructorDeclaration => false,
+        | SymbolKind::DestructorDeclaration
+        | SymbolKind::NegativeIntKey
+        | SymbolKind::ArrayAppend => false,
     }
 }
 
@@ -637,13 +653,25 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
             .or_else(|| prelude.iter().find_map(|stmt| stmt_refs(stmt, target))),
         ExprKind::ClosureCall { args, .. } => args.iter().find_map(|arg| expr_refs(arg, target)),
         ExprKind::ArrayLiteral(items) => items.iter().find_map(|item| expr_refs(item, target)),
-        ExprKind::ArrayLiteralAssoc(pairs) => pairs.iter().find_map(|(key, value)| {
-            expr_refs(key, target).or_else(|| expr_refs(value, target))
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs
+            .iter()
+            .any(|(key, value)| assoc_pair_matches(key, value, target))
+            .then_some(expr.span)
+        .or_else(|| {
+            pairs.iter().find_map(|(key, value)| {
+                expr_refs(key, target).or_else(|| expr_refs(value, target))
+            })
         }),
         ExprKind::ArrayLiteralMixed(entries) => entries
             .iter()
-            .flat_map(|entry| entry.exprs())
-            .find_map(|expr| expr_refs(expr, target)),
+            .any(|entry| array_entry_matches(entry, target))
+            .then_some(expr.span)
+            .or_else(|| {
+                entries
+                    .iter()
+                    .flat_map(|entry| entry.exprs())
+                    .find_map(|expr| expr_refs(expr, target))
+            }),
         ExprKind::Match {
             subject,
             arms,
@@ -778,13 +806,14 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
             .or_else(|| condition.as_ref().and_then(|expr| expr_refs(expr, target)))
             .or_else(|| update.as_deref().and_then(|stmt| stmt_refs(stmt, target)))
             .or_else(|| body.iter().find_map(|stmt| stmt_refs(stmt, target))),
-        StmtKind::ArrayAssign { index, value, .. } => {
-            expr_refs(index, target).or_else(|| expr_refs(value, target))
-        }
+        StmtKind::ArrayAssign { index, value, .. } => negative_key_write(stmt, index, target)
+            .or_else(|| expr_refs(index, target))
+            .or_else(|| expr_refs(value, target)),
         StmtKind::NestedArrayAssign { target: t, value } => {
             expr_refs(t, target).or_else(|| expr_refs(value, target))
         }
-        StmtKind::ArrayPush { value, .. } => expr_refs(value, target),
+        StmtKind::ArrayPush { value, .. } => append_write(stmt, target)
+            .or_else(|| expr_refs(value, target)),
         StmtKind::TypedAssign { value, .. } => expr_refs(value, target),
         StmtKind::Foreach { array, body, .. } => expr_refs(array, target)
             .or_else(|| body.iter().find_map(|stmt| stmt_refs(stmt, target))),
@@ -887,23 +916,74 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_refs(object, target).or_else(|| expr_refs(value, target))
         }
-        StmtKind::StaticPropertyAssign { value, .. }
-        | StmtKind::StaticPropertyArrayPush { value, .. } => expr_refs(value, target),
+        StmtKind::StaticPropertyAssign { value, .. } => expr_refs(value, target),
+        StmtKind::StaticPropertyArrayPush { value, .. } => append_write(stmt, target)
+            .or_else(|| expr_refs(value, target)),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
-            expr_refs(index, target).or_else(|| expr_refs(value, target))
+            negative_key_write(stmt, index, target)
+                .or_else(|| expr_refs(index, target))
+                .or_else(|| expr_refs(value, target))
         }
-        StmtKind::PropertyArrayPush { object, value, .. } => {
-            expr_refs(object, target).or_else(|| expr_refs(value, target))
-        }
+        StmtKind::PropertyArrayPush { object, value, .. } => append_write(stmt, target)
+            .or_else(|| expr_refs(object, target))
+            .or_else(|| expr_refs(value, target)),
         StmtKind::PropertyArrayAssign {
             object,
             index,
             value,
             ..
-        } => expr_refs(object, target)
+        } => negative_key_write(stmt, index, target)
+            .or_else(|| expr_refs(object, target))
             .or_else(|| expr_refs(index, target))
             .or_else(|| expr_refs(value, target)),
     }
+}
+
+/// Returns whether `expr` is a negative integer literal, as the parser leaves `-5` (a negation
+/// of a positive literal) or as a fold leaves it (`IntLiteral(-5)`).
+fn is_negative_int_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => *value < 0,
+        ExprKind::Negate(inner) => matches!(inner.kind, ExprKind::IntLiteral(value) if value > 0),
+        _ => false,
+    }
+}
+
+/// Returns whether one pair of an associative array literal is what a
+/// [`SymbolKind::NegativeIntKey`] or [`SymbolKind::ArrayAppend`] search looks for.
+///
+/// The parser gives a bare element of a keyed literal its implicit key up front, and that
+/// synthesized key reuses the element's own span (`parse_array_literal_with_terminator`). A
+/// written key never shares its value's span, so the shared span marks an implicit entry.
+fn assoc_pair_matches(key: &Expr, value: &Expr, target: Symbol<'_>) -> bool {
+    match target.kind {
+        SymbolKind::NegativeIntKey => key.span != value.span && is_negative_int_literal(key),
+        SymbolKind::ArrayAppend => key.span == value.span,
+        _ => false,
+    }
+}
+
+/// Returns whether one entry of a mixed array literal is what a [`SymbolKind::NegativeIntKey`]
+/// or [`SymbolKind::ArrayAppend`] search looks for.
+fn array_entry_matches(entry: &ArrayEntry, target: Symbol<'_>) -> bool {
+    match (target.kind, entry) {
+        (SymbolKind::NegativeIntKey, ArrayEntry::Keyed(key, _)) => is_negative_int_literal(key),
+        (SymbolKind::ArrayAppend, ArrayEntry::Value(_)) => true,
+        _ => false,
+    }
+}
+
+/// Returns the statement's span when it writes an element at a negative integer literal key
+/// and the search is for [`SymbolKind::NegativeIntKey`].
+fn negative_key_write(stmt: &Stmt, index: &Expr, target: Symbol<'_>) -> Option<Span> {
+    (target.kind == SymbolKind::NegativeIntKey && is_negative_int_literal(index))
+        .then_some(stmt.span)
+}
+
+/// Returns the statement's span when it is an implicit-key insertion and the search is for
+/// [`SymbolKind::ArrayAppend`].
+fn append_write(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
+    (target.kind == SymbolKind::ArrayAppend).then_some(stmt.span)
 }
 
 #[cfg(test)]

@@ -25,6 +25,12 @@
 //!   version surface makes the PROGRAM profile-dependent even though nothing in the AST names
 //!   a watched symbol. It is matched on what its argument CONTAINS, and an argument the
 //!   compiler cannot read counts — over-reporting a note is the cheap direction.
+//! - The implicit array key is the one VALUE rule no symbol names: from PHP 8.3 the next
+//!   implicit key continues from a negative key (`[-5 => "a", "b"]` puts "b" at -4), where
+//!   8.2 restarts at 0. Which appends follow a negative key is not decidable in general, so
+//!   the scan reports a program that spells BOTH a negative integer literal key and an
+//!   implicit-key insertion anywhere. A negative key reached only through a variable, or an
+//!   append nested under another index (`$a[1][] = ...`), is a documented blind spot.
 //! - An empty scan is the answer for the overwhelming majority of programs, and that silence
 //!   is the feature: the compiler speaks only when the profile is a choice with consequences.
 
@@ -268,7 +274,9 @@ pub fn scan(program: &[Stmt], web: bool) -> Vec<Sensitivity> {
                 | SymbolKind::AsymmetricVisibility
                 | SymbolKind::TypedClassConst
                 | SymbolKind::ObjectCast
-                | SymbolKind::DestructorDeclaration => Symbol::syntactic(watched.symbol_kind),
+                | SymbolKind::DestructorDeclaration
+                | SymbolKind::NegativeIntKey
+                | SymbolKind::ArrayAppend => Symbol::syntactic(watched.symbol_kind),
             };
             detect::first_reference(program, symbol).map(|span| Sensitivity {
                 symbol: watched.symbol,
@@ -278,8 +286,24 @@ pub fn scan(program: &[Stmt], web: bool) -> Vec<Sensitivity> {
             })
         })
         .collect();
+    found.extend(negative_key_append(program));
     found.sort_by_key(|sensitivity| (sensitivity.span.line, sensitivity.span.col));
     found
+}
+
+/// Reports the first negative integer literal array key when the program also inserts under
+/// an implicit key, which is where PHP 8.3 changed the next key. See the module docs for why
+/// the pair is matched program-wide rather than per array.
+fn negative_key_append(program: &[Stmt]) -> Option<Sensitivity> {
+    let key = detect::first_reference(program, Symbol::syntactic(SymbolKind::NegativeIntKey))?;
+    detect::first_reference(program, Symbol::syntactic(SymbolKind::ArrayAppend))?;
+    Some(Sensitivity {
+        symbol: "negative array key",
+        span: key,
+        detail: "is followed by implicit keys: from 8.3 they continue from it, before 8.3 they \
+                 restart at 0",
+        is_function: false,
+    })
 }
 
 #[cfg(test)]
@@ -459,6 +483,32 @@ mod tests {
     }
 
     /// Every table entry names a distinct symbol, so a dependence is never reported twice.
+    #[test]
+    fn negative_key_with_an_append_is_dependent() {
+        for source in [
+            r#"<?php $a = [-5 => "a", "b"];"#,
+            r#"<?php $a = [-5 => "a"]; $a[] = "b";"#,
+            r#"<?php $a = []; $a[-3] = 1; $a[] = 2;"#,
+            r#"<?php class C { public array $p = []; } $c = new C(); $c->p[-1] = 0; $c->p[] = 1;"#,
+        ] {
+            let found = scan(&parse(source), false);
+            assert_eq!(found.len(), 1, "{source}");
+            assert_eq!(found[0].symbol, "negative array key", "{source}");
+        }
+    }
+
+    #[test]
+    fn negative_key_or_append_alone_is_independent() {
+        for source in [
+            r#"<?php $a = [-5 => "a"]; echo $a[-5];"#,
+            r#"<?php $a = [1, 2]; $a[] = 3;"#,
+            r#"<?php $a = ["k" => 1, "b"]; $s = "abc"; echo $s[-1];"#,
+            r#"<?php $a = [5 => "a", "b"]; $a[] = "c";"#,
+        ] {
+            assert!(scan(&parse(source), false).is_empty(), "{source}");
+        }
+    }
+
     #[test]
     fn table_has_no_duplicate_symbols() {
         let mut seen = std::collections::HashSet::new();
