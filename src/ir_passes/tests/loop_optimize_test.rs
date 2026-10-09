@@ -93,6 +93,48 @@ fn unequal_inductions_are_not_coalesced() {
     }
 }
 
+/// Builds a single-iteration loop whose Boolean counter values stay in the 0..=1 domain.
+fn boolean_counters() -> Function {
+    let mut function = counters(0, 1, Op::ICheckedAddToInt);
+    for &parameter in &function.blocks[1].params {
+        function.values[parameter.as_raw() as usize].php_type = PhpType::Bool;
+    }
+    let bound = function.blocks[1].instructions[0];
+    function.instruction_mut(bound).unwrap().immediate = Some(Immediate::I64(1));
+    function
+}
+
+/// Identical I64 storage does not make Boolean loop parameters integer inductions.
+#[test]
+fn induction_recognition_requires_php_integer_metadata() {
+    for boolean in [false, true] {
+        let mut function = if boolean { boolean_counters() } else { counters(0, 1, Op::ICheckedAddToInt) };
+        validate_function(&function).unwrap();
+        let dominance = crate::ir_passes::compute_dominance(&function);
+        let loops = crate::ir_passes::compute_loops(&function, &dominance);
+        let inductions = crate::ir_passes::induction::basic_inductions(
+            &function, loops.header_loop(BlockId::from_raw(1)).unwrap(), |value| {
+                match defining_instruction(&function, value)?.immediate {
+                    Some(Immediate::I64(value)) => Some(value),
+                    _ => None,
+                }
+            },
+        );
+        assert_eq!(inductions.len(), if boolean { 0 } else { 2 });
+        assert_eq!(run(&LoopOptimize, &mut function), !boolean);
+        assert_eq!(function.blocks[1].params.len(), if boolean { 2 } else { 1 });
+    }
+}
+
+/// Excluding Boolean induction summaries does not disable ordinary I64 range proofs.
+#[test]
+fn boolean_counters_retain_non_induction_range_proofs() {
+    let mut function = boolean_counters();
+    let compared_update = function.blocks[3].instructions[2];
+    assert!(run(&crate::ir_passes::integer_range::IntegerRange, &mut function));
+    assert_eq!(function.instruction(compared_update).unwrap().op, Op::IAdd);
+}
+
 /// Pure bounds and steps leave the loop and reversed comparisons become canonical.
 #[test]
 fn materializations_and_loop_test_are_canonical() {

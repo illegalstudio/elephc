@@ -1489,8 +1489,12 @@ integer range analysis removes their checks.
 ### Canonical Loop Optimization
 
 `induction.rs` recognizes scalar integer header parameters with a preheader value
-and a common nonzero constant-step update on every latch. Integer range analysis
-uses the same recognition before proving overflow safety. `loop_optimize.rs`
+and a common nonzero constant-step update on every latch. Parameters must have both
+`I64` storage and PHP `Int` metadata. Booleans and other PHP types represented as
+`I64` are deliberately excluded from induction summaries and counter coalescing;
+ordinary interval propagation and comparison-edge proofs still apply to them.
+Integer range analysis uses the same recognition before proving overflow safety.
+`loop_optimize.rs`
 first replaces self-carried scalar parameters with their preheader inputs, then
 coalesces equivalent inductions with equal initial values, steps, and overflow
 semantics. Checked recurrences require matching conversion modes and a retained
@@ -1937,7 +1941,9 @@ The pass has four stages:
 
 1. **Liveness** (`liveness.rs`): backward dataflow to a fixed point producing
    per-block live-in/live-out value sets. Block parameters are definitions at
-   block entry; branch arguments are uses at the predecessor's terminator.
+   block entry; branch arguments are uses at the predecessor's terminator. A
+   predecessor worklist propagates only newly live values, so each value crosses
+   each edge at most once even after LICM hoists many materializations.
 2. **Intervals** (`intervals.rs`): blocks are numbered in reverse postorder and
    each value gets one contiguous `[start, end]` live interval. A value live
    across edges or a loop back-edge spans the intervening positions.

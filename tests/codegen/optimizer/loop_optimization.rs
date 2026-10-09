@@ -130,6 +130,107 @@ echo is_float($i) ? "float" : "int", ":", is_float($j) ? "float" : "int";
     }
 }
 
+/// Builds exported equal recurrences so native execution and every target retain the same loop.
+fn coalesced_overflow_fixture(explicit_cast: bool) -> Fixture {
+    let source = r#"<?php
+#[Export]
+function paired_counters(int $start): void {
+    $left = $start;
+    $right = $left;
+    for ($iteration = 0; $iteration < 3; $iteration++) {
+        echo "before;";
+        $left = (int) ($left + 1);
+        echo "left=", $left, ";";
+        $right = (int) ($right + 1);
+        echo "right=", $right, "\n";
+    }
+}
+paired_counters(PHP_INT_MAX - ($argc & 1));
+"#;
+    if explicit_cast {
+        Fixture::new(source)
+    } else {
+        Fixture::new(r#"<?php
+#[Export]
+function paired_counters(int $start): void {
+    $left = $start;
+    $right = $left;
+    for ($iteration = 0; $iteration < 3; $left++, print("between;"), $right++, $iteration++) {
+        echo "before:", $left, ":", $right, ";";
+    }
+}
+paired_counters(PHP_INT_MAX - ($argc & 1));
+"#)
+    }
+}
+
+/// Requires actual scalar counter sharing while retaining the unproven overflow check.
+fn assert_coalesced_overflow_ir(fixture: &Fixture, explicit_cast: bool) {
+    let optimized = function_ir(
+        &String::from_utf8(fixture.compile(true, &["--emit-ir"]).stdout).unwrap(),
+        "paired_counters",
+    );
+    let header = optimized.lines().find(|line| line.contains("for.cond(")).unwrap();
+    assert_eq!(header.matches("I64").count(), 2, "only iteration and one shared counter remain: {optimized}");
+    assert_eq!(optimized.matches("= ichecked_add_to_int ").count(), 1,
+        "the shared update must retain its overflow path: {optimized}");
+    assert!(!optimized.contains("= ichecked_add "), "no boxed counter may bypass coalescing: {optimized}");
+    let update = optimized.lines().find(|line| line.contains("= ichecked_add_to_int ")).unwrap();
+    assert!(update.split(';').next().unwrap().trim_end().ends_with(
+        if explicit_cast { " true" } else { " false" }), "wrong overflow mode: {update}");
+}
+
+/// Coalesced cast recurrences execute their overflow conversion with unchanged output ordering.
+#[test]
+fn test_loop_optimization_coalesced_cast_overflow_both_modes() {
+    let fixture = coalesced_overflow_fixture(true);
+    assert_coalesced_overflow_ir(&fixture, true);
+    for mode in [false, true] {
+        fixture.compile(mode, &[]);
+        for (args, values) in [
+            (vec![], [i64::MAX, i64::MIN, i64::MIN + 1]),
+            (vec!["extra"], [i64::MIN, i64::MIN + 1, i64::MIN + 2]),
+        ] {
+            let expected = values.iter().map(|value| format!("before;left={value};right={value}\n"))
+                .collect::<String>();
+            let output = run_binary_with_args(&fixture.0.join("main"), &fixture.0, &args);
+            assert!(output.status.success(), "optimized={mode}: {output:?}");
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), expected, "optimized={mode}");
+            assert!(output.stderr.is_empty(), "optimized={mode}: {:?}", output.stderr);
+        }
+    }
+    for target in ["linux-x86_64", "linux-aarch64", "macos-aarch64", "ios-arm64", "ios-sim-arm64"] {
+        for mode in [false, true] {
+            let mut options = vec!["--emit-asm", "--target", target];
+            if target.starts_with("ios-") { options.extend(["--emit", "staticlib"]); }
+            fixture.compile(mode, &options);
+            let assembly = fs::read_to_string(fixture.0.join("main.s")).unwrap();
+            let opcode = if mode { "op=ichecked_add_to_int" } else { "op=ichecked_add" };
+            assert!(assembly.contains(opcode), "{target}, optimized={mode}: missing checked update");
+        }
+    }
+}
+
+/// Coalescing raw counters preserves the first overflow fatal before intervening output.
+#[test]
+fn test_loop_optimization_coalesced_raw_overflow_preserves_first_fatal() {
+    let fixture = coalesced_overflow_fixture(false);
+    assert_coalesced_overflow_ir(&fixture, false);
+    // Raw-slot overflow already has different on/off behavior in CheckedIntSink.
+    // Pin the existing optimized fatal, including its order relative to print().
+    fixture.compile(true, &[]);
+    for (args, expected) in [
+        (vec![], format!("before:{0}:{0};between;before:{1}:{1};", i64::MAX - 1, i64::MAX)),
+        (vec!["extra"], format!("before:{0}:{0};", i64::MAX)),
+    ] {
+        let output = run_binary_with_args(&fixture.0.join("main"), &fixture.0, &args);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains("integer overflow in arithmetic whose result is used as an int"), "{error}");
+    }
+}
+
 /// Exception paths and loop-carried values remain observable across catch boundaries.
 #[test]
 fn test_loop_optimization_exception_both_modes() {

@@ -7,6 +7,8 @@
 //! Key details:
 //! - Every latch must supply the same nonzero constant-step recurrence.
 //! - Recognition alone does not prove that a checked update cannot overflow.
+//! - I64 storage alone is insufficient: only PHP Int parameters receive induction
+//!   summaries or counter coalescing. Other I64 values retain ordinary range analysis.
 
 use crate::ir::{BlockId, Function, IrType, Op, Terminator, ValueId};
 use crate::types::PhpType;
