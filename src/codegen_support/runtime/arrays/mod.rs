@@ -75,6 +75,7 @@ mod array_set_mixed_key;
 mod array_set_refcounted;
 mod array_set_str;
 mod array_rand;
+mod mt19937;
 mod random_u32;
 mod random_uniform;
 mod random_uniform64;
@@ -344,6 +345,8 @@ pub use array_set_str::emit_array_set_str;
 pub use array_rand::emit_array_rand;
 /// Emit random array element helper.
 pub use random_u32::emit_random_u32;
+/// Emit php's Mersenne Twister engine behind `mt_srand()` and `mt_rand()`.
+pub use mt19937::{emit_mt19937, MT_MODE_MT19937, MT_MODE_PHP, MT_STATE_BYTES};
 /// Emit 32-bit random unsigned integer helper.
 pub use random_uniform::emit_random_uniform;
 pub use random_uniform64::{emit_random_u64, emit_random_uniform64};

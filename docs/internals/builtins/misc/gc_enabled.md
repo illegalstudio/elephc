@@ -2,7 +2,7 @@
 title: "gc_enabled() - internals"
 description: "Compiler internals for gc_enabled(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 618
+  order: 622
 ---
 
 ## `gc_enabled()` - internals

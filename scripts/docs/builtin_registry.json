@@ -54431,6 +54431,106 @@
   {
     "aot": {
       "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "getrandmax",
+    "description": "Show largest possible random value.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/getrandmax.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 680,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.getrandmax` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/getrandmax.rs",
+      "sig_line": null
+    },
+    "module": "random",
+    "name": "getrandmax",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": []
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "getrandmax"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "getrandmax"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "getrandmax",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
       "params": [
         {
           "by_ref": false,
@@ -91642,6 +91742,106 @@
   {
     "aot": {
       "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "mt_getrandmax",
+    "description": "Show largest possible random value.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/mt_getrandmax.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 680,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.mt_getrandmax` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/mt_getrandmax.rs",
+      "sig_line": null
+    },
+    "module": "random",
+    "name": "mt_getrandmax",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": []
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "mt_getrandmax"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "mt_getrandmax"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mt_getrandmax",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
       "params": [
         {
           "by_ref": false,
@@ -91787,6 +91987,158 @@
     },
     "since": null,
     "slug": "mt_rand",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "seed",
+          "optional": true,
+          "type": "?int"
+        },
+        {
+          "by_ref": false,
+          "default": {
+            "constant": "MT_RAND_MT19937"
+          },
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "mt_srand",
+    "description": "Seeds the Mersenne Twister Random Number Generator.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/mt_srand.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "seed",
+          "optional": true,
+          "type": "?int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 680,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.mt_srand` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/mt_srand.rs",
+      "sig_line": null
+    },
+    "module": "random",
+    "name": "mt_srand",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "writes_process",
+          "may_throw",
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "mt_srand"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "mt_srand"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "seed",
+          "optional": true,
+          "type": "?int"
+        },
+        {
+          "by_ref": false,
+          "default": "MT_RAND_MT19937",
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mt_srand",
     "sub_area": "Math"
   },
   {
@@ -120749,6 +121101,158 @@
     },
     "since": null,
     "slug": "sqrt",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "seed",
+          "optional": true,
+          "type": "?int"
+        },
+        {
+          "by_ref": false,
+          "default": {
+            "constant": "MT_RAND_MT19937"
+          },
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "srand",
+    "description": "Seed the random number generator.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/srand.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "seed",
+          "optional": true,
+          "type": "?int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 680,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.srand` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/srand.rs",
+      "sig_line": null
+    },
+    "module": "random",
+    "name": "srand",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "writes_process",
+          "may_throw",
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "srand"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "srand"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "seed",
+          "optional": true,
+          "type": "?int"
+        },
+        {
+          "by_ref": false,
+          "default": "MT_RAND_MT19937",
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "srand",
     "sub_area": "Math"
   },
   {

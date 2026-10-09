@@ -42,6 +42,7 @@ sidebar:
 | [`fdiv()`](./math/fdiv.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
 | [`floor()`](./math/floor.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`fmod()`](./math/fmod.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
+| [`getrandmax()`](./math/getrandmax.md) | `(): int` | `int` | ✓ | ✓ |
 | [`hexdec()`](./math/hexdec.md) | `(string $hex_string): mixed` | `mixed` | ✓ | - |
 | [`hypot()`](./math/hypot.md) | `(float $x, float $y): float` | `float` | ✓ | ✓ |
 | [`intdiv()`](./math/intdiv.md) | `(int $num1, int $num2): int` | `int` | ✓ | ✓ |
@@ -53,7 +54,9 @@ sidebar:
 | [`log2()`](./math/log2.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`max()`](./math/max.md) | `(mixed $value, ...$values): mixed` | `mixed` | ✓ | ✓ |
 | [`min()`](./math/min.md) | `(mixed $value, ...$values): mixed` | `mixed` | ✓ | ✓ |
+| [`mt_getrandmax()`](./math/mt_getrandmax.md) | `(): int` | `int` | ✓ | ✓ |
 | [`mt_rand()`](./math/mt_rand.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
+| [`mt_srand()`](./math/mt_srand.md) | `(?int $seed = null, int $mode = MT_RAND_MT19937): void` | `void` | ✓ | ✓ |
 | [`octdec()`](./math/octdec.md) | `(string $octal_string): mixed` | `mixed` | ✓ | - |
 | [`pi()`](./math/pi.md) | `(): float` | `float` | ✓ | ✓ |
 | [`pow()`](./math/pow.md) | `(float $num, float $exponent): float` | `float` | ✓ | ✓ |
@@ -64,5 +67,6 @@ sidebar:
 | [`sin()`](./math/sin.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`sinh()`](./math/sinh.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`sqrt()`](./math/sqrt.md) | `(float $num): float` | `float` | ✓ | ✓ |
+| [`srand()`](./math/srand.md) | `(?int $seed = null, int $mode = MT_RAND_MT19937): void` | `void` | ✓ | ✓ |
 | [`tan()`](./math/tan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`tanh()`](./math/tanh.md) | `(float $num): float` | `float` | ✓ | ✓ |

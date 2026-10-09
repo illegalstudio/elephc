@@ -2,7 +2,7 @@
 title: "mb_str_split()"
 description: "Splits a string into chunks measured in encoded characters."
 sidebar:
-  order: 873
+  order: 877
 ---
 
 ## mb_str_split()

@@ -2,7 +2,7 @@
 title: "rad2deg()"
 description: "Converts a radian value to degrees."
 sidebar:
-  order: 594
+  order: 597
 ---
 
 ## rad2deg()

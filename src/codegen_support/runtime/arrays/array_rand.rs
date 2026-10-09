@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the `__rt_array_rand`, `__rt_random_uniform` runtime helper assembly for array rand.
+//! Emits the `__rt_array_rand` runtime helper assembly for array rand.
 //! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
@@ -13,7 +13,7 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_array_rand` runtime helper.
 ///
-/// Loads the array length from the header at `[x0]`, calls `__rt_random_uniform` to
+/// Loads the array length from the header at `[x0]`, calls `__rt_mt_uniform` to
 /// sample a uniform index in the half-open range `[0, length)`, and returns the index in `x0`.
 /// On x86_64 this delegates to the platform-specific `emit_array_rand_linux_x86_64`.
 ///
@@ -38,7 +38,7 @@ pub fn emit_array_rand(emitter: &mut Emitter) {
 
     // -- get array length and generate random index --
     emitter.instruction("ldr x0, [x0]");                                        // x0 = array length
-    emitter.instruction("bl __rt_random_uniform");                              // x0 = random value in [0, length)
+    emitter.instruction("bl __rt_mt_uniform");                                  // x0 = random value in [0, length)
 
     // -- tear down stack frame and return --
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -47,7 +47,7 @@ pub fn emit_array_rand(emitter: &mut Emitter) {
 }
 
 /// x86_64/Linux-specific emitter for `__rt_array_rand`.
-/// Loads the array length from `[rdi]` into `rdi`, calls `__rt_random_uniform`, and returns
+/// Loads the array length from `[rdi]` into `rdi`, calls `__rt_mt_uniform`, and returns
 /// the sampled index in `rax`.
 fn emit_array_rand_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -55,6 +55,6 @@ fn emit_array_rand_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_rand");
 
     emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // load the source indexed-array logical length into the x86_64 random-uniform bound register
-    emitter.instruction("call __rt_random_uniform");                            // sample a random scalar index in the half-open range [0, length)
+    emitter.instruction("call __rt_mt_uniform");                                // sample a random scalar index in the half-open range [0, length)
     emitter.instruction("ret");                                                 // return the sampled scalar index in rax
 }

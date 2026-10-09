@@ -2,7 +2,7 @@
 title: "pcntl_errno()"
 description: "Returns the errno recorded by the most recent failing PCNTL operation."
 sidebar:
-  order: 648
+  order: 652
 ---
 
 ## pcntl_errno()

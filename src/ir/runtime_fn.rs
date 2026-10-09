@@ -387,6 +387,10 @@ pub enum RuntimeFnId {
     Max,
     Min,
     MtRand,
+    MtGetrandmax,
+    MtSrand,
+    Getrandmax,
+    Srand,
     Octdec,
     Pi,
     Pow,
@@ -1501,6 +1505,17 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_PROCESS.bits()
                     | crate::ir::Effects::WRITES_PROCESS.bits(),
             ),
+            // Seeding rewrites the Mersenne Twister every later `mt_rand()` reads, so a call
+            // can never be dropped or reordered; `MT_RAND_PHP` also raises a deprecation, which
+            // an error handler may turn into a throw.
+            RuntimeFnId::MtSrand | RuntimeFnId::Srand => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
+            // php's fixed `PHP_MT_RAND_MAX`.
+            RuntimeFnId::MtGetrandmax | RuntimeFnId::Getrandmax => crate::ir::Effects::PURE,
             // `mt_rand()` and `random_int()` raise a catchable `ValueError` for an inverted
             // `[min, max]` range; `rand()` silently swaps the bounds instead.
             RuntimeFnId::MtRand | RuntimeFnId::RandomInt => {
@@ -2945,6 +2960,10 @@ impl RuntimeFnId {
             RuntimeFnId::Max => "max",
             RuntimeFnId::Min => "min",
             RuntimeFnId::MtRand => "mt_rand",
+            RuntimeFnId::MtGetrandmax => "mt_getrandmax",
+            RuntimeFnId::MtSrand => "mt_srand",
+            RuntimeFnId::Getrandmax => "getrandmax",
+            RuntimeFnId::Srand => "srand",
             RuntimeFnId::Pi => "pi",
             RuntimeFnId::Pow => "pow",
             RuntimeFnId::Rad2deg => "rad2deg",

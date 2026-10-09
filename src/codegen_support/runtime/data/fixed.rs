@@ -70,6 +70,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    // php's Mersenne Twister: 624 state words, the next-word index, and the seeding mode
+    // (0 until `mt_srand()` runs, so unseeded draws come from the CSPRNG).
+    out.push_str(&comm_directive("_mt_state", super::super::arrays::MT_STATE_BYTES, target));
+    out.push_str(&comm_directive("_mt_count", 8, target));
+    out.push_str(&comm_directive("_mt_mode", 8, target));
     out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_head", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_tail", 8, target));

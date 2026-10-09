@@ -2,7 +2,7 @@
 title: "pcntl_exec() - internals"
 description: "Compiler internals for pcntl_exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 649
+  order: 653
 ---
 
 ## `pcntl_exec()` - internals
