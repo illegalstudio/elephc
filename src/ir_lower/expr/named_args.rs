@@ -16,7 +16,7 @@ pub(super) fn lower_named_args_with_signature_options(
     args: &[Expr],
     trim_trailing_defaults: bool,
     capture_values: bool,
-    capture_output_index: Option<usize>,
+    capture_output_index: Option<(usize, PhpType)>,
 ) -> Vec<crate::ir::ValueId> {
     let call_span = args
         .first()
@@ -42,6 +42,7 @@ pub(super) fn lower_named_args_with_signature_options(
             &plan,
             &assoc_spread_sources,
             capture_values,
+            capture_output_index.as_ref(),
         ) {
             return operands;
         }
@@ -53,14 +54,15 @@ pub(super) fn lower_named_args_with_signature_options(
     }
     let mut source_values = Vec::with_capacity(plan.source_args.len());
     for source_index in 0..plan.source_args.len() {
-        if let Some(output_index) = capture_output_index {
-            if let Some(source) = plan.source_values.iter().find(|source| {
-                source.source_index() == source_index && source.param_idx() == Some(output_index)
-            }) {
-                promote_captured_reference_argument(ctx, source.expr());
-            }
-        }
+        let previous = capture_output_index.as_ref().and_then(|(output_index, ty)| {
+            plan.source_values.iter().find(|source| {
+                source.source_index() == source_index && source.param_idx() == Some(*output_index)
+            }).and_then(|source| if capture_values {
+                promote_captured_reference_argument(ctx, source.expr()); None
+            } else { prepare_captured_output_argument(ctx, source.expr(), ty) })
+        });
         source_values.push(lower_planned_source_arg(ctx, sig, &plan, source_index, capture_values));
+        if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
     }
 
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
@@ -314,6 +316,7 @@ pub(super) fn lower_named_args_with_spread_plan(
     plan: &crate::types::call_args::CallArgPlan,
     assoc_spread_sources: &[bool],
     capture_values: bool,
+    capture_output: Option<&(usize, PhpType)>,
 ) -> Option<Vec<crate::ir::ValueId>> {
     lower_named_args_with_spread_plan_impl(
         ctx,
@@ -321,6 +324,7 @@ pub(super) fn lower_named_args_with_spread_plan(
         plan,
         assoc_spread_sources,
         capture_values,
+        capture_output,
         &mut |_, _, _| None,
     )
 }
@@ -337,7 +341,7 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
     assoc_spread_sources: &[bool],
     hinted: &mut dyn FnMut(&mut LoweringContext<'_, '_>, usize, &Expr) -> Option<crate::ir::ValueId>,
 ) -> Option<Vec<crate::ir::ValueId>> {
-    lower_named_args_with_spread_plan_impl(ctx, sig, plan, assoc_spread_sources, false, hinted)
+    lower_named_args_with_spread_plan_impl(ctx, sig, plan, assoc_spread_sources, false, None, hinted)
 }
 
 /// Applies optional per-parameter hints while preserving caller-selected value capture.
@@ -347,6 +351,7 @@ fn lower_named_args_with_spread_plan_impl(
     plan: &crate::types::call_args::CallArgPlan,
     assoc_spread_sources: &[bool],
     capture_values: bool,
+    capture_output: Option<&(usize, PhpType)>,
     hinted: &mut dyn FnMut(&mut LoweringContext<'_, '_>, usize, &Expr) -> Option<crate::ir::ValueId>,
 ) -> Option<Vec<crate::ir::ValueId>> {
     if assoc_spread_sources.iter().any(|is_assoc| *is_assoc) {
@@ -382,6 +387,10 @@ fn lower_named_args_with_spread_plan_impl(
             .iter()
             .find(|source| source.source_index() == source_index)
             .and_then(|source| Some((source.param_idx()?, source.expr())));
+        let previous = capture_output.and_then(|(output, ty)| {
+            planned.filter(|(index, _)| index == output && !capture_values)
+                .and_then(|(_, expr)| prepare_captured_output_argument(ctx, expr, ty))
+        });
         let value = match planned {
             Some((param_idx, expr)) => hinted(ctx, param_idx, expr)
                 .map(|value| {
@@ -397,6 +406,7 @@ fn lower_named_args_with_spread_plan_impl(
                 .unwrap_or_else(|| lower_planned_source_arg(ctx, sig, plan, source_index, capture_values)),
             None => lower_planned_source_arg(ctx, sig, plan, source_index, capture_values),
         };
+        if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
         source_values[source_index] = Some(value);
     }
     if single_prefix_spread {

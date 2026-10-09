@@ -10,6 +10,97 @@
 
 use crate::support::*;
 
+/// A subject aliased with its output is captured as a string before output storage widens.
+#[test]
+fn preg_match_all_second_review_subject_output_alias() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$subject = 'ab';
+echo preg_match_all('/[a-z]/', $subject, $subject), ':', count($subject[0]), ':', $subject[0][1];
+unset($subject);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:2:b");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Single-match output widening must not change the earlier aliased subject's lowering type.
+#[test]
+fn preg_match_all_second_review_single_subject_alias() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$subject = 'ab';
+echo preg_match('/([a-z])/', $subject, $subject), ':', $subject[0], ':', $subject[1];
+unset($subject);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:a:a");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Aliased flags are converted from their pre-call scalar before captures replace the output.
+#[test]
+fn preg_match_all_second_review_flags_output_alias() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$flags = PREG_SET_ORDER;
+echo preg_match_all('/([a-z])/', 'ab', $flags, $flags), ':', $flags[1][1];
+unset($flags);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:b");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Named aliases keep their pre-call value whether matches appears before or after input.
+#[test]
+fn preg_match_all_second_review_named_output_aliases() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$subject = 'ab';
+echo preg_match_all(matches: $subject, subject: $subject, pattern: '/([a-z])/'), ':', $subject[1][1], '|';
+$second = 'ab';
+echo preg_match_all(subject: $second, pattern: '/([a-z])/', matches: $second), ':', $second[1][1], '|';
+$flags = PREG_SET_ORDER;
+echo preg_match_all(matches: $flags, flags: $flags, subject: 'ab', pattern: '/([a-z])/'), ':', $flags[1][1], '|';
+$spread = 'ab';
+echo preg_match_all(...['/[a-z]/', $spread], matches: $spread), ':', $spread[0][1];
+unset($subject, $second, $spread, $flags);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:b|2:b|2:b|2:b");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Argument side effects still run once and in source order around output preparation.
+#[test]
+fn preg_match_all_second_review_source_order() {
+    let boxed = compile_and_run_with_heap_debug(r#"<?php
+function input(string $value): string { echo 'S'; return $value; }
+function inspect(mixed $value): void { echo input((string) $value); }
+inspect('ab');
+"#);
+    assert!(boxed.success, "{}", boxed.stderr);
+    assert_eq!(boxed.stdout, "Sab");
+    assert!(boxed.stderr.contains("HEAP DEBUG: leak summary: clean"), "boxed control: {}", boxed.stderr);
+    let control = compile_and_run_with_heap_debug(r#"<?php
+function input(string $value): string { echo 'S'; return $value; }
+function flags(int $value): int { echo 'F'; return $value; }
+$subject = 'ab';
+echo preg_match_all('/([a-z])/', input($subject), $matches, flags(PREG_SET_ORDER)), ':', $matches[1][1];
+unset($subject, $matches);
+"#);
+    assert!(control.success, "{}", control.stderr);
+    assert_eq!(control.stdout, "SF2:b");
+    assert!(control.stderr.contains("HEAP DEBUG: leak summary: clean"), "control: {}", control.stderr);
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function input(string $value): string { echo 'S'; return $value; }
+function flags(int $value): int { echo 'F'; return $value; }
+$subject = 'ab';
+echo preg_match_all('/([a-z])/', input($subject), $subject, flags(PREG_SET_ORDER)), ':', $subject[1][1];
+unset($subject);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "SF2:b");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Named output arguments update matches rather than the argument at source position two.
 #[test]
 fn preg_match_all_oct9_reordered_named_matches() {
