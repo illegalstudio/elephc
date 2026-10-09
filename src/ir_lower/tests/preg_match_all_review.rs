@@ -16,6 +16,10 @@ function collect(array &$matches): int {
     return preg_match_all('/a|(?<=a)b/', 'ab', $matches, PREG_OFFSET_CAPTURE);
 }
 $matches = []; echo collect($matches);
+$previous = 42;
+$flags = PREG_SET_ORDER;
+echo preg_match_all(pattern: '/(a)/', flags: $flags, subject: 'a', matches: $previous), $previous[0][1], $flags + 1;
+echo preg_match(matches: $single, pattern: '/(a)/', subject: 'a'), $single[1];
 "#, std::path::Path::new("main.php"), std::path::Path::new("."), target);
     let function = module.functions.iter().find(|function| function.name == "collect").unwrap();
     assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::LoadRefCell));

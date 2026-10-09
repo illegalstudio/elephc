@@ -79,12 +79,18 @@ pub(in crate::interpreter) fn eval_preg_match_all_capture_result(
     flags: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
+    let flags = eval_preg_match_all_flags(flags, values)?;
+    if flags & (EVAL_PREG_PATTERN_ORDER | EVAL_PREG_SET_ORDER)
+        == (EVAL_PREG_PATTERN_ORDER | EVAL_PREG_SET_ORDER)
+    {
+        // Match AOT's fail-closed result for mutually exclusive order modes.
+        return Ok((values.int(0)?, values.array_new(0)?));
+    }
     let regex = eval_preg_regex(pattern, values)?;
     let capture_count = regex.captures_len();
     let subject = values.string_bytes(subject)?;
     let captures: Vec<Captures<'_>> = regex.captures_iter(&subject).collect();
     let count = values.int(i64::try_from(captures.len()).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-    let flags = eval_preg_match_all_flags(flags, values)?;
     let matches = if flags & EVAL_PREG_SET_ORDER != 0 {
         eval_preg_match_all_set_order_array(&subject, &captures, capture_count, flags, values)?
     } else {

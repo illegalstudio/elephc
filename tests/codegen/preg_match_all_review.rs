@@ -10,6 +10,35 @@
 
 use crate::support::*;
 
+/// Named output arguments update matches rather than the argument at source position two.
+#[test]
+fn preg_match_all_oct9_reordered_named_matches() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$flags = PREG_SET_ORDER;
+echo preg_match_all(pattern: '/([a-z])/', subject: 'ab', flags: $flags, matches: $all),
+    ':', $all[1][1], ':', $flags + 1, '|';
+$previous = 42;
+echo preg_match_all(pattern: '/([a-z])/', flags: $flags, subject: 'ab', matches: $previous),
+    ':', $previous[0][1], ':', $flags + 1, '|';
+echo preg_match(matches: $single, pattern: '/(a)/', subject: 'a'), ':', $single[1];
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2:b:3|2:a:3|1:a");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Conflicting order flags fail closed without a capture matrix on both execution routes.
+#[test]
+fn preg_match_all_oct9_conflicting_eval_order() {
+    let out = compile_and_run_with_regex(r#"<?php
+echo preg_match_all('/(a)/', 'a', $native, PREG_PATTERN_ORDER | PREG_SET_ORDER), ':', count($native), '|';
+$source = 'echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER), ":", count($matches);'
+    . ' // ' . $argc;
+eval($source);
+"#);
+    assert_eq!(out, "0:0|0:0");
+}
+
 /// Keeps the original subject visible for later alternatives in both count and capture modes.
 #[test]
 fn preg_match_all_review_retains_prefix_context() {

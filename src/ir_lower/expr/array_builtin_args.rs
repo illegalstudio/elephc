@@ -270,7 +270,11 @@ fn lower_planned_builtin_call_args(
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
-    let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
+    let output_locals = prepare_write_only_output_locals(ctx, &canonical, sig, args);
+    let capture_regex_output = (canonical == "preg_match" || canonical == "preg_match_all")
+        && output_locals.iter().any(|(name, _)| {
+            ctx.local_slots.get(name).is_none_or(|slot| !ctx.slot_is_initialized(*slot))
+        });
     if matches!(argument_lowering,
         crate::builtins::semantics::BuiltinArgumentLowering::Standard
         | crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
@@ -293,7 +297,7 @@ fn lower_planned_builtin_call_args(
             if let Some(operands) = lower_positional_spread_args_with_signature(
                 ctx, sig, args, Some(name), false,
             ) {
-                for (name, ty) in pcntl_outputs {
+                for (name, ty) in output_locals {
                     ctx.set_local_logical_type(&name, ty);
                 }
                 return operands;
@@ -332,6 +336,15 @@ fn lower_planned_builtin_call_args(
                 && !args.iter().any(is_spread_arg) =>
         {
             lower_preg_replace_callback_args(ctx, sig, args)
+        }
+        crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex
+            if capture_regex_output =>
+        {
+            // Publish an owner at the output's source-order evaluation point, not
+            // while preparing storage before earlier arguments have run.
+            lower_args_with_signature_options_for_capture(
+                ctx, sig, args, true, false, Some(2),
+            )
         }
         crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex
             if !crate::types::call_args::has_named_args(args)
@@ -387,14 +400,17 @@ fn lower_planned_builtin_call_args(
         }
         _ => lower_args_with_signature(ctx, sig, args),
     };
-    for (name, ty) in pcntl_outputs {
+    for (name, ty) in output_locals {
+        let ty = if capture_regex_output && ctx.is_ref_bound_local(&name) {
+            PhpType::Mixed
+        } else { ty };
         ctx.set_local_logical_type(&name, ty);
     }
     lowered
 }
 
-/// Widens PCNTL output storage before its write-only by-reference loads are lowered.
-fn prepare_pcntl_output_locals(
+/// Widens regex and PCNTL outputs before their write-only by-reference loads are lowered.
+fn prepare_write_only_output_locals(
     ctx: &mut LoweringContext<'_, '_>,
     canonical: &str,
     sig: Option<&FunctionSig>,
@@ -403,7 +419,7 @@ fn prepare_pcntl_output_locals(
     let mut outputs = Vec::new();
     if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
         for (index, arg) in args.iter().enumerate() {
-            if let Some(output) = prepare_pcntl_output_local(ctx, canonical, index, arg) {
+            if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, arg) {
                 outputs.push(output);
             }
         }
@@ -432,27 +448,43 @@ fn prepare_pcntl_output_locals(
         let crate::types::call_args::PlannedRegularArg::Source { expr, .. } = arg else {
             continue;
         };
-        if let Some(output) = prepare_pcntl_output_local(ctx, canonical, index, expr) {
+        if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, expr) {
             outputs.push(output);
         }
     }
     outputs
 }
 
-/// Widens one direct PCNTL output slot without reinterpreting its pre-call value.
-fn prepare_pcntl_output_local(
+/// Widens one output slot without reinterpreting its pre-call value.
+fn prepare_write_only_output_local(
     ctx: &mut LoweringContext<'_, '_>,
     canonical: &str,
     parameter_index: usize,
     value: &Expr,
 ) -> Option<(String, PhpType)> {
-    let ty = pcntl_output_type(canonical, parameter_index)?;
+    let ty = match (canonical, parameter_index) {
+        ("preg_match", 2) => PhpType::Array(Box::new(PhpType::Str)),
+        ("preg_match_all", 2) => PhpType::Array(Box::new(PhpType::Mixed)),
+        _ => pcntl_output_type(canonical, parameter_index)?,
+    };
     let ExprKind::Variable(name) = &value.kind else {
         return None;
     };
+    if (canonical == "preg_match" || canonical == "preg_match_all")
+        && matches!(ctx.local_kinds.get(name),
+            Some(crate::ir::LocalKind::StaticLocal | crate::ir::LocalKind::GlobalAlias))
+    {
+        // The regex backend diagnoses these unsupported output destinations itself.
+        return None;
+    }
     if ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
         ctx.set_local_type(name, PhpType::Mixed);
     }
+    // Regex output can replace a boxed PHP array or reference parameter. Keep that
+    // runtime-shaped view instead of narrowing its boxed storage to a concrete list.
+    let ty = if canonical == "preg_match" || canonical == "preg_match_all" {
+        ctx.local_type(name)
+    } else { ty };
     Some((name.clone(), ty))
 }
 

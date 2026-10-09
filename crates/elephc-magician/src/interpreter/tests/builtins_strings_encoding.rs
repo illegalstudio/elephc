@@ -327,6 +327,22 @@ return preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);"#,
     assert_eq!(values.get(result), FakeValue::Int(1));
 }
 
+/// Conflicting preg order bits fail closed instead of producing a set-order matrix.
+#[test]
+fn execute_program_preg_oct9_conflicting_order() {
+    let program = parse_fragment(br#"
+$matches = ["old"];
+echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER), ":", count($matches), "|";
+echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_OFFSET_CAPTURE), ":", count($matches), "|";
+return preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+"#).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.output, "0:0|0:0|");
+    assert_eq!(values.get(result), FakeValue::Int(0));
+}
+
 /// Verifies eval HTML entity builtins encode, decode, and dispatch as callables.
 #[test]
 fn execute_program_dispatches_html_entity_builtins() {
