@@ -26,6 +26,7 @@ mod array_clone_shallow;
 mod array_diff;
 mod array_diff_refcounted;
 mod array_diff_key;
+mod array_set_op_boxed;
 mod array_edge_key;
 mod array_ensure_unique;
 mod array_take_boxed;
@@ -112,6 +113,7 @@ mod array_walk_boxed;
 mod array_walk_recursive;
 mod asort;
 mod assoc_diff_intersect;
+mod hash_value_diff_intersect;
 mod decref_any;
 mod decref_array;
 mod decref_hash;
@@ -242,6 +244,8 @@ pub use array_diff::emit_array_diff;
 pub use array_diff_refcounted::emit_array_diff_refcounted;
 /// Emit refcounted array difference helper.
 pub use array_diff_key::emit_array_diff_key;
+/// Emit the by-value set-operation scan over any array layout and element type.
+pub use array_set_op_boxed::{emit_array_set_op_boxed, MODE_DIFF, MODE_INTERSECT, MODE_UNIQUE};
 /// Emit array difference by key helper.
 pub use array_edge_key::emit_array_edge_key;
 /// Emit array first/last key helper (array_key_first / array_key_last).
@@ -415,6 +419,7 @@ pub use array_walk_recursive::emit_array_walk_recursive;
 pub use asort::emit_asort;
 /// Emit associative sort helper.
 pub use assoc_diff_intersect::emit_assoc_diff_intersect;
+pub use hash_value_diff_intersect::emit_hash_value_diff_intersect;
 /// Emit associative diff/intersect helper (array_diff_assoc / array_intersect_assoc).
 pub use decref_any::emit_decref_any;
 /// Emit generic reference decrement helper.

@@ -9,9 +9,10 @@
 //!   param plus a variadic `arrays`). The legacy CHECK arm required exactly 2 arguments,
 //!   so `min_args: 2, max_args: 2` reproduce that enforcement in `check_arity` only;
 //!   `function_sig` and the parity gate keep the variadic shape from the golden.
-//! - `check` reproduces the legacy rule: the first argument must be an indexed or
-//!   associative array, and the result preserves that first-operand type. A check hook
-//!   is required because the return type depends on the inferred first-argument type.
+//! - `check` requires the first argument to be an indexed or associative array. PHP keeps
+//!   the surviving keys, so an indexed first operand yields an integer-keyed hash (see
+//!   `set_result`, #1645); a check hook is required because the return type depends on the
+//!   inferred first-argument type.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -32,11 +33,14 @@ builtin! {
 /// argument once for side effects. The result preserves the first-operand array shape.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return Err(CompileError::new(
-            cx.span,
-            &format!("{}() first argument must be array", cx.name),
-        ));
+    let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    for (ty, position) in [(&ty1, "first"), (&ty2, "second")] {
+        if !super::set_result::value_set_operand_may_hold_array(ty) {
+            return Err(CompileError::new(
+                cx.span,
+                &format!("{}() {position} argument must be array", cx.name),
+            ));
+        }
     }
-    Ok(ty1)
+    Ok(super::set_result::value_set_result_type(ty1))
 }

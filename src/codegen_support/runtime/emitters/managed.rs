@@ -144,6 +144,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_splice_str(emitter);
     arrays::emit_array_splice_insert_str(emitter);
     arrays::emit_array_diff_key(emitter);
+    arrays::emit_array_set_op_boxed(emitter);
     arrays::emit_array_intersect_key(emitter);
     arrays::emit_array_to_hash(emitter);
     arrays::emit_array_to_hash_reverse(emitter);
@@ -152,6 +153,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_replace(emitter);
     arrays::emit_array_replace_recursive(emitter);
     arrays::emit_assoc_diff_intersect(emitter);
+    arrays::emit_hash_value_diff_intersect(emitter);
     arrays::emit_amr_box_value(emitter);
     arrays::emit_array_merge_recursive(emitter);
     arrays::emit_array_multisort(emitter);

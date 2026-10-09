@@ -278,10 +278,8 @@ echo $padded[1][0] . "|" . $padded[2][0];
 ///
 /// The fixture used to add a THIRD, distinct inner array and assert two survivors. Reference
 /// PHP answers ONE there: `array_unique()` compares elements by their string rendering, and
-/// every array renders as `"Array"`, so distinct inner arrays collapse. elephc compares inner
-/// arrays by pointer instead — a separate divergence from this test's subject, which is the
-/// GC alias. Two copies of the SAME array are deduplicated identically by both, so the
-/// fixture no longer depends on the comparison rule.
+/// every array renders as `"Array"`, so distinct inner arrays collapse. Two copies of the SAME
+/// array keep the fixture on this test's subject, the GC alias, whatever the comparison rule.
 #[test]
 fn test_gc_array_unique_borrowed_array_survives_unset() {
     let out = compile_and_run(
@@ -316,15 +314,18 @@ echo $removed[0][0];
 }
 
 /// Verifies that an inner array in array_diff output survives unset of the original.
-/// Fixture: left contains inner array and another element, right contains only the other element, diff, unset left and inner, read result.
+/// Fixture: left contains inner array and a string, right contains only the string, diff, unset left and inner, read result.
 /// Regression: ensures array_diff output preserves GC alias for nested inner arrays.
+///
+/// php compares by string rendering and every array renders as `"Array"`, so the excluded
+/// element is a string: an excluded `[8]` would exclude the inner array too.
 #[test]
 fn test_gc_array_diff_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
 $inner = [6];
-$left = [$inner, [8]];
-$right = [[8]];
+$left = [$inner, "eight"];
+$right = ["eight"];
 $diff = array_diff($left, $right);
 unset($left);
 unset($inner);
@@ -335,23 +336,26 @@ echo $diff[0][0];
 }
 
 /// Verifies that an inner array in array_intersect output survives unset of the originals.
-/// Fixture: left contains inner array and another element, right contains inner array, intersect, unset all, read result.
+/// Fixture: left contains inner array and a string, right contains inner array, intersect, unset all, read result.
 /// Regression: ensures array_intersect output preserves GC alias for nested inner arrays.
+///
+/// php compares by string rendering and every array renders as `"Array"`, so the dropped
+/// element is a string: a dropped `[1]` would match the inner array and be kept at key 0.
 #[test]
 fn test_gc_array_intersect_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
 $inner = [9];
-$left = [[1], $inner];
+$left = ["one", $inner];
 $right = [$inner];
 $both = array_intersect($left, $right);
 unset($left);
 unset($right);
 unset($inner);
-echo $both[0][0];
+echo count($both), "|", $both[1][0];
 "#,
     );
-    assert_eq!(out, "9");
+    assert_eq!(out, "1|9");
 }
 
 /// Verifies that an inner array in array_filter output survives unset of the original.

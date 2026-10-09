@@ -88,32 +88,6 @@ pub(super) fn require_set_op_result_type(
     }
 }
 
-/// Returns the hash operand type accepted by key set-operation helpers.
-pub(super) fn assoc_array_key_set_operand_type(ty: PhpType, name: &str, position: &str) -> Result<PhpType> {
-    match ty.codegen_repr() {
-        PhpType::AssocArray { key, value } => Ok(PhpType::AssocArray { key, value }),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} {} argument PHP type {:?}",
-            name, position, other
-        ))),
-    }
-}
-
-/// Verifies a key set-operation result preserves the first operand's hash metadata.
-pub(super) fn require_assoc_array_key_set_result_type(
-    name: &str,
-    first_ty: &PhpType,
-    result_ty: &PhpType,
-) -> Result<()> {
-    if result_ty == first_ty {
-        return Ok(());
-    }
-    Err(CodegenIrError::unsupported(format!(
-        "{} result PHP type {:?} for first argument PHP type {:?}",
-        name, result_ty, first_ty
-    )))
-}
-
 /// Verifies that a `range()` endpoint can be passed to the integer runtime helper.
 ///
 /// `Mixed`/`Union` endpoints are accepted here and unboxed to a plain integer by `lower_range`
