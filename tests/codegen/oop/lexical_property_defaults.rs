@@ -10,6 +10,21 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Class initialization prioritizes missing parent constants without changing per-slot reflection.
+#[test]
+fn test_property_default_oct9_mixed_parent_errors() {
+    let out = crate::support::compile_and_run(r#"<?php
+trait Names { public string $name = parent::class; }
+class Probe { use Names; public int $number = parent::A; }
+try { new Probe(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+try { echo (new ReflectionProperty(Probe::class, 'name'))->getDefaultValue(); }
+catch (Error $e) { echo $e->getMessage(), '|'; }
+try { echo (new ReflectionProperty(Probe::class, 'number'))->getDefaultValue(); }
+catch (Error $e) { echo $e->getMessage(), '|'; }
+"#);
+    assert_eq!(out, "Cannot access \"parent\" when current class scope has no parent|Cannot use \"parent\" when current class scope has no parent|Cannot access \"parent\" when current class scope has no parent|");
+}
+
 /// Instantiated generic constant receivers survive method and reflected parameter defaults.
 #[test]
 fn test_property_default_generic_receiver_keeps_type_arguments() {

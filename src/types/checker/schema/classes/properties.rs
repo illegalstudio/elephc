@@ -52,7 +52,13 @@ pub(super) fn apply_properties(
                             .is_some_and(|names| names.contains(&prop.name)))) =>
             {
                 // Class initialization and individual default reflection have distinct boundaries.
-                state.deferred_property_default_error.get_or_insert_with(|| error.message.clone());
+                // A missing parent constant invalidates initialization before a trait's
+                // missing parent class name, regardless of flattened property order.
+                if state.deferred_property_default_error.is_none()
+                    || error.message == "Cannot access \"parent\" when current class scope has no parent"
+                {
+                    state.deferred_property_default_error = Some(error.message.clone());
+                }
                 Some(super::constants::deferred_default_error(error.message, error.span))
             }
             Err(error) => return Err(error),

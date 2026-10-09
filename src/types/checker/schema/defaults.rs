@@ -93,26 +93,30 @@ pub(crate) fn validate_deferred_declaration_defaults(
     errors
 }
 
-/// Missing-parent class names in directly declared methods are compile errors, not lazy defaults.
+/// Missing-parent class names in direct class-like methods are compile errors, not lazy defaults.
 fn validate_direct_class_name_defaults(program: &Program, errors: &mut Vec<CompileError>) {
     for statement in program {
-        match &statement.kind {
-            StmtKind::ClassDecl { name, extends, methods, .. } => {
-                for method in methods {
-                    for (_, _, default, _) in &method.params {
-                        let Some(default) = default else { continue };
-                        if let Err(error) = super::classes::normalize_property_default_in_scope(
-                            default, name, extends.as_deref(),
-                        ) {
-                            if error.message == "Cannot use \"parent\" when current class scope has no parent" {
-                                errors.push(error);
-                            }
-                        }
+        let (name, parent, methods) = match &statement.kind {
+            StmtKind::ClassDecl { name, extends, methods, .. } => (name, extends.as_deref(), methods),
+            StmtKind::InterfaceDecl { name, methods, .. }
+            | StmtKind::EnumDecl { name, methods, .. } => (name, None, methods),
+            StmtKind::NamespaceBlock { body, .. } => {
+                validate_direct_class_name_defaults(body, errors);
+                continue;
+            }
+            _ => continue,
+        };
+        for method in methods {
+            for (_, _, default, _) in &method.params {
+                let Some(default) = default else { continue };
+                if let Err(error) = super::classes::normalize_property_default_in_scope(
+                    default, name, parent,
+                ) {
+                    if error.message == "Cannot use \"parent\" when current class scope has no parent" {
+                        errors.push(error);
                     }
                 }
             }
-            StmtKind::NamespaceBlock { body, .. } => validate_direct_class_name_defaults(body, errors),
-            _ => {}
         }
     }
 }

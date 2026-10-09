@@ -40,6 +40,9 @@ eval($source);
     let module = super::lower_source_at_for_target(source, Path::new("main.php"), Path::new("."),
         Target::parse(target_name).unwrap());
     let consumer = &module.class_infos["Consumer"];
+    assert_eq!(consumer.deferred_property_default_error.as_deref(),
+        Some("Cannot access \"parent\" when current class scope has no parent"),
+        "{target_name}: initialization must prioritize the local constant error");
     let slot = consumer.visible_property_index("bad").unwrap();
     assert!(matches!(consumer.defaults[slot].as_ref().unwrap().kind,
         crate::parser::ast::ExprKind::Throw(_)), "{target_name}");

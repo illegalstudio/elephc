@@ -10,6 +10,19 @@
 
 use super::*;
 
+/// Direct interface and enum defaults cannot bind a nonexistent parent class.
+#[test]
+fn test_property_default_oct9_classlike_method_parent() {
+    for source in [
+        "<?php interface Probe { public function value($name = parent::class); }",
+        "<?php interface ParentContract {} interface Probe extends ParentContract { public function value($name = [parent::class]); }",
+        "<?php enum Probe { case Item; public function value($name = parent::class) {} }",
+        "<?php namespace Named { enum Probe { case Item; public static function value($name = [parent::class]) {} } }",
+    ] {
+        expect_error(source, "Cannot use \"parent\" when current class scope has no parent");
+    }
+}
+
 /// An unused trait may retain parent receivers until a consuming class provides its scope.
 #[test]
 fn test_property_default_scope_unused_trait_accepts_relative_receivers() {
