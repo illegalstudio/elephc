@@ -10,6 +10,35 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// False union receivers throw before readonly initialization or setter permission checks.
+#[test]
+fn test_readonly_oct9_false_receiver_error_precedence() {
+    for setter in ["", "public(set)"] {
+        let source = format!(r#"<?php
+class Box {{ public {setter} readonly int $id; }}
+function receiver(bool $found): Box|false {{ if ($found) {{ return new Box(); }} return false; }}
+function value(): int {{ echo 'rhs|'; return 9; }}
+$box = receiver($argc > 100);
+try {{ $box->id = value(); echo 'bad'; }}
+catch (Error $error) {{ echo $error->getMessage(); }}
+"#);
+        verify(&source, "rhs|Attempt to assign property \"id\" on false");
+    }
+}
+
+/// Rejecting a non-object receiver retires a fresh refcounted RHS before the catch.
+#[test]
+fn test_readonly_oct9_false_receiver_rhs_ownership() {
+    verify(r#"<?php
+class Box { public public(set) readonly array $id; }
+function receiver(bool $found): Box|false { if ($found) { return new Box(); } return false; }
+function value(): array { echo 'rhs|'; return [str_repeat('x', 24)]; }
+$box = receiver($argc > 100);
+try { $box->id = value(); echo 'bad'; }
+catch (Error $error) { echo $error->getMessage(); }
+"#, "rhs|Attempt to assign property \"id\" on false");
+}
+
 /// Checks observable output and balanced heap ownership for one readonly fixture.
 fn verify(source: &str, expected: &str) {
     let out = compile_and_run_with_heap_debug(source);

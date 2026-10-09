@@ -66,6 +66,10 @@ echo count($properties);
     let overwrite = module.functions.iter().find(|function| function.name == "overwrite").unwrap();
     assert!(overwrite.blocks.iter().any(|block| matches!(block.terminator,
         Some(Terminator::Throw { .. }))), "{target}: direct readonly writes remain catchable");
+    let union = module.functions.iter().find(|function| function.name == "initializeUnion").unwrap();
+    assert!(union.instructions.iter().any(|inst| inst.op == Op::TypePredicate
+        && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object))),
+        "{target}: non-object receivers are rejected before inspecting readonly state");
     for function in [
         module.functions.iter().find(|function| function.name == "initializePublic").unwrap(),
         module.functions.iter().find(|function| function.name == "initializeUnion").unwrap(),

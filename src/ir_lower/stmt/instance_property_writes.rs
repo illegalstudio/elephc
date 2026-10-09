@@ -42,6 +42,9 @@ pub(super) fn lower_property_assign(
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
     if let Some((overwrite_message, initialization_error)) = readonly_write {
+        super::readonly_receiver_guard::guard_readonly_write_receiver(
+            ctx, object, lowered_value, property, span,
+        );
         let data = ctx.intern_string(property);
         let initialized = ctx.emit_value(Op::PropInitialized, vec![object.value],
             Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
@@ -79,7 +82,7 @@ pub(super) fn lower_property_assign(
 }
 
 /// Releases independent evaluated operands before a readonly write throws its catchable Error.
-fn lower_readonly_write_error(
+pub(super) fn lower_readonly_write_error(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, value: LoweredValue,
     message: &str, span: Span,
 ) {
