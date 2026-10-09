@@ -127,6 +127,45 @@ consume();
     assert_clean(out, "2\n");
 }
 
+/// A by-reference loop over a by-value call result must not free the caller's shared array.
+///
+/// The `mixed` cell the call returns holds one reference to the array; converting the unboxed
+/// payload without acquiring its own reference consumed that one, and releasing the cell then
+/// freed an array the caller still held (issue #1790). Heap debug turns the resulting double free
+/// into an invalid-free report rather than silent corruption.
+#[test]
+fn by_ref_foreach_over_by_value_call_result_keeps_the_caller_array_alive() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function id($x) { return $x; }
+$array = ['a', 'b', 'c'];
+foreach (id($array) as &$v) {
+    $v .= 'q';
+}
+unset($v);
+echo implode(',', $array), "\n";
+"#,
+    );
+    assert_clean(out, "a,b,c\n");
+}
+
+/// The associative form of the same conversion must stay balanced too.
+#[test]
+fn by_ref_foreach_over_by_value_assoc_call_result_keeps_the_caller_array_alive() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function id($x) { return $x; }
+$array = ['k' => 'v', 'j' => 'w'];
+foreach (id($array) as &$v) {
+    $v .= 'q';
+}
+unset($v);
+echo $array['k'], "|", $array['j'], "\n";
+"#,
+    );
+    assert_clean(out, "v|w\n");
+}
+
 /// Type-changing writes through map references persist as boxed values on later reads.
 #[test]
 fn associative_source_readback_uses_runtime_value_type_after_foreach_write() {

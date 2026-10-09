@@ -174,6 +174,7 @@ use merge_temps::*;
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
+pub(in crate::ir_lower) use callable_resolution::call_returns_by_reference;
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, retire_owned_call_operand, root_owned_call_operand, unpin_in_flight_owners,
 };

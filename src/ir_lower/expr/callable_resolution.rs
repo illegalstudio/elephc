@@ -716,6 +716,89 @@ pub(super) fn call_signature(
     builtin_call_signature(name)
 }
 
+/// Returns true when a call expression's selected callee returns by reference.
+///
+/// Mirrors the call kinds `lower_ref_assign` accepts (function, method, static method, closure and
+/// expression call), so a by-reference `foreach` source can adopt the callee's cell for every one
+/// of them instead of only a direct function call. The receiver type is resolved SYNTACTICALLY —
+/// no expression is lowered — so this is safe to ask before the source itself is lowered.
+pub(in crate::ir_lower) fn call_returns_by_reference(
+    ctx: &LoweringContext<'_, '_>,
+    source: &Expr,
+) -> bool {
+    match &source.kind {
+        ExprKind::FunctionCall { name, .. } => ctx
+            .functions
+            .get(name.as_str())
+            .is_some_and(|signature| signature.by_ref_return),
+        ExprKind::MethodCall { object, method, .. } => {
+            let receiver_ty = match &object.kind {
+                ExprKind::Variable(name) => ctx.local_type(name),
+                _ => infer_expr_type_syntactic(object),
+            };
+            // Only a concretely-typed receiver selects the direct method lowering that can hand
+            // back the callee's reference cell; a dynamic receiver goes through the descriptor
+            // invoker, which boxes its result.
+            matches!(receiver_ty.codegen_repr(), PhpType::Object(_))
+                && method_signature_for_receiver_type(ctx, &receiver_ty, method)
+                    .is_some_and(|signature| signature.by_ref_return)
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_implementation_signature(ctx, receiver, method)
+            .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
+            .is_some_and(|signature| signature.by_ref_return),
+        ExprKind::ClosureCall { var, .. } => ctx
+            .static_callable_local(var)
+            .is_some_and(|target| static_callable_binding_returns_by_reference(ctx, &target)),
+        ExprKind::ExprCall { callee, .. } => match &callee.kind {
+            // An immediately-invoked closure literal is directly callable only while it captures
+            // nothing by reference; a by-reference capture routes through the descriptor invoker,
+            // which boxes its result and cannot transfer a cell.
+            ExprKind::Closure {
+                by_ref_return,
+                capture_refs,
+                ..
+            } => *by_ref_return && capture_refs.is_empty(),
+            ExprKind::Variable(name) => ctx
+                .static_callable_local(name)
+                .is_some_and(|target| static_callable_binding_returns_by_reference(ctx, &target)),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Returns true when a directly-callable static callable binding transfers a reference cell.
+///
+/// A binding that lowers through the descriptor invoker (`static_callable_call_lowers_directly`
+/// is false) boxes its result, so it cannot satisfy a reference assignment and must stay on the
+/// ordinary by-value path rather than reach `lower_ref_assign_call`'s refusal.
+fn static_callable_binding_returns_by_reference(
+    ctx: &LoweringContext<'_, '_>,
+    target: &StaticCallableBinding,
+) -> bool {
+    if !static_callable_call_lowers_directly(ctx, target) {
+        return false;
+    }
+    match target {
+        StaticCallableBinding::UserFunction(name) => ctx
+            .functions
+            .get(name)
+            .is_some_and(|signature| signature.by_ref_return),
+        StaticCallableBinding::Closure { signature, .. } => signature.by_ref_return,
+        StaticCallableBinding::InstanceMethod { signature, .. } => signature.by_ref_return,
+        StaticCallableBinding::StaticMethod { receiver, method } => {
+            static_method_implementation_signature(ctx, receiver, method)
+                .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
+                .is_some_and(|signature| signature.by_ref_return)
+        }
+        StaticCallableBinding::ExternFunction(_)
+        | StaticCallableBinding::Builtin(_)
+        | StaticCallableBinding::StaticMethodDescriptor { .. } => false,
+    }
+}
+
 /// Returns whether the active source profile must prefer an elephc extension over a shadow.
 pub(super) fn source_prefers_extension_builtin(name: &str) -> bool {
     !crate::strict_php::is_enabled()
