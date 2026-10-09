@@ -23,7 +23,9 @@ pub(super) fn lower_nested_array_assign(
     {
         let mut snapshots = Vec::new();
         let (read, write) = snapshot_nested_update_keys(ctx, target, &mut snapshots);
-        if nested_static_root_is_boxed(ctx, target) {
+        if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
+            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), value, value.span);
+        } else if nested_static_root_is_boxed(ctx, target) {
             lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), value, value.span);
         } else {
             let mut value = value.clone();
@@ -43,6 +45,34 @@ pub(super) fn lower_nested_array_assign(
         return;
     }
     lower_nested_array_assign_inner(ctx, target, value, span, false);
+}
+
+/// Gives a concrete mixed-element root the existing relocating local writeback protocol.
+fn bind_concrete_static_update_root(
+    ctx: &mut LoweringContext<'_, '_>, read: &Expr, write: &Expr,
+) -> Option<(Expr, Expr)> {
+    let mut root = read;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else { return None; };
+    let ty = static_property_type(ctx, receiver, property)?;
+    if !matches!(ty.codegen_repr(), PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed) {
+        return None;
+    }
+    let name = ctx.declare_synthetic_php_local(ty);
+    crate::ir_lower::expr::lower_ref_assign_static_property(ctx, &name, root, root.span);
+    Some((replace_static_update_root(read, &name), replace_static_update_root(write, &name)))
+}
+
+/// Replaces only the static root while preserving captured dimensions and source spans.
+fn replace_static_update_root(target: &Expr, name: &str) -> Expr {
+    let kind = match &target.kind {
+        ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
+            array: Box::new(replace_static_update_root(array, name)), index: index.clone(),
+        },
+        ExprKind::StaticPropertyAccess { .. } => ExprKind::Variable(name.to_string()),
+        _ => unreachable!("a classified static update has a static root"),
+    };
+    Expr::new(kind, target.span)
 }
 
 /// Rebuilds the read with key captures at each dimension, not before the entire chain.
@@ -160,6 +190,14 @@ fn lower_static_update_parent(
     let probe = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
     if ctx.value_is_owning_temporary(probe) {
         crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
+    }
+    if let ExprKind::Variable(name) = &read_array.kind {
+        if let Some(parent) = lower_local_parent_fetch_for_write_inner(ctx, name, write_key, read, true) {
+            if let Some(owner) = owner {
+                crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+            }
+            return parent;
+        }
     }
     let key = lower_expr(ctx, write_key);
     let parent = ctx.emit_value(Op::RuntimeCall, vec![pinned.value, key.value],
@@ -388,6 +426,14 @@ pub(super) fn lower_local_parent_fetch_for_write(
     index: &Expr,
     parent_expr: &Expr,
 ) -> Option<LoweredValue> {
+    lower_local_parent_fetch_for_write_inner(ctx, name, index, parent_expr, false)
+}
+
+/// Reuses an update's converted numeric dimension without issuing a duplicate warning.
+fn lower_local_parent_fetch_for_write_inner(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, index: &Expr, parent_expr: &Expr,
+    key_already_diagnosed: bool,
+) -> Option<LoweredValue> {
     let span = parent_expr.span;
     let local_ty = ctx.local_type(name);
     match local_ty.codegen_repr() {
@@ -396,10 +442,10 @@ pub(super) fn lower_local_parent_fetch_for_write(
                 || is_empty_indexed_array_element(elem_ty.as_ref()) =>
         {
             match index_expr_key_type(ctx, index) {
-                PhpType::Int => {
+                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void => {
                     let array_value = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
-                    let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), false);
+                    let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), key_already_diagnosed);
                     // Autovivification makes the element type effectively
                     // Mixed even when the array started empty-typed. The
                     // ensure call consumes the loaded container (in-place

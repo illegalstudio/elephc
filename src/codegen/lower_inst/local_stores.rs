@@ -89,7 +89,7 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
     store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)
 }
 
-/// Returns true when `value` is `ArrayToHash(LoadRefCell(slot))` for the slot being stored.
+/// Recognizes a consuming container conversion or ensure rooted in the stored reference slot.
 ///
 /// `ArrayToHash` CONSUMES the array it converts: the convert path releases the source after the
 /// copy and returns a fresh hash, the already-a-hash path returns the source pointer itself. Either
@@ -99,6 +99,7 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
 /// (`function r(&...$items) { $items[0] = 1; $items["k"] = 2; }` called through a first-class
 /// callable), and the freed block's reuse by the persisted key string then walked that string as a
 /// hash on the next release.
+/// Concrete fetch-for-write ensures use the same consuming convention during COW and growth.
 fn value_is_consuming_conversion_of_ref_cell(
     ctx: &FunctionContext<'_>,
     value: ValueId,
@@ -107,7 +108,12 @@ fn value_is_consuming_conversion_of_ref_cell(
     let Some(conversion) = instruction_for_value(ctx, value)? else {
         return Ok(false);
     };
-    if conversion.op != Op::ArrayToHash {
+    let consuming_ensure = conversion.op == Op::RuntimeCall
+        && matches!(conversion.immediate, Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+            | crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)))
+        && matches!(conversion.result_php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. });
+    if conversion.op != Op::ArrayToHash && !consuming_ensure {
         return Ok(false);
     }
     let Some(source) = conversion.operands.first().copied() else {

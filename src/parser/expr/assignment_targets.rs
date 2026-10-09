@@ -55,7 +55,7 @@ pub(super) fn desugar_lvalue_incdec(
         return None;
     }
     let mut prelude = lowerer.finish();
-    // One dimension of a local, property, or static-property array is read once into `old`,
+    // One dimension of a local or instance-property array is read once into `old`,
     // and the write stores `old ± 1`, so the element is fetched and its key converted a single
     // time, as in PHP. Deeper places keep the statement write below.
     if let ExprKind::ArrayAccess { array, .. } = &target.kind {
@@ -63,7 +63,6 @@ pub(super) fn desugar_lvalue_incdec(
             &array.kind,
             ExprKind::Variable(_)
                 | ExprKind::PropertyAccess { .. }
-                | ExprKind::StaticPropertyAccess { .. }
         ) {
             let old_name = crate::names::generated_local_name(&format!(
                 "__elephc_incdec_old_{}_{}", span.line, span.col

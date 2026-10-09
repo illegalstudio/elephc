@@ -18,12 +18,15 @@ fn check_static_nested_updates(target: &str) {
     let source = r#"<?php
 class NestedUpdate { public static array $items = [[null]]; }
 class ConcreteUpdate { public static $items = [1, [5]]; }
+class DeclaredMixedUpdate { public static array<mixed> $items = [1, [5]]; }
 function fail(): int { throw new Error("stop"); }
 function finalKey(): int { echo "key"; return 0; }
 function scalarUpdate(): void { ++NestedUpdate::$items[0][0][finalKey()]; }
 set_error_handler(function($level, $message) { return true; });
 ++NestedUpdate::$items[0][0]["before"];
 ++ConcreteUpdate::$items[1][0];
+++DeclaredMixedUpdate::$items[1][0];
+echo ++NestedUpdate::$items[0][0]["before"];
 try { scalarUpdate(); } catch (Error $e) { echo "scalar"; }
 try { NestedUpdate::$items[0][0]["before"] += fail(); } catch (Error $e) { echo "caught"; }
 restore_error_handler();
@@ -33,6 +36,8 @@ echo json_encode(NestedUpdate::$items);
         source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
     );
     let main = module.functions.iter().find(|function| function.flags.is_main).unwrap();
+    assert!(main.instructions.iter().any(|inst| inst.op == Op::LoadStaticPropertyRefCell),
+        "{target}: declared mixed roots publish relocated containers through their native slot");
     assert!(main.instructions.iter().any(|inst| {
         inst.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed))
     }), "{target}: intermediate parents use write-context lookup");

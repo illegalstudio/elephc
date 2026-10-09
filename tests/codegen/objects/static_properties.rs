@@ -9,6 +9,51 @@
 
 use super::*;
 
+/// Explicit mixed-element static roots keep nested writes attached without mutating aliases.
+#[test]
+fn test_static_prefix_oct9_declared_mixed_nested_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [1, [5]]; }
+$alias = H::$items;
+echo json_encode($alias), '|';
+++H::$items[1][0];
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[1,[5]]|[1,[6]]|[1,[5]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Concrete roots evaluate and diagnose a fractional computed parent dimension once.
+#[test]
+fn test_static_prefix_oct9_declared_mixed_float_dimension() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [1, [5]]; }
+function dimensionKey(): float { echo 'K'; return 1.5; }
+set_error_handler(function($level, $message) { echo 'W'; return true; });
+++H::$items[dimensionKey()][0];
+echo '|', json_encode(H::$items);
+restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "KW|[1,[6]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Prefix and postfix expression forms use the same PHP incdec semantics as statements.
+#[test]
+fn test_static_prefix_oct9_expression_string_null() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = ['az', 'az', null, '9', 'zz', null]; }
+echo ++H::$items[0], '|', --H::$items[1], '|', is_null(--H::$items[2]) ? 'null' : 'bad', '|';
+echo H::$items[3]++, ':', H::$items[3], '|', H::$items[4]++, ':', H::$items[4], '|';
+echo is_null(H::$items[5]++) ? 'null' : 'bad', ':', H::$items[5], '|', json_encode(H::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ba|az|null|9:10|zz:aaa|null:1|[\"ba\",\"az\",null,10,\"aaa\",1]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Inferred concrete and homogeneous static roots keep nested mutations attached with COW.
 #[test]
 fn test_static_prefix_followup_concrete_nested_writeback() {
