@@ -2610,3 +2610,73 @@ echo (new Wrap(new User()))->pluck($row, "a"), "|", (new Wrap(new Order()))->plu
         "a dynamic access on a mixed receiver must merge to one body (user={has_user}, order={has_order})"
     );
 }
+
+/// `isset` and `unset` on a `T` slot resolve through the receiver's static type to a
+/// template-identical slot, so both methods merge.
+#[test]
+fn test_shape_merge_merges_isset_and_unset() {
+    let source = r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function has(): bool { return isset($this->value); }
+    public function drop(): void { unset($this->value); }
+}
+class User {}
+class Order {}
+$u = new Box(new User());
+$o = new Box(new Order());
+echo $u->has() ? "y" : "n", $o->has() ? "y" : "n";
+$u->drop();
+$o->drop();
+echo $u->has() ? "y" : "n";
+"#;
+    assert_eq!(compile_and_run(source), "yyn");
+
+    let user_asm = compile_cli_to_asm("isset", source);
+    for method in ["has", "drop"] {
+        let key = elephc::names::php_symbol_key(method);
+        let user = elephc::names::method_symbol("Box<User>", &key);
+        let order = elephc::names::method_symbol("Box<Order>", &key);
+        let has_user = user_asm.contains(&format!("{user}:"));
+        let has_order = user_asm.contains(&format!("{order}:"));
+        assert!(
+            has_user ^ has_order,
+            "{method} must merge to one body (user={has_user}, order={has_order})"
+        );
+    }
+}
+
+/// An append to a `T`-element array property is a read-for-write plus a concrete store, so the
+/// whole mutating method merges across instantiations.
+#[test]
+fn test_shape_merge_merges_property_appends() {
+    let source = r#"<?php
+class Bag<T> {
+    public function __construct(private array $items = []) {}
+    public function add(T $item): void { $this->items[] = $item; }
+    public function count(): int { return count($this->items); }
+}
+class User {}
+class Order {}
+$b1 = new Bag<User>();
+$b1->add(new User());
+$b1->add(new User());
+$b2 = new Bag<Order>();
+$b2->add(new Order());
+echo $b1->count(), $b2->count();
+"#;
+    assert_eq!(compile_and_run(source), "21");
+
+    let user_asm = compile_cli_to_asm("append", source);
+    for method in ["add", "count"] {
+        let key = elephc::names::php_symbol_key(method);
+        let user = elephc::names::method_symbol("Bag<User>", &key);
+        let order = elephc::names::method_symbol("Bag<Order>", &key);
+        let has_user = user_asm.contains(&format!("{user}:"));
+        let has_order = user_asm.contains(&format!("{order}:"));
+        assert!(
+            has_user ^ has_order,
+            "{method} must merge to one body (user={has_user}, order={has_order})"
+        );
+    }
+}

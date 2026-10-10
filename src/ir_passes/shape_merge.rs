@@ -219,9 +219,6 @@ fn has_nominal_use(function: &Function, method_dispatch_is_nominal: bool) -> boo
                 | Op::IteratorMethodCall
                 | Op::SplRuntimeCall
                 | Op::MethodLookup
-                | Op::PropGetForWrite
-                | Op::PropInitialized
-                | Op::PropUnset
                 | Op::LoadPropRefCell
                 | Op::LoadPropRefCellChecked
                 | Op::LoadStaticProperty
