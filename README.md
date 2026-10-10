@@ -266,6 +266,10 @@ elephc hello.php
 ./hello
 elephc hello.lfc
 
+# Start an eval-backed interactive session with multiline input and cached startup
+elephc repl
+elephc repl --php-version 8.4 --no-history
+
 # Print the compiler version
 elephc --version
 elephc -V

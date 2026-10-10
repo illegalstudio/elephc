@@ -309,7 +309,31 @@ pub(crate) fn link_with_plan(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<(), LinkError> {
+    link_with_plan_and_inputs(target, emit, bin_path, obj_path, runtime_object_path,
+        plan, forced_whole_archive).map(|_| ())
+}
+
+/// Links normally and returns exact archive paths plus bridge names for executable caches.
+pub(crate) fn link_with_plan_and_inputs(
+    target: Target,
+    emit: Emit,
+    bin_path: &Path,
+    obj_path: &Path,
+    runtime_object_path: &Path,
+    plan: &LinkPlan,
+    forced_whole_archive: &[String],
+) -> Result<Vec<(PathBuf, Option<String>)>, LinkError> {
     let resolved = bridges::resolve(plan, forced_whole_archive, target.platform)?;
+    let inputs = resolved.plan.items().iter().filter_map(|item| match item {
+        LinkItem::StaticArchive { path, origin, .. } => {
+            let bridge = match origin {
+                crate::link_plan::LinkOrigin::Bridge { name } => Some(name.clone()),
+                _ => None,
+            };
+            Some((path.clone(), bridge))
+        }
+        _ => None,
+    }).collect();
     let prepared = (target.platform == Platform::MacOS)
         .then(|| archive_dedup::prepare(&resolved.plan));
     let render_plan = prepared
@@ -353,5 +377,10 @@ pub(crate) fn link_with_plan(
     if let Some(prepared) = prepared {
         prepared.cleanup();
     }
-    Ok(())
+    Ok(inputs)
+}
+
+/// Rejects a cached host when an auto-built bridge has newer local source inputs.
+pub(crate) fn cached_bridge_is_current(name: &str, archive: &Path) -> bool {
+    bridges::cached_archive_is_current(name, archive)
 }

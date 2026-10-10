@@ -44,6 +44,16 @@ use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
 /// Reads PHP source, tokenizes, parses, resolves names, type-checks, optimizes,
 /// generates assembly, and links into a native binary. Exits on any error.
 pub(crate) fn compile(config: CliConfig) {
+    compile_inner(config, None);
+}
+
+/// Compiles the embedded REPL host with a logical project source and cache-local outputs.
+pub(crate) fn compile_repl(config: CliConfig, output: &str) {
+    compile_inner(config, Some(output));
+}
+
+/// Shares every compiler pass while separating generated host storage from project discovery.
+fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let CliConfig {
         filename,
         heap_size,
@@ -91,7 +101,7 @@ pub(crate) fn compile(config: CliConfig) {
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
-    let output_paths = output_paths(filename, target, emit);
+    let output_paths = output_paths(repl_output.unwrap_or(filename), target, emit);
     // BEFORE ANY WORK RUNS. Every generated path is derived from the source filename, so a
     // tree someone else controls chooses them; refusing a symlink destination up front is
     // the only way to cover the ones an external assembler or linker writes, which this
@@ -109,7 +119,10 @@ pub(crate) fn compile(config: CliConfig) {
     }
     let mut timings = CompileTimings::new(emit_timings);
 
-    let parsed = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);
+    let parsed = frontend::read_and_parse(
+        filename, source_mode, &defines, &mut timings,
+        repl_output.map(|_| crate::repl::HOST_SOURCE),
+    );
 
     // `opcache.preload` becomes an implicit `require_once` at the very top of the entry program,
     // which is what reference PHP's startup preload pass IS for a compiler: the resolver inlines
@@ -128,7 +141,11 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("autoload-build");
     let phase_started = Instant::now();
-    let (autoload_registry, parsed) = autoload::Registry::build(parent, parsed);
+    let (autoload_registry, parsed) = if repl_output.is_some() {
+        (autoload::Registry::empty(), parsed)
+    } else {
+        autoload::Registry::build(parent, parsed)
+    };
     codegen::set_autoload_rule_count(autoload_registry.rule_count());
     for warning in autoload_registry.warnings() {
         errors::report_warning(warning);
@@ -785,6 +802,7 @@ pub(crate) fn compile(config: CliConfig) {
     timings.record_since("ir-opt", phase_started);
 
     backend::emit_and_link(backend::BackendInputs {
+        repl_build: repl_output.is_some(),
         filename,
         with_crates: &with_crates,
         ini_overrides: &ini_overrides,
