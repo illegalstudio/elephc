@@ -1688,12 +1688,16 @@ to be threaded through the emitter.
 The soundness guard is wider for methods because method dispatch does **not** name
 its class in an immediate: `lower_method_call` resolves the callee from the
 receiver's static type at codegen time. A merged body that contained `$this->other()`
-would therefore call the survivor class's `other`, not the receiver's. So a body
-with any method-dispatch op, or any dynamic/static property or object access, is
-refused — along with the class-identity-immediate rule above. Only a method whose
-body is free of class-resolving operations (a pure computation, or `return $this`)
-merges, which keeps the transitivity hazard the design warns about out of the
-transform entirely.
+would therefore call the survivor class's `other`, not the receiver's. The soundness guard refuses a body with any method-dispatch op, any
+dynamic/static property or object access, or any class-identity immediate. Property
+**reads** are the deliberate exception: reading a `T`-typed slot (`get(): T { return
+$this->value; }`) is the design's canonical non-nominal use — the instruction carries
+only the property name, and the slot it lowers through the receiver's static type is
+template-identical across instantiations, so the read merges. A property WRITE stays
+refused: it carries a `PropertyRef` immediate and runs the typed-property guard, whose
+accepted-class list is the concrete `T`. Only a method whose body is free of the other
+class-resolving operations merges, which keeps the transitivity hazard the design warns
+about out of the transform entirely.
 
 ## Dominance Analysis
 
