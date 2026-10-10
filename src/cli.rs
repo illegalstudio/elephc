@@ -120,6 +120,7 @@ Arguments:
 
 Subcommands:
   native <COMMAND>        Native dependency management (see `elephc native --help`)
+  repl                    Interactive PHP through eval (see `elephc repl --help`)
   monitor <TARGET>        Profile a program built with --with-monitoring: a .php
                           source, a binary, or a running service's address
                           (see `elephc monitor --help`)
@@ -256,8 +257,10 @@ pub(crate) struct CliConfig {
     pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
-/// A fully parsed top-level invocation of either the compiler or native package manager.
+/// A fully parsed compiler, REPL, monitoring, or native package invocation.
 pub(crate) enum Command {
+    /// One interactive eval session, or its isolated host build subprocess.
+    Repl(crate::repl::ReplCommand),
     /// The existing PHP compilation command and all of its normalized options.
     Compile(CliConfig),
     /// One validated `elephc native` subcommand.
@@ -266,8 +269,17 @@ pub(crate) enum Command {
     Monitor(crate::monitor::MonitorCommand),
 }
 
-/// Parses the exact top-level `native` selector before falling back to legacy compilation.
+/// Dispatches exact top-level subcommand selectors before falling back to compilation.
 pub(crate) fn parse_args(args: &[String]) -> Command {
+    if args.get(1).map(String::as_str) == Some("repl") {
+        return match crate::repl::parse_args(&args[2..]) {
+            Ok(command) => Command::Repl(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::repl::HELP);
+                process::exit(1);
+            }
+        };
+    }
     if args.get(1).map(String::as_str) == Some("monitor") {
         return match crate::monitor::parse_monitor_args(&args[2..]) {
             Ok(command) => Command::Monitor(command),
@@ -295,7 +307,7 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
 }
 
 /// Parses legacy compilation arguments into a normalized configuration.
-fn parse_compile_args(args: &[String]) -> CliConfig {
+pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if args.len() < 2 {
         fail("no source file given");
     }
@@ -638,7 +650,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
 ///
 /// The monitoring bridges are excluded: they are how `--with-monitoring` is
 /// built, not something to ask for by mechanism.
-fn with_flag_is_known(name: &str) -> bool {
+pub(crate) fn with_flag_is_known(name: &str) -> bool {
     if MONITORING_BRIDGES.contains(&name) {
         return false;
     }

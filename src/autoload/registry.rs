@@ -31,6 +31,12 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// Creates a registry without project discovery for compiler-owned hosts such as the REPL.
+    pub fn empty() -> Self {
+        Self { psr4: AutoloadIndex::default(), rules: Vec::new(),
+            extensions: DEFAULT_AUTOLOAD_EXTENSIONS.to_string(), warnings: Vec::new() }
+    }
+
     /// Build the registry by reading composer.json from `project_root` and
     /// scanning `program` for `spl_autoload_register` callsites. Returns
     /// the registry plus the program with consumed register sites stripped

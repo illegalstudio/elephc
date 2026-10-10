@@ -45,9 +45,9 @@ fn shared_runtime_calls_balance_operand_owners() {
 /// Operand evaluation and runtime-hook failures retire all previously evaluated arguments.
 #[test]
 fn shared_runtime_call_failures_release_evaluated_operands() {
-    for source in [
-        "return array_key_exists('released', missingSharedOperand());",
-        "return array_key_exists('released', 0);",
+    for (source, expected) in [
+        ("return array_key_exists('released', missingSharedOperand());", EvalStatus::UncaughtThrowable),
+        ("return array_key_exists('released', 0);", EvalStatus::UnsupportedConstruct),
     ] {
         let mut values = FakeOps::default();
         let mut context = ElephcEvalContext::new();
@@ -55,7 +55,8 @@ fn shared_runtime_call_failures_release_evaluated_operands() {
         let program = parse_fragment(source.as_bytes())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
         assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values),
-            Err(EvalStatus::UnsupportedConstruct), "{source}");
+            Err(expected), "{source}");
+        if let Some(error) = context.take_pending_throw() { values.release(error).unwrap(); }
         for (id, count) in &values.cell_owners {
             assert_eq!(*count, 0, "{source}: {:?}", values.values[id]);
         }

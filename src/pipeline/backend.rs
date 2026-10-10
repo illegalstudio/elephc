@@ -13,6 +13,7 @@ use super::*;
 
 /// Inputs consumed by the post-EIR backend and linker pipeline.
 pub(super) struct BackendInputs<'a> {
+    pub(super) repl_build: bool,
     pub(super) filename: &'a str,
     pub(super) with_crates: &'a HashSet<String>,
     pub(super) ini_overrides: &'a [(String, String)],
@@ -61,6 +62,7 @@ fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
 /// the result against the runtime and whichever bridge crates were requested.
 pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let BackendInputs {
+        repl_build,
         filename,
         with_crates,
         ini_overrides,
@@ -384,7 +386,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         // managed-native archives alongside this library.
         linker::archive(&output_paths.bin, &output_paths.obj, &runtime_object.path);
     } else {
-        if let Err(error) = linker::link_with_plan(
+        let linked = linker::link_with_plan_and_inputs(
             target,
             emit,
             &output_paths.bin,
@@ -392,9 +394,21 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             &runtime_object.path,
             &link_plan,
             &forced_bridge_libs,
-        ) {
-            eprintln!("Linker error: {error}");
-            process::exit(1);
+        );
+        match linked {
+            Ok(inputs) if repl_build => {
+                let path = output_paths.bin.with_extension("inputs.json");
+                let contents = serde_json::to_vec(&inputs).expect("serializable linker inputs");
+                if let Err(error) = fs::write(&path, contents) {
+                    eprintln!("Cannot record REPL dependencies: {error}");
+                    process::exit(1);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("Linker error: {error}");
+                process::exit(1);
+            }
         }
     }
     timings.record_since("link", phase_started);

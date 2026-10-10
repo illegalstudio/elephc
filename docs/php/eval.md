@@ -1026,7 +1026,7 @@ where listed below unless a note says otherwise.
 > elephc-extension builtins below — the whole "Raw memory and buffers" row plus
 > `class_attribute_names()`, `class_attribute_args()`, and
 > `class_get_attributes()` — do not exist inside eval'd code either: calling one
-> is a runtime fatal like any unknown function, and
+> is a runtime fatal for the unavailable extension, and
 > `function_exists()`/`is_callable()` report them as missing, matching the PHP
 > interpreter.
 
@@ -1051,6 +1051,12 @@ where listed below unless a note says otherwise.
 | Constants | `define()`, `defined()` |
 
 ## Builtin notes
+
+An undefined direct function call throws a catchable `Error` with
+`Call to undefined function name()`. Function lookup fails before its arguments
+are evaluated. Namespace fallback and imported function aliases report the resolved
+missing name. Known builtins whose required capability or prelude is unavailable
+retain their existing runtime diagnostics.
 
 A builtin called with an argument count PHP refuses throws a catchable
 `ArgumentCountError` with PHP's message (`strlen() expects exactly 1 argument,

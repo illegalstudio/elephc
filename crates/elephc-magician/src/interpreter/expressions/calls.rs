@@ -39,6 +39,18 @@ pub(in crate::interpreter) fn eval_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_call_with_error_name(name, name, args, context, scope, values)
+}
+
+/// Keeps the original namespace name for errors while resolving a global fallback target.
+fn eval_call_with_error_name(
+    name: &str,
+    error_name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if eval_expr_language_construct_name(name) {
         let args = positional_call_arg_exprs(args)?;
         return eval_positional_expr_call(name, &args, context, scope, values);
@@ -162,7 +174,16 @@ pub(in crate::interpreter) fn eval_call(
     if let Some(function) = context.native_function(name) {
         return eval_native_function(function, args, context, scope, values);
     }
-    Err(EvalStatus::UnsupportedConstruct)
+    // A known builtin may require an unavailable prelude or capability. Preserve
+    // that diagnostic; an undefined function is a catchable PHP Error.
+    if elephc_builtin_contract::lookup(name).is_some() {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    eval_throw_error(
+        &format!("Call to undefined function {}()", error_name.trim_start_matches('\\')),
+        context,
+        values,
+    )
 }
 
 /// Evaluates an unqualified namespaced function call with PHP's global fallback.
@@ -180,7 +201,7 @@ pub(in crate::interpreter) fn eval_namespaced_call(
     if let Some(function) = context.native_function(name) {
         return eval_native_function(function, args, context, scope, values);
     }
-    eval_call(fallback_name, args, context, scope, values)
+    eval_call_with_error_name(fallback_name, name, args, context, scope, values)
 }
 
 /// Evaluates a variable or expression callable and dispatches it with source-order arguments.

@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use crate::parser::ast::{Stmt, StmtKind};
 
 /// Compiled view of every autoload section found in the project.
+#[derive(Default)]
 pub struct AutoloadIndex {
     fqn_to_path: HashMap<String, PathBuf>,
     files_to_include: Vec<PathBuf>,
