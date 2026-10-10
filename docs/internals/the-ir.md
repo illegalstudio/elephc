@@ -1688,16 +1688,25 @@ to be threaded through the emitter.
 The soundness guard is wider for methods because method dispatch does **not** name
 its class in an immediate: `lower_method_call` resolves the callee from the
 receiver's static type at codegen time. A merged body that contained `$this->other()`
-would therefore call the survivor class's `other`, not the receiver's. The soundness guard refuses a body with any method-dispatch op, any
-dynamic/static property or object access, or any class-identity immediate. Property
-**reads** are the deliberate exception: reading a `T`-typed slot (`get(): T { return
-$this->value; }`) is the design's canonical non-nominal use — the instruction carries
-only the property name, and the slot it lowers through the receiver's static type is
+would therefore call the survivor class's `other`, not the receiver's. The soundness guard refuses a body with any dynamic/static property or object
+access, or any class-identity immediate. Property **reads** are a deliberate
+exception: reading a `T`-typed slot (`get(): T { return $this->value; }`) is the
+design's canonical non-nominal use — the instruction carries only the property
+name, and the slot it lowers through the receiver's static type is
 template-identical across instantiations, so the read merges. A property WRITE stays
 refused: it carries a `PropertyRef` immediate and runs the typed-property guard, whose
-accepted-class list is the concrete `T`. Only a method whose body is free of the other
-class-resolving operations merges, which keeps the transitivity hazard the design warns
-about out of the transform entirely.
+accepted-class list is the concrete `T`.
+
+Instance-method **dispatch** is handled by a transitive fixpoint rather than refused.
+Because `lower_method_call` resolves its callee from the receiver's static type, a
+merged body that called `$this->other()` would reach the survivor class's `other`. So
+two same-slot methods merge only when every call in their bodies resolves to the same
+callee given the merges accepted so far: the merge itself is a union-find whose edge is
+"bodies match under the object shape AND all calls are consistent", iterated to a fixed
+point so folding a callee unlocks its callers. A call to a callee that is not merged
+(for example one that writes a `T` slot) leaves both bodies in place. This is the
+transitivity rule the design's nominal-use analysis describes, applied at the
+instantiated bodies the backend actually emits.
 
 ## Dominance Analysis
 
