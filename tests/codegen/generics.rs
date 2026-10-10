@@ -2409,10 +2409,11 @@ echo $u->size(), $o->size(), "|", get_class($u), get_class($o);
     );
 }
 
-/// A T-DEPENDENT method is NOT merged: `get()` reads the `T`-typed property, a class-resolving
-/// operation, so both instantiations keep their own body.
+/// A T-SLOT READ is the design's canonical non-nominal use, so `get(): T { return $this->value; }`
+/// merges across instantiations: the property name is the only immediate, and the slot it lowers
+/// through the receiver's static type is template-identical.
 #[test]
-fn test_shape_merge_keeps_t_dependent_methods() {
+fn test_shape_merge_merges_t_slot_reads() {
     let source = r#"<?php
 class Box<T> {
     public function __construct(private T $value) {}
@@ -2424,7 +2425,7 @@ echo get_class((new Box(new User()))->get()), "|", get_class((new Box(new Order(
 "#;
     assert_eq!(compile_and_run(source), "User|Order");
 
-    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_dep_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_read_{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let (user_asm, _runtime_asm, _libs) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
@@ -2432,13 +2433,48 @@ echo get_class((new Box(new User()))->get()), "|", get_class((new Box(new Order(
     let key = elephc::names::php_symbol_key("get");
     let user = elephc::names::method_symbol("Box<User>", &key);
     let order = elephc::names::method_symbol("Box<Order>", &key);
+    let has_user = user_asm.contains(&format!("{user}:"));
+    let has_order = user_asm.contains(&format!("{order}:"));
+    assert!(
+        has_user ^ has_order,
+        "a T-slot read must merge to one body (user={has_user}, order={has_order})"
+    );
+}
+
+/// A T-SLOT WRITE is NOT merged: it carries a `PropertyRef` immediate and runs the typed-property
+/// guard, whose accepted-class list is the concrete `T`, so both bodies stay.
+#[test]
+fn test_shape_merge_keeps_t_slot_writes() {
+    let source = r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function set(T $value): void { $this->value = $value; }
+}
+class User {}
+class Order {}
+$u = new Box(new User());
+$u->set(new User());
+$o = new Box(new Order());
+$o->set(new Order());
+echo get_class($u), "|", get_class($o);
+"#;
+    assert_eq!(compile_and_run(source), "Box<User>|Box<Order>");
+
+    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_write_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let (user_asm, _runtime_asm, _libs) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let _ = fs::remove_dir_all(&dir);
+    let key = elephc::names::php_symbol_key("set");
+    let user = elephc::names::method_symbol("Box<User>", &key);
+    let order = elephc::names::method_symbol("Box<Order>", &key);
     assert!(
         user_asm.contains(&format!("{user}:")),
-        "the user get body must stay (nominal property read)"
+        "the user set body must stay (nominal typed-property guard)"
     );
     assert!(
         user_asm.contains(&format!("{order}:")),
-        "the order get body must stay (nominal property read)"
+        "the order set body must stay (nominal typed-property guard)"
     );
 }
 

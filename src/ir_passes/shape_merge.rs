@@ -164,10 +164,15 @@ fn cheap_key(function: &Function) -> CheapKey {
 /// Two things qualify. First, a class-identity IMMEDIATE (a class/method/property/enum/variant
 /// ref, a type name): those embed a concrete class in the emitted code. Second, an OP whose
 /// backend lowering resolves a class from the receiver's STATIC type rather than from an
-/// immediate — method dispatch and dynamic property/object access — because two instantiations
-/// would then silently share one class's resolution. Property and `instanceof` ops normally carry
-/// their class/property as an immediate and are already caught, but they are listed too: the
-/// guard must not depend on which of the two encodings an op currently uses.
+/// immediate — method dispatch, dynamic property access, writes, object construction — because
+/// two instantiations would then silently share one class's resolution.
+///
+/// A plain property READ is deliberately NOT in the second set. `$this->value` on a `T` slot is
+/// the design's canonical non-nominal use: the instruction carries only the property NAME, and the
+/// slot it resolves through the receiver's static type is template-identical across instantiations
+/// (every object slot is one pointer wide), so `get(): T { return $this->value; }` may merge. A
+/// property WRITE stays refused: it carries a `PropertyRef` immediate and runs the typed-property
+/// guard, whose accepted-class list is the concrete `T`.
 fn has_nominal_use(function: &Function) -> bool {
     use crate::ir::Op;
     function.instructions.iter().any(|instruction| {
@@ -198,12 +203,10 @@ fn has_nominal_use(function: &Function) -> bool {
                 | Op::DynamicPropGet
                 | Op::DynamicPropSet
                 | Op::DynamicPropUnset
-                | Op::PropGet
                 | Op::PropGetForWrite
                 | Op::PropInitialized
                 | Op::PropSet
                 | Op::PropUnset
-                | Op::NullsafePropGet
                 | Op::LoadPropRefCell
                 | Op::LoadPropRefCellChecked
                 | Op::LoadStaticProperty
