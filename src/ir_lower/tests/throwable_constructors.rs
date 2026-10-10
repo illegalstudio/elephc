@@ -37,8 +37,7 @@ $owner->exercise();
 }
 
 /// Every eval bridge owns a nullable previous result before handing it back across the native ABI.
-#[test]
-fn compact_throwable_eval_previous_getter_boxes_both_return_arms_on_all_targets() {
+fn verify_compact_throwable_eval_previous_getter(target: &str) {
     let source = r#"<?php
 function throwEvalGetterException(): void { throw new RuntimeException("native"); }
 $source = 'try { throwEvalGetterException(); } catch (RuntimeException $error) {
@@ -46,7 +45,7 @@ $source = 'try { throwEvalGetterException(); } catch (RuntimeException $error) {
 }' . ' // ' . $argc;
 eval($source);
 "#;
-    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+    let name = target;
         let module = lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
@@ -59,8 +58,22 @@ eval($source);
         let null = body.find("__elephc_eval_builtin_throwable_previous_null:").unwrap();
         assert!(lookup < object_box && object_box < null, "{name}");
         assert!(body[null..].contains("__rt_mixed_from_value"), "{name}");
-    }
 }
+
+/// Schedules the expensive eval bridge fixture once per target under the unchanged CI timeout.
+macro_rules! compact_previous_target_test {
+    ($name:ident, $target:literal) => {
+        /// Checks both owned previous-result arms for this supported target.
+        #[test]
+        fn $name() { verify_compact_throwable_eval_previous_getter($target); }
+    };
+}
+
+compact_previous_target_test!(compact_throwable_eval_previous_getter_macos, "macos-aarch64");
+compact_previous_target_test!(compact_throwable_eval_previous_getter_ios, "ios-arm64");
+compact_previous_target_test!(compact_throwable_eval_previous_getter_ios_sim, "ios-sim-arm64");
+compact_previous_target_test!(compact_throwable_eval_previous_getter_linux_arm, "linux-aarch64");
+compact_previous_target_test!(compact_throwable_eval_previous_getter_linux_x86, "linux-x86_64");
 
 /// Both constructor roots remain emitted and use normalized boxed previous operands on all targets.
 #[test]

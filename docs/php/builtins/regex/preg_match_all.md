@@ -1,6 +1,6 @@
 ---
 title: "preg_match_all()"
-description: "Performs a global regular expression match and returns the number of matches."
+description: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed."
 sidebar:
   order: 762
 ---
@@ -8,14 +8,16 @@ sidebar:
 ## preg_match_all()
 
 ```php
-function preg_match_all(string $pattern, string $subject): int
+function preg_match_all(string $pattern, string $subject, mixed $matches = [], int $flags = 0): int
 ```
 
-Performs a global regular expression match and returns the number of matches.
+Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed.
 
 **Parameters**:
 - `$pattern` (`string`)
 - `$subject` (`string`)
+- `$matches` (`mixed`), passed by reference, default `[]`, optional
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `int`
 

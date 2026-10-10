@@ -318,7 +318,7 @@ impl Checker {
                             }
                             continue;
                         }
-                        if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
+                        if preg_output_type(builtin_name, arg, idx).is_some()
                             || pcntl_output_type(builtin_name, arg, idx).is_some()
                             || xml_struct_output_type(builtin_name, arg, idx).is_some()
                             || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
@@ -347,14 +347,12 @@ impl Checker {
                 // The callee may mutate any reachable object; drop property narrowings. (The
                 // call's own argument checking above still saw them.)
                 Self::purge_property_narrowings(env);
-                if builtin_name.eq_ignore_ascii_case("preg_match") {
-                    if let Some(arg) = expanded_args.get(2) {
+                for (idx, arg) in expanded_args.iter().enumerate() {
+                    if let Some(output_ty) = preg_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
-                            env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
+                            env.insert(name.clone(), output_ty);
                         }
                     }
-                }
-                for (idx, arg) in expanded_args.iter().enumerate() {
                     if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), PhpType::Mixed);
@@ -776,6 +774,20 @@ fn output_variable(arg: &Expr) -> Option<&String> {
         ExprKind::NamedArg { value, .. } => output_variable(value),
         _ => None,
     }
+}
+
+/// Identifies regex output parameters independently of named-argument source order.
+fn preg_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType> {
+    let element = match php_symbol_key(builtin).as_str() {
+        "preg_match" => PhpType::Str,
+        "preg_match_all" => PhpType::Mixed,
+        _ => return None,
+    };
+    let matches = match &arg.kind {
+        ExprKind::NamedArg { name, .. } => name == "matches",
+        _ => index == 2,
+    };
+    matches.then(|| PhpType::Array(Box::new(element)))
 }
 
 /// Returns the post-call type of a write-only PCNTL output argument, when applicable.
