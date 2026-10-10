@@ -14,6 +14,8 @@ mod prefix;
 mod prefix_complex;
 mod pratt;
 
+pub(crate) use assignment_targets::plain_assignment_expression;
+
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{Expr, ExprKind};

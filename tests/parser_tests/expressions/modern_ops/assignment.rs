@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Static property chains capture even a replayable compound RHS before traversing the receiver.
+#[test]
+fn test_static_chain_compound_assignment_captures_rhs_first() {
+    let stmts = parse_source("<?php echo (C::$o->child->v += $rhs);");
+    let StmtKind::Echo(expr) = &stmts[0].kind else { panic!("expected echo"); };
+    let ExprKind::Assignment { prelude, .. } = &expr.kind else { panic!("expected assignment"); };
+    assert_eq!(prelude.len(), 2);
+    assert!(matches!(&prelude[0].kind,
+        StmtKind::Assign { value: Expr { kind: ExprKind::Variable(name), .. }, .. } if name == "rhs"));
+    assert!(matches!(&prelude[1].kind,
+        StmtKind::Assign { value: Expr { kind: ExprKind::BinaryOp { .. }, .. }, .. }));
+}
+
 /// Verifies that a parenthesized expression on the RHS of a word logical operator
 /// (`and`) parses as a `BinaryOp(And)` within the assignment's value field, not as
 /// some other expression wrapper. Regression check for precedence handling when

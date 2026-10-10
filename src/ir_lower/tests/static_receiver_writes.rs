@@ -1,0 +1,163 @@
+//! Purpose:
+//! Checks delayed static receiver evaluation and ownership on all supported targets.
+//!
+//! Called from:
+//! - The EIR lowering unit test harness.
+//!
+//! Key details:
+//! - A plain assignment evaluates an effectful RHS before loading its static receiver.
+//! - Nullable writes retain a checked object payload and throw catchable null Errors.
+//! - Indirect appends delay pure receiver traversal without delaying computed dimensions.
+
+/// Emits the shared fixture and checks the RHS precedes the concrete static receiver load.
+fn verify(target: &str) {
+    let source = r#"<?php
+class O { public int $v = 1; public array $items = [1]; public array $nested = [[1]]; }
+class Root { public O $child; public function __construct() { $this->child = new O(); } }
+class C { public static O $o; public static ?O $nullable = null; }
+class R { public static Root $root; public static ?Root $nullable = null; }
+function replace(): int { C::$o = new O(); return 9; }
+function write(): void { C::$o->v = replace(); }
+function writeNested(): void { C::$o->nested[0][] = replace(); }
+function writeChild(): void { R::$root->child->items[] = replace(); }
+function writeNull(): void { C::$nullable->v = replace(); }
+function writeCompoundNull(): void { C::$nullable->v += replace(); }
+function writeLocalAppend(?O $object): void { $object->items[] = (print 'rhs'); }
+function writeLocalIndexed(?O $object): void { $object->items[(print 'i')] = (print 'v'); }
+function writeDynamicLocal(?O $object, string $name): void { $object->$name = (print 'rhs'); }
+function writeDynamicStatic(string $name): void { C::$nullable->$name = (print 'rhs'); }
+function writeCoalesce(): void { C::$nullable->v ??= replace(); }
+class StaticBuckets { public static array $items = []; }
+function writeStaticNested(): void { StaticBuckets::$items[0][] = replace(); }
+function writeStaticAppend(): void { StaticBuckets::$items[] = replace(); }
+function writeStaticElement(): void { StaticBuckets::$items[0] = replace(); }
+function writeStaticCompound(): void { StaticBuckets::$items[0] += replace(); }
+function writeStaticNestedElement(): void { StaticBuckets::$items[0][0] = replace(); }
+function computedKey(): int { echo 'K'; return 0; }
+function writeComputedNested(): void { StaticBuckets::$items[computedKey()][0] = replace(); }
+function writeComputedLeaf(): void { StaticBuckets::$items[0][computedKey()] = replace(); }
+function writeComputedCompound(): void { StaticBuckets::$items[computedKey()][0] += replace(); }
+function writeFractionalCompound(): void { StaticBuckets::$items[1.5][0] += replace(); }
+function writeNullChain(): void { R::$nullable->child->v = replace(); }
+interface Store { public function get(): string; }
+interface Named { public function name(): string; }
+class Both implements Store, Named {
+    public function get(): string { return 'V'; }
+    public function name(): string { return 'N'; }
+}
+class InterfaceHolder { public static ?Store $value = null; }
+function writeInterface(): void { InterfaceHolder::$value->x = replace(); }
+function dispatch(): void {
+    $value = InterfaceHolder::$value;
+    if ($value !== null) {
+        echo $value->get();
+        if ($value instanceof Named) { echo $value->name(); }
+    }
+}
+C::$o = new O(); C::$nullable = new O();
+R::$root = new Root();
+write(); writeNested(); writeChild();
+try { writeNull(); } catch (Error $error) {}
+InterfaceHolder::$value = new Both(); dispatch();
+C::$o->items[0] = replace();
+$name = 'v'; C::$o->$name = replace();
+C::$nullable->items[0] = 9;
+C::$nullable->items[] = 3;
+"#;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    for name in ["write", "writeNested", "writeChild", "writeNull", "writeStaticNested", "writeStaticAppend",
+        "writeStaticElement", "writeStaticCompound", "writeStaticNestedElement", "writeInterface", "writeCompoundNull"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let rhs = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
+        let receiver = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
+        assert!(rhs < receiver, "{target}: {name} RHS must precede receiver fetch");
+        if name == "write" {
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::Acquire));
+        }
+        if name == "writeNull" {
+            assert!(function.blocks.iter().any(|block| block.name == "property.write.null"));
+            assert!(function.blocks.iter().any(|block|
+                matches!(block.terminator, Some(crate::ir::Terminator::Throw { .. }))));
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::MixedUnbox));
+        }
+        if name == "writeStaticNested" {
+            for load in function.instructions.iter().filter(|inst|
+                inst.op == crate::ir::Op::LoadStaticProperty)
+            {
+                assert!(!function.instructions.iter().any(|inst|
+                    inst.op == crate::ir::Op::Release && inst.operands == [load.result.unwrap()]),
+                    "{target}: a static-array probe borrows the published class slot");
+            }
+        }
+    }
+    for name in ["writeInterface", "writeCompoundNull"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
+        if name == "writeInterface" {
+            assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::MixedUnbox),
+                "{target}: interfaces retain boxed dispatch after the null guard");
+        } else {
+            let read = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PropGet).unwrap();
+            assert!(guard < read, "{target}: null is rejected before the compound property read");
+        }
+    }
+    for name in ["writeComputedNested", "writeComputedLeaf", "writeComputedCompound", "writeNullChain"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let rhs = function.instructions.iter().rposition(|inst| inst.op == crate::ir::Op::Call).unwrap();
+        let receiver = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
+        assert!(rhs < receiver, "{target}: {name} RHS precedes static traversal");
+        if name == "writeNullChain" {
+            let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
+            let read = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PropGet).unwrap();
+            assert!(guard < read, "{target}: intermediate null is guarded before a property read");
+        } else {
+            assert_eq!(function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::Call).count(), 2,
+                "{target}: {name} calls the key and RHS only once");
+        }
+    }
+    let fractional = module.functions.iter().find(|function|
+        function.name == "writeFractionalCompound").unwrap();
+    assert!(fractional.instructions.iter().any(|inst|
+        inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed))),
+        "{target}: fractional compound parents reuse the preceding read's key conversion");
+    for name in ["writeLocalAppend", "writeLocalIndexed", "writeDynamicLocal", "writeDynamicStatic"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let last_print = function.instructions.iter().rposition(|inst|
+            inst.op == crate::ir::Op::PrintValue).unwrap();
+        let guard = function.instructions.iter().position(|inst|
+            inst.op == crate::ir::Op::IsNull).unwrap();
+        assert!(last_print < guard, "{target}: {name} operands precede the null guard");
+        assert!(function.blocks.iter().any(|block|
+            block.name == "property.write.null" && matches!(block.terminator,
+                Some(crate::ir::Terminator::Throw { .. }))), "{target}: {name} catchable Error");
+    }
+    let coalesce = module.functions.iter().find(|function| function.name == "writeCoalesce").unwrap();
+    assert!(coalesce.instructions.iter().any(|inst|
+        inst.op == crate::ir::Op::Acquire && inst.immediate == Some(crate::ir::Immediate::Bool(true))),
+        "{target}: coalesce acquires an independent receiver pin");
+    for acquire in coalesce.instructions.iter().filter(|inst|
+        inst.op == crate::ir::Op::Acquire && inst.immediate == Some(crate::ir::Immediate::Bool(true)))
+    {
+        assert!(coalesce.instructions.iter().any(|inst|
+            inst.op == crate::ir::Op::Release && inst.operands == [acquire.result.unwrap()]),
+            "{target}: borrowed RHS does not hide the receiver release");
+    }
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+}
+
+/// Schedules each supported target independently under the CI timeout envelope.
+macro_rules! receiver_target_test {
+    ($name:ident, $target:literal) => {
+        /// Checks receiver evaluation and array mutation emission for this target.
+        #[test]
+        fn $name() { verify($target); }
+    };
+}
+
+receiver_target_test!(static_receiver_review_macos, "macos-aarch64");
+receiver_target_test!(static_receiver_review_ios, "ios-arm64");
+receiver_target_test!(static_receiver_review_ios_sim, "ios-sim-arm64");
+receiver_target_test!(static_receiver_review_linux_arm, "linux-aarch64");
+receiver_target_test!(static_receiver_review_linux_x86, "linux-x86_64");

@@ -159,8 +159,8 @@ pub(super) fn lower_static_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    let value = lower_expr(ctx, value);
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
-        let value = lower_expr(ctx, value);
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![array.value, value.value],
@@ -177,7 +177,6 @@ pub(super) fn lower_static_property_array_push(
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
-        let value = lower_expr(ctx, value);
         ctx.emit_void(
             Op::ArrayPush,
             vec![property_value.value, value.value],
@@ -190,7 +189,6 @@ pub(super) fn lower_static_property_array_push(
     }
 
     let property_value = load_static_property(ctx, receiver, property, span);
-    let value = lower_expr(ctx, value);
     if static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::MixedArrayAppend,
@@ -228,6 +226,24 @@ pub(super) fn lower_static_property_array_assign(
     });
     if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
         crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+        return;
+    }
+    if matches!(update, Some(ElementUpdate::Compound)) {
+        let ExprKind::BinaryOp { left, op, right } = &value.kind else { unreachable!() };
+        let rhs = lower_expr(ctx, right);
+        let ty = ctx.builder.value_php_type(rhs.value);
+        let name = ctx.declare_synthetic_php_local(ty.clone());
+        let rhs = crate::ir_lower::ownership::copy_assignment_value(ctx, rhs, Some(span));
+        ctx.store_local(&name, rhs, ty, Some(span));
+        let staged = Expr::new(ExprKind::BinaryOp {
+            left: left.clone(), op: op.clone(),
+            right: Box::new(Expr::new(ExprKind::Variable(name.clone()), right.span)),
+        }, value.span);
+        lower_static_property_array_assign_with_diagnosed_key(
+            ctx, receiver, property, index, &staged, span, true,
+        );
+        let null = LoweredValue { value: ctx.builder.emit_const_null(), ir_type: IrType::I64 };
+        ctx.unset_local(&name, null, Some(span));
         return;
     }
     lower_static_property_array_assign_with_diagnosed_key(
@@ -275,8 +291,8 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     key_already_diagnosed: bool,
 ) {
     let key_marker = key_already_diagnosed.then_some(Immediate::Bool(true));
+    let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
-        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
         ctx.emit_void(
             Op::RuntimeCall,
             vec![array.value, index.value, value.value],
@@ -299,8 +315,6 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
         // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         let index =
             coerce_array_key_to_int_at_span(ctx, index, Some(span), key_already_diagnosed);
         let value = coerce_indexed_array_set_value(ctx, &array_ty, value, Some(span));
@@ -328,8 +342,6 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
     // rule; sharing the helper is what keeps the two from answering differently for
     // the same source line.
-    let (index, value) =
-        crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
     if static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::RuntimeCall,

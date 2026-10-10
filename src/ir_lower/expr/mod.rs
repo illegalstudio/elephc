@@ -44,6 +44,8 @@ mod unary_logic;
 mod lazy_branches;
 mod pipe;
 mod assignments;
+mod static_property_updates;
+use static_property_updates::{finish_static_compound_receiver, guard_static_compound_property_read};
 mod function_calls;
 mod eval_barriers;
 mod lazy_isset;
@@ -176,7 +178,9 @@ pub(crate) use callable_resolution::{
 };
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, retire_owned_call_operand, root_owned_call_operand, unpin_in_flight_owners,
+    PinnedInFlightOwner,
 };
+pub(crate) use property_access::singular_object_class;
 pub(crate) use callable_tracking::{
     lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
     reflection_class_binding_for_expr, reflection_function_binding_for_expr,
@@ -205,6 +209,7 @@ pub(crate) use property_access::{
     prepare_scoped_addressable_ref_array_receiver, static_property_result_type,
 };
 pub(crate) use property_fetch_for_write::{
+    is_static_property_write_chain, lower_static_property_write_chain,
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
     lower_nested_assignment_property_source,
 };

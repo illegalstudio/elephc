@@ -17,6 +17,7 @@ use crate::span::Span;
 
 use super::assignment_targets::{
     AssignmentExpressionLowerer, is_assignment_expression_target, is_non_local_assignment_target,
+    static_property_receiver_chain,
 };
 use super::calls::parse_first_class_callable_parens;
 use super::parse_args;
@@ -421,6 +422,10 @@ fn parse_expr_bp_inner(
             // Widen only the END so the span covers through the value expression;
             // the start stays on the operator token, keeping diagnostics anchored.
             let span = span.merge(rhs.span);
+            if op == AssignmentOperator::Assign {
+                lhs = super::plain_assignment_expression(lhs, rhs, span);
+                continue;
+            }
             if is_non_local_assignment_target(&lhs) {
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
 
@@ -428,8 +433,12 @@ fn parse_expr_bp_inner(
                 let target = lowerer.stabilize_non_local_target(lhs, &rhs);
                 let conditional_value_temp =
                     null_coalesce_assign.then(|| lowerer.reserve_value_temp());
+                let static_object_write = matches!(&target.kind,
+                    ExprKind::PropertyAccess { object, .. } if static_property_receiver_chain(object));
                 let rhs = if null_coalesce_assign {
                     rhs
+                } else if static_object_write {
+                    lowerer.bind_result_value(rhs)
                 } else {
                     lowerer.bind_value(&target, rhs)
                 };

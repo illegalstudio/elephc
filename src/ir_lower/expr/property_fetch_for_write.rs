@@ -21,6 +21,40 @@
 
 use super::*;
 
+/// Recognizes pure static-property receiver chains whose traversal follows the RHS of a write.
+pub(crate) fn is_static_property_write_chain(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => is_static_property_write_chain(object),
+        _ => false,
+    }
+}
+
+/// Guards intermediate write-context properties before reading them, once per chain step.
+pub(crate) fn lower_static_property_write_chain(
+    ctx: &mut LoweringContext<'_, '_>, expr: &Expr, rhs: LoweredValue, span: Span,
+) -> crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver {
+    use crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver;
+    let ExprKind::PropertyAccess { object, property } = &expr.kind else {
+        let value = lower_expr(ctx, expr);
+        return PropertyWriteReceiver::new(ctx, value, span);
+    };
+    let mut parent = lower_static_property_write_chain(ctx, object, rhs, span);
+    parent.narrow_for_array(ctx, property, &[rhs.value], span);
+    // The parent lease owns cleanup. Pass a borrowed view to the ordinary getter so it
+    // cannot retire that same owner a second time, including when a hook performs the read.
+    let ty = ctx.builder.value_php_type(parent.value.value);
+    let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value.value], None, ty,
+        Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let child = lower_property_get_from_value(ctx, borrowed, property, Op::PropGet, expr);
+    let child = if ctx.value_is_owning_temporary(child) { child } else {
+        crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, child, Some(span))
+    };
+    parent.finish(ctx, span);
+    PropertyWriteReceiver::new(ctx, child, span)
+}
+
 /// Lowers the source of a by-reference `foreach` whose receiver is an object property.
 ///
 /// An ordinary property read acquires the container, so `IterStart` sees a shared source and

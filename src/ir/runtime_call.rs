@@ -76,6 +76,8 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Fetches a parent whose key conversion was diagnosed by the preceding compound read.
+    ArrayFetchForWriteAlreadyDiagnosed,
     /// Borrows a boxed PHP array and returns an independently owned hash for literal unpacking.
     /// Rejects non-array values without mutating the original cell or its payload.
     ArrayUnpackToHash,
@@ -134,7 +136,7 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
-            RuntimeCallTarget::ArrayFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
+            RuntimeCallTarget::ArrayFetchForWrite | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
             }),
@@ -202,6 +204,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
                 "array.mixed_cell_promote_to_hash_ksort"

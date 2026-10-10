@@ -772,6 +772,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         result
     }
 
+    /// Classifies a receiver lease independently of the borrowed RHS of a container write.
+    pub(crate) fn with_independent_write_receiver<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let previous = self.write_operand_is_borrowed;
+        self.write_operand_is_borrowed = false;
+        let result = f(self);
+        self.write_operand_is_borrowed = previous;
+        result
+    }
+
+    /// Makes a borrowed write operand explicit so backend consumers cannot adopt its temp slot.
+    pub(crate) fn borrow_write_operand_if_needed(&mut self, value: LoweredValue, span: Span) -> LoweredValue {
+        let ty = self.builder.value_php_type(value.value);
+        if !self.write_operand_is_borrowed || !Ownership::php_type_needs_lifetime_tracking(&ty) {
+            return value;
+        }
+        let borrowed = self.emit_value(Op::Borrow, vec![value.value], None, ty,
+            Op::Borrow.default_effects(), Some(span));
+        self.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    }
+
     /// Returns the storage type for a `global` alias name.
     ///
     /// Under `--web`, request superglobals resolve to their fixed

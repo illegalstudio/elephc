@@ -16,6 +16,60 @@ pub(super) fn lower_nested_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    if nested_target_has_static_root(target) {
+        let compound = matches!(desugared_element_update(value, span, |read| read == target),
+            Some(ElementUpdate::Compound));
+        let mut captured = Vec::new();
+        let target = capture_static_write_keys(ctx, target, &mut captured);
+        let value = if compound {
+            let ExprKind::BinaryOp { op, right, .. } = &value.kind else { unreachable!() };
+            let right = capture_static_write_operand(ctx, right, &mut captured);
+            Expr::new(ExprKind::BinaryOp {
+                left: Box::new(target.clone()), op: op.clone(), right: Box::new(right),
+            }, value.span)
+        } else { value.clone() };
+        lower_nested_array_assign_inner(ctx, &target, &value, span, compound);
+        for name in captured {
+            let slot = ctx.local_slots[&name];
+            ctx.release_stored_local_value(&name, slot, Some(span));
+            ctx.emit_void(Op::ZeroLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                Op::ZeroLocalSlot.default_effects(), Some(span));
+        }
+        return;
+    }
+    lower_nested_array_assign_inner(ctx, target, value, span, false);
+}
+
+/// Captures computed dimensions before the RHS without retaining the static array itself.
+fn capture_static_write_keys(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, captured: &mut Vec<String>,
+) -> Expr {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else { return target.clone(); };
+    let array = capture_static_write_keys(ctx, array, captured);
+    let index = if matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::Variable(_)) {
+        index.as_ref().clone()
+    } else { capture_static_write_operand(ctx, index, captured) };
+    Expr::new(ExprKind::ArrayAccess { array: Box::new(array), index: Box::new(index) }, target.span)
+}
+
+/// Gives an evaluated write operand normal PHP-local ownership and exception cleanup.
+fn capture_static_write_operand(
+    ctx: &mut LoweringContext<'_, '_>, expr: &Expr, captured: &mut Vec<String>,
+) -> Expr {
+    let value = lower_expr(ctx, expr);
+    let value = crate::ir_lower::ownership::copy_assignment_value(ctx, value, Some(expr.span));
+    let ty = ctx.builder.value_php_type(value.value);
+    let name = ctx.declare_synthetic_php_local(ty.clone());
+    ctx.store_local(&name, value, ty, Some(expr.span));
+    captured.push(name.clone());
+    Expr::new(ExprKind::Variable(name), expr.span)
+}
+
+/// Applies the ordinary write after static dimensions and the actual compound RHS are captured.
+fn lower_nested_array_assign_inner(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+    key_already_diagnosed: bool,
+) {
     // Lowering the FULL target as an expression routes the write through the
     // read helper (`__rt_mixed_array_get`), which returns a detached fresh box
     // whenever the slot storage is not already a boxed Mixed cell; the
@@ -34,9 +88,12 @@ pub(super) fn lower_nested_array_assign(
         // so the shape is checked and anything else keeps the original order. Constant
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
-        let deferred = nested_target_is_all_bare_variables(target);
+        let deferred = nested_target_is_all_bare_variables(target)
+            || nested_target_has_static_root(target);
         let value_first = deferred.then(|| lower_expr(ctx, value));
-        let parent = lower_nested_assign_parent(ctx, array, span);
+        let parent = if key_already_diagnosed {
+            lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, true)
+        } else { lower_nested_assign_parent(ctx, array, span) };
         let key = lower_expr(ctx, index);
         let value = match value_first {
             Some(value) => value,
@@ -45,12 +102,16 @@ pub(super) fn lower_nested_array_assign(
         ctx.emit_void(
             Op::RuntimeCall,
             vec![parent.value, key.value, value.value],
-            None,
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
             effects_lookup::runtime_effects(),
             Some(span),
         );
         release_persisted_string_operand(ctx, key, span);
-        release_persisted_string_operand(ctx, value, span);
+        if matches!(value.ir_type, IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union))
+            && ctx.value_is_owning_temporary(value)
+        {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        } else { release_persisted_string_operand(ctx, value, span); }
         // Parent subscript reads of Mixed/refcounted elements are owning
         // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
         // reference — fresh, retained, or installed by autovivification). The
@@ -73,6 +134,15 @@ pub(super) fn lower_nested_array_assign(
     );
 }
 
+/// Recognizes static roots independently of their already captured dimension expressions.
+fn nested_target_has_static_root(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => nested_target_has_static_root(array),
+        _ => false,
+    }
+}
+
 /// Lowers the parent chain of a nested array assignment with write-context
 /// (fetch-for-write) semantics (issue #555): missing indexed elements, null
 /// gap slots, boxed `Mixed(null)` elements, and missing hash keys autovivify
@@ -85,6 +155,13 @@ pub(super) fn lower_nested_assign_parent(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
     span: Span,
+) -> LoweredValue {
+    lower_nested_assign_parent_with_diagnosed_key(ctx, expr, span, false)
+}
+
+/// Reuses a compound read's dimension diagnoses while obtaining the writable parent cell.
+fn lower_nested_assign_parent_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span, key_already_diagnosed: bool,
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array, index } = &expr.kind else {
         if let ExprKind::Variable(name) = &expr.kind {
@@ -109,13 +186,15 @@ pub(super) fn lower_nested_assign_parent(
     }
     // Boxed Mixed receivers: chains recurse with for-write semantics; other
     // receiver shapes evaluate once as plain reads of the receiver cell.
-    let receiver = lower_nested_assign_parent(ctx, array, span);
+    let receiver = lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, key_already_diagnosed);
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         let key = lower_expr(ctx, index);
         let parent = ctx.emit_value(
             Op::RuntimeCall,
             vec![receiver.value, key.value],
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+            Some(Immediate::RuntimeCall(if key_already_diagnosed {
+                RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+            } else { RuntimeCallTarget::ArrayFetchForWrite })),
             PhpType::Mixed,
             effects_lookup::runtime_effects(),
             Some(expr.span),

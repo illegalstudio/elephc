@@ -55,6 +55,7 @@ mod declarations;
 mod instance_property_writes;
 mod static_property_writes;
 mod property_array_writes;
+pub(crate) mod property_write_receiver;
 mod metadata_control;
 mod nested_append;
 mod return_coercions;
