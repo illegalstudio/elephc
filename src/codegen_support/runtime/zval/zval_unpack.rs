@@ -9,7 +9,8 @@
 //! - Input: `x0` / `rax` = zval pointer.
 //! - Output: `x0` / `rax` = boxed `Mixed` cell pointer (produced via
 //!   `__rt_mixed_from_value` with the recovered `(tag, lo, hi)` triple).
-//! - String zvals are copied into an owned elephc string via `__rt_str_persist`.
+//! - String zvals are boxed from the borrowed zend_string bytes; the boxing
+//!   (`__rt_mixed_from_value`) makes the one owned copy.
 //! - Array zvals are rebuilt into elephc arrays by `__rt_zval_unpack_array`
 //!   (wired per stage) so the resulting cell holds runtime-managed storage.
 
@@ -110,15 +111,17 @@ pub fn emit_zval_unpack(emitter: &mut Emitter) {
     emitter.instruction("mov x2, xzr");                                         // hi = 0
     emitter.instruction("b __rt_zval_unpack_build");                            // build the Mixed cell from the recovered triple
 
-    // -- string: copy zend_string bytes into an owned elephc string --
+    // -- string: box the zend_string bytes; the boxing makes the owned copy --
+    // __rt_mixed_from_value persists a string payload for the cell it returns,
+    // so the bytes are passed borrowed. Persisting them here as well left the
+    // first copy owned by nothing: one leaked block per unpacked string.
     emitter.label("__rt_zval_unpack_string");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the zval pointer
     emitter.instruction("ldr x10, [x10]");                                      // load the zend_string pointer
-    emitter.instruction("ldr x2, [x10, #16]");                                  // load the zend_string length
-    emitter.instruction("add x1, x10, #24");                                    // x1 = zend_string val[] base
-    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned elephc string pointer, x2 = length
+    emitter.instruction("ldr x2, [x10, #16]");                                  // hi = zend_string length
+    emitter.instruction("add x1, x10, #24");                                    // lo = borrowed zend_string val[] bytes
     emitter.instruction("mov x0, #1");                                          // tag = 1 (string)
-    emitter.instruction("b __rt_zval_unpack_build");                            // build the Mixed cell from the recovered triple
+    emitter.instruction("b __rt_zval_unpack_build");                            // box it; the boxing persists the bytes
 
     // -- array: rebuild a fresh elephc array, then own-transfer box it into a Mixed cell --
     // The rebuilt array is freshly allocated (refcount 1), so the cell takes its
@@ -241,17 +244,16 @@ fn emit_zval_unpack_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // hi = 0
     emitter.instruction("jmp __rt_zval_unpack_build");                          // build the Mixed cell from the recovered triple
 
-    // -- string: copy zend_string bytes into an owned elephc string --
+    // -- string: box the zend_string bytes; the boxing makes the owned copy --
+    // __rt_mixed_from_value persists a string payload for the cell it returns,
+    // so the bytes are passed borrowed (see the aarch64 variant).
     emitter.label("__rt_zval_unpack_string");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the zval pointer
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the zend_string pointer
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // load the zend_string length
-    emitter.instruction("lea rax, [r10 + 24]");                                 // rax = zend_string val[] base
-    emitter.instruction("call __rt_str_persist");                               // rax = owned elephc string pointer, rdx = length
-    emitter.instruction("mov rdi, rax");                                        // lo = owned string pointer
-    emitter.instruction("mov rsi, rdx");                                        // hi = string length
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // hi = zend_string length
+    emitter.instruction("lea rdi, [r10 + 24]");                                 // lo = borrowed zend_string val[] bytes
     emitter.instruction("mov eax, 1");                                          // tag = 1 (string)
-    emitter.instruction("jmp __rt_zval_unpack_build");                          // build the Mixed cell from the recovered triple
+    emitter.instruction("jmp __rt_zval_unpack_build");                          // box it; the boxing persists the bytes
 
     // -- array: rebuild a fresh elephc array, then own-transfer box it into a Mixed cell --
     // The rebuilt array is freshly allocated (refcount 1), so the cell takes its

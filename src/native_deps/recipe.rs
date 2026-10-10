@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::{curl, libssh2, libxml2, nghttp2, oniguruma, openssl, pcre2, zlib};
+use super::recipes::{curl, libssh2, libxml2, nghttp2, oniguruma, openssl, pcre2, php_src, zlib};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -44,6 +44,7 @@ pub struct CuratedRecipes;
 enum BuiltInRecipe {
     Oniguruma,
     Pcre2,
+    PhpSrc,
     Zlib,
     Openssl,
     Nghttp2,
@@ -57,6 +58,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
         ("oniguruma", 3) => Some(BuiltInRecipe::Oniguruma),
         ("pcre2", 3) => Some(BuiltInRecipe::Pcre2),
+        ("php-src", 1) => Some(BuiltInRecipe::PhpSrc),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
@@ -73,6 +75,7 @@ impl RecipeRunner for CuratedRecipes {
         match built_in_recipe(request.package, request.version.recipe_revision) {
             Some(BuiltInRecipe::Oniguruma) => oniguruma::build(request),
             Some(BuiltInRecipe::Pcre2) => pcre2::build(request),
+            Some(BuiltInRecipe::PhpSrc) => php_src::build(request),
             Some(BuiltInRecipe::Zlib) => zlib::build(request),
             Some(BuiltInRecipe::Openssl) => openssl::build(request),
             Some(BuiltInRecipe::Nghttp2) => nghttp2::build(request),

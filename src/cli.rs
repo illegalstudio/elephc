@@ -262,6 +262,8 @@ pub(crate) enum Command {
     Compile(CliConfig),
     /// One validated `elephc native` subcommand.
     Native(NativeCommand),
+    /// One validated `elephc extension` hosted-extension command.
+    PhpExt(crate::php_ext::cli::PhpExtCommand),
     /// One validated `elephc monitor` sampling invocation.
     Monitor(crate::monitor::MonitorCommand),
 }
@@ -273,6 +275,20 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
             Ok(command) => Command::Monitor(command),
             Err(error) => {
                 eprintln!("{error}\n\n{}", crate::monitor::MONITOR_USAGE);
+                process::exit(1);
+            }
+        };
+    }
+    if args.get(1).map(String::as_str) == Some("extension") {
+        use crate::php_ext::cli::{parse_php_ext_args, php_ext_help, PhpExtParseOutcome};
+        return match parse_php_ext_args(&args[2..]) {
+            Ok(PhpExtParseOutcome::Command(command)) => Command::PhpExt(command),
+            Ok(PhpExtParseOutcome::Help(help)) => {
+                print!("{help}");
+                process::exit(0);
+            }
+            Err(error) => {
+                eprintln!("{error}\n\n{}", php_ext_help());
                 process::exit(1);
             }
         };

@@ -1083,3 +1083,28 @@ echo $c->readP() . ":" . $c->readC();
     );
     assert_eq!(out, "10:2;10:20");
 }
+
+/// A property name computed for one access (`$o->{(string) $mixed}`) is a
+/// temporary string the access only reads. Neither the write nor the read
+/// released it, so each access leaked one block.
+#[test]
+fn test_computed_dynamic_property_name_is_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function name_of(int $i): mixed {
+    return $i % 2 === 0 ? "alpha" : "beta";
+}
+$total = 0;
+for ($i = 0; $i < 50; $i++) {
+    $o = new stdClass();
+    $o->{(string) name_of($i)} = $i;
+    $o->{(string) name_of($i + 1)} = 1;
+    $total += $o->{(string) name_of($i)};
+}
+echo $total, "\n";
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "1225\n");
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}

@@ -1363,6 +1363,7 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_indexed ---");
     emitter.label_global("__rt_var_dump_indexed");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "x0", "__rt_var_dump_hash");
 
     // -- hand a run-time promoted array to the hash walker --
     // A statically `Array(Mixed)` local can hold HASH storage at run time: the write helper
@@ -1458,6 +1459,7 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_indexed ---");
     emitter.label_global("__rt_var_dump_indexed");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "rdi", "__rt_var_dump_hash");
 
     // -- hand a run-time promoted array to the hash walker --
     // Same runtime-promotion probe as the AArch64 path; see its comment for why a statically

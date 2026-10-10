@@ -20,6 +20,9 @@ pub(super) struct BackendInputs<'a> {
     /// `extension_loaded()` alongside archive-derived bridge extensions. Needed
     /// because the shared `elephc_pdo` archive cannot identify a surface by itself.
     pub(super) linked_php_surfaces: &'a [String],
+    /// Real PHP extensions the project hosts: their archives, the Zend engine
+    /// archive they resolve against, and the C++ runtime when one needs it.
+    pub(super) hosted_php_ext: Option<&'a crate::php_ext::install::HostedExtensions>,
     pub(super) ir_module: ir::Module,
     pub(super) web: bool,
     pub(super) web_isolation: codegen::WebIsolation,
@@ -65,6 +68,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         with_crates,
         ini_overrides,
         linked_php_surfaces,
+        hosted_php_ext,
         mut ir_module,
         web,
         web_isolation,
@@ -341,7 +345,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     {
         native_requirements.push(NativeRequirement::package("libxml2"));
     }
-    let resolved_native = match crate::native_deps::resolve_for_compilation(
+    // Hosted PHP extensions resolve their Zend symbols from the managed
+    // `php-src` package's engine archive.
+    if hosted_php_ext.is_some() {
+        native_requirements.push(NativeRequirement::package(crate::php_ext::install::PHP_SRC_PACKAGE));
+    }
+    let mut resolved_native = match crate::native_deps::resolve_for_compilation(
         Path::new(filename),
         target,
         &native_requirements,
@@ -352,6 +361,9 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             process::exit(1);
         }
     };
+    if let Some(hosted) = hosted_php_ext {
+        insert_hosted_extensions(&mut resolved_native, hosted, target);
+    }
     let link_plan = crate::link_planning::build(crate::link_planning::LinkPlanningInputs {
         user_libraries: extra_link_libs,
         user_search_paths: extra_link_paths,
@@ -467,4 +479,41 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         &format!("Compiled '{}' -> '{}'", filename, output_paths.bin.display()),
         timings.elapsed(),
     );
+}
+
+/// Places each hosted PHP extension's archive in the link, immediately before
+/// the `php-src` engine archive every one of them resolves Zend symbols from.
+/// Static archives resolve in command-line order on GNU ld, so an extension
+/// after the engine would leave its engine calls undefined. A C++ extension
+/// also needs the platform's C++ runtime, which nothing else in a compiled
+/// program links.
+fn insert_hosted_extensions(
+    resolved: &mut Vec<crate::native_deps::ResolvedNativePackage>,
+    hosted: &crate::php_ext::install::HostedExtensions,
+    target: Target,
+) {
+    let engine = resolved
+        .iter()
+        .position(|package| package.package == crate::php_ext::install::PHP_SRC_PACKAGE)
+        .unwrap_or(resolved.len());
+    let cxx_runtime = match target.platform {
+        crate::codegen_support::platform::Platform::Linux => "stdc++",
+        _ => "c++",
+    };
+    let packages = hosted.extensions.iter().map(|extension| {
+        let mut system_libraries = extension.record.libraries.clone();
+        if extension.record.cxx {
+            system_libraries.push(cxx_runtime.to_string());
+        }
+        crate::native_deps::ResolvedNativePackage {
+            package: format!("extension:{}", extension.name),
+            artifact_root: extension.artifact_dir.clone(),
+            archives: vec![extension.archive()],
+            system_libraries,
+            frameworks: Vec::new(),
+        }
+    });
+    let tail = resolved.split_off(engine);
+    resolved.extend(packages);
+    resolved.extend(tail);
 }

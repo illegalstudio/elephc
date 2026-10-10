@@ -30,6 +30,7 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_dynamic ---");
     emitter.label_global("__rt_json_encode_array_dynamic");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "x0", "__rt_json_encode_assoc");
 
     // -- hand a run-time promoted array to the object-form encoder --
     // A statically `Array(...)` value can hold HASH storage at run time:
@@ -302,6 +303,7 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_dynamic ---");
     emitter.label_global("__rt_json_encode_array_dynamic");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "rax", "__rt_json_encode_assoc");
 
     // -- hand a run-time promoted array to the object-form encoder --
     // Same runtime-promotion probe as the AArch64 path; `__rt_json_encode_assoc` takes the

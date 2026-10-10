@@ -459,6 +459,11 @@ pub(super) fn lower_dynamic_property_assign(
     crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
         ctx, &PhpType::Mixed, value, span,
     );
+    // The write copies the name into the property table; a name computed for this
+    // write (`$o->{(string) $mixed} = ...`) is a temporary the write does not keep.
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
+    }
 }
 
 /// Returns whether a runtime-name write needs a boxed value for a reachable fixed slot.

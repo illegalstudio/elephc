@@ -1,0 +1,11 @@
+[native]
+schema = 1
+
+[native.dependencies]
+php-src = "8.5.6"
+
+[extension]
+schema = 1
+
+[extension.dependencies]
+wordstat = { path = "ext/wordstat" }

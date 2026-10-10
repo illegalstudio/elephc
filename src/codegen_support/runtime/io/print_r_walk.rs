@@ -492,6 +492,7 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_indexed ---");
     emitter.label_global("__rt_print_r_indexed");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "x0", "__rt_print_r_hash");
 
     // -- hand a run-time promoted array to the hash walker --
     // A statically `Array(Mixed)` value can hold HASH storage at run time:
@@ -600,6 +601,7 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_indexed ---");
     emitter.label_global("__rt_print_r_indexed");
+    crate::codegen_support::runtime::arrays::emit_tail_jump_if_hash(emitter, "rdi", "__rt_print_r_hash");
 
     // -- hand a run-time promoted array to the hash walker --
     // Same runtime-promotion probe as the AArch64 path; the hash walker takes the array in

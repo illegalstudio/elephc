@@ -64,6 +64,18 @@ const TAR_TRAILER: u64 = 1024;
 /// Extracts a verified compressed tar of the catalogued format to an empty destination and
 /// returns it.
 pub fn extract_archive(archive_path: &Path, format: ArchiveFormat, destination: &Path) -> Result<PathBuf, NativeError> {
+    extract_archive_skipping(archive_path, format, destination, &[])
+}
+
+/// Like [`extract_archive`], but tolerates and drops the named regular files
+/// beside the single top-level directory. A PECL release is shaped that way:
+/// `package.xml` next to `<name>-<version>/`.
+pub fn extract_archive_skipping(
+    archive_path: &Path,
+    format: ArchiveFormat,
+    destination: &Path,
+    skip_top_level_files: &[&str],
+) -> Result<PathBuf, NativeError> {
     if destination.exists() {
         return Err(NativeError::new(NativeErrorKind::Archive, "archive destination already exists").with_path(destination));
     }
@@ -74,12 +86,12 @@ pub fn extract_archive(archive_path: &Path, format: ArchiveFormat, destination: 
     }
     let file = fs::File::open(archive_path).map_err(|error| NativeError::io("open source archive", archive_path, error))?;
     match format {
-        ArchiveFormat::TarGz => extract_tar(GzDecoder::new(file), archive_path, compressed_size, destination)?,
+        ArchiveFormat::TarGz => extract_tar(GzDecoder::new(file), archive_path, compressed_size, destination, skip_top_level_files)?,
         ArchiveFormat::TarXz => {
             let inflated = inflate_xz(file, archive_path, compressed_size, destination)?;
             let result = fs::File::open(&inflated)
                 .map_err(|error| NativeError::io("open inflated xz source", &inflated, error))
-                .and_then(|tar| extract_tar(BufReader::new(tar), archive_path, compressed_size, destination));
+                .and_then(|tar| extract_tar(BufReader::new(tar), archive_path, compressed_size, destination, skip_top_level_files));
             let _ = fs::remove_file(&inflated);
             result?;
         }
@@ -163,7 +175,7 @@ impl<W: Write> Write for BoundedWriter<W> {
 ///
 /// `compressed_size` is the on-disk size of the ORIGINAL compressed archive, whatever the
 /// container, so the compression-ratio bound means the same thing for both formats.
-fn extract_tar<R: Read>(reader: R, archive_path: &Path, compressed_size: u64, destination: &Path) -> Result<(), NativeError> {
+fn extract_tar<R: Read>(reader: R, archive_path: &Path, compressed_size: u64, destination: &Path, skip_top_level_files: &[&str]) -> Result<(), NativeError> {
     let mut archive = tar::Archive::new(reader);
     let mut root: Option<std::ffi::OsString> = None;
     let mut seen = HashSet::new();
@@ -185,6 +197,12 @@ fn extract_tar<R: Read>(reader: R, archive_path: &Path, compressed_size: u64, de
             continue;
         }
         let original = entry.path().map_err(|error| archive_error(archive_path, format!("invalid tar path: {error}")))?.into_owned();
+        if entry.header().entry_type().is_file()
+            && original.components().count() == 1
+            && original.to_str().is_some_and(|name| skip_top_level_files.contains(&name))
+        {
+            continue;
+        }
         let relative = stripped_path(&original, &mut root)?;
         if relative.as_os_str().is_empty() {
             if !entry.header().entry_type().is_dir() {
@@ -447,6 +465,33 @@ mod tests {
         let output = root.join("out");
         extract_archive(&archive, ArchiveFormat::TarGz, &output).unwrap();
         assert_eq!(fs::read(output.join("file.txt")).unwrap(), b"fixture");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A PECL release keeps `package.xml` beside `<name>-<version>/`. Skipping it
+    /// by name extracts the extension; without the skip the second top-level
+    /// entry is still refused, so the tolerance is opt-in and exact.
+    #[test]
+    fn skips_named_top_level_files_beside_the_root() {
+        let root = fixture("pecl");
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("ext.tar.gz");
+        let entries = [
+            ("package.xml", tar::EntryType::Regular, 0o644),
+            ("ext-1.0.0/config.m4", tar::EntryType::Regular, 0o644),
+        ];
+        let file = fs::File::create(&archive).unwrap();
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder.write_all(&tar_bytes(&entries)).unwrap();
+        encoder.finish().unwrap();
+
+        let output = root.join("out");
+        extract_archive_skipping(&archive, ArchiveFormat::TarGz, &output, &["package.xml"]).unwrap();
+        assert_eq!(fs::read(output.join("config.m4")).unwrap(), b"fixture");
+        assert!(!output.join("package.xml").exists());
+
+        let refused = root.join("refused");
+        assert!(extract_archive(&archive, ArchiveFormat::TarGz, &refused).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

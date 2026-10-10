@@ -92,3 +92,39 @@ pub fn emit_heap_kind(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // report raw/non-heap kind 0
     emitter.instruction("ret");                                                 // return default kind 0
 }
+
+/// The uniform heap kind of associative hash storage.
+const HASH_HEAP_KIND: u8 = 3;
+
+/// Emits, at the entry of an indexed-array walker, a tail jump to `hash_label`
+/// when the array in `array_reg` is really a hash.
+///
+/// A PHP `array<mixed>` can be promoted to hash storage at run time
+/// (`Op::ArraySetMixedKey` writing a string key), while its static type still
+/// selects the indexed walker. The hash walker must take the same arguments in
+/// the same registers. The check reads only the header word the indexed
+/// walkers read anyway, and clobbers one scratch register (`x9` / `r10`)
+/// before any frame exists, so the return address is untouched.
+///
+/// On AArch64 the jump is an unconditional `b` behind a local `b.ne`: the hash
+/// walker may live in another runtime object, and a conditional branch has
+/// no relocation that reaches a symbol outside its own section.
+pub(crate) fn emit_tail_jump_if_hash(emitter: &mut Emitter, array_reg: &str, hash_label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let indexed = format!("{hash_label}_indexed_entry");
+            emitter.instruction(&format!("ldr x9, [{array_reg}, #-8]"));        // load the array's uniform heap kind word
+            emitter.instruction("and x9, x9, #0xff");                           // keep the low-byte heap kind
+            emitter.instruction(&format!("cmp x9, #{HASH_HEAP_KIND}"));         // is this indexed-typed array really a hash?
+            emitter.instruction(&format!("b.ne {indexed}"));                    // an indexed array walks on here
+            emitter.instruction(&format!("b {hash_label}"));                    // walk a promoted array as the hash it is
+            emitter.label(&indexed);
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov r10, QWORD PTR [{array_reg} - 8]")); // load the array's uniform heap kind word
+            emitter.instruction("and r10d, 0xff");                              // keep the low-byte heap kind
+            emitter.instruction(&format!("cmp r10, {HASH_HEAP_KIND}"));         // is this indexed-typed array really a hash?
+            emitter.instruction(&format!("je {hash_label}"));                   // walk a promoted array as the hash it is
+        }
+    }
+}

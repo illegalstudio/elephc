@@ -354,6 +354,14 @@ pub(super) fn lower_mixed_key_array_set(
         Op::ArraySetMixedKey.default_effects(),
         Some(span),
     );
+    // The helper only borrows the key cell (a string key is copied into the hash), and the
+    // backend retains a Mixed value before the helper stores it, so a call's fresh key or value
+    // cell is released here like any other Mixed-element write operand: `$map[key()] = 1` kept
+    // the key's box, `$map[$k] = value()` the value's.
+    if ctx.value_is_owning_temporary(index) {
+        crate::ir_lower::ownership::release_if_owned(ctx, index, Some(span));
+    }
+    release_indexed_array_write_operand(ctx, Some(&PhpType::Mixed), value, span);
     ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
 }
 

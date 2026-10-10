@@ -129,6 +129,10 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         // opcache_* integration suites compile both examples' surfaces for real.
         "opcache_get_configuration",
         "opcache-runtime-cache",
+        // Hosted PHP extension functions are declared by the extension prelude
+        // from the project's built extensions, which corpus lowering does not
+        // resolve.
+        "extension",
     ];
     main_php
         .parent()

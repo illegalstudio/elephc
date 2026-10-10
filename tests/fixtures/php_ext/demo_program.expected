@@ -1,0 +1,27 @@
+3 42
+Hello, Ada. | Hi, Ada.
+a/b//c 1 1+2+3
+3 6 1 3 2
+NULL
+42 false
+-9223372036854775808 true
+2
+DemoParseException 42 '12x' is not an integer
+-17
+OutOfRangeException 7 out of range
+6 6
+UnderflowException 3 overdrawn left=0
+ValueError: demo_split(): Argument #2 ($separator) cannot be empty
+{"a":[1,2.5,"x"],"b":null,"3":true}
+float(1.5)
+string(3) "str"
+bool(false)
+NULL
+int(-9)
+{"list":[1,2.5,true,null],"object":{"label":"inside","items":["deep"]},"7":"seven","utf8":"caf\u00e9"}
+inside deep seven
+elephc 6
+3 2 1001 k0
+2
+42 demo 0.25
+bool(true)
