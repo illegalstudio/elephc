@@ -10,6 +10,51 @@
 
 use crate::support::*;
 
+/// Boxed pop restores the next append key only for the immediate integer predecessor.
+#[test]
+fn test_core_boxed_array_pop_append_cursor() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function appendAfterPop(array $items): string {
+    array_pop($items);
+    $items[] = 'c';
+    return implode(',', array_keys($items));
+}
+for ($i = 0; $i < 6; $i++) {
+    echo appendAfterPop([0 => 'a', 1 => 'b']), ';';
+    echo appendAfterPop([2 => 'a', 6 => 'b']), ';';
+    echo appendAfterPop([9 => 'a', 2 => 'b']), ';';
+    echo appendAfterPop(['x' => 'a', 4 => 'b']), ';';
+    echo appendAfterPop([4 => 'a', 'x' => 'b']), ';';
+    echo appendAfterPop([-2 => 'a', -1 => 'b']), ';';
+    echo appendAfterPop([PHP_INT_MAX => 'a']), ';';
+    echo appendAfterPop([PHP_INT_MIN => 'a']), ';';
+    echo appendAfterPop(['x' => 'a', PHP_INT_MIN => 'b']), ';';
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0,1;2,6;9,10;x,4;4,5;-2,-1;9223372036854775807;0;x,0;".repeat(6));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Concrete hash pop updates only its separated receiver's append history, not a COW copy.
+#[test]
+fn test_core_assoc_array_pop_append_cursor() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 6; $i++) {
+    $items = [2 => 'a', 6 => 'b'];
+    $copy = $items;
+    array_pop($items);
+    $items[] = 'c';
+    echo implode(',', array_keys($items)), '|', implode(',', array_keys($copy)), '|',
+        implode(',', $items), '|', implode(',', $copy), ';';
+    unset($items, $copy);
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2,6|2,6|a,c|a,b;".repeat(6));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Concrete string slots transfer their owners on both discarded and retained pop/shift results.
 #[test]
 fn test_core_concrete_array_pop_shift_transfer_string_owners() {

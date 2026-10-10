@@ -5,7 +5,8 @@
 //! - Hash insertion, native Mixed append, EIR append, and query registration adapters.
 //!
 //! Key details:
-//! - The signed counter survives deletion and saturates at PHP_INT_MAX.
+//! - The signed counter survives unset, but pop rewinds its immediate predecessor.
+//! - Saturation at PHP_INT_MAX is preserved when popping that maximum key.
 //! - A nonthrowing probe lets query registration stop a field on append exhaustion.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -36,6 +37,35 @@ pub(super) fn record_insert(emitter: &mut Emitter, hash: &str, entry: &str, pref
         emitter.instruction("add r14, 1");                                      // compute the successor with signed overflow flags
         emitter.instruction("cmovo r14, r13");                                  // keep PHP_INT_MAX instead of wrapping negative
         emitter.instruction(&format!("mov QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}], r14")); // publish the persistent next index
+    }
+    emitter.label(&done);
+}
+
+/// Rewinds the append counter only when pop removes its integer predecessor.
+/// Preserves the hash/key/length argument registers; ARM uses x9/x10, x86 uses r10/r11.
+pub(super) fn rewind_after_pop(
+    emitter: &mut Emitter, hash: &str, key: &str, key_len: &str, prefix: &str,
+) {
+    let done = format!("{prefix}_next_index_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmn {key_len}, #1"));                 // only integer tail keys can rewind automatic indexing
+            emitter.instruction(&format!("b.ne {done}"));                       // popping a string key preserves numeric insertion history
+            emitter.instruction(&format!("ldr x9, [{hash}, #{NEXT_INDEX_OFFSET}]"));// read the current next automatic integer key
+            emitter.instruction("sub x10, x9, #1");                             // match PHP's immediate predecessor rule, including saturation
+            emitter.instruction(&format!("cmp {key}, x10"));                    // older numeric tail entries do not rewind a higher counter
+            emitter.instruction(&format!("b.ne {done}"));                       // retain history unless this is the counter's predecessor
+            emitter.instruction(&format!("str {key}, [{hash}, #{NEXT_INDEX_OFFSET}]"));// let the next append reuse the popped numeric slot
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {key_len}, -1"));                 // only integer tail keys can rewind automatic indexing
+            emitter.instruction(&format!("jne {done}"));                        // popping a string key preserves numeric insertion history
+            emitter.instruction(&format!("mov r10, QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}]"));// read the persistent next automatic integer key
+            emitter.instruction("lea r11, [r10 - 1]");                          // match PHP's immediate predecessor rule, including saturation
+            emitter.instruction(&format!("cmp {key}, r11"));                    // lower numeric tail entries preserve a higher insertion history
+            emitter.instruction(&format!("jne {done}"));                        // rewind only when this key directly precedes the counter
+            emitter.instruction(&format!("mov QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}], {key}"));// let the next append reuse the popped numeric slot
+        }
     }
     emitter.label(&done);
 }

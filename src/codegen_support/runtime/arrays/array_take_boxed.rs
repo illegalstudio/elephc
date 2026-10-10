@@ -141,6 +141,17 @@ fn emit_take(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, arg0, 16);
     abi::load_at_offset(emitter, arg1, 32);
     abi::load_at_offset(emitter, arg2, 40);
+    let mode = if emitter.target.arch == Arch::AArch64 { "x9" } else { "r10" };
+    abi::load_at_offset(emitter, mode, 48);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("cbnz x9, __rt_array_take_skip_pop_rewind"),// shift rebuilds the next index instead of rewinding the tail
+        Arch::X86_64 => {
+            emitter.instruction("test r10, r10");                               // select pop-specific append-counter repair
+            emitter.instruction("jnz __rt_array_take_skip_pop_rewind");         // shift reindexes survivors through the existing rebuild path
+        }
+    }
+    super::hash_next_index::rewind_after_pop(emitter, arg0, arg1, arg2, "__rt_array_take_pop");
+    emitter.label("__rt_array_take_skip_pop_rewind");
     abi::emit_call_label(emitter, "__rt_hash_unset");
     abi::load_at_offset(emitter, result, 48);
     match emitter.target.arch {
@@ -261,6 +272,7 @@ fn emit_hash_pop(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, arg0, 8);
     abi::load_at_offset(emitter, arg1, 16);
     abi::load_at_offset(emitter, arg2, 24);
+    super::hash_next_index::rewind_after_pop(emitter, arg0, arg1, arg2, "__rt_hash_pop");
     abi::emit_call_label(emitter, "__rt_hash_unset");
     abi::emit_jump(emitter, "__rt_hash_pop_boxed_done");
 
@@ -293,6 +305,7 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_array_take_boxed(&mut emitter);
+            let arch = emitter.target.arch;
             let asm = emitter.output();
             let take = &asm[asm.find("__rt_array_take_boxed:").unwrap()..];
             let unlink = take.find("__rt_hash_unset").unwrap();
@@ -302,6 +315,13 @@ mod tests {
             let hash_pop = &asm[asm.find("__rt_hash_pop_boxed:").unwrap()..];
             assert!(hash_pop.find("__rt_incref").unwrap() < hash_pop.find("__rt_hash_unset").unwrap(), "{name}");
             assert!(hash_pop.contains("__rt_mixed_from_value"), "{name}");
+            let counter_write = if arch == Arch::AArch64 {
+                "str x1, [x0, #56]"
+            } else {
+                "mov QWORD PTR [rdi + 56], rsi"
+            };
+            assert_eq!(asm.matches(counter_write).count(), 2, "{name}: both pop paths rewind");
+            assert!(take.contains("__rt_array_take_skip_pop_rewind"), "{name}: shift skips rewind");
             if name == "linux-x86_64" {
                 let release = take.find("call __rt_decref_hash").unwrap();
                 let reload = take[..release].rfind("mov rax, QWORD PTR [rbp - 16]").unwrap();
