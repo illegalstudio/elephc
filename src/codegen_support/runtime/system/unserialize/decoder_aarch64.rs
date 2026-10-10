@@ -536,6 +536,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #56]");                                   // key length
     emitter.instruction("ldr x9, [sp, #80]");                                   // blocked objects keep their wire properties opaque
     emitter.instruction("cbz x9, __rt_unser_obj_store_opaque_prop");            // blocked objects retain the parsed property semantically
+    emitter.instruction("ldr x16, [sp, #96]");                                  // pass the object's owning box for release on a hydration TypeError
     emitter.instruction("bl __rt_obj_store_prop");                              // store the value into the matching property slot
     emitter.instruction("b __rt_unser_obj_skip_prop_store");                    // transferred value now belongs to the hydrated object
     emitter.label("__rt_unser_obj_store_opaque_prop");

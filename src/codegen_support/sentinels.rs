@@ -95,6 +95,15 @@ pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 /// carries it: there a tagged slot is `0`, since it owns no heap reference.
 pub(crate) const TAGGED_SCALAR_PROPERTY_TAG: u64 = 12;
 
+/// Accepted-tag mask bit that admits a `false` member's boxed tag-3 payload only when it is zero.
+///
+/// `true` and `false` share runtime value tag 3, so a declared `false` (or `int|false`) member
+/// cannot be expressed by a tag bit alone. `serprop_accepted_mask` sets this bit instead of tag
+/// bit 3 for a `False` member, and the unserialize hydration check additionally requires a zero
+/// payload when it is set. It sits above the runtime value tag range (0-10) so it never collides
+/// with a tag bit.
+pub(crate) const SERPROP_FALSE_ONLY_BIT: u64 = 1 << 11;
+
 /// Uniform low-byte heap kinds shared by allocation producers, ownership dispatchers and GC.
 ///
 /// These values describe top-level managed allocations. They are unrelated to Mixed runtime

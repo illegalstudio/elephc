@@ -11,7 +11,6 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::{
     UNSER_OBJECT_STRING_ERROR_PREFIX, UNSER_OBJECT_STRING_ERROR_SUFFIX,
-    UNSER_TYPE_GIVEN_SUFFIX,
 };
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
@@ -29,11 +28,14 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.blank();
             emitter.comment("--- runtime: catchable unserialize TypeError ---");
             emitter.label_global("__rt_unser_throw_type_error");
-            emitter.instruction("sub sp, sp, #80");                             // reserve tag/payload/prefix/type/message state
-            emitter.instruction("stp x29, x30, [sp, #64]");                     // preserve the caller frame and return address
-            emitter.instruction("add x29, sp, #64");                            // establish a stable error-construction frame
+            emitter.instruction("sub sp, sp, #96");                             // reserve tag/payload/prefix/suffix/type/message state
+            emitter.instruction("stp x29, x30, [sp, #80]");                     // preserve the caller frame and return address
+            emitter.instruction("add x29, sp, #80");                            // establish a stable error-construction frame
             emitter.instruction("stp x0, x1, [sp]");                            // save runtime tag and payload
             emitter.instruction("stp x2, x3, [sp, #16]");                       // save diagnostic prefix pointer and length
+            emitter.instruction("stp x4, x5, [sp, #32]");                       // save diagnostic suffix pointer and length
+            emitter.instruction("str x6, [sp, #48]");                           // save the bool-spelling flag (true/false vs bool)
+            emitter.instruction("str x7, [sp, #72]");                           // save the rejected value box to release after type resolution
             emitter.instruction("mov x0, #0");                                  // end cleanup ignores the placeholder parse result
             emitter.instruction("bl __rt_unserialize_end");                     // close this opened context exactly once
             emitter.instruction("ldr x9, [sp]");                                // reload rejected runtime tag
@@ -62,7 +64,6 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
                 ("__rt_unser_type_int", "_unser_type_int", 3),
                 ("__rt_unser_type_string", "_unser_type_string", 6),
                 ("__rt_unser_type_float", "_unser_type_float", 5),
-                ("__rt_unser_type_bool", "_unser_type_bool", 4),
                 ("__rt_unser_type_array", "_unser_type_array", 5),
                 ("__rt_unser_type_null", "_unser_type_null", 4),
                 ("__rt_unser_type_resource", "_unser_type_resource", 8),
@@ -72,10 +73,29 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
                 emitter.instruction(&format!("mov x4, #{}", len));              // materialize the selected PHP type-name length
                 emitter.instruction("b __rt_unser_type_ready");                 // join dynamic message construction
             }
+            emitter.label("__rt_unser_type_bool");
+            emitter.instruction("ldr x9, [sp, #48]");                           // bool-spelling flag: 0 = `bool`, else the literal value
+            emitter.instruction("cbz x9, __rt_unser_type_bool_word");           // argument diagnostics spell the type as `bool`
+            emitter.instruction("ldr x9, [sp, #8]");                            // rejected bool payload
+            emitter.instruction("cbz x9, __rt_unser_type_false");               // a zero payload is PHP false
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x3", "_unser_type_true");
+            emitter.instruction("mov x4, #4");                                  // byte length of true
+            emitter.instruction("b __rt_unser_type_ready");                     // join dynamic message construction
+            emitter.label("__rt_unser_type_false");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x3", "_unser_type_false");
+            emitter.instruction("mov x4, #5");                                  // byte length of false
+            emitter.instruction("b __rt_unser_type_ready");                     // join dynamic message construction
+            emitter.label("__rt_unser_type_bool_word");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x3", "_unser_type_bool");
+            emitter.instruction("mov x4, #4");                                  // byte length of bool
+            emitter.instruction("b __rt_unser_type_ready");                     // join dynamic message construction
             emitter.label("__rt_unser_type_object");
             emitter.instruction("ldr x9, [sp, #8]");                            // rejected object payload
             emitter.instruction("cbz x9, __rt_unser_type_object_generic");      // null payload has no class metadata
             emitter.instruction("ldr x10, [x9]");                               // object class id
+            crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", -2);
+            emitter.instruction("cmp x10, x11");                                // is this the undeclared-class synthetic id?
+            emitter.instruction("b.eq __rt_unser_type_incomplete");             // PHP spells it __PHP_Incomplete_Class
             crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_class_name_count", 0);
             emitter.instruction("cmp x10, x11");                                // class id within the dense name table?
             emitter.instruction("b.hs __rt_unser_type_object_generic");         // out-of-range ids fall back to the object spelling
@@ -86,14 +106,26 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.label("__rt_unser_type_object_generic");
             crate::codegen_support::abi::emit_symbol_address(emitter, "x3", "_unser_type_object");
             emitter.instruction("mov x4, #6");                                  // byte length of object
+            emitter.instruction("b __rt_unser_type_ready");                     // join dynamic message construction
+            emitter.label("__rt_unser_type_incomplete");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x3", "_incomplete_class_name");
+            emitter.instruction("mov x4, #22");                                 // byte length of __PHP_Incomplete_Class
             emitter.label("__rt_unser_type_ready");
+            // Release a supplied rejected-value box now that its type name is resolved into
+            // x3/x4. The box is dropped through the uniform Mixed release path; the message
+            // construction below must not depend on the freed payload.
+            emitter.instruction("ldr x0, [sp, #72]");                           // rejected value box (0 for argument diagnostics)
+            emitter.instruction("cbz x0, __rt_unser_type_box_released");        // argument diagnostics own no value box
+            emitter.instruction("stp x3, x4, [sp, #56]");                       // keep the resolved type name across the release
+            emitter.instruction("bl __rt_decref_mixed");                        // drop the rejected value's boxed owner
+            emitter.instruction("ldp x3, x4, [sp, #56]");                       // restore the resolved type name
+            emitter.label("__rt_unser_type_box_released");
             emitter.instruction("ldp x1, x2, [sp, #16]");                       // diagnostic prefix string
             emitter.instruction("bl __rt_concat");                              // append the resolved PHP type name
-            crate::codegen_support::abi::emit_symbol_address(emitter, "x3", "_unser_type_given_suffix");
-            emitter.instruction(&format!("mov x4, #{}", UNSER_TYPE_GIVEN_SUFFIX.len())); // suffix byte length
-            emitter.instruction("bl __rt_concat");                              // append PHP's ` given` suffix
+            emitter.instruction("ldp x3, x4, [sp, #32]");                       // diagnostic suffix string
+            emitter.instruction("bl __rt_concat");                              // append the caller's suffix
             emitter.instruction("bl __rt_str_persist");                         // give the Throwable stable message ownership
-            emitter.instruction("stp x1, x2, [sp, #48]");                       // preserve message pointer/length across allocation
+            emitter.instruction("stp x1, x2, [sp, #56]");                       // preserve message pointer/length across allocation
             emitter.instruction("mov x0, #56");                                 // request the canonical Throwable payload size
             emitter.instruction("bl __rt_heap_alloc");                          // allocate the TypeError object payload
             emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
@@ -106,9 +138,9 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
                 0,
             );
             emitter.instruction("str x9, [x0]");                                // store the built-in TypeError class id
-            emitter.instruction("ldr x9, [sp, #48]");                           // recover the persisted TypeError message pointer
+            emitter.instruction("ldr x9, [sp, #56]");                           // recover the persisted TypeError message pointer
             emitter.instruction("str x9, [x0, #8]");                            // store the dynamic TypeError message pointer
-            emitter.instruction("ldr x9, [sp, #56]");                           // recover the dynamic message byte length
+            emitter.instruction("ldr x9, [sp, #64]");                           // recover the dynamic message byte length
             emitter.instruction("str x9, [x0, #16]");                           // store the TypeError message byte length
             emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
@@ -121,8 +153,8 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
                 "_exc_value",
                 0,
             );
-            emitter.instruction("ldp x29, x30, [sp, #64]");                     // restore the frame before unwinding
-            emitter.instruction("add sp, sp, #80");                             // release error-construction state
+            emitter.instruction("ldp x29, x30, [sp, #80]");                     // restore the frame before unwinding
+            emitter.instruction("add sp, sp, #96");                             // release error-construction state
             emitter.instruction("b __rt_throw_current");                        // propagate through the standard catchable exception path
         }
         Arch::X86_64 => {
@@ -131,11 +163,15 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.label_global("__rt_unser_throw_type_error");
             emitter.instruction("push rbp");                                    // preserve the caller frame while building the message
             emitter.instruction("mov rbp, rsp");                                // establish an aligned exception-construction frame
-            emitter.instruction("sub rsp, 64");                                 // reserve tag/payload/prefix/type/message state
+            emitter.instruction("sub rsp, 96");                                 // reserve tag/payload/prefix/suffix/type/message state
             emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // save runtime tag
             emitter.instruction("mov QWORD PTR [rbp - 16], rdi");               // save runtime payload
             emitter.instruction("mov QWORD PTR [rbp - 24], rsi");               // save diagnostic prefix pointer
             emitter.instruction("mov QWORD PTR [rbp - 32], rdx");               // save diagnostic prefix length
+            emitter.instruction("mov QWORD PTR [rbp - 56], r8");                // save diagnostic suffix pointer
+            emitter.instruction("mov QWORD PTR [rbp - 64], r9");                // save diagnostic suffix length
+            emitter.instruction("mov QWORD PTR [rbp - 72], r10");               // save the bool-spelling flag (true/false vs bool)
+            emitter.instruction("mov QWORD PTR [rbp - 80], r11");               // save the rejected value box to release after type resolution
             emitter.instruction("xor eax, eax");                                // end cleanup ignores the placeholder result
             emitter.instruction("call __rt_unserialize_end");                   // close this opened context exactly once
             emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                 // rejected runtime tag
@@ -164,7 +200,6 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
                 ("__rt_unser_type_int_x", "_unser_type_int", 3),
                 ("__rt_unser_type_string_x", "_unser_type_string", 6),
                 ("__rt_unser_type_float_x", "_unser_type_float", 5),
-                ("__rt_unser_type_bool_x", "_unser_type_bool", 4),
                 ("__rt_unser_type_array_x", "_unser_type_array", 5),
                 ("__rt_unser_type_null_x", "_unser_type_null", 4),
                 ("__rt_unser_type_resource_x", "_unser_type_resource", 8),
@@ -174,11 +209,29 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
                 emitter.instruction(&format!("mov rsi, {}", len));              // selected PHP type-name length
                 emitter.instruction("jmp __rt_unser_type_ready_x");             // join dynamic message construction
             }
+            emitter.label("__rt_unser_type_bool_x");
+            emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                 // bool-spelling flag: 0 = `bool`, else the literal value
+            emitter.instruction("je __rt_unser_type_bool_word_x");              // argument diagnostics spell the type as `bool`
+            emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                 // rejected bool payload
+            emitter.instruction("je __rt_unser_type_false_x");                  // a zero payload is PHP false
+            emitter.instruction("lea rdi, [rip + _unser_type_true]");           // spell the value as true
+            emitter.instruction("mov rsi, 4");                                  // byte length of true
+            emitter.instruction("jmp __rt_unser_type_ready_x");                 // join dynamic message construction
+            emitter.label("__rt_unser_type_false_x");
+            emitter.instruction("lea rdi, [rip + _unser_type_false]");          // spell the value as false
+            emitter.instruction("mov rsi, 5");                                  // byte length of false
+            emitter.instruction("jmp __rt_unser_type_ready_x");                 // join dynamic message construction
+            emitter.label("__rt_unser_type_bool_word_x");
+            emitter.instruction("lea rdi, [rip + _unser_type_bool]");           // spell the type as bool
+            emitter.instruction("mov rsi, 4");                                  // byte length of bool
+            emitter.instruction("jmp __rt_unser_type_ready_x");                 // join dynamic message construction
             emitter.label("__rt_unser_type_object_x");
             emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                // rejected object payload
             emitter.instruction("test r8, r8");                                 // null payload has no class metadata
             emitter.instruction("jz __rt_unser_type_object_generic_x");         // fall back to the generic object spelling
             emitter.instruction("mov r9, QWORD PTR [r8]");                      // object class id
+            emitter.instruction("cmp r9, -2");                                  // is this the undeclared-class synthetic id?
+            emitter.instruction("je __rt_unser_type_incomplete_x");             // PHP spells it __PHP_Incomplete_Class
             emitter.instruction("mov r10, QWORD PTR [rip + _class_name_count]"); // dense class-name table bound
             emitter.instruction("cmp r9, r10");                                 // class id within the dense name table?
             emitter.instruction("jae __rt_unser_type_object_generic_x");        // out-of-range ids fall back to the object spelling
@@ -192,13 +245,30 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.label("__rt_unser_type_object_generic_x");
             emitter.instruction("lea rdi, [rip + _unser_type_object]");         // generic fallback type name
             emitter.instruction("mov rsi, 6");                                  // byte length of object
+            emitter.instruction("jmp __rt_unser_type_ready_x");                 // join dynamic message construction
+            emitter.label("__rt_unser_type_incomplete_x");
+            emitter.instruction("lea rdi, [rip + _incomplete_class_name]");     // PHP's undeclared-class spelling
+            emitter.instruction("mov rsi, 22");                                 // byte length of __PHP_Incomplete_Class
             emitter.label("__rt_unser_type_ready_x");
+            // Release a supplied rejected-value box now that its type name is resolved into
+            // rdi/rsi. The box is dropped through the uniform Mixed release path; the message
+            // construction below must not depend on the freed payload.
+            emitter.instruction("mov r11, QWORD PTR [rbp - 80]");               // rejected value box (0 for argument diagnostics)
+            emitter.instruction("test r11, r11");                               // was a value box supplied?
+            emitter.instruction("jz __rt_unser_type_box_released_x");           // argument diagnostics own no value box
+            emitter.instruction("mov QWORD PTR [rbp - 88], rdi");               // keep the resolved type-name pointer across the release
+            emitter.instruction("mov QWORD PTR [rbp - 96], rsi");               // keep the resolved type-name length across the release
+            emitter.instruction("mov rax, r11");                                // rejected value box
+            emitter.instruction("call __rt_decref_mixed");                      // drop the rejected value's boxed owner
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 88]");               // restore the resolved type-name pointer
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 96]");               // restore the resolved type-name length
+            emitter.label("__rt_unser_type_box_released_x");
             emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // diagnostic prefix pointer
             emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");               // diagnostic prefix length
             emitter.instruction("call __rt_concat");                            // append the resolved PHP type name
-            emitter.instruction("lea rdi, [rip + _unser_type_given_suffix]");   // PHP diagnostic suffix
-            emitter.instruction(&format!("mov rsi, {}", UNSER_TYPE_GIVEN_SUFFIX.len())); // suffix byte length
-            emitter.instruction("call __rt_concat");                            // append ` given`
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");               // diagnostic suffix pointer
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");               // diagnostic suffix length
+            emitter.instruction("call __rt_concat");                            // append the caller's suffix
             emitter.instruction("call __rt_str_persist");                       // give the Throwable stable message ownership
             emitter.instruction("mov QWORD PTR [rbp - 40], rax");               // save persisted message pointer
             emitter.instruction("mov QWORD PTR [rbp - 48], rdx");               // save persisted message length

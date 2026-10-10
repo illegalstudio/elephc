@@ -29,7 +29,8 @@ use super::{
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
     STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
     UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
-    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
+    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_PROPERTY_ASSIGN_PREFIX,
+    UNSER_TYPE_GIVEN_SUFFIX,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -160,6 +161,13 @@ pub(crate) fn emit_runtime_data_fixed(
             ".globl {label}\n{label}:\n    .ascii {name:?}\n"
         ));
     }
+    // A hydrated property TypeError spells a bool value as its literal `true`/`false`
+    // (unlike the argument-type diagnostics, which spell the type as `bool`).
+    out.push_str(".globl _unser_type_true\n_unser_type_true:\n    .ascii \"true\"\n");
+    out.push_str(".globl _unser_type_false\n_unser_type_false:\n    .ascii \"false\"\n");
+    out.push_str(&format!(
+        ".globl _unser_property_assign_prefix\n_unser_property_assign_prefix:\n    .ascii {UNSER_PROPERTY_ASSIGN_PREFIX:?}\n"
+    ));
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
     out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
