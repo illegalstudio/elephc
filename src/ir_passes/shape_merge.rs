@@ -140,7 +140,7 @@ fn is_mergeable_candidate(function: &Function, module: &Module) -> bool {
         && !function.flags.is_callback_wrapper
         && !function.flags.is_runtime_callable_invoker
         && !module.data.strings.contains(&function.name)
-        && !has_nominal_use(function, true)
+        && !has_nominal_use(function, &module.data, true)
 }
 
 /// A cheap pre-filter so full comparisons only run within plausible groups.
@@ -173,7 +173,11 @@ fn cheap_key(function: &Function) -> CheapKey {
 /// (every object slot is one pointer wide), so `get(): T { return $this->value; }` may merge. A
 /// property WRITE stays refused: it carries a `PropertyRef` immediate and runs the typed-property
 /// guard, whose accepted-class list is the concrete `T`.
-fn has_nominal_use(function: &Function, method_dispatch_is_nominal: bool) -> bool {
+fn has_nominal_use(
+    function: &Function,
+    data: &crate::ir::DataPool,
+    method_dispatch_is_nominal: bool,
+) -> bool {
     use crate::ir::Op;
     function.instructions.iter().any(|instruction| {
         if matches!(
@@ -212,10 +216,12 @@ fn has_nominal_use(function: &Function, method_dispatch_is_nominal: bool) -> boo
         {
             return true;
         }
+        if instruction.op == Op::StaticMethodCall {
+            return static_call_is_nominal(instruction, data);
+        }
         matches!(
             instruction.op,
-            Op::StaticMethodCall
-                | Op::EvalStaticMethodCall
+            Op::EvalStaticMethodCall
                 | Op::IteratorMethodCall
                 | Op::SplRuntimeCall
                 | Op::MethodLookup
@@ -255,6 +261,32 @@ fn prop_set_source_is_concrete(function: &Function, instruction: &Instruction) -
                 .get(operand.as_raw() as usize)
                 .is_some_and(|value| value.php_type.codegen_repr() != PhpType::Mixed)
         })
+}
+
+/// Whether a static method call target is nominal.
+///
+/// `static::m()` is late-bound and `parent::m()` names a per-instantiation parent, so both are
+/// nominal. `self::m()` resolves through the lexical class like an instance dispatch, so it is
+/// soft and the call fixpoint decides. A target naming a concrete class carries that class in the
+/// immediate: identical strings mean the same class, and differing strings refuse the merge on
+/// their own, so returning not-nominal is safe either way.
+fn static_call_is_nominal(
+    instruction: &Instruction,
+    data: &crate::ir::DataPool,
+) -> bool {
+    let target = match instruction.immediate {
+        Some(Immediate::Data(id)) | Some(Immediate::ProfiledData { data: id, .. }) => {
+            data.strings.get(id.as_raw() as usize).map(String::as_str)
+        }
+        _ => None,
+    };
+    let Some(target) = target else {
+        return true;
+    };
+    let Some((receiver, _)) = target.rsplit_once("::") else {
+        return true;
+    };
+    !receiver.eq_ignore_ascii_case("self")
 }
 
 /// Whether a dynamic property access resolves through a statically typed object rather than a
@@ -404,12 +436,12 @@ pub fn merge_shape_identical_methods(module: &mut Module) -> usize {
     // Candidate methods, each with its extractable instance-method calls. A method whose
     // receiver-typed call cannot be extracted is not a candidate at all.
     let mut candidates: Vec<usize> = Vec::new();
-    let mut calls: Vec<Vec<(String, Option<String>)>> = Vec::new();
+    let mut calls: Vec<Vec<(String, Option<String>, bool)>> = Vec::new();
     for (index, function) in module.class_methods.iter().enumerate() {
-        if !method_is_mergeable_candidate(function) {
+        if !method_is_mergeable_candidate(function, &module.data) {
             continue;
         }
-        let Some(extracted) = method_calls(function, &module.data) else {
+        let Some(extracted) = dispatch_calls(function, &module.data) else {
             continue;
         };
         candidates.push(index);
@@ -552,33 +584,52 @@ fn dsu_find(parent: &mut [usize], mut x: usize) -> usize {
     x
 }
 
-/// Returns the instance-method calls of one body as `(method name, receiver class)`.
+/// Returns the dispatch calls of one body as `(method name, receiver class, is static)`.
 ///
-/// `Some(class)` is the receiver's static object class; `None` is a non-object receiver, whose
-/// dispatch is resolved at run time and is therefore identical across instantiations. `None` for
-/// the whole result means a call this pass cannot reason about, so the caller is not a candidate.
-fn method_calls(
+/// An instance call's receiver class comes from the receiver value's static type; a `self::m()`
+/// static call resolves through the lexical class, the instantiation the shape erases. A
+/// non-object instance receiver is `None`: its dispatch is resolved at run time and is therefore
+/// identical across instantiations. `None` for the whole result means a call this pass cannot
+/// reason about, so the caller is not a candidate.
+fn dispatch_calls(
     function: &Function,
     data: &crate::ir::DataPool,
-) -> Option<Vec<(String, Option<String>)>> {
+) -> Option<Vec<(String, Option<String>, bool)>> {
     use crate::ir::Op;
     let mut calls = Vec::new();
     for instruction in &function.instructions {
-        if !matches!(instruction.op, Op::MethodCall | Op::NullsafeMethodCall) {
-            continue;
-        }
-        let name = match instruction.immediate {
+        let is_static = match instruction.op {
+            Op::MethodCall | Op::NullsafeMethodCall => false,
+            Op::StaticMethodCall => true,
+            _ => continue,
+        };
+        let target = match instruction.immediate {
             Some(Immediate::Data(id)) | Some(Immediate::ProfiledData { data: id, .. }) => {
                 data.strings.get(id.as_raw() as usize)?.clone()
             }
             _ => return None,
         };
-        let receiver = *instruction.operands.first()?;
-        let class = match &function.values.get(receiver.as_raw() as usize)?.php_type {
-            PhpType::Object(name) => Some(name.clone()),
-            _ => None,
-        };
-        calls.push((name, class));
+        match instruction.op {
+            Op::StaticMethodCall => {
+                let (receiver, method) = target.rsplit_once("::")?;
+                if !receiver.eq_ignore_ascii_case("self") {
+                    // A concrete class target is the same class in both bodies, so the call
+                    // carries no shape-erased information.
+                    calls.push((method.to_string(), Some(receiver.to_string()), is_static));
+                    continue;
+                }
+                let lexical = function.lexical_class.clone()?;
+                calls.push((method.to_string(), Some(lexical), is_static));
+            }
+            _ => {
+                let receiver = *instruction.operands.first()?;
+                let class = match &function.values.get(receiver.as_raw() as usize)?.php_type {
+                    PhpType::Object(name) => Some(name.clone()),
+                    _ => None,
+                };
+                calls.push((target, class, is_static));
+            }
+        }
     }
     Some(calls)
 }
@@ -590,19 +641,22 @@ fn method_calls(
 /// receivers, dispatch identically; two different object classes are safe only when their callees
 /// are the same candidate component (already merged).
 fn calls_consistent(
-    a: &[(String, Option<String>)],
-    b: &[(String, Option<String>)],
+    a: &[(String, Option<String>, bool)],
+    b: &[(String, Option<String>, bool)],
     node_of: &HashMap<(String, String, bool), usize>,
     parent: &mut [usize],
 ) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    for ((name, recv_a), (_, recv_b)) in a.iter().zip(b.iter()) {
+    for ((name, recv_a, static_a), (_, recv_b, static_b)) in a.iter().zip(b.iter()) {
+        if static_a != static_b {
+            return false;
+        }
         match (recv_a, recv_b) {
             (Some(class_a), Some(class_b)) if class_a != class_b => {
-                let key_a = (class_a.clone(), crate::names::php_symbol_key(name), false);
-                let key_b = (class_b.clone(), crate::names::php_symbol_key(name), false);
+                let key_a = (class_a.clone(), crate::names::php_symbol_key(name), *static_a);
+                let key_b = (class_b.clone(), crate::names::php_symbol_key(name), *static_b);
                 match (node_of.get(&key_a).copied(), node_of.get(&key_b).copied()) {
                     (Some(na), Some(nb)) if dsu_find(parent, na) == dsu_find(parent, nb) => {}
                     _ => return false,
@@ -621,7 +675,7 @@ fn split_method_name(name: &str) -> Option<(&str, &str)> {
 }
 
 /// Returns whether a class method may be merged away at all.
-fn method_is_mergeable_candidate(function: &Function) -> bool {
+fn method_is_mergeable_candidate(function: &Function, data: &crate::ir::DataPool) -> bool {
     let Some((class, _)) = split_method_name(&function.name) else {
         return false;
     };
@@ -629,7 +683,7 @@ fn method_is_mergeable_candidate(function: &Function) -> bool {
     class.contains('<')
         && !function.flags.is_generator
         && !function.flags.is_synthetic
-        && !has_nominal_use(function, false)
+        && !has_nominal_use(function, data, false)
 }
 
 #[cfg(test)]

@@ -2582,6 +2582,50 @@ echo get_class($u), "|", get_class($o);
     );
 }
 
+/// A `self::` static call resolves through the lexical class, so it participates in the call
+/// fixpoint like an instance dispatch: once the callee is merged, the caller merges too.
+/// (`static::`/`parent::` stay nominal — late-bound or per-instantiation.)
+#[test]
+fn test_shape_merge_merges_self_static_calls() {
+    let source = r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    private static function helper(): void { return; }
+    public function touch(): void { self::helper(); }
+}
+class User {}
+class Order {}
+$u = new Box(new User());
+$u->touch();
+$o = new Box(new Order());
+$o->touch();
+echo get_class($u), "|", get_class($o);
+"#;
+    assert_eq!(compile_and_run(source), "Box<User>|Box<Order>");
+
+    let user_asm = compile_cli_to_asm("selfstatic", source);
+    let key = elephc::names::php_symbol_key("helper");
+    let user = elephc::names::static_method_symbol("Box<User>", &key);
+    let order = elephc::names::static_method_symbol("Box<Order>", &key);
+    let has_user = user_asm.contains(&format!("{user}:"));
+    let has_order = user_asm.contains(&format!("{order}:"));
+    assert!(
+        has_user ^ has_order,
+        "helper must merge to one body (user={has_user}, order={has_order})"
+    );
+    // `touch` may be inlined at its call site (zero bodies) or merged (one); two bodies would mean
+    // the static-call fixpoint refused it, which is the regression this test pins.
+    let key = elephc::names::php_symbol_key("touch");
+    let user = elephc::names::static_method_symbol("Box<User>", &key);
+    let order = elephc::names::static_method_symbol("Box<Order>", &key);
+    let has_user = user_asm.contains(&format!("{user}:"));
+    let has_order = user_asm.contains(&format!("{order}:"));
+    assert!(
+        !(has_user && has_order),
+        "touch must not stay split per instantiation (user={has_user}, order={has_order})"
+    );
+}
+
 /// A dynamic property access on a `mixed` (runtime-typed) receiver dispatches on the runtime class,
 /// so its emitted code is identical across instantiations and the method merges.
 #[test]
