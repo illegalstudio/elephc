@@ -297,7 +297,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // per physical file, between the magic constants and the conditional pass. Skipping it here
     // let a `@template` fixture compile as ordinary untyped PHP and still print the right
     // values, so the surface looked tested while nothing exercised it.
-    let ast = elephc::docblock::apply(ast, source);
+    let ast = elephc::docblock::apply(ast, source, elephc::source::SourceMode::Php);
     let ast = elephc::conditional::apply(ast, defines);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());

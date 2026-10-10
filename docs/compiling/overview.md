@@ -43,6 +43,26 @@ elephc src/app.php     # produces ./src/app
 ./src/app
 ```
 
+## Inline HTML
+
+A `.php` file is a PHP script with HTML around it, exactly as the interpreter
+sees it. Text before the first `<?php`/`<?=` tag, and text between a `?>` close
+tag and the next open tag, is emitted verbatim:
+
+```php
+<!doctype html>
+<?php foreach ($rows as $row): ?>
+  <li><?= $row ?></li>
+<?php endforeach; ?>
+```
+
+A `?>` ends the current statement (no `;` needed) and swallows the single
+newline directly after it; `<?=` is shorthand for `echo`. `<?php` opens code only
+when followed by a space, a tab, a line break, or the end of the file, so
+`<?phpX` stays text, and the short `<?` tag stays text too. Tagless `.lfc` files
+never contain tags — see
+[LFC source files](../beyond-php/lfc-source-files.md).
+
 ## What happens during a compile
 
 A compile runs the source through a fixed sequence of phases — lexing, parsing,

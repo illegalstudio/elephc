@@ -45,6 +45,7 @@ pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_u
 pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
 pub(crate) use namespace_use::token_as_import_name;
 pub(crate) use recovery::recover_to_statement_boundary;
+pub(super) use declare::preseed_strict_types;
 
 /// Appends one parsed statement to a file- or namespace-scope statement list.
 ///
@@ -137,6 +138,13 @@ fn parse_stmt_dispatch(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     match &tokens[*pos].0 {
+        // An empty statement (`;`) is valid PHP and is what a `?>` close tag lowers to. It has
+        // no effect, so it parses to an empty synthetic block: `foreach ($a as $v);`,
+        // `if ($c);`, and the `; ;` a close tag after a `;`-terminated statement produces.
+        Token::Semicolon => {
+            *pos += 1;
+            Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
+        }
         Token::Echo => simple::parse_echo(tokens, pos, span),
         Token::Print => simple::parse_expr_stmt(tokens, pos, span),
         // `clone $o;` and PHP 8.5's `clone($o, $overrides);` are ordinary expression statements

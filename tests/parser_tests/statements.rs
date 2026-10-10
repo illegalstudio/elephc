@@ -51,6 +51,19 @@ fn test_multiple_statements() {
 
 // --- Parse errors ---
 
+/// Verifies a bare `;` parses to an empty synthetic block — the shape a `?>` close tag
+/// lowers to, and valid PHP on its own.
+#[test]
+fn test_empty_statement_parses_to_an_empty_synthetic() {
+    let stmts = parse_source("<?php ;");
+    assert_eq!(stmts.len(), 1);
+    assert!(
+        matches!(&stmts[0].kind, StmtKind::Synthetic(body) if body.is_empty()),
+        "expected an empty synthetic block, got {:?}",
+        stmts[0].kind
+    );
+}
+
 /// Verifies that `<?php echo "hi"` (missing semicolon) fails during parsing.
 #[test]
 fn test_missing_semicolon() {

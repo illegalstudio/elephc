@@ -186,26 +186,30 @@ pub(super) fn enabled_cache_with_resolvable_preload_preloads() {
     /// the brace form of `namespace` are handled, and duplicates are dropped case-insensitively.
     #[test]
 pub(super) fn collect_preload_symbols_qualifies_and_dedupes() {
-        let program = parse(
+        // A namespace must be the file's first statement, so global and namespaced symbols are
+        // collected from two programs.
+        let global = collect_preload_symbols(&parse(
+            "<?php\nfunction GlobalFn() {}\nclass GlobalClass {}\n",
+        ));
+        assert_eq!(global.functions, vec!["GlobalFn".to_string()]);
+        assert_eq!(global.classes, vec!["GlobalClass".to_string()]);
+
+        let namespaced = collect_preload_symbols(&parse(
             "<?php\n\
-             function GlobalFn() {}\n\
-             class GlobalClass {}\n\
              namespace My\\Space;\n\
              function MixedCaseFn() {}\n\
              class MixedCaseClass {}\n\
              interface MyIface {}\n\
              trait MyTrait {}\n\
              enum MyEnum {}\n",
-        );
-        let symbols = collect_preload_symbols(&program);
+        ));
         assert_eq!(
-            symbols.functions,
-            vec!["GlobalFn".to_string(), "My\\Space\\MixedCaseFn".to_string()]
+            namespaced.functions,
+            vec!["My\\Space\\MixedCaseFn".to_string()]
         );
         assert_eq!(
-            symbols.classes,
+            namespaced.classes,
             vec![
-                "GlobalClass".to_string(),
                 "My\\Space\\MixedCaseClass".to_string(),
                 "My\\Space\\MyIface".to_string(),
                 "My\\Space\\MyTrait".to_string(),

@@ -48,11 +48,20 @@ fn lfc_rejects_php_tags_at_code_boundaries() {
     }
 }
 
-/// Verifies tag-shaped bytes in comments and strings remain ordinary data.
+/// Verifies tag-shaped bytes in comments and strings remain ordinary data, including a `?>`
+/// inside a `//` or `#` line comment: LFC has no HTML mode, so it never ends a comment.
 #[test]
 fn lfc_allows_tag_text_inside_comments_and_strings() {
+    for source in [
+        "// <?php\n/* ?> */\necho \"<?php ?>\";",
+        "// ratio 3 ?> 2\necho 1;",
+        "# ratio 3 ?> 2\necho 1;",
+    ] {
+        let tokens = lfc_tokens(source);
+        assert!(tokens.contains(&Token::Echo), "source: {source}");
+        assert_eq!(tokens.last(), Some(&Token::Eof), "source: {source}");
+    }
     let tokens = lfc_tokens("// <?php\n/* ?> */\necho \"<?php ?>\";");
-    assert!(tokens.contains(&Token::Echo));
     assert!(tokens.iter().any(|token| {
         matches!(token, Token::StringLiteral(value) if value == "<?php ?>")
     }));

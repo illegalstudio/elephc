@@ -199,9 +199,12 @@ Rejected (compile error):
 
 `const` or `define()` calls inside functions, methods, loops, and branches are scoped to that resolved body during include expansion. They do not leak into the surrounding top-level include path resolver.
 
-**Other limitations:** Tagged-PHP included files must start with `<?php`;
-physical `.lfc` targets are parsed as tagless code. Runtime-dynamic include
-paths are not supported by the current AOT resolver.
+Included files are parsed as PHP — a `.lfc` target as tagless code — so inline
+HTML in an included `.php` file (leading, and between `?>` and the next tag) is
+emitted where the include runs.
+
+**Other limitations:** Runtime-dynamic include paths are not supported by the
+current AOT resolver.
 
 ## Composer PSR-4 autoload (static)
 

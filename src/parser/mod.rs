@@ -150,9 +150,38 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
         return Err(vec![CompileError::new(span, "Expected '<?php' open tag")]);
     }
 
+    // Seed the file's `strict_types` from a leading `declare(strict_types=...)` before any
+    // statement is parsed, so the directive stamps statements that PRECEDE it too (PHP applies it
+    // to the whole file, including a leading `declare(ticks=...)` body).
+    stmt::preseed_strict_types(tokens);
+
+    // PHP requires a namespace declaration to be the file's first statement, or to follow only
+    // `declare` and empty statements; after a namespace has been opened, further `namespace`
+    // declarations are always allowed (`namespace A; function f() {} namespace B;` runs).
+    // Leading inline HTML is lowered to an `echo`, so it counts as a real statement, exactly as
+    // the interpreter does (`<b>\n<?php namespace Foo;` is a fatal). Compiler-generated
+    // `Internal` sources (the PDO/opcache preludes) are exempt: they use block-form namespaces
+    // ahead of appended user code and never reach a PHP interpreter.
+    let check_namespace_placement =
+        crate::source::current_parse_mode() != crate::source::SourceMode::Internal;
+    let mut saw_real_statement = false;
+    let mut saw_namespace = false;
+
     while pos < tokens.len() {
         if tokens[pos].0 == Token::Eof {
             break;
+        }
+        if check_namespace_placement
+            && tokens[pos].0 == Token::Namespace
+            && saw_real_statement
+            && !saw_namespace
+        {
+            errors.push(CompileError::new(
+                tokens[pos].1.span,
+                "Namespace declaration statement has to be the very first statement or after any declare call",
+            ));
+            stmt::recover_to_statement_boundary(tokens, &mut pos);
+            continue;
         }
         // Extern blocks can produce multiple stmts. Attributes on declarations
         // flow through parse_stmt below — extern is an elephc-specific block
@@ -166,8 +195,27 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
                 }
             }
         } else {
+            // A `declare` is a directive, not a real statement: PHP lets a namespace follow it
+            // in either its `;` or block form.
+            let is_directive = tokens[pos].0 == Token::Declare;
             match stmt::parse_stmt(tokens, &mut pos) {
-                Ok(stmt) => stmt::push_parsed_stmt(&mut stmts, stmt),
+                Ok(stmt) => {
+                    let is_namespace = matches!(
+                        &stmt.kind,
+                        crate::parser::ast::StmtKind::NamespaceDecl { .. }
+                            | crate::parser::ast::StmtKind::NamespaceBlock { .. }
+                    );
+                    let is_empty = matches!(
+                        &stmt.kind,
+                        crate::parser::ast::StmtKind::Synthetic(body) if body.is_empty()
+                    );
+                    if is_namespace {
+                        saw_namespace = true;
+                    } else if !is_empty && !is_directive {
+                        saw_real_statement = true;
+                    }
+                    stmt::push_parsed_stmt(&mut stmts, stmt);
+                }
                 Err(error) => {
                     errors.extend(error.flatten());
                     stmt::recover_to_statement_boundary(tokens, &mut pos);

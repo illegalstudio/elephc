@@ -12,16 +12,20 @@
 
 use std::collections::HashMap;
 
-use crate::lexer::{tokenize, tokenize_with_mode, SpannedToken, Token};
+use crate::lexer::{tokenize_with_mode, SpannedToken, Token};
 use crate::source::SourceMode;
 
 use super::{parse_block, DocBlock};
 
 /// Collects annotated declaration positions, including property declarator positions.
-pub(super) fn collect(source: &str) -> HashMap<(u32, u32), DocBlock> {
+///
+/// `mode` is the physical file's own [`SourceMode`]; the comments are recovered by
+/// re-tokenizing `source`, which must match how the file was parsed. PHP mode accepts a tagless
+/// file as pure inline HTML, so a failed tokenization no longer identifies an LFC source.
+pub(super) fn collect(source: &str, mode: SourceMode) -> HashMap<(u32, u32), DocBlock> {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut blocks = HashMap::new();
-    let Ok(tokens) = tokenize(source).or_else(|_| tokenize_with_mode(source, SourceMode::Lfc)) else {
+    let Ok(tokens) = tokenize_with_mode(source, mode) else {
         return blocks;
     };
     let mut lines = Vec::new();
@@ -78,7 +82,12 @@ fn source_offset(lines: &[(usize, usize, Option<Vec<usize>>)], line: u32, col: u
     })
 }
 
-/// Finds the last real docblock in a gap made of whitespace and comments.
+/// Finds the last real docblock in a gap made of whitespace, comments and PHP tags.
+///
+/// The tag bytes are part of the gap because the lexer lowers `?>`, the inline HTML after it and
+/// the following `<?php`/`<?=` to tokens but consumes the tag itself without one. A doc comment
+/// can sit directly below a tag (`<div>\n<?php\n/** @template T */\nfunction f`), so the scan
+/// steps over tags the way it steps over whitespace, matching PHP's own binding.
 fn last_docblock(mut gap: &str) -> Option<&str> {
     let mut last = None;
     loop {
@@ -86,7 +95,10 @@ fn last_docblock(mut gap: &str) -> Option<&str> {
         if gap.is_empty() {
             return last;
         }
-        if gap.starts_with("//") || gap.starts_with('#') {
+        let tag_len = php_tag_len(gap);
+        if tag_len > 0 {
+            gap = &gap[tag_len..];
+        } else if gap.starts_with("//") || gap.starts_with('#') {
             gap = gap.find('\n').map_or("", |end| &gap[end + 1..]);
         } else if gap.starts_with("/*") {
             // The opener is consumed before the closer is searched for, as php's lexer does: in
@@ -103,6 +115,29 @@ fn last_docblock(mut gap: &str) -> Option<&str> {
         } else {
             return None;
         }
+    }
+}
+
+/// Returns the byte length of a PHP open or close tag at the head of `gap`, or 0 for none.
+///
+/// `<?php` is matched case-insensitively and only when a separator or the end of input follows,
+/// exactly as the lexer decides an open tag; `<?=` and `?>` need no separator.
+fn php_tag_len(gap: &str) -> usize {
+    let bytes = gap.as_bytes();
+    if bytes.len() >= 5
+        && bytes[..5].eq_ignore_ascii_case(b"<?php")
+        && bytes
+            .get(5)
+            .copied()
+            .is_none_or(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+    {
+        5
+    } else if gap.starts_with("<?=") {
+        3
+    } else if gap.starts_with("?>") {
+        2
+    } else {
+        0
     }
 }
 

@@ -539,14 +539,15 @@ impl<'a> Lexer<'a> {
     /// Advances past a `//` or `#` comment, including its trailing newline when present.
     ///
     /// A `?>` ends the comment too, and is left for `next_tokens` to lex as a close tag:
-    /// `eval('// c ?>X')` prints `X` in reference PHP 8.5.10.
+    /// `eval('// c ?>X')` prints `X` in reference PHP 8.5.10. A bare `\r` ends the comment as
+    /// well as `\n`, matching the file lexer and the interpreter.
     fn skip_line_comment(&mut self) {
         while let Some(ch) = self.peek_char() {
             if ch == '?' && self.peek_next_char() == Some('>') {
                 return;
             }
             self.bump_char();
-            if ch == '\n' {
+            if ch == '\n' || ch == '\r' {
                 break;
             }
         }

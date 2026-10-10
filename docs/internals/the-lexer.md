@@ -69,7 +69,7 @@ The scanner is the main loop. It uses the cursor to read characters and decides 
 ```rust
 pub fn scan_tokens(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
     // 1. Skip whitespace
-    // 2. Must start with <?php
+    // 2. Emit leading inline HTML (if any), then consume `<?php`/`<?=`
     // 3. Loop: skip whitespace, look at next char, produce a token
     // 4. When EOF reached, push Eof token and return
 }
@@ -224,7 +224,7 @@ instanceof
 
 | Token | Meaning |
 |---|---|
-| `OpenTag` | `<?php` — required at the start of every file |
+| `OpenTag` | Structural file boundary, emitted once at the start; `<?php` opens code but leading inline HTML before it is allowed |
 | `AttrOpen` | `#[` — starts a PHP 8 attribute group; bare `#` is a line comment |
 | `Eof` | End of file — signals the parser to stop |
 

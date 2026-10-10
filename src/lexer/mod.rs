@@ -9,6 +9,7 @@
 //! - Every emitted token carries a span used later for parser and semantic diagnostics.
 
 mod cursor;
+mod inline_html;
 mod literals;
 mod scan;
 /// Lexer token module.
@@ -20,20 +21,21 @@ use crate::errors::CompileError;
 use crate::source::SourceMode;
 /// Tokenizes PHP source text into a stream of spanned tokens.
 ///
-/// Entry point for the lexer pipeline. Requires the source to begin with `<?php`.
-/// Each token carries a `Span` (line, column) used for parser diagnostics.
+/// Entry point for the lexer pipeline. PHP source may begin with inline HTML before its
+/// first `<?php`/`<?=` open tag, and may interleave HTML through `?>` close tags; each HTML
+/// run becomes an `echo` statement. Each token carries a `Span` (line, column) used for
+/// parser diagnostics.
 ///
-/// Returns `Err` if the source is missing the opening `<?php` tag or contains
-/// an unterminated string literal.
+/// Returns `Err` if a source contains an unterminated string literal.
 pub fn tokenize(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
     tokenize_with_mode(source, SourceMode::Php)
 }
 
 /// Tokenizes source text according to one explicit physical-file source mode.
 ///
-/// PHP mode requires the normal opening tag. LFC mode treats the complete
-/// source as code and synthesizes the structural open-tag token consumed by
-/// the shared parser, preserving the original source coordinates.
+/// PHP mode accepts the normal opening tag and inline HTML around it. LFC mode treats the
+/// complete source as code and synthesizes the structural open-tag token consumed by the
+/// shared parser, preserving the original source coordinates.
 pub fn tokenize_with_mode(
     source: &str,
     mode: SourceMode,
