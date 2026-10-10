@@ -140,7 +140,7 @@ fn is_mergeable_candidate(function: &Function, module: &Module) -> bool {
         && !function.flags.is_callback_wrapper
         && !function.flags.is_runtime_callable_invoker
         && !module.data.strings.contains(&function.name)
-        && !has_nominal_use(function)
+        && !has_nominal_use(function, true)
 }
 
 /// A cheap pre-filter so full comparisons only run within plausible groups.
@@ -173,7 +173,7 @@ fn cheap_key(function: &Function) -> CheapKey {
 /// (every object slot is one pointer wide), so `get(): T { return $this->value; }` may merge. A
 /// property WRITE stays refused: it carries a `PropertyRef` immediate and runs the typed-property
 /// guard, whose accepted-class list is the concrete `T`.
-fn has_nominal_use(function: &Function) -> bool {
+fn has_nominal_use(function: &Function, method_dispatch_is_nominal: bool) -> bool {
     use crate::ir::Op;
     function.instructions.iter().any(|instruction| {
         if matches!(
@@ -191,11 +191,14 @@ fn has_nominal_use(function: &Function) -> bool {
         ) {
             return true;
         }
+        if method_dispatch_is_nominal
+            && matches!(instruction.op, Op::MethodCall | Op::NullsafeMethodCall)
+        {
+            return true;
+        }
         matches!(
             instruction.op,
-            Op::MethodCall
-                | Op::NullsafeMethodCall
-                | Op::StaticMethodCall
+            Op::StaticMethodCall
                 | Op::EvalStaticMethodCall
                 | Op::IteratorMethodCall
                 | Op::SplRuntimeCall
@@ -359,51 +362,114 @@ fn rewrite_function_refs(module: &mut Module, resolve: &impl Fn(usize) -> Option
 /// emits the survivor's symbol instead. This is the choke point that avoids threading a symbol
 /// map through the codegen.
 pub fn merge_shape_identical_methods(module: &mut Module) -> usize {
-    let candidates: Vec<usize> = module
-        .class_methods
-        .iter()
-        .enumerate()
-        .filter(|(_, function)| method_is_mergeable_candidate(function))
-        .map(|(index, _)| index)
-        .collect();
+    // Candidate methods, each with its extractable instance-method calls. A method whose
+    // receiver-typed call cannot be extracted is not a candidate at all.
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut calls: Vec<Vec<(String, Option<String>)>> = Vec::new();
+    for (index, function) in module.class_methods.iter().enumerate() {
+        if !method_is_mergeable_candidate(function) {
+            continue;
+        }
+        let Some(extracted) = method_calls(function, &module.data) else {
+            continue;
+        };
+        candidates.push(index);
+        calls.push(extracted);
+    }
     if candidates.len() < 2 {
         return 0;
     }
+    // (class, php_symbol_key(method), static) -> candidate position, so a call site can name the
+    // candidate it dispatches to.
+    let mut node_of: HashMap<(String, String, bool), usize> = HashMap::new();
+    for (position, &index) in candidates.iter().enumerate() {
+        let function = &module.class_methods[index];
+        if let Some((class, method)) = split_method_name(&function.name) {
+            node_of.insert(
+                (
+                    class.to_string(),
+                    crate::names::php_symbol_key(method),
+                    function.flags.is_static,
+                ),
+                position,
+            );
+        }
+    }
+    // Bucket by dispatch slot (method base + staticness) so only same-slot methods are compared.
     let mut buckets: HashMap<(String, bool), Vec<usize>> = HashMap::new();
-    for index in candidates {
-        let Some((_, method)) = split_method_name(&module.class_methods[index].name) else {
-            continue;
-        };
-        buckets
-            .entry((method.to_string(), module.class_methods[index].flags.is_static))
-            .or_default()
-            .push(index);
+    for (position, &index) in candidates.iter().enumerate() {
+        let function = &module.class_methods[index];
+        if let Some((_, method)) = split_method_name(&function.name) {
+            buckets
+                .entry((method.to_string(), function.flags.is_static))
+                .or_default()
+                .push(position);
+        }
+    }
+    let mut parent: Vec<usize> = (0..candidates.len()).collect();
+    // Fixed point per bucket: union a pair when its bodies match under the object shape AND every
+    // method call resolves to the same callee given the merges accepted so far. Merging one pair
+    // can make an earlier inconsistent pair consistent, so the whole loop repeats.
+    for positions in buckets.values() {
+        loop {
+            let mut changed = false;
+            for (offset, &p) in positions.iter().enumerate() {
+                for &q in &positions[offset + 1..] {
+                    if dsu_find(&mut parent, p) == dsu_find(&mut parent, q) {
+                        continue;
+                    }
+                    let a = &module.class_methods[candidates[p]];
+                    let b = &module.class_methods[candidates[q]];
+                    if cheap_key(a) != cheap_key(b) || !shape_equal(a, b) {
+                        continue;
+                    }
+                    if !calls_consistent(&calls[p], &calls[q], &node_of, &mut parent) {
+                        continue;
+                    }
+                    let (rp, rq) = (dsu_find(&mut parent, p), dsu_find(&mut parent, q));
+                    parent[rp] = rq;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+    // Apply: the survivor of a component is its lowest candidate position.
+    let mut survivor_of_root: HashMap<usize, usize> = HashMap::new();
+    for position in 0..candidates.len() {
+        let root = dsu_find(&mut parent, position);
+        survivor_of_root
+            .entry(root)
+            .and_modify(|existing| {
+                if position < *existing {
+                    *existing = position;
+                }
+            })
+            .or_insert(position);
     }
     let mut removed: Vec<usize> = Vec::new();
     let mut redirects: Vec<(String, String, bool, String)> = Vec::new();
-    for indices in buckets.values() {
-        let mut survivors: Vec<usize> = Vec::new();
-        for &index in indices {
-            let survivor = survivors.iter().copied().find(|&candidate| {
-                shape_equal(&module.class_methods[candidate], &module.class_methods[index])
-            });
-            match survivor {
-                Some(survivor) => {
-                    let (dup_class, method) = split_method_name(&module.class_methods[index].name)
-                        .expect("a merged method has a class receiver");
-                    let (survivor_class, _) = split_method_name(&module.class_methods[survivor].name)
-                        .expect("a surviving method has a class receiver");
-                    redirects.push((
-                        dup_class.to_string(),
-                        method.to_string(),
-                        module.class_methods[index].flags.is_static,
-                        survivor_class.to_string(),
-                    ));
-                    removed.push(index);
-                }
-                None => survivors.push(index),
-            }
+    for position in 0..candidates.len() {
+        let root = dsu_find(&mut parent, position);
+        let survivor_position = survivor_of_root[&root];
+        if survivor_position == position {
+            continue;
         }
+        let index = candidates[position];
+        let survivor = candidates[survivor_position];
+        let (dup_class, method) = split_method_name(&module.class_methods[index].name)
+            .expect("a merged method has a class receiver");
+        let (survivor_class, _) = split_method_name(&module.class_methods[survivor].name)
+            .expect("a surviving method has a class receiver");
+        redirects.push((
+            dup_class.to_string(),
+            method.to_string(),
+            module.class_methods[index].flags.is_static,
+            survivor_class.to_string(),
+        ));
+        removed.push(index);
     }
     if removed.is_empty() {
         return 0;
@@ -436,6 +502,78 @@ pub fn merge_shape_identical_methods(module: &mut Module) -> usize {
     count
 }
 
+/// Union-find root with path halving.
+fn dsu_find(parent: &mut [usize], mut x: usize) -> usize {
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+/// Returns the instance-method calls of one body as `(method name, receiver class)`.
+///
+/// `Some(class)` is the receiver's static object class; `None` is a non-object receiver, whose
+/// dispatch is resolved at run time and is therefore identical across instantiations. `None` for
+/// the whole result means a call this pass cannot reason about, so the caller is not a candidate.
+fn method_calls(
+    function: &Function,
+    data: &crate::ir::DataPool,
+) -> Option<Vec<(String, Option<String>)>> {
+    use crate::ir::Op;
+    let mut calls = Vec::new();
+    for instruction in &function.instructions {
+        if !matches!(instruction.op, Op::MethodCall | Op::NullsafeMethodCall) {
+            continue;
+        }
+        let name = match instruction.immediate {
+            Some(Immediate::Data(id)) | Some(Immediate::ProfiledData { data: id, .. }) => {
+                data.strings.get(id.as_raw() as usize)?.clone()
+            }
+            _ => return None,
+        };
+        let receiver = *instruction.operands.first()?;
+        let class = match &function.values.get(receiver.as_raw() as usize)?.php_type {
+            PhpType::Object(name) => Some(name.clone()),
+            _ => None,
+        };
+        calls.push((name, class));
+    }
+    Some(calls)
+}
+
+/// Whether two call lists resolve to the same callees under the current merge state.
+///
+/// `shape_equal` already guarantees the two bodies have the same calls in the same order with the
+/// same names, so only the receiver class can differ: an identical class, or two non-object
+/// receivers, dispatch identically; two different object classes are safe only when their callees
+/// are the same candidate component (already merged).
+fn calls_consistent(
+    a: &[(String, Option<String>)],
+    b: &[(String, Option<String>)],
+    node_of: &HashMap<(String, String, bool), usize>,
+    parent: &mut [usize],
+) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for ((name, recv_a), (_, recv_b)) in a.iter().zip(b.iter()) {
+        match (recv_a, recv_b) {
+            (Some(class_a), Some(class_b)) if class_a != class_b => {
+                let key_a = (class_a.clone(), crate::names::php_symbol_key(name), false);
+                let key_b = (class_b.clone(), crate::names::php_symbol_key(name), false);
+                match (node_of.get(&key_a).copied(), node_of.get(&key_b).copied()) {
+                    (Some(na), Some(nb)) if dsu_find(parent, na) == dsu_find(parent, nb) => {}
+                    _ => return false,
+                }
+            }
+            (Some(_), Some(_)) | (None, None) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 /// Returns the `(class, method)` halves of a `Class::method` EIR function name.
 fn split_method_name(name: &str) -> Option<(&str, &str)> {
     name.rsplit_once("::")
@@ -450,7 +588,7 @@ fn method_is_mergeable_candidate(function: &Function) -> bool {
     class.contains('<')
         && !function.flags.is_generator
         && !function.flags.is_synthetic
-        && !has_nominal_use(function)
+        && !has_nominal_use(function, false)
 }
 
 #[cfg(test)]

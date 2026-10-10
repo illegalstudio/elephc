@@ -2478,10 +2478,10 @@ echo get_class($u), "|", get_class($o);
     );
 }
 
-/// A method that CALLS another method is NOT merged: dispatch resolves the callee from the
-/// receiver's static type, so a merged body would call the survivor class's method.
+/// A delegating method MERGES once its callee is merged: `indirect()` calls `direct()`, and both
+/// are shape-identical across instantiations, so the transitive fixpoint folds them.
 #[test]
-fn test_shape_merge_keeps_method_dispatch_bodies() {
+fn test_shape_merge_merges_delegating_methods() {
     let source = r#"<?php
 class Box<T> {
     public function __construct(private T $value) {}
@@ -2502,12 +2502,48 @@ echo get_class((new Box(new User()))->indirect()), "|", get_class((new Box(new O
     let key = elephc::names::php_symbol_key("indirect");
     let user = elephc::names::method_symbol("Box<User>", &key);
     let order = elephc::names::method_symbol("Box<Order>", &key);
+    let has_user = user_asm.contains(&format!("{user}:"));
+    let has_order = user_asm.contains(&format!("{order}:"));
+    assert!(
+        has_user ^ has_order,
+        "a delegating method must merge to one body (user={has_user}, order={has_order})"
+    );
+}
+
+/// A method that calls a callee which is NOT merged does NOT merge: the callee differs across the
+/// two classes (it writes a `T` slot), so the caller's dispatch would resolve to the wrong class.
+#[test]
+fn test_shape_merge_keeps_calls_to_unmerged_methods() {
+    let source = r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function rawSet(T $v): void { $this->value = $v; }
+    public function delegate(T $v): void { $this->rawSet($v); }
+}
+class User {}
+class Order {}
+$u = new Box(new User());
+$u->delegate(new User());
+$o = new Box(new Order());
+$o->delegate(new Order());
+echo get_class($u), "|", get_class($o);
+"#;
+    assert_eq!(compile_and_run(source), "Box<User>|Box<Order>");
+
+    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_callee_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let (user_asm, _runtime_asm, _libs) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let _ = fs::remove_dir_all(&dir);
+    let key = elephc::names::php_symbol_key("delegate");
+    let user = elephc::names::method_symbol("Box<User>", &key);
+    let order = elephc::names::method_symbol("Box<Order>", &key);
     assert!(
         user_asm.contains(&format!("{user}:")),
-        "the user indirect body must stay (method dispatch)"
+        "the user delegate body must stay (its callee is not merged)"
     );
     assert!(
         user_asm.contains(&format!("{order}:")),
-        "the order indirect body must stay (method dispatch)"
+        "the order delegate body must stay (its callee is not merged)"
     );
 }
