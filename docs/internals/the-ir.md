@@ -1651,6 +1651,32 @@ in-flight scratch string argument. Call-site name resolution (`call` Data immedi
 and `function_variant_call` include-variant refs) uses snapshots taken before
 mutation, so the rewrite loop never aliases the module while holding a function.
 
+### Shape-Identical Body Merging
+
+After the module-level fixed point, `optimize_module` runs one more module-level
+transform, the shape-identical body merge (`src/ir_passes/shape_merge.rs`). It
+targets the duplication monomorphization leaves behind: a `T`-independent generic
+function instantiated once per concrete object class lowers to the same pointer
+code every time, under a different name.
+
+Only free functions whose name carries a type-argument list (`identity<User>`) are
+candidates, so an ordinary name — which may be `#[Export]`ed or reflected on —
+never loses its symbol. Two candidates merge when they are structurally identical
+once the object class name is collapsed to one shape: `IrType` (the storage type,
+where every object is already one `Heap(Object)`), control flow, values, locals,
+parameters, function flags, and the instruction stream must all agree. The
+instruction comparison is deliberately exact on immediates, and any body carrying a
+class-identity immediate (a class/method/property/enum/variant ref, a type name) is
+refused outright. That is the soundness guard: a nominal use of `T` (`new T()`,
+`T::class`, a method or class-typed property access the backend lowers with a class
+id) shows up as a differing immediate, so it can never be merged away.
+
+The merge rewrites the victim's name in the shared `function_names` data pool to the
+survivor's, then removes the victim and reindexes. Direct calls resolve through that
+pool, so no codegen change is needed. Methods are not merged here: their symbols are
+referenced from vtables and callable tables built in codegen from `class_info`, so
+merging them needs a symbol-resolution map and is a separate step.
+
 ## Dominance Analysis
 
 `src/ir_passes/dominance.rs` is a read-only sidecar analysis (like liveness, not
