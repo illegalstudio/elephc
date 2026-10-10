@@ -13,6 +13,32 @@
 
 use crate::support::*;
 
+/// Compiles `source` through the real CLI with `--emit-asm` and returns the user assembly.
+///
+/// A fresh process per call: the in-process library codegen path sets process-global state
+/// (null repr, compile profile, linked extensions), so a fixture compiled in-process can observe a
+/// previous test's settings. The CLI is isolated and deterministic.
+fn compile_cli_to_asm(tag: &str, source: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("elephc_asm_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let php = dir.join("main.php");
+    fs::write(&php, source).unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-asm")
+        .arg(&php)
+        .output()
+        .expect("run elephc CLI");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(dir.join("main.s")).unwrap();
+    let _ = fs::remove_dir_all(&dir);
+    asm
+}
+
 /// A written `array<mixed>` method parameter is a contract, not a hint sharpened by its first call.
 ///
 /// The method path rewrote its stored signature to the first call's array shape, a rule meant for
@@ -2361,11 +2387,7 @@ echo get_class(identity(new User())), "|", get_class(identity(new Order()));
 "#;
     assert_eq!(compile_and_run(source), "User|Order");
 
-    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_{}", std::process::id()));
-    fs::create_dir_all(&dir).unwrap();
-    let (user_asm, _runtime_asm, _libs) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    let _ = fs::remove_dir_all(&dir);
+    let user_asm = compile_cli_to_asm("inst", source);
     let user = elephc::names::function_symbol("identity<User>");
     let order = elephc::names::function_symbol("identity<Order>");
     let has_user = user_asm.contains(&format!("{user}:"));
@@ -2393,11 +2415,7 @@ echo $u->size(), $o->size(), "|", get_class($u), get_class($o);
 "#;
     assert_eq!(compile_and_run(source), "11|Box<User>Box<Order>");
 
-    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_m_{}", std::process::id()));
-    fs::create_dir_all(&dir).unwrap();
-    let (user_asm, _runtime_asm, _libs) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    let _ = fs::remove_dir_all(&dir);
+    let user_asm = compile_cli_to_asm("method", source);
     let size_key = elephc::names::php_symbol_key("size");
     let user = elephc::names::method_symbol("Box<User>", &size_key);
     let order = elephc::names::method_symbol("Box<Order>", &size_key);
@@ -2425,11 +2443,7 @@ echo get_class((new Box(new User()))->get()), "|", get_class((new Box(new Order(
 "#;
     assert_eq!(compile_and_run(source), "User|Order");
 
-    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_read_{}", std::process::id()));
-    fs::create_dir_all(&dir).unwrap();
-    let (user_asm, _runtime_asm, _libs) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    let _ = fs::remove_dir_all(&dir);
+    let user_asm = compile_cli_to_asm("read", source);
     let key = elephc::names::php_symbol_key("get");
     let user = elephc::names::method_symbol("Box<User>", &key);
     let order = elephc::names::method_symbol("Box<Order>", &key);
@@ -2460,11 +2474,7 @@ echo get_class($u), "|", get_class($o);
 "#;
     assert_eq!(compile_and_run(source), "Box<User>|Box<Order>");
 
-    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_write_{}", std::process::id()));
-    fs::create_dir_all(&dir).unwrap();
-    let (user_asm, _runtime_asm, _libs) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    let _ = fs::remove_dir_all(&dir);
+    let user_asm = compile_cli_to_asm("write", source);
     let key = elephc::names::php_symbol_key("set");
     let user = elephc::names::method_symbol("Box<User>", &key);
     let order = elephc::names::method_symbol("Box<Order>", &key);
@@ -2494,11 +2504,7 @@ echo get_class((new Box(new User()))->indirect()), "|", get_class((new Box(new O
 "#;
     assert_eq!(compile_and_run(source), "User|Order");
 
-    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_disp_{}", std::process::id()));
-    fs::create_dir_all(&dir).unwrap();
-    let (user_asm, _runtime_asm, _libs) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    let _ = fs::remove_dir_all(&dir);
+    let user_asm = compile_cli_to_asm("disp", source);
     let key = elephc::names::php_symbol_key("indirect");
     let user = elephc::names::method_symbol("Box<User>", &key);
     let order = elephc::names::method_symbol("Box<Order>", &key);
@@ -2530,11 +2536,7 @@ echo get_class($u), "|", get_class($o);
 "#;
     assert_eq!(compile_and_run(source), "Box<User>|Box<Order>");
 
-    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_callee_{}", std::process::id()));
-    fs::create_dir_all(&dir).unwrap();
-    let (user_asm, _runtime_asm, _libs) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    let _ = fs::remove_dir_all(&dir);
+    let user_asm = compile_cli_to_asm("callee", source);
     let key = elephc::names::php_symbol_key("delegate");
     let user = elephc::names::method_symbol("Box<User>", &key);
     let order = elephc::names::method_symbol("Box<Order>", &key);
@@ -2545,5 +2547,34 @@ echo get_class($u), "|", get_class($o);
     assert!(
         user_asm.contains(&format!("{order}:")),
         "the order delegate body must stay (its callee is not merged)"
+    );
+}
+
+/// A dynamic property access on a `mixed` (runtime-typed) receiver dispatches on the runtime class,
+/// so its emitted code is identical across instantiations and the method merges.
+#[test]
+fn test_shape_merge_merges_dynamic_access_on_mixed() {
+    let source = r#"<?php
+class Wrap<T> {
+    public function __construct(private T $value) {}
+    public function pluck(mixed $row, string $key): mixed { return $row->$key; }
+}
+class Row { public function __construct(public int $a = 1) {} }
+class User {}
+class Order {}
+$row = new Row();
+echo (new Wrap(new User()))->pluck($row, "a"), "|", (new Wrap(new Order()))->pluck($row, "a");
+"#;
+    assert_eq!(compile_and_run(source), "1|1");
+
+    let user_asm = compile_cli_to_asm("dyn", source);
+    let key = elephc::names::php_symbol_key("pluck");
+    let user = elephc::names::method_symbol("Wrap<User>", &key);
+    let order = elephc::names::method_symbol("Wrap<Order>", &key);
+    let has_user = user_asm.contains(&format!("{user}:"));
+    let has_order = user_asm.contains(&format!("{order}:"));
+    assert!(
+        has_user ^ has_order,
+        "a dynamic access on a mixed receiver must merge to one body (user={has_user}, order={has_order})"
     );
 }

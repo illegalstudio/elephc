@@ -191,6 +191,15 @@ fn has_nominal_use(function: &Function, method_dispatch_is_nominal: bool) -> boo
         ) {
             return true;
         }
+        if matches!(
+            instruction.op,
+            Op::DynamicPropGet | Op::DynamicPropSet | Op::DynamicPropUnset
+        ) {
+            // A dynamic access on a NON-object receiver dispatches on the runtime class, which is
+            // identical across instantiations; on a statically typed object it resolves the name
+            // through the class and stays nominal.
+            return nominal_dynamic_receiver(function, instruction);
+        }
         if method_dispatch_is_nominal
             && matches!(instruction.op, Op::MethodCall | Op::NullsafeMethodCall)
         {
@@ -203,9 +212,6 @@ fn has_nominal_use(function: &Function, method_dispatch_is_nominal: bool) -> boo
                 | Op::IteratorMethodCall
                 | Op::SplRuntimeCall
                 | Op::MethodLookup
-                | Op::DynamicPropGet
-                | Op::DynamicPropSet
-                | Op::DynamicPropUnset
                 | Op::PropGetForWrite
                 | Op::PropInitialized
                 | Op::PropSet
@@ -230,6 +236,20 @@ fn has_nominal_use(function: &Function, method_dispatch_is_nominal: bool) -> boo
                 | Op::DynamicPdoStatementConstructorCall
         )
     })
+}
+
+/// Whether a dynamic property access resolves through a statically typed object rather than a
+/// runtime-typed receiver.
+///
+/// A `Mixed`/`Union` receiver dispatches on the runtime class, so the emitted code is the same for
+/// every instantiation; a static `Object(_)` receiver resolves the name through its class, which
+/// is exactly the class the shape erased.
+fn nominal_dynamic_receiver(function: &Function, instruction: &Instruction) -> bool {
+    instruction
+        .operands
+        .first()
+        .and_then(|value| function.values.get(value.as_raw() as usize))
+        .is_some_and(|value| matches!(value.php_type, PhpType::Object(_)))
 }
 
 /// Full structural equality under the object shape, with identity fields excluded.
@@ -407,12 +427,14 @@ pub fn merge_shape_identical_methods(module: &mut Module) -> usize {
         }
     }
     let mut parent: Vec<usize> = (0..candidates.len()).collect();
-    // Fixed point per bucket: union a pair when its bodies match under the object shape AND every
-    // method call resolves to the same callee given the merges accepted so far. Merging one pair
-    // can make an earlier inconsistent pair consistent, so the whole loop repeats.
-    for positions in buckets.values() {
-        loop {
-            let mut changed = false;
+    // Fixed point over ALL slots: union a pair when its bodies match under the object shape AND
+    // every method call resolves to the same callee given the merges accepted so far. Merging a
+    // callee in one slot unlocks its callers in another, so every slot is re-swept until a sweep
+    // changes nothing. A per-slot inner fixpoint would be order-dependent: with two instantiations
+    // the caller's bucket can be visited before the callee's and never re-checked.
+    loop {
+        let mut changed = false;
+        for positions in buckets.values() {
             for (offset, &p) in positions.iter().enumerate() {
                 for &q in &positions[offset + 1..] {
                     if dsu_find(&mut parent, p) == dsu_find(&mut parent, q) {
@@ -431,9 +453,9 @@ pub fn merge_shape_identical_methods(module: &mut Module) -> usize {
                     changed = true;
                 }
             }
-            if !changed {
-                break;
-            }
+        }
+        if !changed {
+            break;
         }
     }
     // Apply: the survivor of a component is its lowest candidate position.
