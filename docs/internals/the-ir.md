@@ -1688,14 +1688,16 @@ to be threaded through the emitter.
 The soundness guard is wider for methods because method dispatch does **not** name
 its class in an immediate: `lower_method_call` resolves the callee from the
 receiver's static type at codegen time. A merged body that contained `$this->other()`
-would therefore call the survivor class's `other`, not the receiver's. The soundness guard refuses a body with any dynamic/static property or object
-access, or any class-identity immediate. Property **reads** are a deliberate
-exception: reading a `T`-typed slot (`get(): T { return $this->value; }`) is the
-design's canonical non-nominal use — the instruction carries only the property
-name, and the slot it lowers through the receiver's static type is
+would therefore call the survivor class's `other`, not the receiver's. The soundness guard refuses a body with any static property access, any
+class-identity immediate, or any object construction or `instanceof`. Property
+**reads** are a deliberate exception: reading a `T`-typed slot (`get(): T { return
+$this->value; }`) is the design's canonical non-nominal use — the instruction carries
+only the property name, and the slot it lowers through the receiver's static type is
 template-identical across instantiations, so the read merges. A property WRITE stays
 refused: it carries a `PropertyRef` immediate and runs the typed-property guard, whose
-accepted-class list is the concrete `T`.
+accepted-class list is the concrete `T`. A dynamic property access is refused only on a
+statically typed object; on a `mixed` (runtime-typed) receiver it dispatches on the
+runtime class, identical across instantiations, and merges.
 
 Instance-method **dispatch** is handled by a transitive fixpoint rather than refused.
 Because `lower_method_call` resolves its callee from the receiver's static type, a
