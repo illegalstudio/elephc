@@ -186,12 +186,20 @@ pub fn optimize_module(module: &mut Module) {
         }
 
         if !changed {
-            return; // module-level fixed point reached
+            break; // module-level fixed point reached
         }
     }
     // Module-level non-convergence: keep the current (valid, more-optimized) IR.
     // Each per-function run still converged; only the inline/simplify interleave
     // hit the round cap, which is a generous backstop for deep inline chains.
+    //
+    // The structural body merge is a size transform, not a per-function optimization the driver
+    // feeds on, so it runs once after the fixed point rather than inside the loop.
+    super::shape_merge::merge_shape_identical_functions(module);
+    #[cfg(debug_assertions)]
+    if let Err(error) = crate::ir::validate_module(module) {
+        panic!("shape-merge produced invalid module: {error:?}");
+    }
 }
 
 /// Runs the given passes over one function to a fixed point, returning whether the

@@ -2344,3 +2344,34 @@ echo get_class($b);
         "report must be opt-in: {quiet}"
     );
 }
+
+/// A monomorphized free function whose body is T-independent keeps ONE emitted body when its two
+/// instantiations differ only by the concrete object class.
+///
+/// `identity<User>` and `identity<Order>` both lower to `return $x` over an object pointer, so the
+/// shape merge collapses them. The behavior must be unchanged, and exactly one of the two entry
+/// symbols must survive in the emitted user assembly — the other is folded into it.
+#[test]
+fn test_shape_merge_keeps_one_t_independent_instantiation() {
+    let source = r#"<?php
+class User {}
+class Order {}
+function identity<T>(T $x): T { return $x; }
+echo get_class(identity(new User())), "|", get_class(identity(new Order()));
+"#;
+    assert_eq!(compile_and_run(source), "User|Order");
+
+    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let (user_asm, _runtime_asm, _libs) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let _ = fs::remove_dir_all(&dir);
+    let user = elephc::names::function_symbol("identity<User>");
+    let order = elephc::names::function_symbol("identity<Order>");
+    let has_user = user_asm.contains(&format!("{user}:"));
+    let has_order = user_asm.contains(&format!("{order}:"));
+    assert!(
+        has_user ^ has_order,
+        "exactly one identity instantiation body should remain (user={has_user}, order={has_order})"
+    );
+}
