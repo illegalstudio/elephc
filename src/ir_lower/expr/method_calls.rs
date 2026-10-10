@@ -42,6 +42,28 @@ pub(super) fn lower_method_call(
     };
     let object_expr = object;
     let object = lower_expr(ctx, object_expr);
+    if op == Op::MethodCall && args.is_empty()
+        && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
+        && matches!(php_symbol_key(method).as_str(),
+            "getdefaultproperties" | "getstaticproperties" | "newinstancewithoutconstructor")
+    {
+        if is_reflection_class_construction_receiver(ctx, object.value) {
+            let owns_receiver = ctx.value_is_owning_temporary(object)
+                && !ctx.value_is_owned_unboxed_local_load(object.value);
+            if owns_receiver {
+                ctx.begin_argument_guard_scope();
+                ctx.guard_call_argument(object, 0, expr.span);
+                ctx.end_argument_guard_scope();
+            }
+            // Inspect metadata without consuming an inline reflector needed by the real call.
+            let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None,
+                ctx.builder.value_php_type(object.value).clone(), Op::Borrow.default_effects(),
+                Some(expr.span));
+            let name = lower_property_get_from_value(ctx, borrowed, "__name", Op::PropGet, expr);
+            crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name, expr.span);
+            if owns_receiver { ctx.unguard_call_argument(object.value, expr.span); }
+        }
+    }
     if let Some(message) = throw_access_message {
         release_owning_receiver_temporary(ctx, object, expr.span);
         return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);

@@ -603,6 +603,9 @@ fn lower_initialized_static_property_isset(
     property: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, arg.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
@@ -735,6 +738,9 @@ fn lower_initialized_static_property_empty(
     construct: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, arg.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
@@ -885,6 +891,7 @@ fn rewrite_literal_param_bindings(sig: &FunctionSig, args: &[Expr]) -> Option<Ve
 fn lower_new_dynamic_planned_dispatch(
     ctx: &mut LoweringContext<'_, '_>,
     name_expr: &Expr,
+    name_value: LoweredValue,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
@@ -893,7 +900,6 @@ fn lower_new_dynamic_planned_dispatch(
         return None;
     }
 
-    let name_value = lower_expr(ctx, name_expr);
     let name_type = match ctx.builder.value_php_type(name_value.value).codegen_repr() {
         PhpType::Str => PhpType::Str,
         _ => PhpType::Mixed,

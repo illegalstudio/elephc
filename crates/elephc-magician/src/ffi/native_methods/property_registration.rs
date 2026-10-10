@@ -11,6 +11,22 @@
 
 use super::*;
 
+/// Records one deferred native default after validating all borrowed ABI buffers.
+///
+/// # Safety
+/// The context handle and byte buffers must be valid for their declared lengths.
+pub(super) unsafe fn register_native_property_default_error_inner(
+    ctx: *mut ElephcEvalContext, key_ptr: *const u8, key_len: u64,
+    message_ptr: *const u8, message_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else { return 0 };
+    if context.abi_version() != ABI_VERSION { return 0; }
+    let Ok(key) = abi_name_to_string(key_ptr, key_len) else { return 0 };
+    let Some((class, property)) = split_property_key(&key) else { return 0 };
+    let Ok(message) = abi_name_to_string(message_ptr, message_len) else { return 0 };
+    i32::from(context.define_native_property_default_error(class, property, message))
+}
+
 /// Runs native parent-class registration after installing a panic boundary.
 ///
 /// # Safety

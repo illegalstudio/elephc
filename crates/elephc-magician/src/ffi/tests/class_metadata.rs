@@ -262,6 +262,29 @@ fn register_native_property_default_records_metadata() {
         .is_none());
 }
 
+/// Deferred default metadata is registered per slot and rejects invalid ABI input.
+#[test]
+fn register_native_property_default_error_records_metadata() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"KnownClass::bad";
+    let message = b"Cannot use \"parent\" when current class scope has no parent";
+    let registered = unsafe { __elephc_eval_register_native_property_default_error(
+        &mut context, key.as_ptr(), key.len() as u64, message.as_ptr(), message.len() as u64,
+    ) };
+    assert_eq!(registered, 1);
+    assert_eq!(context.native_property_default_error("knownclass", "bad"),
+        Some(std::str::from_utf8(message).unwrap()));
+    assert_eq!(context.native_property_default_error("KnownClass", "valid"), None);
+    for (key, message) in [(b"invalid".as_slice(), message.as_slice()), (key.as_slice(), b"".as_slice())] {
+        assert_eq!(unsafe { __elephc_eval_register_native_property_default_error(
+            &mut context, key.as_ptr(), key.len() as u64, message.as_ptr(), message.len() as u64,
+        ) }, 0);
+    }
+    assert_eq!(unsafe { __elephc_eval_register_native_property_default_error(
+        std::ptr::null_mut(), key.as_ptr(), key.len() as u64, message.as_ptr(), message.len() as u64,
+    ) }, 0);
+}
+
 /// Verifies native AOT member attributes are available to eval reflection.
 #[test]
 fn register_native_member_attribute_records_metadata() {

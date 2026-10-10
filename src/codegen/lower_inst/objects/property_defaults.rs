@@ -14,6 +14,10 @@ pub(super) fn collect_property_defaults(
     class_info: &ClassInfo,
     inst: &Instruction,
 ) -> Result<Vec<PropertyDefault>> {
+    if class_info.deferred_property_default_error.is_some() {
+        // The preallocation error thunk rejects this class before any literal is consumed.
+        return Ok(Vec::new());
+    }
     let mut defaults = Vec::new();
     for (index, (property, php_type)) in class_info.properties.iter().enumerate() {
         let Some(default_expr) = class_info.defaults.get(index).and_then(Option::as_ref) else {

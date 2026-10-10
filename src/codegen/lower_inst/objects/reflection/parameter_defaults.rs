@@ -16,6 +16,9 @@ pub(super) fn reflection_parameter_default_value(
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
 ) -> Result<Option<ReflectionParameterDefaultValue>> {
+    if let Some(value) = reflection_deferred_default_value(default) {
+        return Ok(Some(value));
+    }
     if let Some(value) =
         reflection_object_parameter_default_value(ctx, current_class, current_info, default)?
     {
@@ -31,6 +34,17 @@ pub(super) fn reflection_parameter_default_value(
         }
         _ => Ok(None),
     }
+}
+
+/// Retains the message from a compiler-generated lazy default Error without evaluating it.
+pub(super) fn reflection_deferred_default_value(default: &Expr) -> Option<ReflectionParameterDefaultValue> {
+    let ExprKind::Throw(exception) = &default.kind else { return None; };
+    let ExprKind::NewObject { class_name, args } = &exception.kind else { return None; };
+    let [Expr { kind: ExprKind::StringLiteral(message), .. }] = args.as_slice() else {
+        return None;
+    };
+    (class_name.as_str() == "Error")
+        .then(|| ReflectionParameterDefaultValue::DeferredError(message.clone()))
 }
 
 /// Converts a top-level object parameter default into Reflection metadata.
@@ -162,6 +176,7 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
         | ReflectionParameterDefaultValue::Bool(_)
         | ReflectionParameterDefaultValue::Float(_)
         | ReflectionParameterDefaultValue::Str(_)
+        | ReflectionParameterDefaultValue::DeferredError(_)
         | ReflectionParameterDefaultValue::Null => false,
     }
 }

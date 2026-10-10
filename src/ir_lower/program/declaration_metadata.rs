@@ -184,10 +184,16 @@ pub(super) fn collect_declared_trait_methods(
                         .enumerate()
                         .map(|(declaration_order, method)| {
                             let method_key = php_symbol_key(&method.name);
+                            let mut signature = function::method_signature_from_ast(method);
+                            let source_defaults = signature.defaults.clone();
+                            crate::types::checker::normalize_signature_default_receivers(
+                                &mut signature, name, None,
+                            );
                             let info = TraitMethodInfo {
                                 declared_name: method.name.clone(),
                                 declaration_order,
-                                signature: function::method_signature_from_ast(method),
+                                signature,
+                                source_defaults,
                                 visibility: method.visibility.clone(),
                                 is_static: method.is_static,
                                 is_final: method.is_final,

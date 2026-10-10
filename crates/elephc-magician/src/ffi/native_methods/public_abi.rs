@@ -973,6 +973,20 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_type(
     .unwrap_or(0)
 }
 
+/// Registers a deferred native property-default error without evaluating it.
+///
+/// # Safety
+/// The context, property key and message buffers must be valid for their declared lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_property_default_error(
+    ctx: *mut ElephcEvalContext, key_ptr: *const u8, key_len: u64,
+    message_ptr: *const u8, message_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_property_default_error_inner(ctx, key_ptr, key_len, message_ptr, message_len)
+    }).unwrap_or(0)
+}
+
 /// Registers one generated native PHP property scalar default in an eval context.
 ///
 /// # Safety

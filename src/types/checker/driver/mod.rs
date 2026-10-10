@@ -42,6 +42,7 @@ use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
     drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
     validate_deferred_declaration_defaults,
+    validate_trait_property_defaults,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::{CheckOptions, Checker};
@@ -100,11 +101,14 @@ pub(super) fn check_types_impl(
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));
+    errors.extend(validate_trait_property_defaults(program));
 
     checker.collect_function_decls(program, &mut errors);
 
     let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
+    (checker.trait_imported_properties, checker.trait_imported_constructors) =
+        super::schema::collect_trait_default_origins(program, &flattened_classes);
     // A prelude parsed from PHP text gives its classes real spans, so the statement's source
     // mode is what tells them apart from the program's own classes (`ClassInfo::is_internal`).
     checker.internal_class_decls = program

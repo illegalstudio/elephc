@@ -138,6 +138,11 @@ pub(super) fn reflection_source_method_defaults(
     is_static: bool,
 ) -> Option<Vec<Option<Expr>>> {
     let declaring_class_name = declaring_class_name.trim_start_matches('\\');
+    if let Some(method) = ctx.module.declared_trait_methods.get(declaring_class_name)
+        .and_then(|methods| methods.get(method_key))
+    {
+        return Some(method.source_defaults.clone());
+    }
     let declarations = ctx
         .module
         .class_infos

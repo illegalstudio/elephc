@@ -31,7 +31,37 @@ pub(super) fn apply_properties(
     class: &FlattenedClass,
     checker: &Checker,
 ) -> Result<(), CompileError> {
+    super::property_defaults::validate_promoted_defaults(
+        &class.properties, &class.methods, &class.name,
+        class.extends.as_deref().or_else(|| {
+            checker.trait_imported_constructors.contains(&class.name).then_some(class.name.as_str())
+        }),
+    )?;
+    let mut default_errors: [Option<String>; 4] = [None, None, None, None];
     for prop in &class.properties {
+        let normalized = prop.default.as_ref().map(|default| {
+            super::constants::normalize_property_default_in_scope(
+                default, &class.name, class.extends.as_deref(),
+            )
+        }).transpose();
+        let normalized = match normalized {
+            Ok(default) => default,
+            Err(error) if class.extends.is_none()
+                && (error.message == "Cannot access \"parent\" when current class scope has no parent"
+                    || (error.message == "Cannot use \"parent\" when current class scope has no parent"
+                        && checker.trait_imported_properties.get(&class.name)
+                            .is_some_and(|names| names.contains(&prop.name)))) =>
+            {
+                // PHP resolves instance before static defaults, and each class's own
+                // declarations before imported traits. Preserve order within each group.
+                let imported = checker.trait_imported_properties.get(&class.name)
+                    .is_some_and(|names| names.contains(&prop.name));
+                let priority = usize::from(prop.is_static) * 2 + usize::from(imported);
+                default_errors[priority].get_or_insert_with(|| error.message.clone());
+                Some(super::constants::deferred_default_error(error.message, error.span))
+            }
+            Err(error) => return Err(error),
+        };
         if prop.is_static {
             apply_static_property(state, class, checker, prop)?;
         } else {
@@ -52,6 +82,18 @@ pub(super) fn apply_properties(
             apply_instance_property(state, class, checker, prop)?;
             state.property_hooks.insert(prop.name.clone(), hooks);
         }
+        if prop.default.is_some() {
+            if prop.is_static {
+                let slot = state.static_prop_types.iter().position(|(name, _)| name == &prop.name)
+                    .expect("static property schema slot was just recorded");
+                state.static_defaults[slot] = normalized;
+            } else if let Some(slot) = state.prop_types.iter().rposition(|(name, _)| name == &prop.name) {
+                state.defaults[slot] = normalized;
+            }
+        }
+    }
+    if state.deferred_property_default_error.is_none() {
+        state.deferred_property_default_error = default_errors.into_iter().flatten().next();
     }
     Ok(())
 }

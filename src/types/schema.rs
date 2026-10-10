@@ -353,6 +353,8 @@ pub struct ClassInfo {
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<Expr>>,
+    /// A trait's unbound parent default fails only when this class initializes its properties.
+    pub deferred_property_default_error: Option<String>,
     pub property_visibilities: HashMap<String, Visibility>,
     /// PHP 8.4 asymmetric write (`set`) visibility, only for properties whose write visibility
     /// differs from their read visibility (e.g. `public private(set)`). Properties absent here

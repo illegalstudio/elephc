@@ -302,6 +302,9 @@ pub(super) fn lower_static_property_get_by_class_name_with_op(
     expr: &Expr,
     op: Op,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_class(ctx, class_name, expr.span) {
+        return error;
+    }
     let data = ctx.intern_string(&format!("{}::{}", class_name, property));
     ctx.emit_value(
         op,
@@ -340,6 +343,9 @@ pub(super) fn store_static_property_by_class_name_with_op(
     span: Span,
     op: Op,
 ) {
+    if crate::ir_lower::property_default_errors::for_class(ctx, class_name, span).is_some() {
+        return;
+    }
     let data = ctx.intern_string(&format!("{}::{}", class_name, property));
     ctx.emit_void(
         op,
@@ -349,4 +355,3 @@ pub(super) fn store_static_property_by_class_name_with_op(
         Some(span),
     );
 }
-
