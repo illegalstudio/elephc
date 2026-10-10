@@ -115,6 +115,7 @@ mod boxed_array_multisort;
 mod instanceof_operand_owners;
 mod boxed_array_set_comparators;
 mod boxed_array_write_owners;
+mod concrete_nested_receiver_reboxing;
 mod static_callable_string_owners;
 mod boxed_array_implode;
 mod boxed_array_reference_outputs;

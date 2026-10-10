@@ -641,6 +641,42 @@ pub(crate) fn root_owned_call_operand(
     (rooted, Some(slot))
 }
 
+/// Roots a heap operand in an unwind-visible frame slot whether it is owned or BORROWED.
+///
+/// `root_owned_call_operand` leaves a borrowed operand alone. That is right for a call, whose
+/// callee cannot free what the operand borrows from, but not for an element write that fetches
+/// its receiver after the operands (`element_write_order`): the value may reassign the receiver
+/// and free the array a borrowed key was read from (`$m[$m["k"]] = ($m = [...]) ? ...`). The
+/// slot takes its own reference right away, so the operand stays alive until the write, and a
+/// throw between the operands and the write releases it through the unwinder. A non-heap operand
+/// is returned unchanged with no slot.
+///
+/// The returned operand is a BORROWED load of the slot: the slot is its only owner, so the write
+/// takes its own reference to store it (an owned result would let the store move the slot's
+/// reference into the array, or release it, and the retirement would then free it again).
+pub(crate) fn root_call_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
+    let ty = ctx.builder.value_php_type(value.value);
+    if !value.ir_type.is_refcounted_storage() && !Ownership::php_type_needs_lifetime_tracking(&ty) {
+        return (value, None);
+    }
+    if matches!(ty.codegen_repr(), PhpType::Buffer(_)) {
+        return (value, None);
+    }
+    let name = ctx.declare_hidden_temp(ty.clone());
+    let rooted = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    ctx.store_local(&name, rooted, ty.clone(), Some(span));
+    let slot = ctx.local_slots[&name];
+    register_owned_call_operand(ctx, slot, span);
+    if ctx.value_needs_release_after_use(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    (load_published_container(ctx, slot, ty, span), Some(slot))
+}
+
 /// Makes a rooted operand visible even to a catch that preserves the current PHP activation.
 pub(super) fn register_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,

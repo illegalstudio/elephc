@@ -262,3 +262,251 @@ echo ":", $a[0][0];
     );
     assert_eq!(index_expressions, "[idx][idx][val]:9");
 }
+
+/// Pins that an element write fetches its receiver after the key and the value (#1653): when
+/// either one reassigns the receiver, the write lands in the array the variable holds THEN.
+/// elephc used to fetch the receiver first and write into the array the reassignment released,
+/// which printed garbage keys, hung, or crashed (this program segfaulted). Covers a keyed
+/// write, an indexed write and append, a key that reassigns, a by-reference alias, a
+/// by-reference call argument, a global written through a call, and instance and static
+/// property elements.
+#[test]
+fn test_element_write_fetches_the_receiver_after_a_reassigning_operand() {
+    let out = compile_and_run(
+        r#"<?php
+function keyed(): string {
+    $m = ["a" => "x"];
+    $m["k"] = ($m = ["y" => "z"]) ? "p" : "q";
+    return json_encode($m);
+}
+function indexed(): string {
+    $a = [1, 2];
+    $a[0] = ($a = [7, 8, 9])[2];
+    $b = [1, 2];
+    $b[] = ($b = [7, 8, 9])[2];
+    return json_encode($a) . json_encode($b);
+}
+function key_side(): string {
+    $m = ["a" => "x"];
+    $m[($m = ["w" => "v"]) ? "k" : "j"] = "n";
+    return json_encode($m);
+}
+function alias(): string {
+    $m = ["a" => "x"];
+    $r = &$m;
+    $m["k"] = ($r = ["y" => "z"]) ? "p" : "q";
+    return json_encode($m);
+}
+function reset_by_ref(array &$x): string { $x = ["y" => "z"]; return "k"; }
+function by_ref_arg(): string {
+    $m = ["a" => "x"];
+    $m[reset_by_ref($m)] = "v";
+    return json_encode($m);
+}
+class O { public array $arr = ["a" => "x"]; }
+class S { public static array $arr = ["a" => "x"]; }
+function props(): string {
+    $o = new O();
+    $o->arr["k"] = ($o->arr = ["y" => "z"]) ? "p" : "q";
+    S::$arr["k"] = (S::$arr = ["y" => "z"]) ? "p" : "q";
+    return json_encode($o->arr) . json_encode(S::$arr);
+}
+function reset_global(): string { global $gm; $gm = ["y" => "z"]; return "k"; }
+$gm = ["a" => "x"];
+$gm[reset_global()] = "v";
+echo keyed(), "\n", indexed(), "\n", key_side(), "\n", alias(), "\n", by_ref_arg(), "\n";
+echo props(), "\n", json_encode($gm), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"y\":\"z\",\"k\":\"p\"}\n",
+            "[9,8,9][7,8,9,9]\n",
+            "{\"w\":\"v\",\"k\":\"n\"}\n",
+            "{\"y\":\"z\",\"k\":\"p\"}\n",
+            "{\"y\":\"z\",\"k\":\"v\"}\n",
+            "{\"y\":\"z\",\"k\":\"p\"}{\"y\":\"z\",\"k\":\"p\"}\n",
+            "{\"y\":\"z\",\"k\":\"v\"}\n",
+        )
+    );
+}
+
+/// The late receiver fetch keeps ownership balanced: reassigning keyed, indexed, boxed and
+/// property writes with owned string keys and values run in a loop under `--heap-debug` and
+/// leave nothing live (#1653).
+#[test]
+fn test_element_write_reassigning_operand_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class O { public array $arr = ["a" => "x"]; }
+function run(int $n): string {
+    $m = ["a" => "x"];
+    $m["k" . $n] = ($m = ["y" => "z" . $n]) ? "p" . $n : "q";
+    $a = [1, 2];
+    $a[] = ($a = [7, 8, 9])[2];
+    $x = $n > 1000 ? 1 : ["a" => "x"];
+    $x["k" . $n] = ($x = ["y" => "z" . $n]) ? "p" . $n : "q";
+    $o = new O();
+    $o->arr["k"] = ($o->arr = ["y" => "z" . $n]) ? "p" : "q";
+    return count($m) . count($a) . json_encode($x) . count($o->arr);
+}
+$out = "";
+for ($i = 0; $i < 40 + ($argc > 5 ? 1 : 0); $i++) { $out = run($i); }
+echo $out, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "24{\"y\":\"z39\",\"k39\":\"p39\"}2\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Pins the receiver-last order for the review shapes of #1653: a value that writes THROUGH the
+/// receiver (`$m[0] = ($m["b"] = 5)`, also in the key), a nested write whose value reassigns or
+/// writes into the chain's root (on a `mixed` local and on a property), a property reassigned
+/// through its own reference alias, and a key borrowed from the array the value then replaces.
+#[test]
+fn test_element_write_receiver_order_review_shapes() {
+    let out = compile_and_run(
+        r#"<?php
+function through_mixed(mixed $m) { $m[0] = ($m["b"] = 5); return json_encode($m); }
+function through_local(): string { $m = [1, 2]; $m[0] = ($m["x"] = 5); return json_encode($m); }
+function through_key(): string { $m = [1, 2]; $m[($m[1] = 7) - 7] = 3; return json_encode($m); }
+function nested_reassign(mixed $m) { $m["a"]["b"] = ($m = ["a" => ["c" => 1]]) ? 5 : 6; return json_encode($m); }
+function nested_through(mixed $m) { $m["a"]["b"] = ($m["a"] = ["c" => 1]) ? 5 : 6; return json_encode($m); }
+class N { public mixed $p = ["a" => ["x" => 0]]; }
+function nested_prop(): string { $o = new N(); $o->p["a"]["b"] = ($o->p = ["a" => ["c" => 1]]) ? 5 : 6; return json_encode($o->p); }
+class O { public array $arr = ["a" => 1]; }
+function prop_alias(): string { $o = new O(); $r = &$o->arr; $o->arr["k"] = ($r = ["y" => "z"]) ? "p" : "q"; return json_encode($o->arr); }
+function borrowed(mixed $m) { $m[$m["k"]] = ($m = ["k" => "z"]) ? $m["k"] : "q"; return json_encode($m); }
+echo through_mixed([1, 2]), "\n", through_local(), "\n", through_key(), "\n";
+echo nested_reassign(["a" => ["x" => 0]]), "\n", nested_through(["a" => ["x" => 0]]), "\n", nested_prop(), "\n";
+echo prop_alias(), "\n", borrowed(["k" => "a"]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"0\":5,\"1\":2,\"b\":5}\n",
+            "{\"0\":5,\"1\":2,\"x\":5}\n",
+            "[3,7]\n",
+            "{\"a\":{\"c\":1,\"b\":5}}\n",
+            "{\"a\":{\"c\":1,\"b\":5}}\n",
+            "{\"a\":{\"c\":1,\"b\":5}}\n",
+            "{\"y\":\"z\",\"k\":\"p\"}\n",
+            "{\"k\":\"z\",\"a\":\"z\"}\n",
+        )
+    );
+}
+
+/// The review shapes leave nothing live under `--heap-debug`, including a key borrowed from the
+/// array the value replaces and an owned key pinned across a value that throws on every other
+/// iteration (#1653).
+#[test]
+fn test_element_write_receiver_order_review_shapes_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class N { public mixed $p = ["a" => ["x" => 0]]; }
+class O { public array $arr = ["a" => 1]; }
+function key_of(int $n): string { return "k" . $n; }
+function boom(int $n): string { if ($n % 2 == 0) { throw new RuntimeException("boom"); } return "v" . $n; }
+function run(mixed $m, int $n): string {
+    $m[$m["k"] . $n] = ($m = ["k" => "z" . $n]) ? $m["k"] : "q";
+    $m[0] = ($m["b"] = "w" . $n);
+    $m["a"]["b"] = ($m = ["a" => ["c" => $n]]) ? "d" . $n : "e";
+    $o = new N();
+    $o->p["a"]["b"] = ($o->p = ["a" => ["c" => $n]]) ? "f" : "g";
+    $q = new O();
+    $r = &$q->arr;
+    $q->arr["k"] = ($r = ["y" => "z" . $n]) ? "p" : "q";
+    $t = ["s" => "x"];
+    try {
+        $t[key_of($n)] = ($t = ["u" => "y"]) ? boom($n) : "none";
+    } catch (RuntimeException $e) {
+        $t["caught"] = "1";
+    }
+    return json_encode($m) . json_encode($o->p) . json_encode($q->arr) . json_encode($t);
+}
+$out = "";
+for ($i = 0; $i < 40 + ($argc > 5 ? 1 : 0); $i++) { $out = run(["k" => "a"], $i); }
+echo $out, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"a\":{\"c\":39,\"b\":\"d39\"}}{\"a\":{\"c\":39,\"b\":\"f\"}}{\"y\":\"z39\",\"k\":\"p\"}{\"u\":\"y\",\"k39\":\"v39\"}\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Pins that a compound write to an element READ the element AFTER the right-hand side, so an
+/// index other than a plain variable matches PHP too. `$a[0] += ($a = [10])[0]` leaves `[20]`:
+/// the reassignment installs `[10]`, the read sees it, and 10 + 10 is written back. A LITERAL
+/// index used to read the old element before the right-hand side ran, yielding `[11]`.
+#[test]
+fn test_compound_write_reads_a_literal_index_after_the_right_hand_side() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1];
+$a[0] += ($a = [10])[0];
+echo json_encode($a), ",";
+$b = ["k" => 1];
+$b["k"] += ($b = ["k" => 10])["k"];
+echo json_encode($b);
+"#,
+    );
+    assert_eq!(out, "[20],{\"k\":20}");
+}
+
+/// Pins a nested increment/decrement THROUGH-write: `$m[0] = ++$m[1][0]` must fetch the receiver
+/// AFTER the value, because the increment stores into `$m`. The increment desugars into an
+/// assignment whose element store lives in its prelude, which the receiver gate now walks.
+#[test]
+fn test_receiver_fetch_for_a_nested_increment_through_write() {
+    let prefix = compile_and_run(
+        r#"<?php
+$m = [9, [3, 4]];
+$m[0] = ++$m[1][0];
+echo json_encode($m);
+"#,
+    );
+    assert_eq!(prefix, "[4,[4,4]]");
+
+    let postfix = compile_and_run(
+        r#"<?php
+$m = [9, [3, 4]];
+$m[0] = $m[1][0]++;
+echo json_encode($m);
+"#,
+    );
+    assert_eq!(postfix, "[3,[4,4]]");
+}
+
+/// Pins a variable-index nested write whose value reassigns the root: `$m[$i][$j] = ($m = […]) ? …`
+/// must write into the array the reassignment installed (and rebox the retyped root so the
+/// Mixed-only nested writer still accepts it). It used to fail to compile entirely.
+#[test]
+fn test_variable_index_nested_write_reboxes_a_reassigned_root() {
+    let assoc = compile_and_run(
+        r#"<?php
+function v(mixed $m, string $i, string $j): string {
+    $m[$i][$j] = ($m = ["a" => ["c" => 1]]) ? 5 : 6;
+    return json_encode($m);
+}
+echo v(["a" => ["x" => 0]], "a", "b");
+"#,
+    );
+    assert_eq!(assoc, "{\"a\":{\"c\":1,\"b\":5}}");
+
+    let indexed = compile_and_run(
+        r#"<?php
+function v(mixed $m, int $i, int $j): string {
+    $m[$i][$j] = ($m = [[0, 0], [0, 0]]) ? 5 : 6;
+    return json_encode($m);
+}
+echo v([[1, 1], [2, 2]], 1, 0);
+"#,
+    );
+    assert_eq!(indexed, "[[0,0],[5,0]]");
+}
