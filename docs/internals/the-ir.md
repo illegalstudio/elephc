@@ -1693,13 +1693,14 @@ class-identity immediate, or any object construction or `instanceof`. Property
 **reads** are a deliberate exception: reading a `T`-typed slot (`get(): T { return
 $this->value; }`) is the design's canonical non-nominal use — the instruction carries
 only the property name, and the slot it lowers through the receiver's static type is
-template-identical across instantiations, so the read merges. A property WRITE with a
-concrete (non-`Mixed`) source merges the same way: no typed-property guard is emitted,
-so the only class-specific thing is the template-identical slot. A WRITE of a `Mixed`
-value stays refused because it runs the typed-property guard, whose accepted-class list
-is the concrete `T`. A dynamic property access is refused only on a statically typed
-object; on a `mixed` (runtime-typed) receiver it dispatches on the runtime class,
-identical across instantiations, and merges.
+template-identical across instantiations, so the read merges. The same reasoning covers
+`isset`/`unset` on the slot and a read-for-write, whose lowering carries the property
+name and nothing else. A property WRITE with a concrete (non-`Mixed`) source merges the
+same way: no typed-property guard is emitted, so the only class-specific thing is the
+template-identical slot. A WRITE of a `Mixed` value stays refused because it runs the
+typed-property guard, whose accepted-class list is the concrete `T`. A dynamic property
+access is refused only on a statically typed object; on a `mixed` (runtime-typed)
+receiver it dispatches on the runtime class, identical across instantiations, and merges.
 
 Instance-method **dispatch** is handled by a transitive fixpoint rather than refused.
 Because `lower_method_call` resolves its callee from the receiver's static type, a
