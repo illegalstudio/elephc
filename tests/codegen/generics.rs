@@ -2408,3 +2408,70 @@ echo $u->size(), $o->size(), "|", get_class($u), get_class($o);
         "exactly one size method body should remain (user={has_user}, order={has_order})"
     );
 }
+
+/// A T-DEPENDENT method is NOT merged: `get()` reads the `T`-typed property, a class-resolving
+/// operation, so both instantiations keep their own body.
+#[test]
+fn test_shape_merge_keeps_t_dependent_methods() {
+    let source = r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function get(): T { return $this->value; }
+}
+class User {}
+class Order {}
+echo get_class((new Box(new User()))->get()), "|", get_class((new Box(new Order()))->get());
+"#;
+    assert_eq!(compile_and_run(source), "User|Order");
+
+    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_dep_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let (user_asm, _runtime_asm, _libs) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let _ = fs::remove_dir_all(&dir);
+    let key = elephc::names::php_symbol_key("get");
+    let user = elephc::names::method_symbol("Box<User>", &key);
+    let order = elephc::names::method_symbol("Box<Order>", &key);
+    assert!(
+        user_asm.contains(&format!("{user}:")),
+        "the user get body must stay (nominal property read)"
+    );
+    assert!(
+        user_asm.contains(&format!("{order}:")),
+        "the order get body must stay (nominal property read)"
+    );
+}
+
+/// A method that CALLS another method is NOT merged: dispatch resolves the callee from the
+/// receiver's static type, so a merged body would call the survivor class's method.
+#[test]
+fn test_shape_merge_keeps_method_dispatch_bodies() {
+    let source = r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function direct(): T { return $this->value; }
+    public function indirect(): T { return $this->direct(); }
+}
+class User {}
+class Order {}
+echo get_class((new Box(new User()))->indirect()), "|", get_class((new Box(new Order()))->indirect());
+"#;
+    assert_eq!(compile_and_run(source), "User|Order");
+
+    let dir = std::env::temp_dir().join(format!("elephc_shape_merge_disp_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let (user_asm, _runtime_asm, _libs) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let _ = fs::remove_dir_all(&dir);
+    let key = elephc::names::php_symbol_key("indirect");
+    let user = elephc::names::method_symbol("Box<User>", &key);
+    let order = elephc::names::method_symbol("Box<Order>", &key);
+    assert!(
+        user_asm.contains(&format!("{user}:")),
+        "the user indirect body must stay (method dispatch)"
+    );
+    assert!(
+        user_asm.contains(&format!("{order}:")),
+        "the order indirect body must stay (method dispatch)"
+    );
+}
