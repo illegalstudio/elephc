@@ -196,6 +196,7 @@ pub fn optimize_module(module: &mut Module) {
     // The structural body merge is a size transform, not a per-function optimization the driver
     // feeds on, so it runs once after the fixed point rather than inside the loop.
     super::shape_merge::merge_shape_identical_functions(module);
+    super::shape_merge::merge_shape_identical_methods(module);
     #[cfg(debug_assertions)]
     if let Err(error) = crate::ir::validate_module(module) {
         panic!("shape-merge produced invalid module: {error:?}");

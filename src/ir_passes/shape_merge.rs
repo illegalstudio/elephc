@@ -20,7 +20,7 @@
 //! - A function whose name is a string callable (present in `data.strings`) or is exported is left
 //!   alone: removing it would strand the name lookup or the export symbol.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
     BasicBlock, Function, FunctionId, FunctionParam, Immediate, Instruction, LocalSlot, Module,
@@ -158,13 +158,20 @@ fn cheap_key(function: &Function) -> CheapKey {
     )
 }
 
-/// Returns whether the function's instructions carry any class-identity immediate.
+/// Returns whether the function's instructions could resolve a concrete class the shape has
+/// erased.
 ///
-/// These are the encodings that embed a concrete class into the emitted code, so a body that has
-/// one is never merged — the class it names is the whole thing that must stay distinct.
+/// Two things qualify. First, a class-identity IMMEDIATE (a class/method/property/enum/variant
+/// ref, a type name): those embed a concrete class in the emitted code. Second, an OP whose
+/// backend lowering resolves a class from the receiver's STATIC type rather than from an
+/// immediate — method dispatch and dynamic property/object access — because two instantiations
+/// would then silently share one class's resolution. Property and `instanceof` ops normally carry
+/// their class/property as an immediate and are already caught, but they are listed too: the
+/// guard must not depend on which of the two encodings an op currently uses.
 fn has_nominal_use(function: &Function) -> bool {
+    use crate::ir::Op;
     function.instructions.iter().any(|instruction| {
-        matches!(
+        if matches!(
             instruction.immediate,
             Some(
                 Immediate::ClassRef(_)
@@ -176,6 +183,45 @@ fn has_nominal_use(function: &Function) -> bool {
                     | Immediate::FunctionVariantRef { .. }
                     | Immediate::TypeName(_)
             )
+        ) {
+            return true;
+        }
+        matches!(
+            instruction.op,
+            Op::MethodCall
+                | Op::NullsafeMethodCall
+                | Op::StaticMethodCall
+                | Op::EvalStaticMethodCall
+                | Op::IteratorMethodCall
+                | Op::SplRuntimeCall
+                | Op::MethodLookup
+                | Op::DynamicPropGet
+                | Op::DynamicPropSet
+                | Op::DynamicPropUnset
+                | Op::PropGet
+                | Op::PropGetForWrite
+                | Op::PropInitialized
+                | Op::PropSet
+                | Op::PropUnset
+                | Op::NullsafePropGet
+                | Op::LoadPropRefCell
+                | Op::LoadPropRefCellChecked
+                | Op::LoadStaticProperty
+                | Op::LoadStaticPropertyRefCell
+                | Op::StoreStaticProperty
+                | Op::StaticPropInitialized
+                | Op::LoadReflectionStaticProperty
+                | Op::StoreReflectionStaticProperty
+                | Op::ReflectionStaticPropertyInitialized
+                | Op::InstanceOf
+                | Op::InstanceOfDynamic
+                | Op::ObjectNew
+                | Op::EvalObjectNew
+                | Op::DynamicObjectNew
+                | Op::DynamicObjectNewMixed
+                | Op::DynamicObjectNewWithoutConstructorMixed
+                | Op::DynamicPdoCalledClassStatus
+                | Op::DynamicPdoStatementConstructorCall
         )
     })
 }
@@ -186,12 +232,20 @@ fn shape_equal(a: &Function, b: &Function) -> bool {
         && a.return_type == b.return_type
         && shape(&a.return_php_type) == shape(&b.return_php_type)
         && a.no_epilogue_cleanup_slots == b.no_epilogue_cleanup_slots
-        && a.lexical_class == b.lexical_class
+        && class_scope_shape(&a.lexical_class) == class_scope_shape(&b.lexical_class)
         && params_equal(&a.params, &b.params)
         && locals_equal(&a.locals, &b.locals)
         && values_equal(&a.values, &b.values)
         && instruction_tables_equal(&a.instructions, &b.instructions)
         && blocks_equal(&a.blocks, &b.blocks)
+}
+
+/// Collapses a lexical class scope to its template base, so two instantiations of one generic
+/// class compare equal while two different classes never do.
+fn class_scope_shape(scope: &Option<String>) -> Option<String> {
+    scope
+        .as_ref()
+        .map(|name| name.split('<').next().unwrap_or(name).to_string())
 }
 
 /// Compares the caller-visible parameter metadata, shaping each PHP type.
@@ -291,6 +345,109 @@ fn rewrite_function_refs(module: &mut Module, resolve: &impl Fn(usize) -> Option
     for function in module.extern_callback_trampolines.iter_mut() {
         fix(function);
     }
+}
+
+/// Merges structurally-identical monomorphized METHODS, returning how many were removed.
+///
+/// A generic class's T-independent method is emitted once per instantiation, under
+/// `<class>::<method>`. The duplicate body is dropped and its class's method-impl entry is
+/// redirected to the survivor's class, so every vtable, callable and reflection table that
+/// resolves a method through `class_info.method_impl_classes` (all keyed by `php_symbol_key`)
+/// emits the survivor's symbol instead. This is the choke point that avoids threading a symbol
+/// map through the codegen.
+pub fn merge_shape_identical_methods(module: &mut Module) -> usize {
+    let candidates: Vec<usize> = module
+        .class_methods
+        .iter()
+        .enumerate()
+        .filter(|(_, function)| method_is_mergeable_candidate(function))
+        .map(|(index, _)| index)
+        .collect();
+    if candidates.len() < 2 {
+        return 0;
+    }
+    let mut buckets: HashMap<(String, bool), Vec<usize>> = HashMap::new();
+    for index in candidates {
+        let Some((_, method)) = split_method_name(&module.class_methods[index].name) else {
+            continue;
+        };
+        buckets
+            .entry((method.to_string(), module.class_methods[index].flags.is_static))
+            .or_default()
+            .push(index);
+    }
+    let mut removed: Vec<usize> = Vec::new();
+    let mut redirects: Vec<(String, String, bool, String)> = Vec::new();
+    for indices in buckets.values() {
+        let mut survivors: Vec<usize> = Vec::new();
+        for &index in indices {
+            let survivor = survivors.iter().copied().find(|&candidate| {
+                shape_equal(&module.class_methods[candidate], &module.class_methods[index])
+            });
+            match survivor {
+                Some(survivor) => {
+                    let (dup_class, method) = split_method_name(&module.class_methods[index].name)
+                        .expect("a merged method has a class receiver");
+                    let (survivor_class, _) = split_method_name(&module.class_methods[survivor].name)
+                        .expect("a surviving method has a class receiver");
+                    redirects.push((
+                        dup_class.to_string(),
+                        method.to_string(),
+                        module.class_methods[index].flags.is_static,
+                        survivor_class.to_string(),
+                    ));
+                    removed.push(index);
+                }
+                None => survivors.push(index),
+            }
+        }
+    }
+    if removed.is_empty() {
+        return 0;
+    }
+    for (dup_class, method, is_static, survivor_class) in redirects {
+        let key = crate::names::php_symbol_key(&method);
+        if let Some(info) = module.class_infos.get_mut(&dup_class) {
+            let map = if is_static {
+                &mut info.static_method_impl_classes
+            } else {
+                &mut info.method_impl_classes
+            };
+            // Only an OWN method is redirected; an inherited entry already names an ancestor, and
+            // the survivor's class must stay the one that carries the emitted symbol.
+            if map.get(&key).map(String::as_str) == Some(dup_class.as_str()) {
+                map.insert(key, survivor_class);
+            }
+        }
+    }
+    let removed_set: HashSet<usize> = removed.into_iter().collect();
+    let count = removed_set.len();
+    let mut new_methods: Vec<Function> = Vec::with_capacity(module.class_methods.len() - count);
+    for (index, function) in module.class_methods.drain(..).enumerate() {
+        if removed_set.contains(&index) {
+            continue;
+        }
+        new_methods.push(function);
+    }
+    module.class_methods = new_methods;
+    count
+}
+
+/// Returns the `(class, method)` halves of a `Class::method` EIR function name.
+fn split_method_name(name: &str) -> Option<(&str, &str)> {
+    name.rsplit_once("::")
+}
+
+/// Returns whether a class method may be merged away at all.
+fn method_is_mergeable_candidate(function: &Function) -> bool {
+    let Some((class, _)) = split_method_name(&function.name) else {
+        return false;
+    };
+    // Only an instantiated owner is worth merging; an ordinary class keeps its own symbol.
+    class.contains('<')
+        && !function.flags.is_generator
+        && !function.flags.is_synthetic
+        && !has_nominal_use(function)
 }
 
 #[cfg(test)]
