@@ -37,7 +37,7 @@ impl Terminal {
         let master = unsafe { File::from_raw_fd(master) };
         let slave = unsafe { File::from_raw_fd(slave) };
         let mut command = elephc_cli_command(&fixture.0);
-        command.args(["repl", "--php-version=8.5", "--quiet"]).args(args).env("TERM", "xterm-256color")
+        command.args(["repl", "--php-version=8.5"]).args(args).env("TERM", "xterm-256color")
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stdout(Stdio::from(slave.try_clone().unwrap())).stderr(Stdio::from(slave));
         unsafe {
@@ -52,13 +52,12 @@ impl Terminal {
             pending: String::new(), screen: screen::Screen::default() }
     }
 
-    /// Waits for an output marker while retaining any bytes after it for the next assertion.
-    fn expect(&mut self, marker: &str) {
+    /// Returns output through a marker, retaining later bytes for the next assertion.
+    fn expect(&mut self, marker: &str) -> String {
         let deadline = Instant::now() + Duration::from_secs(150);
         loop {
             if let Some(index) = self.pending.find(marker) {
-                self.pending.drain(..index + marker.len());
-                return;
+                return self.pending.drain(..index + marker.len()).collect();
             }
             assert!(Instant::now() < deadline, "timed out waiting for {marker:?}: {:?}", self.pending);
             let mut poll = libc::pollfd { fd: self.master.as_raw_fd(), events: libc::POLLIN, revents: 0 };
@@ -94,11 +93,32 @@ impl Terminal {
     }
 }
 
+/// The mascot appears first on cold and warm terminals, and quiet/piped sessions omit it.
+#[test]
+fn test_repl_terminal_starts_with_mascot() {
+    let fixture = Fixture::new();
+    for _ in 0..2 {
+        let mut terminal = Terminal::start(&fixture, &[]);
+        let opening = terminal.expect(">>> ");
+        assert!(opening.starts_with("\r\n        _ooOoo_\r\n"), "{opening:?}");
+        assert_eq!(opening.matches("_ooOoo_").count(), 1, "{opening:?}");
+        assert!(opening.contains("Elephc REPL."), "{opening:?}");
+        terminal.send(b"\x04");
+        terminal.exited();
+    }
+    let mut quiet = Terminal::start(&fixture, &["--quiet"]);
+    let opening = quiet.expect(">>> ");
+    assert!(!opening.contains("_ooOoo_") && !opening.contains("Elephc REPL."), "{opening:?}");
+    quiet.send(b"\x04");
+    quiet.exited();
+    assert_eq!(super::stdout(&fixture.run("21 * 2\n", &[])), "int(42)\n");
+}
+
 /// Echo without a newline must remain on screen after the editor redraws its next prompt.
 #[test]
 fn test_repl_terminal_echo_preserves_visible_output() {
     let fixture = Fixture::new();
-    let mut terminal = Terminal::start(&fixture, &[]);
+    let mut terminal = Terminal::start(&fixture, &["--quiet"]);
     terminal.expect(">>> ");
     for (source, output) in [
         ("echo 'ciao';\r", "ciao"),
@@ -126,7 +146,7 @@ impl Drop for Terminal {
 #[test]
 fn test_repl_terminal_controls_and_history() {
     let fixture = Fixture::new();
-    let mut terminal = Terminal::start(&fixture, &[]);
+    let mut terminal = Terminal::start(&fixture, &["--quiet"]);
     terminal.expect(">>> ");
     terminal.send(b"function cancelled() {\r");
     terminal.expect("... ");
@@ -171,7 +191,7 @@ fn test_repl_terminal_controls_and_history() {
     assert!(text.contains("twice(21)"), "{text}");
     assert!(!text.contains("cancelled") && !text.contains("12345"), "{text}");
 
-    let mut disabled = Terminal::start(&fixture, &["--no-history"]);
+    let mut disabled = Terminal::start(&fixture, &["--quiet", "--no-history"]);
     disabled.expect(">>> ");
     disabled.send(b"67890\r");
     disabled.expect("int(67890)");

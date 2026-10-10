@@ -11,6 +11,9 @@ Start an interactive session with:
 elephc repl
 ```
 
+Interactive sessions open with the compiler's ASCII mascot and a random quote,
+followed by the session banner and prompt. Use `--quiet` to hide the welcome output.
+
 Every submission runs through dynamic [`eval()`](../php/eval.md) and Magician.
 Variables, references, functions, classes, and constants survive between submissions.
 Each new invocation starts with fresh PHP state.

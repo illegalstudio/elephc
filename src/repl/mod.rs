@@ -16,10 +16,16 @@ pub(crate) const HOST_SOURCE: &str = include_str!("host.php");
 
 use std::path::Path;
 use std::process::Command;
+use std::io::{self, IsTerminal};
 
 /// Runs the requested session or builds its host in an isolated compiler subprocess.
 pub(crate) fn run(command: ReplCommand) -> i32 {
     if command.help { print!("{HELP}"); return 0; }
+    if !command.quiet && command.build_output.is_none()
+        && io::stdin().is_terminal() && io::stdout().is_terminal() {
+        println!();
+        crate::cli::print_mascotte();
+    }
     match run_inner(command) {
         Ok(code) => code,
         Err(error) => { eprintln!("elephc repl: {error}"); 1 }
