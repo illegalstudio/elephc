@@ -1673,9 +1673,27 @@ id) shows up as a differing immediate, so it can never be merged away.
 
 The merge rewrites the victim's name in the shared `function_names` data pool to the
 survivor's, then removes the victim and reindexes. Direct calls resolve through that
-pool, so no codegen change is needed. Methods are not merged here: their symbols are
-referenced from vtables and callable tables built in codegen from `class_info`, so
-merging them needs a symbol-resolution map and is a separate step.
+pool, so no codegen change is needed.
+
+### Shape-Identical Method Merging
+
+The same transform runs over `module.class_methods` for instantiated owners. A
+duplicate method body is dropped and its class's `method_impl_classes` (or
+`static_method_impl_classes`) entry is redirected to the surviving class's name.
+Every codegen site — instance, static and source vtables, the callable and
+reflection tables — resolves a method symbol through that map, keyed by
+`php_symbol_key`, so the redirect is the single choke point and no symbol map has
+to be threaded through the emitter.
+
+The soundness guard is wider for methods because method dispatch does **not** name
+its class in an immediate: `lower_method_call` resolves the callee from the
+receiver's static type at codegen time. A merged body that contained `$this->other()`
+would therefore call the survivor class's `other`, not the receiver's. So a body
+with any method-dispatch op, or any dynamic/static property or object access, is
+refused — along with the class-identity-immediate rule above. Only a method whose
+body is free of class-resolving operations (a pure computation, or `return $this`)
+merges, which keeps the transitivity hazard the design warns about out of the
+transform entirely.
 
 ## Dominance Analysis
 
