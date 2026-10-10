@@ -664,7 +664,7 @@ Rules:
 
 - `self` resolves to the class the member is declared in; `parent` resolves to that class's parent.
 - A method return declared as `static` binds to the receiver class or interface at each call site, including inherited methods and fluent chains.
-- Overrides and interface implementations must preserve a required late-bound `static`; replacing it with the current concrete class is rejected. Covariant narrowing such as `static|false` to `static` remains valid.
+- Overrides and interface implementations must preserve a required late-bound `static`; replacing it with the current concrete class is rejected for classes. Enums cannot be subclassed, so an enum's `self` return may satisfy a trait or interface requirement of `static`. Covariant narrowing such as `static|false` to `static` remains valid.
 - They are accepted in parameter, return, and property type positions, and may be combined with the nullable shorthand (`?self`) or unions (`self|null`).
 - Used inside a trait, `self` resolves to the using class and a return `static` remains late-bound within that class hierarchy.
 - Using `self`, `static`, or `parent` as a type outside of a class is rejected.
@@ -794,6 +794,8 @@ A dynamically-typed (`mixed`) argument — such as a `foreach` value or an untyp
 ### Enum methods, constants, and interfaces
 
 Enums may declare instance methods, static methods, constants, and an `implements` clause. Instance methods dispatch on the case singleton, so `$this` is the case:
+
+Trait constants are imported alongside trait methods. Reflection lists the enum's own cases and constants in declaration order, followed by imported trait constants. Instance and static methods retain their `final` modifiers. Enum methods cannot remain abstract, including abstract requirements imported from traits.
 
 ```php
 <?php

@@ -108,6 +108,17 @@ pub(super) fn lower_method_call_with_receiver(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
+        return call;
+    }
+    lower_method_call_with_receiver_direct(ctx, object, method, args, op, expr)
+}
+
+/// Lowers an already selected concrete or fallback receiver without redispatching its interface.
+pub(super) fn lower_method_call_with_receiver_direct(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
+    args: &[Expr], op: Op, expr: &Expr,
+) -> LoweredValue {
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
     }

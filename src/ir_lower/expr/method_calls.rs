@@ -122,6 +122,9 @@ pub(super) fn lower_method_call(
             return result;
         }
     }
+    if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
+        return call;
+    }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
         magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)

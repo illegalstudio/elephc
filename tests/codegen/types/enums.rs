@@ -9,6 +9,468 @@
 
 use super::*;
 
+/// Captured optional adapters forward written arguments, never hidden collector addresses.
+#[test]
+fn test_enum_second_review_captured_optional_defaults() {
+    for hook in ["eval('echo 1;');", "debug_print_backtrace();"] {
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(int $x = 1): int; }}
+enum E implements I {{ case A; public function f(int $x = 10, int $y = 2): int {{
+    echo $x, ':', $y, '|'; return $x + $y;
+}} }}
+function invoke(I $value): int {{ return $value->f(); }}
+{hook}
+echo invoke(E::A);
+"#));
+        assert_eq!(out, if hook.starts_with("eval") { "110:2|12" } else { "10:2|12" });
+    }
+}
+
+/// Uncaptured interface calls use the implementation's defaults and optional widening.
+#[test]
+fn test_enum_second_review_implementation_defaults() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x = 1): int; }
+interface Required { public function f(int $x): int; }
+enum E implements I, Required {
+    case A; public function f(int $x = 10, int $y = 2): int { return $x + $y; }
+}
+function optional(I $value): int { return $value->f(); }
+function required(Required $value): int { return $value->f(); }
+echo optional(E::A), ':', required(E::A);
+"#);
+    assert_eq!(out, "12:12");
+}
+
+/// Runtime selection retains each enum's defaults and evaluates supplied arguments once.
+#[test]
+fn test_enum_second_review_runtime_defaults_and_source_order() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x = 1): int; }
+enum E implements I { case A; public function f(int $x = 10, int $y = 2): int { return $x + $y; } }
+enum F implements I { case A; public function f(int $x = 20, int $y = 3): int { return $x + $y; } }
+function argument(string $label, int $value): int { echo $label; return $value; }
+function invoke(I $value): string {
+    return $value->f() . ':' . $value->f(y: argument('Y', 5), x: argument('X', 4))
+        . ':' . $value->f(...[6, 7]);
+}
+echo invoke(E::A), '|', invoke(F::A);
+"#);
+    assert_eq!(out, "YX12:9:13|YX23:9:13");
+}
+
+/// Enum selection leaves a known ordinary class on its unchanged interface fallback path.
+#[test]
+fn test_enum_second_review_class_interface_fallback() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x = 1): int; }
+enum E implements I { case A; public function f(int $x = 10, int $y = 2): int { return $x + $y; } }
+class C implements I { public function f(int $x = 1): int { return $x; } }
+function invoke(I $value): string { return $value->f() . ':' . $value->f(3); }
+echo invoke(E::A), '|', invoke(new C());
+"#);
+    assert_eq!(out, "12:5|1:3");
+}
+
+/// Guarded nullable enum interface calls retain void result and implementation-default behavior.
+#[test]
+fn test_enum_second_review_nullsafe_void_defaults() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x = 1): void; }
+enum E implements I { case A; public function f(int $x = 10, int $y = 2): void { echo $x, ':', $y; } }
+function invoke(?I $value): void { $value?->f(); }
+invoke(null); invoke(E::A);
+"#);
+    assert_eq!(out, "10:2");
+}
+
+/// An optional scalar prefix can consume a required interface's variadic element.
+#[test]
+fn test_enum_second_review_variadic_optional_prefix() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x, int ...$rest): int; }
+enum E implements I { case A; public function f(int $x, int $y = 4, int ...$rest): int {
+    foreach ($rest as $value) { $x += $value; } return $x + $y;
+} }
+function invoke(I $value): string { return $value->f(1) . ':' . $value->f(1, 2, 3); }
+echo invoke(E::A);
+"#);
+    assert_eq!(out, "5:6");
+}
+
+/// A pure variadic interface can widen to an optional scalar and a remaining variadic tail.
+#[test]
+fn test_enum_second_review_variadic_scalar_default() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int ...$values): int; }
+enum E implements I { case A; public function f(int $first = 7, int ...$values): int {
+    foreach ($values as $value) { $first += $value; } return $first;
+} }
+function invoke(I $value): string { return $value->f(1, 2) . ':' . $value->f(); }
+echo invoke(E::A);
+"#);
+    assert_eq!(out, "3:7");
+}
+
+/// Trait variadic requirements compare scalar element hints rather than collector storage.
+#[test]
+fn test_enum_second_review_trait_variadic_scalar_default() {
+    let out = compile_and_run(r#"<?php
+trait T { abstract public function f(int ...$values): int; }
+enum E { use T; case A; public function f(int $first = 7, int ...$values): int {
+    foreach ($values as $value) { $first += $value; } return $first;
+} }
+echo E::A->f(1, 2), ':', E::A->f();
+"#);
+    assert_eq!(out, "3:7");
+}
+
+/// Captured frames compare declared parameters and still materialize optional defaults.
+#[test]
+fn test_enum_oct9_captured_optional_interface() {
+    for hook in ["eval('echo 1;');", "debug_print_backtrace();"] {
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(int $x): int; }}
+enum E implements I {{ case A; public function f(int $x, int $y = 2): int {{ return $x + $y; }} }}
+function invoke(I $value): int {{ return $value->f(1); }}
+function invoke_extra(I $value): int {{ return $value->f(1, 4); }}
+{hook}
+echo invoke(E::A), ':', invoke_extra(E::A);
+"#));
+        assert_eq!(out, if hook.starts_with("eval") { "13:5" } else { "3:5" });
+    }
+}
+
+/// A source variadic can widen a captured interface signature without exposing hidden slots.
+#[test]
+fn test_enum_oct9_captured_variadic_interface() {
+    for hook in ["eval('echo 1;');", "debug_print_backtrace();"] {
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(int $x): int; }}
+enum E implements I {{ case A; public function f(int $x, int ...$rest): int {{
+    foreach ($rest as $value) {{ $x += $value; }} return $x;
+}} }}
+function invoke(I $value): int {{ return $value->f(1); }}
+function invoke_extra(I $value): int {{ return $value->f(1, 5); }}
+{hook}
+echo E::A->f(1, 5), ':', invoke(E::A), ':', invoke_extra(E::A);
+"#));
+        assert_eq!(out, if hook.starts_with("eval") { "16:1:6" } else { "6:1:6" });
+    }
+}
+
+/// An added reference return is dereferenced for a by-value interface entry.
+#[test]
+fn test_enum_oct9_added_reference_return() {
+    for (parameters, expected) in [("", "1"), ("int $extra = 1", "2")] {
+        let setup = if parameters.is_empty() { "" } else { "$result[0] += $extra;" };
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(): array; }}
+enum E implements I {{ case A; public function &f({parameters}): array {{
+    $result = [1]; {setup} return $result;
+}} }}
+function invoke(I $value): int {{ $result = $value->f(); return $result[0]; }}
+echo invoke(E::A);
+"#));
+        assert_eq!(out, expected);
+    }
+    for hook in ["", "eval('echo 1;');", "debug_print_backtrace();"] {
+        let out = compile_and_run(&format!(r#"<?php
+interface I {{ public function f(int ...$values): array; }}
+enum E implements I {{ case A; public function &f(int ...$values): array {{ return $values; }} }}
+function invoke(I $value): string {{ $result = $value->f(1, 2); return $result[0] . ':' . $result[1]; }}
+{hook}
+echo invoke(E::A);
+"#));
+        assert_eq!(out, if hook.starts_with("eval") { "11:2" } else { "1:2" });
+    }
+}
+
+/// Value-return adapters add no retention relative to a direct reference-returning method call.
+#[test]
+fn test_enum_oct9_added_reference_value_ownership() {
+    for iterations in [1, 40] {
+        let run = |receiver: &str| compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function f(): array; }}
+enum E implements I {{ case A; public function &f(int $extra = 1): array {{
+    $result = [1 + $extra]; return $result;
+}} }}
+function invoke({receiver} $value): int {{ $result = $value->f(); return $result[0]; }}
+for ($i = 0; $i < {iterations}; $i++) {{ echo invoke(E::A); }}
+"#));
+        let direct = run("E");
+        let adapted = run("I");
+        assert!(direct.success && adapted.success, "{}\n{}", direct.stderr, adapted.stderr);
+        assert_eq!(adapted.stdout, "2".repeat(iterations));
+        assert_eq!(adapted.stdout, direct.stdout);
+        for metric in ["live_blocks=", "live_bytes="] {
+            let retained = |stderr: &str| stderr.lines().next().unwrap().split_whitespace()
+                .find_map(|field| field.strip_prefix(metric)).unwrap().parse::<usize>().unwrap();
+            assert_eq!(retained(&direct.stderr), retained(&adapted.stderr),
+                "direct: {}\nadapter: {}", direct.stderr, adapted.stderr);
+        }
+    }
+}
+
+/// Optional interface adapters preserve a returned reference and its caller mutation.
+#[test]
+fn test_enum_followup_interface_reference_return() {
+    let out = compile_and_run(r#"<?php
+interface I { public function &f(): array; }
+enum E implements I {
+    case A;
+    public function &f(int $extra = 1): array {
+        $a = [1]; $a[0] += $extra; return $a;
+    }
+}
+function update(I $value): int {
+    $r = &$value->f(); $r[0] += 10; return $r[0];
+}
+echo E::A->name, ':', update(E::A);
+"#);
+    assert_eq!(out, "A:12");
+}
+
+/// Reference returns and reference parameters share the original managed caller cell.
+#[test]
+fn test_enum_followup_interface_reference_return_alias() {
+    let out = compile_and_run(r#"<?php
+namespace Adapter;
+interface I { public function &f(int &$value): int; }
+enum E implements I {
+    case A;
+    public function &f(int &$value, int $extra = 2): int {
+        $value += $extra; return $value;
+    }
+}
+function update(I $enum, int &$value): int {
+    $r = &$enum->f($value); $r += 10; return $r;
+}
+$value = 3;
+$root = &$value;
+echo update(E::A, $value), ':', $value;
+"#);
+    assert_eq!(out, "15:15");
+}
+
+/// Repeated adapters retain no more storage than the same direct interface reference return.
+#[test]
+fn test_enum_followup_interface_reference_return_ownership() {
+    let run = |iterations, optional| {
+        let parameters = if optional { "array $extra = [2]" } else { "" };
+        let setup = if optional { "" } else { "$extra = [2];" };
+        compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function &f(): array; }}
+enum E implements I {{
+    case A;
+    public function &f({parameters}): array {{
+        {setup} $value = [1]; $value[0] += $extra[0]; return $value;
+    }}
+}}
+function update(I $enum): int {{
+    $r = &$enum->f(); $r[0] += 10; return $r[0];
+}}
+for ($i = 0; $i < {iterations}; $i++) {{ echo update(E::A), ':'; }}
+"#))
+    };
+    // The non-adapted interface path already retains returned storage at shutdown.
+    // This regression bounds added adapter/default retention, not that separate lifetime gap.
+    for iterations in [1, 40] {
+        let baseline = run(iterations, false);
+        let adapted = run(iterations, true);
+        assert!(baseline.success && adapted.success, "{}\n{}", baseline.stderr, adapted.stderr);
+        assert_eq!(adapted.stdout, "13:".repeat(iterations));
+        assert_eq!(baseline.stdout, adapted.stdout);
+        for metric in ["live_blocks=", "live_bytes="] {
+            let retained = |stderr: &str| stderr.lines().next().unwrap()
+                .split_whitespace().find_map(|field| field.strip_prefix(metric))
+                .unwrap().parse::<usize>().unwrap();
+            assert_eq!(retained(&baseline.stderr), retained(&adapted.stderr),
+                "baseline: {}\nadapter: {}", baseline.stderr, adapted.stderr);
+        }
+    }
+}
+
+/// Repeated interface calls retire structured default owners instead of accumulating them.
+#[test]
+fn test_enum_followup_interface_default_ownership() {
+    let run = |iterations| compile_and_run_with_heap_debug(&format!(r#"<?php
+interface I {{ public function f(int $x): string; }}
+enum E implements I {{
+    case A;
+    public function f(int $x, string $prefix = 'v', array $values = [2]): string {{
+        return $prefix . $values[0] . $x;
+    }}
+}}
+function render(I $value): string {{ return $value->f(1); }}
+for ($i = 0; $i < {iterations}; $i++) {{ echo render(E::A); }}
+"#));
+    let once = run(1);
+    let repeated = run(100);
+    assert!(once.success && repeated.success, "{}\n{}", once.stderr, repeated.stderr);
+    assert_eq!(once.stdout, "v21");
+    assert_eq!(repeated.stdout, "v21".repeat(100));
+    for metric in ["live_blocks=", "live_bytes="] {
+        let retained = |stderr: &str| stderr.lines().next().unwrap()
+            .split_whitespace().find_map(|field| field.strip_prefix(metric))
+            .unwrap().parse::<usize>().unwrap();
+        assert_eq!(retained(&once.stderr), retained(&repeated.stderr), "{}", repeated.stderr);
+    }
+}
+
+/// EIR adapters materialize structured defaults and keep caller reference arguments attached.
+#[test]
+fn test_enum_followup_interface_structured_defaults_and_references() {
+    let out = compile_and_run(r#"<?php
+interface Data { public function f(int $x): string; }
+enum Value implements Data {
+    case A;
+    const DATA = ['v'];
+    public function f(int $x, string $prefix = 'ok', array $data = self::DATA): string {
+        return $prefix . $data[0] . $x;
+    }
+}
+function render(Data $value): string { return $value->f(2); }
+interface Ref { public function f(int &$x): int; }
+enum RefValue implements Ref {
+    case A;
+    public function f(int &$x, int $extra = 2): int { $x += $extra; return $x; }
+}
+function update(Ref $value, int &$x): int { return $value->f($x); }
+$x = 3;
+echo render(Value::A), ':', update(RefValue::A, $x), ':', $x;
+"#);
+    assert_eq!(out, "okv2:5:5");
+}
+
+/// Enum interface widening preserves direct and interface-dispatched optional argument calls.
+#[test]
+fn test_enum_followup_optional_interface_calls() {
+    let out = compile_and_run(r#"<?php
+interface I { public function f(int $x): int; }
+enum Extra implements I { case A; public function f(int $x, int $y = 2): int { return $x + $y; } }
+enum Optional implements I { case A; public function f(int $x = 3): int { return $x; } }
+interface S { public static function f(int $x): int; }
+enum StaticExtra implements S { case A; public static function f(int $x = 4, int $y = 5): int { return $x + $y; } }
+function call_interface(I $value): int { return $value->f(1); }
+echo Extra::A->f(1), ':', Optional::A->f(), ':', StaticExtra::f(), ':', call_interface(Extra::A);
+"#);
+    assert_eq!(out, "3:3:9:3");
+}
+
+/// Trait magic constants retain trait identity while binding class identity to each consumer.
+#[test]
+fn test_enum_review_trait_magic_constant_values() {
+    let out = compile_and_run(r#"<?php
+namespace MagicEnum;
+trait T { const N = __CLASS__; const T = __TRAIT__; const BOTH = [__CLASS__, __TRAIT__]; }
+trait Middle { use T; }
+enum E { use Middle; case A; const OWN = __CLASS__; }
+enum F { use T; case B; }
+echo E::N, ':', E::T, ':', E::BOTH[0], ':', E::BOTH[1], ':', E::OWN, ':', F::N;
+"#);
+    assert_eq!(out, "MagicEnum\\E:MagicEnum\\T:MagicEnum\\E:MagicEnum\\T:MagicEnum\\E:MagicEnum\\F");
+}
+
+/// Enum abstract trait contracts accept final self returns and legal optional parameter widening.
+#[test]
+fn test_enum_review_legal_trait_signatures() {
+    let out = compile_and_run(r#"<?php
+trait StaticReturn { abstract public function f(): static; }
+enum E { use StaticReturn; case A; public function f(): self { return $this; } }
+trait Parameters { abstract public function f(int $x): int; }
+enum Extra { use Parameters; case A; public function f(int $x, int $y = 0): int { return $x + $y; } }
+enum Optional { use Parameters; case A; public function f(int $x = 1): int { return $x; } }
+enum ProtectedBody {
+    use Parameters { f as protected; }
+    case A;
+    protected function f(int $x): int { return $x; }
+    public function call(): int { return $this->f(1); }
+}
+echo E::A->f()->name, ':', Extra::A->f(1), ':', Optional::A->f(), ':', ProtectedBody::A->call();
+"#);
+    assert_eq!(out, "A:1:1:1");
+}
+
+/// Enums validate transitive interface and nested adapted trait contracts without changing dispatch.
+#[test]
+fn test_enum_review_transitive_interface_and_nested_trait_contracts() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+trait Requirement { abstract public function f(int $x): int; }
+trait Adapted { use Requirement { f as protected; } }
+interface ParentContract { public function label(): string; }
+interface Contract extends ParentContract { public static function make(): static; }
+enum E implements Contract {
+    use Adapted;
+    case A;
+    protected function f(int $x = 1, int $extra = 2): int { return $x + $extra; }
+    public function label(): string { return 'value:' . $this->f(); }
+    public static function make(): self { return self::A; }
+}
+
+function describe(ParentContract $value): string { return $value->label(); }
+echo describe(E::make()), ':', E::A instanceof ParentContract ? 'yes' : 'no';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "value:3:yes");
+    // A bare native enum case already retains its singleton at shutdown. Keep this
+    // frontend regression bounded by that control without claiming singleton cleanup.
+    let baseline = compile_and_run_with_heap_debug("<?php enum E { case A; } echo E::A->name;");
+    assert!(baseline.success, "{}", baseline.stderr);
+    for metric in ["live_blocks=", "live_bytes="] {
+        let retained = |stderr: &str| stderr.lines().next().unwrap()
+            .split_whitespace().find_map(|field| field.strip_prefix(metric))
+            .unwrap().parse::<usize>().unwrap();
+        assert!(retained(&out.stderr) <= retained(&baseline.stderr), "{}", out.stderr);
+    }
+}
+
+
+/// Trait and direct enum constants bind lexical receivers before reflection and native lowering.
+#[test]
+fn test_enum_trait_constant_lexical_receivers() {
+    let out = compile_and_run(r#"<?php
+trait LexicalEnumValues { const A = 1; const B = self::A + 2; const N = self::class; }
+enum LexicalEnum { case Ready; use LexicalEnumValues; const OWN = self::A + 3; }
+echo LexicalEnum::B, "|", LexicalEnum::N, "|", LexicalEnum::OWN, "|";
+echo (new ReflectionClass(LexicalEnum::class))->getConstant("B");
+"#);
+    assert_eq!(out, "3|LexicalEnum|4|3");
+}
+
+/// A concrete enum method may widen a required parameter without losing a relative return hint.
+#[test]
+fn test_enum_trait_abstract_requirement_accepts_parameter_widening() {
+    let out = compile_and_run(r#"<?php
+trait EnumRequirement {
+    abstract public function accept(int $value): self;
+}
+trait EnumRequirementMiddle { use EnumRequirement; }
+enum EnumImplementation {
+    case Ready;
+    use EnumRequirementMiddle;
+    public function accept(mixed $value): self { return $this; }
+}
+echo EnumImplementation::Ready->accept(7)->name;
+"#);
+    assert_eq!(out, "Ready");
+}
+
+/// A never-returning implementation is a valid covariant narrowing of an abstract return type.
+#[test]
+fn test_enum_trait_abstract_requirement_accepts_never_return() {
+    let out = compile_and_run(r#"<?php
+trait NeverEnumRequirement { abstract public function stop(): int; }
+enum NeverEnumImplementation {
+    case Ready;
+    use NeverEnumRequirement;
+    public function stop(): never { throw new Error("stop"); }
+}
+try { NeverEnumImplementation::Ready->stop(); } catch (Error $error) { echo "caught"; }
+"#);
+    assert_eq!(out, "caught");
+}
+
 /// Class-name constant expressions survive enum schema construction as string backing values.
 #[test]
 fn test_backed_enum_values_accept_named_class_constant_expressions() {
@@ -20,6 +482,35 @@ enum Kind: string { case Plain = Alias::class; case Handler = \EnumNames\Payload
 echo Kind::Plain->value, "|", Kind::Handler->value;
 "#);
     assert_eq!(out, "EnumNames\\Payload|EnumNames\\PayloadHandler");
+}
+
+/// Flattened trait constants remain readable and reflect after the enum's own declarations.
+#[test]
+fn test_enum_trait_constants_preserve_read_and_reflection_order() {
+    let out = compile_and_run(r#"<?php
+trait Values { public const TC = 2; }
+enum Mode { use Values; public const OWN = 1; case Active; }
+echo Mode::TC, "\n";
+echo implode(',', array_keys((new ReflectionClass(Mode::class))->getConstants())), "\n";
+"#);
+    assert_eq!(out, "2\nOWN,Active,TC\n");
+}
+
+/// Reflection retains finality for both instance and static enum methods.
+#[test]
+fn test_enum_final_methods_keep_reflection_flags() {
+    let out = compile_and_run(r#"<?php
+enum Mode {
+    case Active;
+    final public function label(): string { return 'active'; }
+    final public static function code(): int { return 1; }
+    public function ordinary(): int { return 2; }
+}
+echo (new ReflectionMethod(Mode::class, 'label'))->isFinal() ? 'final' : 'open', "\n";
+echo (new ReflectionMethod(Mode::class, 'code'))->isFinal() ? 'final' : 'open', "\n";
+echo (new ReflectionMethod(Mode::class, 'ordinary'))->isFinal() ? 'final' : 'open', "\n";
+"#);
+    assert_eq!(out, "final\nfinal\nopen\n");
 }
 
 /// Verifies `Enum` can name an enum and remain usable in type hints and scoped access.
@@ -673,7 +1164,7 @@ fn test_enum_method_uses_self_constant() {
 #[test]
 fn test_example_enum_methods_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enum-methods/main.php"));
-    assert_eq!(out, "red/black\ndiamonds\nblack\n52\nclubs\n");
+    assert_eq!(out, "red/black\ndiamonds\nblack\n52\nclubs\nSuit\n");
 }
 
 /// Verifies a pure (unit) enum case exposes the read-only `->name` property holding the

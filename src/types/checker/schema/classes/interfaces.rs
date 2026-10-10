@@ -296,6 +296,7 @@ fn validate_static_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
+        checker.enums.contains_key(&class.name),
     )?;
     if required_sig.declared_return && !actual_sig.declared_return {
         return Err(CompileError::new(
@@ -534,6 +535,7 @@ fn validate_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
+        checker.enums.contains_key(&class.name),
     )?;
     if required_sig.declared_return && !actual_sig.declared_return {
         return Err(CompileError::new(

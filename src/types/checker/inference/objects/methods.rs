@@ -294,14 +294,29 @@ impl Checker {
                     &format!("Undefined method: {}::{}", interface_name, method),
                 )
             })?;
-        self.check_user_declared_call(
-            &sig,
-            args,
-            expr.span,
-            env,
-            &format!("Method {}::{}", interface_name, method),
-            interface_name,
-        )?;
+        // Final native enum implementations decide the actual defaults and arity.
+        // Keep the declaration authoritative for reflection and the return contract.
+        let mut implementations: Vec<_> = self.classes.iter()
+            .filter(|(_, info)| info.interfaces.iter().any(|name| name == interface_name))
+            .map(|(name, info)| (name.clone(), info.methods.get(&method_key).cloned()))
+            .collect();
+        implementations.sort_by(|left, right| left.0.cmp(&right.0));
+        if !implementations.is_empty()
+            && implementations.iter().all(|(name, _)| self.enums.contains_key(name))
+        {
+            for (name, implementation) in implementations {
+                let implementation = implementation.expect("validated enum interface method");
+                self.check_user_declared_call(
+                    &implementation, args, expr.span, env,
+                    &format!("Method {name}::{method}"), &name,
+                )?;
+            }
+        } else {
+            self.check_user_declared_call(
+                &sig, args, expr.span, env,
+                &format!("Method {}::{}", interface_name, method), interface_name,
+            )?;
+        }
         let late_static_return = self.instance_method_late_static_return(interface_name, &method_key);
         match late_static_return {
             Some(return_type) => self.resolve_late_static_return_type_hint(

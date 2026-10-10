@@ -5,8 +5,15 @@ interface HasSymbol
     public function symbol(): string;
 }
 
+trait EnumOrigin
+{
+    const OWNER = __CLASS__;
+    abstract public function repeat(int $times): string;
+}
+
 enum Suit: string implements HasSymbol
 {
+    use EnumOrigin { repeat as protected; }
     case Hearts = "hearts";
     case Diamonds = "diamonds";
     case Clubs = "clubs";
@@ -26,7 +33,13 @@ enum Suit: string implements HasSymbol
     // Instance method using the backing value.
     public function symbol(): string
     {
-        return $this->value;
+        return $this->repeat();
+    }
+
+    // The adapted abstract contract permits optional and extra optional parameters.
+    protected function repeat(int $times = 1, int $extra = 0): string
+    {
+        return str_repeat($this->value, $times + $extra);
     }
 
     // Static factory.
@@ -53,3 +66,4 @@ function describe(HasSymbol $s): string
     return $s->symbol();
 }
 echo describe(Suit::Clubs), "\n";
+echo Suit::OWNER, "\n";

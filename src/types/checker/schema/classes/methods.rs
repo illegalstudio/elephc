@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker::schema::classes`
+//! - `crate::types::checker::schema::enums` for shared method shape validation.
 //!
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
@@ -30,7 +31,7 @@ pub(super) fn apply_methods(
     checker: &Checker,
 ) -> Result<(), CompileError> {
     for method in &class.methods {
-        validate_method_shape(class, method)?;
+        validate_method_shape(&class.name, method)?;
         // A generic method is a TEMPLATE and has no signature of its own: its parameter types
         // name type parameters that only a call site can bind, so resolving it here would report
         // `Unknown type: U`. Its instantiations are ordinary methods on this same class and go
@@ -50,8 +51,8 @@ pub(super) fn apply_methods(
 /// Validates shape constraints on a single method: abstract+final conflict,
 /// abstract method with a body, non-abstract method without a body, and
 /// private abstract methods are all rejected.
-fn validate_method_shape(
-    class: &FlattenedClass,
+pub(in crate::types::checker::schema) fn validate_method_shape(
+    class_name: &str,
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     if method.is_abstract && method.is_final {
@@ -59,7 +60,7 @@ fn validate_method_shape(
             method.span,
             &format!(
                 "Cannot use the final modifier on an abstract method: {}::{}",
-                class.name, method.name
+                class_name, method.name
             ),
         ));
     }
@@ -68,7 +69,7 @@ fn validate_method_shape(
             method.span,
             &format!(
                 "Abstract method cannot have a body: {}::{}",
-                class.name, method.name
+                class_name, method.name
             ),
         ));
     }
@@ -77,7 +78,7 @@ fn validate_method_shape(
             method.span,
             &format!(
                 "Non-abstract method must have a body: {}::{}",
-                class.name, method.name
+                class_name, method.name
             ),
         ));
     }
@@ -86,7 +87,7 @@ fn validate_method_shape(
             method.span,
             &format!(
                 "Private abstract methods are not supported: {}::{}",
-                class.name, method.name
+                class_name, method.name
             ),
         ));
     }

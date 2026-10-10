@@ -601,6 +601,19 @@ fn test_static_access_on_a_generic_class_type() {
     assert_eq!(out, "7|box|Box<int>");
 }
 
+/// Generic constant types and lexical magic initializers survive the same member traversal.
+#[test]
+fn test_generic_typed_constant_keeps_lexical_magic_initializer() {
+    let out = compile_and_run(r#"<?php
+class Holder<T> {
+    public const T NUMBER = 7;
+    public const int LINE = __LINE__;
+}
+echo Holder<int>::NUMBER, ":", Holder<int>::LINE;
+"#);
+    assert_eq!(out, "7:4");
+}
+
 /// A generic class returning ITSELF at its own parameter: `Box<T>` inside `Box<T>`'s body is
 /// concrete only once the class is instantiated, and the copy carries `Box<int>`.
 #[test]
