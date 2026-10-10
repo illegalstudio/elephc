@@ -544,6 +544,15 @@ pub(crate) struct Checker {
     /// Whether any checked body contains eval. Runtime fragments can write missing names on AOT
     /// objects even when no equivalent property mutation is visible in the source AST.
     pub program_contains_eval: bool,
+    /// Top-level constant names codegen's prescan can materialize: `const` declarations and
+    /// literal `define("NAME", ...)` calls at the top level (plus include/synthetic bodies),
+    /// matching `codegen_support::prescan::collect_constant_decls`'s scoping.
+    ///
+    /// Populated before the `AfterConstants` deferred-default pass so a default that names a
+    /// constant registered only while checking a function body — which the prescan skips and the
+    /// backend cannot fold — is rejected at compile time instead of reaching codegen (review
+    /// follow-up for #1308).
+    pub prescanned_constants: std::collections::HashSet<String>,
     /// Names of the CURRENT body's locals that the syntactic pre-scan marked as whole-frame boxed
     /// `Mixed` storage, because they are assigned incompatible types across a branch.
     ///

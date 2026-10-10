@@ -147,6 +147,7 @@ impl Checker {
             statement_position_expr: None,
             body_contains_eval: false,
             program_contains_eval: false,
+            prescanned_constants: std::collections::HashSet::new(),
             mixed_storage_locals: HashSet::new(),
             guarded_union_types: HashMap::new(),
             mixed_storage_store_sites: HashMap::new(),

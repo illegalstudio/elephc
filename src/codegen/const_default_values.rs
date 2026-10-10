@@ -99,6 +99,72 @@ pub(in crate::codegen) fn resolve_const_default(
     resolve_const_default_at(expr, context, 0)
 }
 
+/// Resolves one PHP default expression into the literal AST form `literal_default_value` materializes.
+///
+/// The class/global-constant defaults this backend supports (nested global constants, class and
+/// interface constants, pure operators, arrays of those) resolve through
+/// [`resolve_const_default`]; this rewrites the resolved tree back into the literal expression
+/// `codegen::literal_defaults` understands. `None` covers the shapes that resolver does not model
+/// — objects and enum cases — which `literal_default_value` still owns.
+pub(in crate::codegen) fn resolve_const_default_to_expr_kind(
+    expr: &Expr,
+    context: &ConstDefaultContext<'_>,
+) -> Option<ExprKind> {
+    const_default_to_expr_kind(&resolve_const_default(expr, context)?)
+}
+
+/// Rewrites a resolved constant value into the literal AST form it materializes from.
+fn const_default_to_expr_kind(value: &ConstDefaultValue) -> Option<ExprKind> {
+    match value {
+        ConstDefaultValue::Scalar { kind, payload } => {
+            match *kind {
+                CONST_DEFAULT_NULL => Some(ExprKind::Null),
+                CONST_DEFAULT_BOOL => Some(ExprKind::BoolLiteral(*payload != 0)),
+                CONST_DEFAULT_INT => Some(ExprKind::IntLiteral(*payload)),
+                CONST_DEFAULT_FLOAT => Some(ExprKind::FloatLiteral(f64::from_bits(*payload as u64))),
+                CONST_DEFAULT_EMPTY_ARRAY => Some(ExprKind::ArrayLiteral(Vec::new())),
+                _ => None,
+            }
+        }
+        ConstDefaultValue::String(value) => Some(ExprKind::StringLiteral(value.clone())),
+        ConstDefaultValue::Array(elements) => {
+            if elements.iter().any(|element| element.key.is_some()) {
+                let mut entries = Vec::with_capacity(elements.len());
+                for element in elements {
+                    let key = match &element.key {
+                        Some(ConstDefaultArrayKey::Int(value)) => {
+                            Expr::new(ExprKind::IntLiteral(*value), crate::span::Span::dummy())
+                        }
+                        Some(ConstDefaultArrayKey::String(value)) => Expr::new(
+                            ExprKind::StringLiteral(value.clone()),
+                            crate::span::Span::dummy(),
+                        ),
+                        // An explicit later key overwrites an implicit earlier one, which this
+                        // literal form cannot express; let `literal_default_value` refuse it.
+                        None => return None,
+                    };
+                    let default = Expr::new(
+                        const_default_to_expr_kind(&element.default)?,
+                        crate::span::Span::dummy(),
+                    );
+                    entries.push((key, default));
+                }
+                Some(ExprKind::ArrayLiteralAssoc(entries))
+            } else {
+                let mut items = Vec::with_capacity(elements.len());
+                for element in elements {
+                    items.push(Expr::new(
+                        const_default_to_expr_kind(&element.default)?,
+                        crate::span::Span::dummy(),
+                    ));
+                }
+                Some(ExprKind::ArrayLiteral(items))
+            }
+        }
+        ConstDefaultValue::Object { .. } => None,
+    }
+}
+
 /// Resolves one PHP default expression while preserving the constant recursion limit.
 pub(in crate::codegen) fn resolve_const_default_at(
     expr: &Expr,

@@ -1095,10 +1095,18 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
+    // A bare global-constant default is folded to the constant's value first: the static
+    // initializer materializes from the AST like the instance path, and `literal_default_value`
+    // has no `ConstRef` arm (review follow-up for #1308).
+    let folded = crate::codegen::literal_defaults::fold_global_constant_default(
+        expr,
+        &crate::codegen::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name),
+    )
+    .unwrap_or_else(|| expr.clone());
     let value = literal_default_value(
         &format!("static property {}::${}", class_name, property),
         php_type,
-        expr,
+        &folded,
         "static property initializer",
     )?;
     ctx.emitter.comment(&format!(

@@ -20,6 +20,7 @@
 //!   `NullRepr::Tagged`) is an inline two-word `{payload, tag}` TaggedScalar, so it takes
 //!   `TaggedInt`/`TaggedNull` and never a boxed Mixed pointer.
 
+use crate::codegen::const_default_values::ConstDefaultContext;
 use crate::codegen::platform::Arch;
 use crate::codegen::{
     abi, emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
@@ -1103,6 +1104,48 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
             other
         ))),
     }
+}
+
+/// Resolves a bare global-constant default to the literal value it names.
+///
+/// `literal_default_value` has no `ConstRef` arm, so a default naming a global constant is folded
+/// to the constant's value before materialization. The fold follows a constant that names another
+/// constant, bounded by `const_default_values::MAX_CONST_DEFAULT_DEPTH`, then resolves any nested
+/// constants, class/interface constants and pure operators the final value still carries
+/// (`const ITEMS = [A, 2]`, `const N = Foo::X`, `const N = A + 1`) through the shared
+/// `const_default_values` resolver. It returns `None` when the chain does not end at a value this
+/// path can materialize.
+pub(crate) fn fold_global_constant_default(
+    expr: &ExprKind,
+    context: &ConstDefaultContext<'_>,
+) -> Option<ExprKind> {
+    let mut current = expr.clone();
+    for _ in 0..crate::codegen::const_default_values::MAX_CONST_DEFAULT_DEPTH {
+        let ExprKind::ConstRef(name) = &current else {
+            break;
+        };
+        let (value, _) = context
+            .module
+            .global_constants
+            .get(name.as_str())
+            .or_else(|| context.module.global_constants.get(name.as_str().trim_start_matches('\\')))?;
+        current = value.clone();
+    }
+    // A chain still naming a constant after the recursion bound is self-referential.
+    if matches!(current, ExprKind::ConstRef(_)) {
+        return None;
+    }
+    // Deep-resolve the value so a non-literal constant (`[A, 2]`, `Foo::X`, `A + 1`) reaches
+    // `literal_default_value` as the literal it denotes. An object or enum-case value leaves the
+    // resolver unmodelled; it is returned as-is for the arms of `literal_default_value` that
+    // handle those shapes.
+    if let Some(resolved) = crate::codegen::const_default_values::resolve_const_default_to_expr_kind(
+        &Expr::new(current.clone(), crate::span::Span::dummy()),
+        context,
+    ) {
+        return Some(resolved);
+    }
+    Some(current)
 }
 
 /// Folds `Foo::class` with a named receiver into the string literal it always is: the name

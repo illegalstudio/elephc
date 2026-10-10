@@ -37,6 +37,8 @@ mod return_alias;
 mod result;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
+/// PHP-spelling of `PhpType` for user-facing type-mismatch diagnostics.
+mod type_names;
 /// Function signature representation and builtin signature helpers.
 ///
 /// Crate-visible because the descriptor variadic storage contract
@@ -63,6 +65,7 @@ pub(crate) use array_keys::{
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
+pub(crate) use type_names::php_type_name;
 pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
     ReturnArgAlias,

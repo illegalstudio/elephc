@@ -257,6 +257,48 @@ fn test_error_typed_property_rejects_invalid_default() {
     );
 }
 
+/// A global-constant default is typed from the constant's declared type, so a mismatch names
+/// PHP's type (`array`, `int`) rather than the internal `PhpType` debug form (issue #1308).
+#[test]
+fn test_error_global_constant_default_names_the_php_type() {
+    expect_error(
+        "<?php const N = 5; class Box { public array $value = N; }",
+        "Property Box::$value default expects array, got int",
+    );
+}
+
+/// A default naming a constant that no top-level `const` / `define()` registers is still
+/// rejected, after the post-constant pass (issue #1308).
+#[test]
+fn test_error_unknown_constant_default_is_rejected() {
+    expect_error(
+        "<?php class Box { public array $value = NOPE; }",
+        "Undefined constant: NOPE",
+    );
+}
+
+/// The same rejection holds when an UNRELATED function contains `eval`: the deferred-default
+/// pass runs outside the eval barrier, so eval elsewhere cannot substitute a type (review
+/// follow-up for #1308).
+#[test]
+fn test_error_unknown_constant_default_is_rejected_despite_an_unrelated_eval() {
+    expect_error(
+        "<?php function later() { return eval('return 1;'); } class Box { public array $value = NOPE; }",
+        "Undefined constant: NOPE",
+    );
+}
+
+/// A constant registered only by a function-body `define()` is not materializable by the
+/// backend, so a default that names one is rejected at compile time instead of reaching codegen
+/// with no value (review follow-up for #1308).
+#[test]
+fn test_error_body_defined_constant_default_is_rejected() {
+    expect_error(
+        "<?php function init() { define('ITEMS', [1, 2]); } class Crate { public function __construct(public array $items = ITEMS) {} }",
+        "Undefined constant: ITEMS",
+    );
+}
+
 /// Verifies the error diagnostic for typed property rejects invalid assignment.
 #[test]
 fn test_error_typed_property_rejects_invalid_assignment() {
