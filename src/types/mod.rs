@@ -56,7 +56,8 @@ mod defined;
 mod warnings;
 
 pub(crate) use array_keys::{
-    array_key_contiguity_is_unproven, array_key_type_from_value_type, is_php_integer_array_key,
+    array_key_contiguity_is_unproven, array_key_type_from_value_type,
+    empty_array_key_requires_hash_storage, is_php_integer_array_key,
     merge_array_key_types, normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };

@@ -16,6 +16,7 @@
 //!   of dropping the write.
 //! - Canonical null and legacy null-container payloads autovivify through the
 //!   shared cell helper before any container header is dereferenced.
+//! - Packed invoker-marker overwrites promote to the shared hash setter to retain caller identity.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -129,6 +130,8 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x12, x9, lsl #3]");                           // load the previous boxed Mixed pointer from the slot
     emitter.instruction("cbz x0, __rt_mixed_array_set_release_slot");           // absent slots contain no persistent reference
     emitter.instruction("ldr x9, [x0]");                                        // inspect the stored boxed tag
+    emitter.instruction("cmp x9, #11");                                         // invoker-backed variadic slots must retain caller identity
+    emitter.instruction("b.eq __rt_mixed_array_set_promote");                   // share hash_set's ownership-safe invoker writeback
     emitter.instruction("cmp x9, #7");                                          // recognize a nested Mixed wrapper
     emitter.instruction("b.ne __rt_mixed_array_set_release_slot");              // ordinary values use normal slot replacement
     emitter.instruction("ldr x9, [x0, #16]");                                   // inspect the persistent reference marker
@@ -420,6 +423,8 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");              // load the previous boxed Mixed pointer from the slot
     emitter.instruction("test rax, rax");                                       // recognize an absent previous slot
     emitter.instruction("jz __rt_mixed_array_set_release_slot");                // absent slots contain no persistent reference
+    emitter.instruction("cmp QWORD PTR [rax], 11");                             // invoker-backed variadic slots must retain caller identity
+    emitter.instruction("je __rt_mixed_array_set_promote");                     // share hash_set's ownership-safe invoker writeback
     emitter.instruction("cmp QWORD PTR [rax], 7");                              // recognize a nested Mixed wrapper
     emitter.instruction("jne __rt_mixed_array_set_release_slot");               // ordinary values use normal slot replacement
     emitter.instruction("cmp QWORD PTR [rax + 16], 1");                         // inspect the persistent reference marker

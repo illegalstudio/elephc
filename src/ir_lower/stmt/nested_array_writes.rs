@@ -188,7 +188,7 @@ pub(super) fn lower_local_parent_fetch_for_write(
                 PhpType::Str => {
                     // A literal string key on an indexed local is always a
                     // hash key: promote the local to a Mixed-valued hash
-                    // first (mirrors `lower_string_key_array_promotion`),
+                    // first (mirrors `lower_array_key_hash_promotion`),
                     // then ensure the element through the hash path. The
                     // promoted hash flows straight into the ensure call and
                     // is stored back exactly once at the end.

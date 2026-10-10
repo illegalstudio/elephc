@@ -9,6 +9,49 @@
 
 use super::*;
 
+/// A property suffix extends the increment target and lowers the known fresh-null Error.
+#[test]
+fn test_append_followup_prefix_property_target() {
+    let statements = parse_source("<?php ++$items[]->x;");
+    assert!(matches!(&statements[0].kind, StmtKind::ExprStmt(Expr { kind: ExprKind::Throw(_), .. })));
+}
+
+/// Empty dimensions remain write-only targets until the assignment or update is known.
+#[test]
+fn test_append_review_write_contexts_parse() {
+    for source in [
+        "<?php echo ($items[] = 2);",
+        "<?php echo ($items[] += 2);",
+        "<?php $items[]['k'] = 'x';",
+        "<?php $items[][] = 1;",
+        "<?php $items[]++;",
+        "<?php $items[]['k'] .= 'x';",
+        "<?php $box->items[] += 2;",
+        "<?php Box::$items[] += 2;",
+        "<?php ++$items[];",
+        "<?php echo ++$items[]['k'];",
+        "<?php ++$box->items[];",
+        "<?php ++Box::$items[];",
+        "<?php $items[0][] += 5;",
+        "<?php $items[0][]['k'] = 'v';",
+        "<?php $items[]->x = 1;",
+        "<?php $items[]->x++;",
+        "<?php ++$items[]->x->y;",
+        "<?php $items[]->{name()}->y = rhs();",
+    ] {
+        assert_eq!(parse_source(source).len(), 1, "{source}");
+    }
+}
+
+/// The parser records an arrow's append receiver even though its write is in a prelude.
+#[test]
+fn test_append_review_arrow_captures_receiver() {
+    let statements = parse_source("<?php $append = fn() => ($items[] += 2);");
+    let StmtKind::Assign { value, .. } = &statements[0].kind else { panic!("expected assignment") };
+    let ExprKind::Closure { captures, .. } = &value.kind else { panic!("expected arrow") };
+    assert_eq!(captures, &vec!["items".to_string()]);
+}
+
 /// Verifies that compound assignment operators `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
 /// parse correctly as `Assign` nodes where the value is a `BinaryOp` on the variable.
 /// Each case checks the operator, lhs variable, and rhs integer literal match the expected AST shape.

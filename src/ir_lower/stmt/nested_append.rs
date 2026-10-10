@@ -213,6 +213,9 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         // Anything else (a `Mixed` property, an object) is out of scope: fall open to today's
         // lowering, which is what the parser's desugar already produces.
         _ => {
+            if ctx.value_is_owning_temporary(container) {
+                crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+            }
             super::lower_stmt(ctx, group.read);
             super::lower_stmt(ctx, group.push);
             super::lower_stmt(ctx, group.write_back);
@@ -228,7 +231,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         isset_op.default_effects(),
         Some(span),
     );
-    if matches!(group.base, BaseKind::Local(_)) {
+    if matches!(group.base, BaseKind::Local(_)) || ctx.value_is_owning_temporary(container) {
         crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
     }
     crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));

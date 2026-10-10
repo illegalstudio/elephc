@@ -456,7 +456,26 @@ fn parse_prefix_inc_dec(
     // original error stands for anything the desugaring declines (a call, for instance,
     // which cannot be read twice).
     let rewind = *pos;
-    if let Ok(target) = parse_expr_bp(tokens, pos, 35) {
+    let operand = super::pratt::parse_prefix_increment_operand(tokens, pos);
+    if let Err(error) = &operand {
+        if !increment && error.message == "Cannot use [] for reading" {
+            return Err(CompileError::new(span,
+                "Pre-decrement on an append dimension is not supported"));
+        }
+    }
+    if let Ok((target, append_kind)) = operand {
+        if matches!(append_kind, super::pratt::PrefixIncrementTarget::Append) {
+            if !increment {
+                return Err(CompileError::new(span,
+                    "Pre-decrement on an append dimension is not supported"));
+            }
+            return Ok(target);
+        }
+        if matches!(append_kind, super::pratt::PrefixIncrementTarget::AppendProperty) {
+            if let Some(error) = super::append_writes::lower_null_property_write(&target, None, span) {
+                return Ok(error);
+            }
+        }
         if let Some(desugared) =
             super::assignment_targets::desugar_lvalue_incdec(target, increment, true, span)
         {

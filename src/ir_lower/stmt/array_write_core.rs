@@ -129,6 +129,14 @@ pub(crate) fn desugared_element_update<'a>(
     if value.span != assignment_span {
         return None;
     }
+    let value = match &value.kind {
+        ExprKind::Assignment { target, value, result_target: None, prelude, .. }
+            if prelude.is_empty() && matches!(target.kind, ExprKind::Variable(_)) => value,
+        _ => value,
+    };
+    if value.span != assignment_span {
+        return None;
+    }
     match &value.kind {
         ExprKind::BinaryOp { left, .. } if reads_target(left) => Some(ElementUpdate::Compound),
         ExprKind::NullCoalesce { value: read, default } if reads_target(read) => {
@@ -167,8 +175,9 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         return;
     }
     let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
-    // A literal string index always means a hash key, so promote the destination
-    // to associative storage like PHP. A boxed Mixed/Union index may hold either
+    // Concrete string keys normally select associative storage. Ref-bound Mixed-slot
+    // arrays instead use the shared writer, preserving invoker markers and keeping numeric
+    // strings indexed. A boxed Mixed/Union index may hold either
     // an integer or a string key (foreach loop keys are always Mixed in EIR via
     // `Op::IterCurrentKey`), so it goes through `Op::ArraySetMixedKey`, whose
     // runtime helper keeps integer keys on indexed storage (preserving indexed
@@ -177,8 +186,39 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     // string key onto int 0. A foreach key over a concretely-indexed array is
     // known to be int-valued, so it is left on the coerce path to avoid
     // needlessly dispatching.
-    if op == Op::ArraySet && index_value.ir_type == IrType::Str {
-        lower_string_key_array_promotion(ctx, array, array_value, index_value, value_value, span);
+    let empty_sparse_key = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+        PhpType::Array(element) if is_empty_indexed_array_element(&element))
+        && crate::types::empty_array_key_requires_hash_storage(index)
+        && !index_is_boxed_mixed_key(index_value.ir_type);
+    let mixed_elements = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
+    let reference_string_key = mixed_elements && index_value.ir_type == IrType::Str
+        && ctx.is_ref_bound_local(array);
+    if op == Op::ArraySet && (index_value.ir_type == IrType::Str || empty_sparse_key)
+        && !reference_string_key
+    {
+        lower_array_key_hash_promotion(ctx, array, array_value, index_value, value_value, span,
+            key_already_diagnosed);
+        return;
+    }
+    // Contextual storage may already have widened an empty destination to Mixed slots.
+    // A scalar key can still be negative or sparse, even when arithmetic lowering
+    // produced an unboxed integer for a checker-facing Mixed expression. Even a
+    // literal zero must preserve an existing invoker marker through the shared writer.
+    if op == Op::ArraySet
+        && mixed_elements
+        && !index_is_boxed_mixed_key(index_value.ir_type)
+        && !index_is_foreach_int_key(ctx, index)
+        && (index_value.ir_type == IrType::Str
+            || crate::types::empty_array_key_requires_hash_storage(index)
+            || matches!(value_value.ir_type,
+                IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)))
+    {
+        let key = ctx.box_value_as_mixed(index_value, PhpType::Mixed, Some(index.span));
+        lower_mixed_key_array_set(
+            ctx, array, array_value, key, value_value, span, key_already_diagnosed,
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(index.span));
         return;
     }
     if op == Op::ArraySet
@@ -295,14 +335,15 @@ pub(super) fn coerce_buffer_set_value(
     coerced
 }
 
-/// Promotes an indexed local array to a Mixed-valued associative array for string-key writes.
-pub(super) fn lower_string_key_array_promotion(
+/// Promotes string-key or potentially sparse first writes into associative storage.
+pub(super) fn lower_array_key_hash_promotion(
     ctx: &mut LoweringContext<'_, '_>,
     array: &str,
     array_value: LoweredValue,
     index: LoweredValue,
     value: LoweredValue,
     span: Span,
+    key_already_diagnosed: bool,
 ) {
     let current_ty = ctx.builder.value_php_type(array_value.value);
     let value_ty = ctx.builder.value_php_type(value.value);
@@ -319,7 +360,7 @@ pub(super) fn lower_string_key_array_promotion(
     ctx.emit_void(
         Op::HashSet,
         vec![hash.value, index.value, value.value],
-        None,
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
         Op::HashSet.default_effects(),
         Some(span),
     );
@@ -334,8 +375,7 @@ pub(super) fn lower_string_key_array_promotion(
 /// `implode` keep routing to the indexed path) while `Op::ArraySetMixedKey`
 /// dispatches the key tag at runtime: integer keys stay on indexed storage and
 /// string keys promote the destination to a hash. This is the Mixed-key analogue
-/// of `lower_string_key_array_promotion`, which unconditionally promotes because
-/// a literal string key is always a hash key.
+/// of `lower_array_key_hash_promotion`, which promotes known hash-key writes.
 pub(super) fn lower_mixed_key_array_set(
     ctx: &mut LoweringContext<'_, '_>,
     array: &str,
@@ -355,6 +395,7 @@ pub(super) fn lower_mixed_key_array_set(
         Some(span),
     );
     ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
+    release_indexed_array_write_operand(ctx, Some(&PhpType::Mixed), value, span);
 }
 
 /// Returns the associative type produced by a string-key write to an indexed array.

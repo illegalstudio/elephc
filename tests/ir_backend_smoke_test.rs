@@ -4386,7 +4386,7 @@ emit_fields(["name" => "Ada", "email" => "ada@example.test"]);
     );
 }
 
-/// Verifies indexed writes into Mixed arrays box concrete values before storage.
+/// Verifies Mixed writes box values while sparse integer keys do not materialize null gaps.
 #[test]
 fn ir_backend_handles_mixed_indexed_array_set() {
     let source = r#"<?php
@@ -4408,7 +4408,7 @@ echo is_null($a[5]) ? "N" : "bad";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("mixed_indexed_array_set", source),
-        "6:7:z:ok:G:N"
+        "4:7:z:ok:G:N"
     );
 }
 
