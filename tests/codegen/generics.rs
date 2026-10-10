@@ -2455,10 +2455,10 @@ echo get_class((new Box(new User()))->get()), "|", get_class((new Box(new Order(
     );
 }
 
-/// A T-SLOT WRITE is NOT merged: it carries a `PropertyRef` immediate and runs the typed-property
-/// guard, whose accepted-class list is the concrete `T`, so both bodies stay.
+/// A T-SLOT WRITE with a concrete source MERGES: the source is not `Mixed`, so no typed-property
+/// guard is emitted and the only class-specific thing is the slot, which is template-identical.
 #[test]
-fn test_shape_merge_keeps_t_slot_writes() {
+fn test_shape_merge_merges_t_slot_writes() {
     let source = r#"<?php
 class Box<T> {
     public function __construct(private T $value) {}
@@ -2478,13 +2478,44 @@ echo get_class($u), "|", get_class($o);
     let key = elephc::names::php_symbol_key("set");
     let user = elephc::names::method_symbol("Box<User>", &key);
     let order = elephc::names::method_symbol("Box<Order>", &key);
+    let has_user = user_asm.contains(&format!("{user}:"));
+    let has_order = user_asm.contains(&format!("{order}:"));
+    assert!(
+        has_user ^ has_order,
+        "a concrete T-slot write must merge to one body (user={has_user}, order={has_order})"
+    );
+}
+
+/// A T-SLOT WRITE with a `mixed` source does NOT merge: it runs the typed-property guard, whose
+/// accepted-class list is the concrete `T`.
+#[test]
+fn test_shape_merge_keeps_guarded_t_slot_writes() {
+    let source = r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function put(mixed $value): void { $this->value = $value; }
+}
+class User {}
+class Order {}
+$u = new Box(new User());
+$u->put(new User());
+$o = new Box(new Order());
+$o->put(new Order());
+echo get_class($u), "|", get_class($o);
+"#;
+    assert_eq!(compile_and_run(source), "Box<User>|Box<Order>");
+
+    let user_asm = compile_cli_to_asm("guardwrite", source);
+    let key = elephc::names::php_symbol_key("put");
+    let user = elephc::names::method_symbol("Box<User>", &key);
+    let order = elephc::names::method_symbol("Box<Order>", &key);
     assert!(
         user_asm.contains(&format!("{user}:")),
-        "the user set body must stay (nominal typed-property guard)"
+        "the user put body must stay (typed-property guard)"
     );
     assert!(
         user_asm.contains(&format!("{order}:")),
-        "the order set body must stay (nominal typed-property guard)"
+        "the order put body must stay (typed-property guard)"
     );
 }
 
@@ -2517,14 +2548,15 @@ echo get_class((new Box(new User()))->indirect()), "|", get_class((new Box(new O
 }
 
 /// A method that calls a callee which is NOT merged does NOT merge: the callee differs across the
-/// two classes (it writes a `T` slot), so the caller's dispatch would resolve to the wrong class.
+/// two classes (it writes a `T` slot from a `mixed` source, so it runs the typed-property guard),
+/// so the caller's dispatch would resolve to the wrong class.
 #[test]
 fn test_shape_merge_keeps_calls_to_unmerged_methods() {
     let source = r#"<?php
 class Box<T> {
     public function __construct(private T $value) {}
-    public function rawSet(T $v): void { $this->value = $v; }
-    public function delegate(T $v): void { $this->rawSet($v); }
+    public function rawSet(mixed $v): void { $this->value = $v; }
+    public function delegate(mixed $v): void { $this->rawSet($v); }
 }
 class User {}
 class Order {}

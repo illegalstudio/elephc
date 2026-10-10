@@ -200,6 +200,13 @@ fn has_nominal_use(function: &Function, method_dispatch_is_nominal: bool) -> boo
             // through the class and stays nominal.
             return nominal_dynamic_receiver(function, instruction);
         }
+        if instruction.op == Op::PropSet {
+            // A store whose source is a concrete (non-`Mixed`) value needs no typed-property guard,
+            // so the only class-specific thing is the slot, which is template-identical across
+            // instantiations. A store of a `Mixed` value runs the guard, whose accepted-class list
+            // is the concrete `T`, so it stays nominal.
+            return !prop_set_source_is_concrete(function, instruction);
+        }
         if method_dispatch_is_nominal
             && matches!(instruction.op, Op::MethodCall | Op::NullsafeMethodCall)
         {
@@ -214,7 +221,6 @@ fn has_nominal_use(function: &Function, method_dispatch_is_nominal: bool) -> boo
                 | Op::MethodLookup
                 | Op::PropGetForWrite
                 | Op::PropInitialized
-                | Op::PropSet
                 | Op::PropUnset
                 | Op::LoadPropRefCell
                 | Op::LoadPropRefCellChecked
@@ -236,6 +242,22 @@ fn has_nominal_use(function: &Function, method_dispatch_is_nominal: bool) -> boo
                 | Op::DynamicPdoStatementConstructorCall
         )
     })
+}
+
+/// Whether every operand of a `prop_set` is concrete (no boxed `Mixed`/`Union` source), so the
+/// store runs no typed-property guard.
+///
+/// The source is checked across ALL operands rather than a fixed index: with two operands the
+/// object is a non-`Mixed` pointer and only the value can be boxed, so "no operand is `Mixed`"
+/// says exactly "the value is concrete" without depending on the operand order.
+fn prop_set_source_is_concrete(function: &Function, instruction: &Instruction) -> bool {
+    !instruction.operands.is_empty()
+        && instruction.operands.iter().all(|operand| {
+            function
+                .values
+                .get(operand.as_raw() as usize)
+                .is_some_and(|value| value.php_type.codegen_repr() != PhpType::Mixed)
+        })
 }
 
 /// Whether a dynamic property access resolves through a statically typed object rather than a
