@@ -164,9 +164,25 @@ The same proof removes numeric local-slot retirement immediately before an
 overwrite. Retirement remains intact when a read, reference alias, or a value
 with a possible destructor prevents proving that the clear is unobservable.
 
+### Canonical loop optimization
+
+The sixth registered pass replaces self-carried scalar loop parameters with their
+preheader values, exposing invariant bounds. It also shares equivalent integer
+induction variables: every back edge must use the same constant step and the
+initial values must agree. Checked recurrences must have identical overflow modes,
+and the retained check must execute before the removed check. They remain checked
+until integer range analysis proves overflow impossible.
+
+Removing duplicate loop parameters and incoming arguments lets dead-code
+elimination discard redundant updates. Integer comparisons place the induction
+operand first, and self-comparisons exposed by counter sharing become constants.
+The recurrence analysis is shared with integer range specialization. Different
+initial values or steps, path-dependent updates, exception handlers, and suspended
+generators are conservatively excluded. See `examples/loop-optimization/main.php`.
+
 ### Integer range and induction-variable analysis
 
-The sixth registered pass propagates signed 64-bit integer intervals through
+The seventh registered pass propagates signed 64-bit integer intervals through
 constants, branch comparisons, block parameters, and arithmetic. Constant-step
 loop counters can inherit bounds from their initial values and loop conditions.
 When every possible result stays within the integer range, checked addition,
@@ -181,7 +197,7 @@ registered pass. See [The Optimizer](../internals/the-optimizer.md).
 
 ### Checked numeric-chain fusion
 
-The seventh registered pass fuses a left-associated chain of boxed checked
+The eighth registered pass fuses a left-associated chain of boxed checked
 addition, subtraction, or multiplication when its only observable result is an
 integer cast. The chain must stay within one basic block, and every boxed
 intermediate may be used only by the next arithmetic operation plus removable
@@ -192,7 +208,7 @@ remaining suffix in order, and applies the normal float-to-int conversion once.
 
 ### Constant folding
 
-The eighth registered pass folds operations whose operands are all compile-time
+The ninth registered pass folds operations whose operands are all compile-time
 constants into a single constant, in place. It covers integer arithmetic
 (`iadd`, `isub`, `imul`), bitwise ops, in-range shifts, unary `ineg`/`ibit_not`,
 float `fadd`/`fsub`/`fmul`/`fneg`, signed integer comparisons (`icmp`), and the
@@ -216,7 +232,7 @@ the three `imul`s eliminated.
 
 ### Common subexpression elimination
 
-The ninth registered pass removes a pure computation when an identical one is
+The tenth registered pass removes a pure computation when an identical one is
 already available on every path to it, redirecting its uses to the earlier
 value. It does both per-block and cross-block elimination in one dominator-tree
 value-numbering traversal: a scoped table maps each pure instruction's
@@ -242,28 +258,40 @@ dead operands that dead-instruction elimination then removes.
 
 ### Loop-invariant code motion
 
-The tenth registered pass moves a pure computation whose operands do not change
+The eleventh registered pass moves a pure computation whose operands do not change
 across a loop out of the loop body and into the loop's preheader, so it runs once
 instead of every iteration. It builds the loop forest on the dominator tree, then
 for each loop grows an invariant set to a fixed point: an instruction is invariant
 when each operand is either defined outside the loop (its definition dominates the
 preheader) or is itself being hoisted.
 
-Only pure instructions with at least one operand and a `NonHeap`/`Persistent`
-result are hoisted — purity means the result depends only on the operands and the
+Only pure instructions with a `NonHeap`/`Persistent` result are hoisted, including
+constant bounds, update steps, and address materializations. Purity means the
+result depends only on the operands and the
 op neither reads mutable state nor faults, so evaluating it once in the preheader
 (unconditionally, even if its original block ran only on some iterations) is safe.
 Loops are processed innermost-first, so a value invariant in several nested loops
 moves all the way to the outermost preheader. Loops without a detected preheader,
 and functions using exception handling, are skipped.
 
+Standalone constant and address materializations move only when their block
+dominates every loop back edge. Constants used only by conditional work stay
+near their uses, avoiding extra entry work and register pressure in short or
+zero-trip loops. A constant needed by an invariant computation can still move
+with that computation, including from a conditional block.
+
 Scalar local promotion exposes invariant source expressions as SSA computations,
 and immutable integer-local loads can also become pure operands. Expressions
 that still read mutable or aliased slots remain in the loop.
 
+Raw integer-slot checked arithmetic retains its original execution point because
+its overflow path can terminate the program. Only explicit integer-cast overflow
+conversions are safe to speculate; proven non-overflowing operations can move after
+integer range analysis removes their checks.
+
 ### Dead instruction elimination
 
-The eleventh registered pass computes CFG liveness and neutralizes unused
+The twelfth registered pass computes CFG liveness and neutralizes unused
 result-producing instructions whose effect metadata says they are pure. This
 cleans up dead values exposed by earlier EIR rewrites. For example, identity
 folding can turn `$argc + 0` into `$argc`; dead-instruction elimination then
@@ -284,7 +312,7 @@ elephc --emit-ir --no-ir-opt app.php
 
 ### Dead store elimination
 
-The twelfth registered pass removes `store_local` writes whose value is never read
+The thirteenth registered pass removes `store_local` writes whose value is never read
 before the slot is overwritten or the function exits. It computes backward,
 CFG-aware liveness over local slots (a `load_local` makes a slot live, a
 `store_local` kills it) so a dead store is dropped even when the overwrite is in a
@@ -300,16 +328,21 @@ left untouched to keep reference counting and aliasing semantics intact.
 
 ### Branch simplification
 
-The thirteenth registered pass prunes the control-flow graph three ways:
+The fourteenth registered pass simplifies the control-flow graph:
 
 - **Constant-condition folding** — a `cond_br` whose condition is a constant
   (`const_bool`, non-zero `const_i64`, or `const_null`) becomes an unconditional
   `br` to the taken edge; a `switch` on a constant scrutinee folds to its matching
   case. A `while (true)` loop, for instance, lowers to a constant `cond_br` that
   this fold collapses.
-- **Empty-block jump threading** — predecessors of an empty, parameterless
-  forwarding block (one that only branches onward) are redirected to the end of
-  the forwarding chain.
+- **Empty-block jump threading**: compose incoming SSA arguments through blocks
+  that only forward control. Argument permutations and parallel edges retain their
+  original values. A parameter used outside the forwarding terminator keeps its
+  defining block. Forwarding cycles are left unchanged.
+- **Loop block merging**: merge an unconditional successor with one predecessor
+  into its caller when both belong to the same natural loop. This removes separate
+  update-block jumps while preserving headers, shared continue targets, and nested
+  loop boundaries.
 - **Unreachable-block removal** — blocks no longer reachable from the entry are
   neutralized (terminator set to `unreachable`, instructions to `nop`).
 

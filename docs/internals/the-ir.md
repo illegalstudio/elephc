@@ -1463,14 +1463,20 @@ for each loop grows the invariant set to a fixed point: an instruction is
 invariant when each operand is defined by another instruction being hoisted from
 the same loop or has a definition that dominates the preheader.
 
-Only **pure** (`Effects::PURE`) instructions with at least one operand and a
-`NonHeap`/`Persistent` result are eligible — purity means the value depends only
+Only **pure** (`Effects::PURE`) instructions with a `NonHeap`/`Persistent` result
+are eligible. Purity means the value depends only
 on the operands and the op neither reads mutable state nor faults, so evaluating
 it once in the preheader, unconditionally even when its original block ran only on
 some iterations, is safe (no speculation hazard); the ownership bound keeps the
-move refcount-neutral. Nullary constant/address materializations are not hoisted
-(rematerializing them is cheaper than keeping them live across the loop). Loops
-are processed innermost-first with moves applied immediately, so a value invariant
+move refcount-neutral. Standalone nullary constant/address materializations move
+only from blocks that dominate every loop latch, including mandatory bounds and
+steps consumed by varying comparisons and updates. Conditional materializations
+stay near their uses to avoid inflating loop live sets and zero-trip entry work;
+dependencies of an otherwise invariant computation still accompany that computation.
+This profitability restriction does not apply to proven-immutable local loads.
+Hoisted instructions follow dependency order rather than instruction table IDs,
+which can differ after CFG rewrites. Loops are processed innermost-first with
+moves applied immediately, so a value invariant
 in several nested loops reaches the outermost preheader in one run. Instructions
 are relocated between blocks' instruction lists and their result `ValueDef`s
 (block + index) are recomputed once at the end so the value table matches the new
@@ -1478,6 +1484,38 @@ layout. Loops without a detected preheader, and functions with exception
 handlers, are skipped. Scalar locals promoted to SSA can now expose invariant
 expressions across loop back edges; remaining slot-backed values retain their
 memory-read restrictions.
+
+Raw integer-slot checked arithmetic retains its original execution point because
+its overflow path can terminate the program. Only explicit integer-cast overflow
+conversions are safe to speculate; proven non-overflowing operations can move after
+integer range analysis removes their checks.
+
+### Canonical Loop Optimization
+
+`induction.rs` recognizes scalar integer header parameters with a preheader value
+and a common nonzero constant-step update on every latch. Parameters must have both
+`I64` storage and PHP `Int` metadata. Booleans and other PHP types represented as
+`I64` are deliberately excluded from induction summaries and counter coalescing;
+ordinary interval propagation and comparison-edge proofs still apply to them.
+Integer range analysis uses the same recognition before proving overflow safety.
+`loop_optimize.rs`
+first replaces self-carried scalar parameters with their preheader inputs, then
+coalesces equivalent inductions with equal initial values, steps, and overflow
+semantics. Checked recurrences require matching conversion modes and a retained
+check that dominates the removed check, preserving fatal ordering. The pass removes
+duplicate header parameters and edge arguments, canonicalizes reversed integer
+comparisons, and folds integer self-comparisons. Recognition alone never licenses
+replacing checked arithmetic with wrapping arithmetic.
+
+Branch simplification composes SSA arguments through empty forwarding blocks only
+when their parameters do not escape the outgoing branch. Each parallel incoming
+edge is substituted independently, and forwarding cycles remain intact.
+`loop_cfg.rs` merges an unconditional successor with a single predecessor only
+within the same innermost loop. Loop headers survive, and shared continue targets
+are not duplicated. Parameter uses are redirected before moving instructions;
+removed parameters become unused Nop definitions so IDs remain stable. Instruction
+`ValueDef` positions are repaired after merging. These rewrites skip exception
+handlers, and loop merging and induction coalescing also skip suspended generators.
 
 ### Dead Instruction Elimination
 
@@ -1542,19 +1580,20 @@ instruction elimination on a later driver sweep.
 
 ### Branch Simplification
 
-The branch simplification transform (`src/ir_passes/branch_simplify.rs`) prunes the
-CFG in three ways:
+The branch simplification transform (`src/ir_passes/branch_simplify.rs`) simplifies
+the CFG in four ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition resolves to a
   constant (`const_bool`, `const_i64` via PHP truthiness, or `const_null`) becomes
   an unconditional `br` to the taken edge. A `switch` on a `const_i64`/`const_bool`
   scrutinee folds to a `br` to the matching case (or the default). A `while (true)`
   loop, for example, lowers to a constant `cond_br` that this fold collapses.
-- **Empty-block jump threading** — a non-entry block with no parameters and only
-  `nop` instructions that ends in an unconditional `br` is a forwarding block.
-  Edges targeting it are redirected to the end of the forwarding chain (with cycle
-  detection). Because forwarding blocks have no parameters, every edge into them
-  carries empty arguments, so retargeting needs no argument rewriting.
+- **Empty-block jump threading**: compose each incoming edge's arguments through
+  non-entry blocks containing only unused Nops and an unconditional branch.
+  Parameters must not escape the forwarding terminator, and cyclic forwarding
+  chains remain unchanged.
+- **Loop block merging**: fuse single-predecessor unconditional successors within
+  the same innermost loop, preserving headers and shared update targets.
 - **Unreachable-block neutralization** — blocks no longer reachable from the entry
   have their terminator set to `Unreachable` and their instructions rewritten to
   `nop`.
@@ -1569,9 +1608,10 @@ keeps `try` handler block-id tokens (encoded in `try_push_handler` immediates)
 correct. Functions that use any exception-handling opcode are skipped wholesale,
 because their handler blocks are reachable through implicit edges absent from the
 terminator graph, so terminator-only reachability could wrongly neutralize a live
-handler. Removing edges only enlarges dominator sets and threaded forwarding blocks
-carry no definitions, so simplification never invalidates a use that was valid
-before; cross-block cascades converge through the fixed-point driver.
+handler. Forwarding parameters are substituted on each incoming edge; parameters
+with escaping uses keep their defining block. Merged block definitions receive
+updated placement metadata. Cross-block cascades converge through the fixed-point
+driver.
 
 ### Small-Function Inlining
 
@@ -1905,7 +1945,9 @@ The pass has four stages:
 
 1. **Liveness** (`liveness.rs`): backward dataflow to a fixed point producing
    per-block live-in/live-out value sets. Block parameters are definitions at
-   block entry; branch arguments are uses at the predecessor's terminator.
+   block entry; branch arguments are uses at the predecessor's terminator. A
+   predecessor worklist propagates only newly live values, so each value crosses
+   each edge at most once even after LICM hoists many materializations.
 2. **Intervals** (`intervals.rs`): blocks are numbered in reverse postorder and
    each value gets one contiguous `[start, end]` live interval. A value live
    across edges or a loop back-edge spans the intervening positions.
