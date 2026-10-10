@@ -8,6 +8,7 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::ir::IrHeapKind;
 
 /// Lowers a nested array assignment that already carries an expression target.
 pub(super) fn lower_nested_array_assign(
@@ -15,6 +16,283 @@ pub(super) fn lower_nested_array_assign(
     target: &Expr,
     value: &Expr,
     span: Span,
+) {
+    let update = desugared_element_update(value, span, |read| read == target);
+    if matches!(update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
+        && nested_target_has_static_array_root(ctx, target)
+    {
+        let mut snapshots = Vec::new();
+        let (read, write) = snapshot_nested_update_keys(ctx, target, &mut snapshots);
+        if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
+            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), value, value.span);
+        } else if nested_static_root_is_boxed(ctx, target) {
+            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), value, value.span);
+        } else {
+            let mut value = value.clone();
+            match &mut value.kind {
+                ExprKind::BinaryOp { left, .. } => *left = Box::new(read),
+                ExprKind::Assignment { prelude, .. } => {
+                    if let StmtKind::Assign { value, .. } = &mut prelude[0].kind { *value = read; }
+                }
+                _ => unreachable!("classified element updates have a captured read"),
+            }
+            lower_nested_array_assign_inner(ctx, &write, &value, span, true);
+        }
+        for name in snapshots {
+            // Null assignment would widen the entire frame slot, turning earlier String
+            // reloads into detached backend casts that lowering never had a chance to release.
+            let slot = ctx.local_slots[&name];
+            ctx.release_stored_local_value(&name, slot, Some(span));
+            ctx.emit_void(Op::ZeroLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                Op::ZeroLocalSlot.default_effects(), Some(span));
+        }
+        return;
+    }
+    if let Some((_, write)) = bind_concrete_static_update_root(ctx, target, target) {
+        lower_nested_array_assign_inner(ctx, &write, value, span, false);
+    } else { lower_nested_array_assign_inner(ctx, target, value, span, false); }
+}
+
+/// Gives a concrete mixed-element root the existing relocating local writeback protocol.
+fn bind_concrete_static_update_root(
+    ctx: &mut LoweringContext<'_, '_>, read: &Expr, write: &Expr,
+) -> Option<(Expr, Expr)> {
+    let mut root = read;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else { return None; };
+    let ty = static_property_type(ctx, receiver, property)?;
+    if !static_root_has_mixed_elements(&ty) {
+        return None;
+    }
+    let name = ctx.declare_synthetic_php_local(ty);
+    crate::ir_lower::expr::lower_ref_assign_static_property(ctx, &name, root, root.span);
+    Some((replace_static_update_root(read, &name), replace_static_update_root(write, &name)))
+}
+
+/// Includes both indexed and associative concrete storage with boxed element cells.
+fn static_root_has_mixed_elements(ty: &PhpType) -> bool {
+    match ty.codegen_repr() {
+        PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => false,
+    }
+}
+
+/// Replaces only the static root while preserving captured dimensions and source spans.
+fn replace_static_update_root(target: &Expr, name: &str) -> Expr {
+    let kind = match &target.kind {
+        ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
+            array: Box::new(replace_static_update_root(array, name)), index: index.clone(),
+        },
+        ExprKind::StaticPropertyAccess { .. } => ExprKind::Variable(name.to_string()),
+        _ => unreachable!("a classified static update has a static root"),
+    };
+    Expr::new(kind, target.span)
+}
+
+/// Rebuilds the read with key captures at each dimension, not before the entire chain.
+fn snapshot_nested_update_keys(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    snapshots: &mut Vec<String>,
+) -> (Expr, Expr) {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return (target.clone(), target.clone());
+    };
+    let (read_array, write_array) = snapshot_nested_update_keys(ctx, array, snapshots);
+    if matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
+        return (
+            Expr::new(ExprKind::ArrayAccess { array: Box::new(read_array), index: index.clone() }, target.span),
+            Expr::new(ExprKind::ArrayAccess { array: Box::new(write_array), index: index.clone() }, target.span),
+        );
+    }
+    let key_type = match &index.kind {
+        ExprKind::Variable(name) if ctx.is_ref_bound_local(name) => PhpType::Mixed,
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => crate::types::checker::infer_expr_type_syntactic(index),
+    };
+    let name = ctx.declare_synthetic_php_local(key_type);
+    snapshots.push(name.clone());
+    let key = Expr::new(ExprKind::Variable(name), index.span);
+    let captured = Expr::new(ExprKind::Assignment {
+        target: Box::new(key.clone()), value: index.clone(), result_target: None,
+        prelude: Vec::new(), conditional_value_temp: None,
+    }, index.span);
+    (
+        Expr::new(ExprKind::ArrayAccess { array: Box::new(read_array), index: Box::new(captured) }, target.span),
+        Expr::new(ExprKind::ArrayAccess { array: Box::new(write_array), index: Box::new(key) }, target.span),
+    )
+}
+
+/// Recognizes static PHP array cells whose nested parents support write-context lookup.
+fn nested_static_root_is_boxed(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::ArrayAccess { array, .. } => nested_static_root_is_boxed(ctx, array),
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_type(ctx, receiver, property)
+                .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
+        }
+        _ => false,
+    }
+}
+
+/// Reads and updates a leaf through the same retained write-context parent cell.
+fn lower_boxed_static_nested_update(
+    ctx: &mut LoweringContext<'_, '_>,
+    read: &Expr,
+    write: &Expr,
+    update: ElementUpdate<'_>,
+    source_value: &Expr,
+    span: Span,
+) {
+    let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else { unreachable!() };
+    let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
+    let parent = lower_static_update_parent(ctx, read_array, write_array, span);
+    let (pinned, owner) = root_static_update_receiver(ctx, parent, span);
+    lower_static_update_key_and_guard(ctx, pinned, read_key, span);
+    let current = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
+    let current_ty = ctx.builder.value_php_type(current.value);
+    let temp = ctx.declare_synthetic_php_local(current_ty.clone());
+    let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, current, Some(span));
+    ctx.store_local(&temp, stored, current_ty, Some(span));
+    if stored.value != current.value && ctx.value_is_owning_temporary(current) {
+        crate::ir_lower::ownership::release_if_owned(ctx, current, Some(span));
+    }
+    let value = match update {
+        ElementUpdate::IncDec { increment } => Expr::new(if increment {
+            ExprKind::PreIncrement(temp.clone())
+        } else { ExprKind::PreDecrement(temp.clone()) }, span),
+        ElementUpdate::Compound => {
+            let ExprKind::BinaryOp { op, right, .. } = &source_value.kind else { unreachable!() };
+            Expr::new(ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::Variable(temp.clone()), span)),
+                op: op.clone(), right: right.clone(),
+            }, span)
+        }
+        ElementUpdate::NullCoalesce { .. } => unreachable!(),
+    };
+    let value = lower_expr(ctx, &value);
+    let key = lower_expr(ctx, write_key);
+    // A warning handler may replace the stored parent. The pending update still
+    // targets the old pinned cell, not a fresh traversal of the static property.
+    ctx.emit_void(Op::RuntimeCall, vec![pinned.value, key.value, value.value],
+        Some(Immediate::Bool(true)), effects_lookup::runtime_effects(), Some(span));
+    release_persisted_string_operand(ctx, key, span);
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    if let Some(owner) = owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
+    let null = LoweredValue { value: ctx.builder.emit_const_null(), ir_type: IrType::I64 };
+    ctx.unset_local(&temp, null, Some(span));
+}
+
+/// Diagnoses each intermediate read, then creates and retains its writable stored cell.
+fn lower_static_update_parent(
+    ctx: &mut LoweringContext<'_, '_>,
+    read: &Expr,
+    write: &Expr,
+    span: Span,
+) -> LoweredValue {
+    let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else {
+        return lower_expr(ctx, read);
+    };
+    let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
+    let receiver = lower_static_update_parent(ctx, read_array, write_array, span);
+    let (pinned, owner) = root_static_update_receiver(ctx, receiver, span);
+    lower_static_update_key_and_guard(ctx, pinned, read_key, span);
+    let probe = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
+    if ctx.value_is_owning_temporary(probe) {
+        crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
+    }
+    if let ExprKind::Variable(name) = &read_array.kind {
+        if let Some(parent) = lower_local_parent_fetch_for_write_inner(ctx, name, write_key, read, true) {
+            if let Some(owner) = owner {
+                crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+            }
+            return parent;
+        }
+    }
+    let key = lower_expr(ctx, write_key);
+    let parent = ctx.emit_value(Op::RuntimeCall, vec![pinned.value, key.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)),
+        PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
+    release_persisted_string_operand(ctx, key, span);
+    if let Some(owner) = owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
+    parent
+}
+
+/// Runs each captured dimension before rejecting a scalar parent with a catchable Error.
+fn lower_static_update_key_and_guard(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, read_key: &Expr, span: Span,
+) {
+    if !matches!(read_key.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
+        let key = lower_expr(ctx, read_key);
+        if ctx.value_is_owning_temporary(key) {
+            crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+        }
+    }
+    let array = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let object = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let valid = ctx.emit_value(Op::IBitOr, vec![array.value, object.value], None, PhpType::Bool,
+        Op::IBitOr.default_effects(), Some(span));
+    let present = ctx.builder.create_named_block("static.update.array", Vec::new());
+    let scalar = ctx.builder.create_named_block("static.update.scalar", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: valid.value, then_target: present, then_args: Vec::new(),
+        else_target: scalar, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(scalar);
+    lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
+    ctx.builder.position_at_end(present);
+}
+
+/// Transfers a pending receiver into an unwind-visible owner and returns its borrowed view.
+fn root_static_update_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
+    let receiver = if ctx.value_is_owning_temporary(receiver) {
+        receiver
+    } else {
+        crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, receiver, Some(span))
+    };
+    let (rooted, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, receiver, span);
+    let ty = ctx.builder.value_php_type(rooted.value);
+    let borrowed = ctx.emit_value(Op::Borrow, vec![rooted.value], None, ty,
+        Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(borrowed.value, crate::ir::Ownership::Borrowed);
+    (borrowed, owner)
+}
+
+/// Restricts the update protocol to class-static array chains, leaving ordinary store timing intact.
+fn nested_target_has_static_array_root(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::ArrayAccess { array, .. } => nested_target_has_static_array_root(ctx, array),
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_type(ctx, receiver, property)
+                .is_some_and(|ty| ty.is_php_array() || is_indexed_array_type(&ty)
+                    || static_root_has_mixed_elements(&ty))
+        }
+        _ => false,
+    }
+}
+
+/// Writes a captured update after its read, or applies ordinary nested assignment ordering.
+fn lower_nested_array_assign_inner(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
 ) {
     // Lowering the FULL target as an expression routes the write through the
     // read helper (`__rt_mixed_array_get`), which returns a detached fresh box
@@ -35,8 +313,10 @@ pub(super) fn lower_nested_array_assign(
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
         let deferred = nested_target_is_all_bare_variables(target);
-        let value_first = deferred.then(|| lower_expr(ctx, value));
-        let parent = lower_nested_assign_parent(ctx, array, span);
+        let value_first = (deferred || key_already_diagnosed).then(|| lower_expr(ctx, value));
+        let parent = if key_already_diagnosed {
+            lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, true)
+        } else { lower_nested_assign_parent(ctx, array, span) };
         let key = lower_expr(ctx, index);
         let value = match value_first {
             Some(value) => value,
@@ -45,12 +325,18 @@ pub(super) fn lower_nested_array_assign(
         ctx.emit_void(
             Op::RuntimeCall,
             vec![parent.value, key.value, value.value],
-            None,
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
             effects_lookup::runtime_effects(),
             Some(span),
         );
         release_persisted_string_operand(ctx, key, span);
-        release_persisted_string_operand(ctx, value, span);
+        if matches!(value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+            && ctx.value_is_owning_temporary(value)
+        {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        } else {
+            release_persisted_string_operand(ctx, value, span);
+        }
         // Parent subscript reads of Mixed/refcounted elements are owning
         // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
         // reference — fresh, retained, or installed by autovivification). The
@@ -86,6 +372,16 @@ pub(super) fn lower_nested_assign_parent(
     expr: &Expr,
     span: Span,
 ) -> LoweredValue {
+    lower_nested_assign_parent_with_diagnosed_key(ctx, expr, span, false)
+}
+
+/// Reuses key diagnoses when the same parent chain was already read by a captured update.
+fn lower_nested_assign_parent_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) -> LoweredValue {
     let ExprKind::ArrayAccess { array, index } = &expr.kind else {
         if let ExprKind::Variable(name) = &expr.kind {
             if ctx.local_type(name).codegen_repr() == PhpType::Mixed {
@@ -109,13 +405,15 @@ pub(super) fn lower_nested_assign_parent(
     }
     // Boxed Mixed receivers: chains recurse with for-write semantics; other
     // receiver shapes evaluate once as plain reads of the receiver cell.
-    let receiver = lower_nested_assign_parent(ctx, array, span);
+    let receiver = lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, key_already_diagnosed);
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         let key = lower_expr(ctx, index);
         let parent = ctx.emit_value(
             Op::RuntimeCall,
             vec![receiver.value, key.value],
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+            Some(Immediate::RuntimeCall(if key_already_diagnosed {
+                RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+            } else { RuntimeCallTarget::ArrayFetchForWrite })),
             PhpType::Mixed,
             effects_lookup::runtime_effects(),
             Some(expr.span),
@@ -144,6 +442,14 @@ pub(super) fn lower_local_parent_fetch_for_write(
     index: &Expr,
     parent_expr: &Expr,
 ) -> Option<LoweredValue> {
+    lower_local_parent_fetch_for_write_inner(ctx, name, index, parent_expr, false)
+}
+
+/// Reuses an update's converted numeric dimension without issuing a duplicate warning.
+fn lower_local_parent_fetch_for_write_inner(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, index: &Expr, parent_expr: &Expr,
+    key_already_diagnosed: bool,
+) -> Option<LoweredValue> {
     let span = parent_expr.span;
     let local_ty = ctx.local_type(name);
     match local_ty.codegen_repr() {
@@ -151,11 +457,15 @@ pub(super) fn lower_local_parent_fetch_for_write(
             if elem_ty.codegen_repr() == PhpType::Mixed
                 || is_empty_indexed_array_element(elem_ty.as_ref()) =>
         {
-            match index_expr_key_type(ctx, index) {
-                PhpType::Int => {
+            let key_ty = match &index.kind {
+                ExprKind::Variable(name) if ctx.local_type(name).codegen_repr() == PhpType::Str => PhpType::Str,
+                _ => index_expr_key_type(ctx, index),
+            };
+            match key_ty {
+                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void => {
                     let array_value = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
-                    let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), false);
+                    let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), key_already_diagnosed);
                     // Autovivification makes the element type effectively
                     // Mixed even when the array started empty-typed. The
                     // ensure call consumes the loaded container (in-place

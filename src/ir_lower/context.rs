@@ -3782,7 +3782,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 })
             }
             Some(Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
+                crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+                    | crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed,
             )) => matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)),
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => {
                 matches!(
@@ -5019,7 +5020,8 @@ fn runtime_call_may_invoke_implicit_user_code(
         return false;
     };
     match target {
-        crate::ir::RuntimeCallTarget::ArrayFetchForWrite => true,
+        crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+            | crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => true,
         crate::ir::RuntimeCallTarget::Pcntl(
             crate::ir::PcntlRuntime::Signal | crate::ir::PcntlRuntime::SignalDispatch,
         ) => true,

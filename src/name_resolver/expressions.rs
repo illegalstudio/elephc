@@ -34,6 +34,17 @@ pub(super) fn resolve_expr(
     symbols: &Symbols,
 ) -> Expr {
     let kind = match &expr.kind {
+        ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp } => {
+            ExprKind::Assignment {
+                target: Box::new(resolve_expr(target, current_namespace, imports, symbols)),
+                value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+                result_target: result_target.as_ref().map(|target|
+                    Box::new(resolve_expr(target, current_namespace, imports, symbols))),
+                prelude: resolve_stmt_list(prelude, current_namespace, imports, symbols)
+                    .expect("name resolver bug: assignment prelude resolution failed"),
+                conditional_value_temp: conditional_value_temp.clone(),
+            }
+        }
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(resolve_expr(left, current_namespace, imports, symbols)),
             op: op.clone(),

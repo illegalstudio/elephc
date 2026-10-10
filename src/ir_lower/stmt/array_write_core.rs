@@ -115,6 +115,8 @@ pub(crate) enum ElementUpdate<'a> {
     /// A compound operator. The value already read the element, so the write reuses the key
     /// that read converted instead of diagnosing a float key a second time.
     Compound,
+    /// A captured static element uses the shared PHP string/null incdec rules.
+    IncDec { increment: bool },
     /// A null-coalescing assignment. `read` probes the element, and `default` is written only
     /// when that probe produced null, as PHP does.
     NullCoalesce { read: &'a Expr, default: &'a Expr },
@@ -133,6 +135,15 @@ pub(crate) fn desugared_element_update<'a>(
         ExprKind::BinaryOp { left, .. } if reads_target(left) => Some(ElementUpdate::Compound),
         ExprKind::NullCoalesce { value: read, default } if reads_target(read) => {
             Some(ElementUpdate::NullCoalesce { read, default })
+        }
+        ExprKind::Assignment { value, prelude, result_target: None, .. } if prelude.len() == 1 => {
+            let StmtKind::Assign { name, value: read } = &prelude[0].kind else { return None; };
+            if !reads_target(read) { return None; }
+            match &value.kind {
+                ExprKind::PreIncrement(local) if local == name => Some(ElementUpdate::IncDec { increment: true }),
+                ExprKind::PreDecrement(local) if local == name => Some(ElementUpdate::IncDec { increment: false }),
+                _ => None,
+            }
         }
         _ => None,
     }

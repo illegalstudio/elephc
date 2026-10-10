@@ -230,6 +230,7 @@ pub(super) fn check_nested_array_assign(
         return Err(CompileError::new(span, "Invalid assignment target"));
     };
 
+    super::static_properties::promote_static_nested_write_root(checker, target, span)?;
     let arr_ty = checker.infer_type_with_assignment_effects(array, env)?;
     checker.infer_type_with_assignment_effects(index, env)?;
     checker.infer_type_with_assignment_effects(value, env)?;

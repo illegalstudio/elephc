@@ -9,6 +9,449 @@
 
 use super::*;
 
+/// Captured variable string keys release each projected string on parent and leaf updates.
+#[test]
+fn test_static_prefix_second_review_variable_string_key_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = ['k' => [5]]; }
+$key = 'k';
+++H::$items[$key][0];
+echo json_encode(H::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"k\":[6]}", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Declared mixed-valued hash roots publish nested incdec and plain stores with COW.
+#[test]
+fn test_static_prefix_second_review_declared_assoc_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<string, mixed> $items = ['k' => [5]]; }
+$alias = H::$items;
+++H::$items['k'][0]; echo json_encode(H::$items), '|';
+H::$items['k'][0] = 9;
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"k\":[6]}|{\"k\":[9]}|{\"k\":[5]}", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// String variable dimensions on declared mixed arrays promote storage instead of selecting zero.
+#[test]
+fn test_static_prefix_second_review_declared_mixed_string_key() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [[5], [7]]; }
+$alias = H::$items; $key = 'k';
+set_error_handler(function($level, $message) { echo 'W:', $message, '|'; return true; });
+++H::$items[$key][0];
+restore_error_handler();
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "W:Undefined array key \"k\"|W:Undefined array key 0|{\"0\":[5],\"1\":[7],\"k\":[1]}|[[5],[7]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// All direct static incdec expression forms evaluate and diagnose their float key once.
+#[test]
+fn test_static_prefix_ci_float_expression_forms() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = [null, 10, 20, 30, 40]; }
+function dimensionKey(float $value): float { echo 'K'; return $value; }
+set_error_handler(function($level, $message) { echo 'W'; return true; });
+echo ++H::$items[dimensionKey(1.5)], '|';
+echo H::$items[dimensionKey(2.5)]++, '|';
+echo --H::$items[dimensionKey(3.5)], '|';
+echo H::$items[dimensionKey(4.5)]--, '|';
+echo json_encode(H::$items);
+restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "KW11|KW20|KW29|KW40|[null,11,21,29,39]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Explicit mixed-element static roots keep nested writes attached without mutating aliases.
+#[test]
+fn test_static_prefix_oct9_declared_mixed_nested_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [1, [5]]; }
+$alias = H::$items;
+echo json_encode($alias), '|';
+++H::$items[1][0];
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[1,[5]]|[1,[6]]|[1,[5]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Concrete roots evaluate and diagnose a fractional computed parent dimension once.
+#[test]
+fn test_static_prefix_oct9_declared_mixed_float_dimension() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [1, [5]]; }
+function dimensionKey(): float { echo 'K'; return 1.5; }
+set_error_handler(function($level, $message) { echo 'W'; return true; });
+++H::$items[dimensionKey()][0];
+echo '|', json_encode(H::$items);
+restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "KW|[1,[6]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Prefix and postfix expression forms use the same PHP incdec semantics as statements.
+#[test]
+fn test_static_prefix_oct9_expression_string_null() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = ['az', 'az', null, '9', 'zz', null]; }
+echo ++H::$items[0], '|', --H::$items[1], '|', is_null(--H::$items[2]) ? 'null' : 'bad', '|';
+echo H::$items[3]++, ':', H::$items[3], '|', H::$items[4]++, ':', H::$items[4], '|';
+echo is_null(H::$items[5]++) ? 'null' : 'bad', ':', H::$items[5], '|', json_encode(H::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ba|az|null|9:10|zz:aaa|null:1|[\"ba\",\"az\",null,10,\"aaa\",1]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Inferred concrete and homogeneous static roots keep nested mutations attached with COW.
+#[test]
+fn test_static_prefix_followup_concrete_nested_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static $items = [1, [5]]; }
+class N { public static $items = [[5], [6]]; }
+$alias = H::$items;
+++H::$items[1][0];
+++N::$items[0][0];
+--N::$items[1][0];
+echo json_encode(H::$items), '|', json_encode(N::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[1,[6]]|[[6],[5]]|[1,[5]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Direct static elements use PHP string, null, float and numeric-string incdec semantics.
+#[test]
+fn test_static_prefix_followup_string_null() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = ['az', 'az', null, '9', 1.5]; }
+++H::$items[0];
+--H::$items[1];
+--H::$items[2];
+++H::$items[3];
+++H::$items[4];
+echo json_encode(H::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[\"ba\",\"az\",null,10,2.5]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested static element updates share the same non-numeric incdec kernel.
+#[test]
+fn test_static_prefix_followup_nested_string_null() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = [['az', null]]; }
+++H::$items[0][0];
+--H::$items[0][1];
+echo json_encode(H::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[\"ba\",null]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A scalar parent throws only after the final computed key runs, without a spurious warning.
+#[test]
+fn test_static_prefix_followup_scalar_parent_error_order() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H {
+    public static array $items = [[1 => 10, 2 => 20]];
+    public static function bump(): int { echo 'b'; return 1; }
+    public static function last(): int { echo 'f'; return 1; }
+}
+set_error_handler(function($level, $message) { echo 'warning:', $message; return true; });
+$key = 0;
+try { ++H::$items[$key][H::bump()][H::last()]; echo 'bad'; }
+catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+restore_error_handler();
+echo json_encode(H::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "bf:Cannot use a scalar value as an array|[{\"1\":10,\"2\":20}]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing final key takes precedence over the scalar-parent Error and unwinds the parent.
+#[test]
+fn test_static_prefix_followup_scalar_parent_throwing_key() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = [[10]]; }
+function fail(): int { echo 'f'; throw new Error('key'); }
+try { ++H::$items[0][0][fail()]; echo 'bad'; }
+catch (Error $error) { echo ':', $error->getMessage(); }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "f:key", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Captured incdec reads resolve namespace imports before matching their stored target.
+#[test]
+fn test_static_prefix_followup_namespaced_capture() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+namespace Storage { class H { public static $items = [[5]]; } }
+namespace Consumer {
+    use Storage\H as Box;
+    function key(): int { echo 'k'; return 0; }
+    ++Box::$items[key()][0];
+    echo json_encode(Box::$items);
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "k[[6]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing warning handler releases the pending nested update's retained parents.
+#[test]
+fn test_static_prefix_review_throwing_handler_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = [[null]]; }
+set_error_handler(function($level, $message) { throw new Error("stop"); });
+try { ++T::$items[0][0][1]; } catch (Error $e) { echo "caught:"; }
+restore_error_handler();
+echo json_encode(T::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "caught:[[[]]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing compound RHS releases the write-context parent without changing the leaf.
+#[test]
+fn test_static_prefix_review_throwing_rhs_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = [[7]]; }
+function fail(): int { throw new Error("stop"); }
+try { T::$items[0][0] += fail(); } catch (Error $e) { echo "caught:"; }
+echo json_encode(T::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "caught:[[7]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A null intermediate becomes an array before the leaf warning handler runs.
+#[test]
+fn test_static_prefix_review_autovivifies_null_before_handler() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = [[null]]; }
+set_error_handler(function($level, $message) {
+    echo json_encode(T::$items), ":", $message, "|";
+    T::$items[0][0]["extra"] = 9;
+    return true;
+});
+++T::$items[0][0][1];
+restore_error_handler();
+echo json_encode(T::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[[]]]:Undefined array key 1|[[{\"extra\":9}]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A handler's replacement of an autovivified parent is not overwritten by the pending update.
+#[test]
+fn test_static_prefix_review_missing_parent_preserves_handler_write() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = [[1 => 10]]; }
+set_error_handler(function($level, $message) {
+    echo json_encode(T::$items), ":", $message, "|";
+    T::$items[1]["seen"] = 1;
+    return true;
+});
+++T::$items[1][1];
+restore_error_handler();
+echo json_encode(T::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"1\":10}]:Undefined array key 1|[{\"1\":10},{\"seen\":1}]:Undefined array key 1|[{\"1\":10},{\"seen\":1}]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A literal string key used by both halves of a nested update leaves no heap owners behind.
+#[test]
+fn test_static_prefix_review_literal_string_key_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $missing = [[]]; }
+set_error_handler(function($level, $message) { return true; });
+++T::$missing[0]["before"];
+restore_error_handler();
+echo json_encode(T::$missing);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"before\":1}]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A later effectful dimension cannot change an earlier mutable static-property key.
+#[test]
+fn test_static_property_array_prefix_update_nested_effectful_key_order() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedPrefixEffectful {
+    public static array $items = [[1 => 10, 2 => 20]];
+    public static int $key = 0;
+    public static function bump(): int { self::$key = 1; echo "f"; return 1; }
+}
+++NestedPrefixEffectful::$items[NestedPrefixEffectful::$key][NestedPrefixEffectful::bump()];
+echo json_encode(NestedPrefixEffectful::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "f[{\"1\":11,\"2\":20}]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Bare variable dimensions keep PHP's deferred lookup even beside an effectful key.
+#[test]
+fn test_static_property_array_prefix_update_nested_bare_variable_key_is_deferred() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedPrefixVariable {
+    public static array $items = [[1 => 10]];
+    public static function bump(): int { global $key; $key = 1; echo "f"; return 1; }
+}
+$key = 0;
+set_error_handler(function($level, $message) { return true; });
+++NestedPrefixVariable::$items[$key][NestedPrefixVariable::bump()];
+restore_error_handler();
+echo json_encode(NestedPrefixVariable::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "f[{\"1\":10},{\"1\":1}]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Prefix static-array updates preserve scoped receivers and evaluate effectful indices once.
+#[test]
+fn test_static_property_array_prefix_updates() {
+    let out = compile_and_run(r#"<?php
+class PrefixStaticBase {
+    public static array $items = [10, 20];
+    public static function key(): int { echo "k"; return 0; }
+    public static function update(): void {
+        ++self::$items[0];
+        --static::$items[1];
+    }
+}
+class PrefixStaticChild extends PrefixStaticBase {
+    public function updateParent(): void {
+        ++parent::$items[0];
+        --parent::$items[1];
+    }
+}
+++PrefixStaticBase::$items[PrefixStaticBase::key()];
+--PrefixStaticBase::$items[PrefixStaticBase::key()];
+++PrefixStaticBase::$items[0];
+--PrefixStaticBase::$items[1];
+PrefixStaticBase::update();
+(new PrefixStaticChild())->updateParent();
+echo "|", PrefixStaticBase::$items[0], "|", PrefixStaticBase::$items[1];
+"#);
+    assert_eq!(out, "kk|13|17");
+}
+
+/// A key changed by a float-key warning handler cannot redirect the update's write half.
+#[test]
+fn test_static_property_array_prefix_update_snapshots_warning_index() {
+    let out = compile_and_run(r#"<?php
+class PrefixStaticSnapshot { public static array $items = [10, 20]; }
+$key = 0.5;
+set_error_handler(function($level, $message) use (&$key) { $key = 1.0; return true; });
+++PrefixStaticSnapshot::$items[$key];
+restore_error_handler();
+echo PrefixStaticSnapshot::$items[0], "|", PrefixStaticSnapshot::$items[1], "|", $key;
+"#);
+    assert_eq!(out, "11|20|1");
+}
+
+/// A nested update keeps the original leaf key when its warning handler mutates that key.
+#[test]
+fn test_static_property_array_prefix_update_nested_warning_index() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedPrefixSnapshot { public static array $items = [[1 => 10, 2 => 20]]; }
+$key = 1.9;
+$warnings = 0;
+set_error_handler(function($level, $message) use (&$key, &$warnings) { $key = 2.9; ++$warnings; return true; });
+++NestedPrefixSnapshot::$items[0][$key];
+restore_error_handler();
+echo json_encode(NestedPrefixSnapshot::$items), "|", $warnings, "|", $key;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"1\":11,\"2\":20}]|1|2.9", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Literal nested float keys are diagnosed once and an undefined leaf keeps its original key.
+#[test]
+fn test_static_property_array_prefix_update_nested_literal_and_missing_keys() {
+    let out = compile_and_run(r#"<?php
+class NestedPrefixKeys { public static array $literal = [[1 => 10]]; public static array $missing = [[]]; }
+$warnings = 0;
+set_error_handler(function($level, $message) use (&$warnings) { ++$warnings; return true; });
+++NestedPrefixKeys::$literal[0][1.9];
+restore_error_handler();
+echo json_encode(NestedPrefixKeys::$literal), "|", $warnings, "|";
+$key = 5;
+set_error_handler(function($level, $message) use (&$key) { $key = 6; return true; });
+++NestedPrefixKeys::$missing[0][$key];
+restore_error_handler();
+echo json_encode(NestedPrefixKeys::$missing);
+"#);
+    assert_eq!(out, "[{\"1\":11}]|1|[{\"5\":1}]");
+}
+
+/// An outer-key handler runs before the inner key is captured, and is not called again on write.
+#[test]
+fn test_static_property_array_prefix_update_nested_key_capture_order() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedPrefixOrder { public static array $items = [[1 => 10, 2 => 20]]; }
+$row = 0.5;
+$key = 1.9;
+$warnings = 0;
+set_error_handler(function($level, $message) use (&$key, &$warnings) { $key = 2.0; ++$warnings; return true; });
+++NestedPrefixOrder::$items[$row][$key];
+restore_error_handler();
+echo json_encode(NestedPrefixOrder::$items), "|", $warnings;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"1\":10,\"2\":21}]|1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Captured nested update keys preserve detached aliases and release string-key snapshots.
+#[test]
+fn test_static_property_array_prefix_update_nested_cow_and_string_key() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedPrefixCow { public static array $items = [[1 => 10]]; public static array $missing = [[]]; }
+$alias = NestedPrefixCow::$items;
+++NestedPrefixCow::$items[0][1];
+echo json_encode($alias), "|", json_encode(NestedPrefixCow::$items), "|";
+$key = "before";
+set_error_handler(function($level, $message) use (&$key) { $key = "after"; return true; });
+++NestedPrefixCow::$missing[0][$key];
+restore_error_handler();
+echo json_encode(NestedPrefixCow::$missing), "|", $key;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"1\":10}]|[{\"1\":11}]|[{\"before\":1}]|after", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Shutdown frees inherited static strings, containers, objects, and captured callbacks exactly once.
 #[test]
 fn test_class_static_properties_release_last_owners_at_shutdown() {

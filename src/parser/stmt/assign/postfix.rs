@@ -718,13 +718,15 @@ fn lower_effectful_postfix_assignment(
 /// Lowers discarded post-increment/decrement to the existing assignment statement forms.
 ///
 /// Statement position discards the operator's value, so prefix `++$obj->n;` lowers through
-/// here too: with the result unused, `++X` and `X++` are both `X += 1`.
+/// here too. Static array places retain the shared PHP incdec kernel instead of numeric `+= 1`.
 pub(crate) fn lower_postfix_incdec_assignment(
     lhs_expr: Expr,
     is_increment: bool,
     span: Span,
 ) -> Result<Stmt, CompileError> {
-    let op = if is_increment {
+    let op = if is_static_array_element_target(&lhs_expr) {
+        AssignmentOperator::IncDec(is_increment)
+    } else if is_increment {
         AssignmentOperator::Compound(BinOp::Add)
     } else {
         AssignmentOperator::Compound(BinOp::Sub)
@@ -732,6 +734,11 @@ pub(crate) fn lower_postfix_incdec_assignment(
     let one = Expr::new(ExprKind::IntLiteral(1), span);
 
     if !can_replay_assignment_target(&lhs_expr) {
+        if matches!(&lhs_expr.kind, ExprKind::ArrayAccess { array, .. }
+            if matches!(array.kind, ExprKind::StaticPropertyAccess { .. }))
+        {
+            return lower_effectful_static_assignment(lhs_expr, op, one, span);
+        }
         return lower_effectful_postfix_assignment(lhs_expr, op, one, span);
     }
 
@@ -750,6 +757,14 @@ pub(crate) fn lower_postfix_incdec_assignment(
                 property,
                 index: *index,
                 value,
+            },
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index: *index,
+                    value,
+                }
             },
             _ => StmtKind::NestedArrayAssign {
                 target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
@@ -772,6 +787,13 @@ pub(crate) fn lower_postfix_incdec_assignment(
     };
 
     Ok(lowerer.finish_if_used(kind, span))
+}
+
+/// Recognizes a static array place without changing unrelated property or local updates.
+fn is_static_array_element_target(target: &Expr) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &target.kind else { return false; };
+    matches!(array.kind, ExprKind::StaticPropertyAccess { .. })
+        || is_static_array_element_target(array)
 }
 
 /// Lowers a compound static property assignment where the target cannot be replayed safely.
@@ -946,18 +968,23 @@ impl EffectfulTargetLowerer {
     }
 
     /// Stabilizes the base of a nested array access chain. Recursively processes
-    /// `ArrayAccess` and `PropertyAccess` chains; returns `Variable`, `This`,
-    /// and `StaticPropertyAccess` directly; calls `stabilize` for all other expressions.
+    /// `ArrayAccess` and `PropertyAccess` chains; captures index expressions before
+    /// a later effectful dimension can change their inputs. Bare variables retain
+    /// PHP's deferred store-time lookup instead of becoming eager expression reads.
     fn stabilize_array_base(&mut self, expr: Expr) -> Expr {
         let span = expr.span;
         match expr.kind {
-            ExprKind::ArrayAccess { array, index } => Expr::new(
-                ExprKind::ArrayAccess {
-                    array: Box::new(self.stabilize_array_base(*array)),
-                    index: Box::new(self.stabilize(*index)),
-                },
-                span,
-            ),
+            ExprKind::ArrayAccess { array, index } => {
+                let array = Box::new(self.stabilize_array_base(*array));
+                let index = if update_index_needs_snapshot(&index)
+                    && !matches!(index.kind, ExprKind::Variable(_))
+                {
+                    self.stabilize_unconditionally(*index)
+                } else {
+                    self.stabilize(*index)
+                };
+                Expr::new(ExprKind::ArrayAccess { array, index: Box::new(index) }, span)
+            }
             ExprKind::PropertyAccess { object, property } => Expr::new(
                 ExprKind::PropertyAccess {
                     object: Box::new(self.stabilize_array_base(*object)),
