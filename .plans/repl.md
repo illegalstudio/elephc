@@ -7,6 +7,7 @@
 - [x] Document the command, cache lifecycle, capabilities, and an executable example.
 - [x] Complete focused build, regression, and hygiene validation.
 - [x] Recover reported eval failures at the submission boundary and cover repeated errors without losing session state.
+- [x] Make PTY setup portable to Apple libc and preserve warm cache reuse with archived CI bridges.
 
 ## Execution
 
@@ -68,3 +69,16 @@ failed function call. Three recovery unit tests and 47 FFI tests validate owned
 Throwable transfer and guarded ABI behavior. Ordinary eval error contracts and
 PCNTL escape checks remain covered separately. Native process termination and
 unsafe ABI failures intentionally remain unrecoverable.
+
+Archived CI sessions configure explicit bridge directory overrides from the test
+runner's trusted prebuilt artifacts. This prevents a newer source checkout from
+invalidating those archives while preserving ordinary development freshness
+checks. A regression copies the compiler and receipt dependencies, assigns old
+archive timestamps, and reruns cache reuse, corruption recovery, and profile
+separation with a rejecting Cargo stub. The fixture also exercises a relative
+target directory and rejects any bridge rebuild attempt. PTY setup uses mutable
+pointers accepted by both Apple and Linux libc; the actual terminal test module
+is type-checked against both targets during focused verification.
+All 14 REPL integration tests passed after the CI fixes. The archived-cache
+regression also passed with a relative target directory after first reproducing
+the original warm-cache failure. The compiler build and diff hygiene checks passed.

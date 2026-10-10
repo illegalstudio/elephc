@@ -8,7 +8,7 @@
 //! - Bounded polling prevents a broken prompt from hanging the test indefinitely.
 //! - RAII closes descriptors, reaps children, and removes the fixture on failure.
 
-use super::{elephc_cli_command, fs, Child, Fixture, Stdio};
+use super::{repl_cli_command, fs, Child, Fixture, Stdio};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -31,12 +31,12 @@ impl Terminal {
     fn start(fixture: &Fixture, args: &[&str]) -> Self {
         let mut master = -1;
         let mut slave = -1;
-        let size = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
+        let mut size = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
         assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(),
-            std::ptr::null(), &size) }, 0, "openpty: {}", io::Error::last_os_error());
+            std::ptr::null_mut(), &mut size) }, 0, "openpty: {}", io::Error::last_os_error());
         let master = unsafe { File::from_raw_fd(master) };
         let slave = unsafe { File::from_raw_fd(slave) };
-        let mut command = elephc_cli_command(&fixture.0);
+        let mut command = repl_cli_command(&fixture.0);
         command.args(["repl", "--php-version=8.5"]).args(args).env("TERM", "xterm-256color")
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stdout(Stdio::from(slave.try_clone().unwrap())).stderr(Stdio::from(slave));

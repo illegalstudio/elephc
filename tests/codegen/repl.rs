@@ -8,14 +8,23 @@
 //! - Each fixture owns its project and cache and removes both even after an assertion fails.
 //! - Tests submit input through stdin; no external PHP installation is required.
 
-use crate::support::{elephc_cli_command, ensure_cli_bridge_staticlibs, make_cli_test_dir};
+use crate::support::{configure_prebuilt_cli_bridges, elephc_cli_command, ensure_cli_bridge_staticlibs, make_cli_test_dir};
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
-use std::process::{Child, Output, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output, Stdio};
 
 #[path = "repl_terminal.rs"]
 mod terminal;
+#[path = "repl_prebuilt.rs"]
+mod prebuilt;
+
+/// Uses authoritative build-job archives for both piped and terminal sessions in CI.
+fn repl_cli_command(directory: &Path) -> Command {
+    let mut command = elephc_cli_command(directory);
+    configure_prebuilt_cli_bridges(&mut command);
+    command
+}
 
 /// One isolated project and all cache artifacts produced by its REPL sessions.
 struct Fixture(PathBuf);
@@ -29,7 +38,7 @@ impl Fixture {
 
     /// Starts a piped session using a stable explicit profile independent of local Composer files.
     fn start(&self, args: &[&str]) -> Child {
-        elephc_cli_command(&self.0).args(["repl", "--php-version", "8.5"])
+        repl_cli_command(&self.0).args(["repl", "--php-version", "8.5"])
             .args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
             .spawn().expect("start REPL")
     }
