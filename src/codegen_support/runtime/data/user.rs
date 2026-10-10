@@ -1385,7 +1385,107 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".globl _stdclass_class_id\n_stdclass_class_id:\n");
     out.push_str(&format!("    .quad {}\n", stdclass_id));
 
-    Ok(out)
+    Ok(dedup_class_string_data(out))
+}
+
+/// Content-addresses the per-class ASCII string blobs the runtime never names directly.
+///
+/// The var_dump / print_r key strings and the callable method-name strings are pure ASCII
+/// payloads referenced only from their own descriptor table (nothing outside this module names
+/// them). A monomorphized template and its siblings repeat exactly these bytes, so the
+/// duplication grows with the instantiation count. Keep the first definition of each payload,
+/// point every reference at the survivor, and drop the rest — the descriptor row that referenced
+/// the dropped symbol now points at the identical one, which the runtime already reads by table.
+fn dedup_class_string_data(asm: String) -> String {
+    /// Symbol prefixes whose definition is a single `.ascii` blob referenced only by its table.
+    const FAMILIES: [&str; 6] = [
+        "_class_vd_pkey_",
+        "_class_vd_ptype_",
+        "_class_prop_pkey_",
+        "_class_prop_nkey_",
+        "_class_callable_method_name_",
+        "_class_callable_static_method_name_",
+    ];
+    let lines: Vec<&str> = asm.split_inclusive('\n').collect();
+    // Symbol -> `.ascii` payload line, and dropped symbol -> surviving symbol. `BTreeMap` keeps
+    // the rewrite order-independent and the output deterministic.
+    let mut canonical: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+    let mut alias: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+    let mut index = 0;
+    while index < lines.len() {
+        if let Some(symbol) = global_definition_symbol(lines[index]) {
+            if FAMILIES.iter().any(|family| symbol.starts_with(family)) {
+                if let Some(payload) = lines.get(index + 2) {
+                    if payload.trim_start().starts_with(".ascii ") {
+                        match canonical.get(payload) {
+                            Some(survivor) => {
+                                alias.insert(symbol, survivor);
+                            }
+                            None => {
+                                canonical.insert(payload, symbol);
+                            }
+                        }
+                        index += 3;
+                        continue;
+                    }
+                }
+            }
+        }
+        index += 1;
+    }
+    if alias.is_empty() {
+        return asm;
+    }
+    let mut out = String::with_capacity(asm.len());
+    let mut index = 0;
+    while index < lines.len() {
+        if let Some(symbol) = global_definition_symbol(lines[index]) {
+            if alias.contains_key(symbol) {
+                index += 3; // the `.globl`, the label, and its `.ascii` payload
+                continue;
+            }
+        }
+        let mut line = lines[index].to_string();
+        for (dropped, survivor) in &alias {
+            if line.contains(dropped) {
+                line = replace_symbol(&line, dropped, survivor);
+            }
+        }
+        out.push_str(&line);
+        index += 1;
+    }
+    out
+}
+
+/// Returns the symbol a `.globl <symbol>` line names, or `None` for any other line.
+fn global_definition_symbol(line: &str) -> Option<&str> {
+    line.strip_prefix(".globl ").map(str::trim_end)
+}
+
+/// Replaces whole-symbol occurrences of `from` with `to`, leaving longer symbols alone.
+///
+/// A plain `str::replace` would rewrite `_class_vd_pkey_1_0` inside `_class_vd_pkey_1_0`-prefixed
+/// neighbours; the boundary check is what keeps the rewrite to the exact symbol.
+fn replace_symbol(line: &str, from: &str, to: &str) -> String {
+    let bytes = line.as_bytes();
+    let is_symbol_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while let Some(offset) = line[cursor..].find(from) {
+        let start = cursor + offset;
+        let end = start + from.len();
+        let before_ok = start == 0 || !is_symbol_byte(bytes[start - 1]);
+        let after_ok = end >= bytes.len() || !is_symbol_byte(bytes[end]);
+        if before_ok && after_ok {
+            out.push_str(&line[cursor..start]);
+            out.push_str(to);
+        } else {
+            out.push_str(&line[cursor..end]);
+        }
+        cursor = end;
+    }
+    out.push_str(&line[cursor..]);
+    out
 }
 
 /// Emits a dense class-id to class-name lookup table for runtime `get_class()`.
@@ -3703,6 +3803,7 @@ mod tests {
         emit_runtime_data_user, source_instance_method_entry, source_instance_vtable_entry,
         source_static_vtable_entry, NOT_SERIALIZABLE_BUILTIN_CLASSES,
     };
+    use super::{dedup_class_string_data, replace_symbol};
 
     /// Builds a direct physical method signature for source-entry lookup tests.
     fn direct_method_signature() -> FunctionSig {
@@ -4135,5 +4236,76 @@ mod tests {
         assert_eq!(refused.len(), NOT_SERIALIZABLE_BUILTIN_CLASSES.len());
         assert!(asm.contains(&format!("_unser_refused_class_count:\n    .quad {}\n", refused.len())));
         assert!(asm.contains("_unser_refused_classes:\n    .quad _unser_refused_class_name_0\n    .quad 15\n"));
+    }
+
+    /// Two classes with the same key payload share one definition, and both tables point at it.
+    #[test]
+    fn dedup_merges_identical_string_blobs() {
+        let asm = "\
+.globl _class_vd_pkey_1_0
+_class_vd_pkey_1_0:
+    .ascii \"value\"
+.globl _class_vd_pkey_2_0
+_class_vd_pkey_2_0:
+    .ascii \"value\"
+.globl _class_vd_desc_1
+_class_vd_desc_1:
+    .quad _class_vd_pkey_1_0
+.globl _class_vd_desc_2
+_class_vd_desc_2:
+    .quad _class_vd_pkey_2_0
+";
+        let out = dedup_class_string_data(asm.to_string());
+        assert_eq!(out.matches(".ascii \"value\"").count(), 1);
+        assert!(!out.contains("_class_vd_pkey_2_0"), "{out}");
+        assert!(
+            out.contains("_class_vd_desc_2:\n    .quad _class_vd_pkey_1_0\n"),
+            "{out}"
+        );
+    }
+
+    /// Distinct payloads are both kept: only an identical blob is dropped.
+    #[test]
+    fn dedup_keeps_distinct_payloads() {
+        let asm = "\
+.globl _class_prop_pkey_1_0
+_class_prop_pkey_1_0:
+    .ascii \"value\"
+.globl _class_prop_pkey_2_0
+_class_prop_pkey_2_0:
+    .ascii \"other\"
+.globl _class_prop_desc_2
+_class_prop_desc_2:
+    .quad _class_prop_pkey_2_0
+";
+        let out = dedup_class_string_data(asm.to_string());
+        assert!(out.contains("_class_prop_pkey_2_0:"), "{out}");
+        assert_eq!(out.matches(".ascii ").count(), 2);
+        assert!(out.contains("_class_prop_desc_2:\n    .quad _class_prop_pkey_2_0\n"));
+    }
+
+    /// A symbol outside the interning families is left alone, definition and references alike.
+    #[test]
+    fn dedup_leaves_unrelated_symbols() {
+        let asm = "\
+.globl _class_other_x
+_class_other_x:
+    .ascii \"value\"
+.globl _class_vd_pkey_1_0
+_class_vd_pkey_1_0:
+    .ascii \"value\"
+";
+        let out = dedup_class_string_data(asm.to_string());
+        assert!(out.contains("_class_other_x:"), "{out}");
+    }
+
+    /// A rewrite touches only the exact symbol, never a longer symbol that contains it.
+    #[test]
+    fn replace_symbol_respects_boundaries() {
+        assert_eq!(
+            replace_symbol("_a_1_0 _a_1_00", "_a_1_0", "SURVIVOR"),
+            "SURVIVOR _a_1_00"
+        );
+        assert_eq!(replace_symbol(".quad _a_1_0\n", "_a_1_0", "S"), ".quad S\n");
     }
 }
