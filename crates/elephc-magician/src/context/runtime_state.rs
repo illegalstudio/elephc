@@ -473,6 +473,13 @@ impl ElephcEvalContext {
         self.clone_reinitialized_properties.contains_key(&identity)
     }
 
+    /// Checks a readonly clone allowance without consuming it before visibility validation.
+    pub(crate) fn clone_property_can_be_reinitialized(&self, identity: u64, property: &str) -> bool {
+        self.clone_reinitialized_properties
+            .get(&identity)
+            .is_some_and(|properties| !properties.contains(property))
+    }
+
     /// Consumes one property's single readonly rewrite allowance in the active phase.
     pub(crate) fn consume_clone_reinitialization(
         &mut self,

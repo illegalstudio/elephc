@@ -9,6 +9,204 @@
 
 use super::*;
 
+/// Private-set readonly clone refusals omit the readonly word and retain the source value.
+#[test]
+fn test_asymmetric_second_review_private_readonly_clone_message() {
+    for eval in [false, true] {
+        let body = r#"class V {
+    public private(set) readonly int $ro;
+    public function __construct() { $this->ro = 1; }
+}
+$source = new V();
+try { clone($source, ["ro" => 9]); }
+catch (Error $error) { echo $error->getMessage(), "|", $source->ro; }
+unset($source);"#;
+        let source = if eval { format!("<?php eval('{body}');") }
+            else { format!("<?php {body}") };
+        let out = compile_and_run_with_heap_debug(&source);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "Cannot modify private(set) property V::$ro from global scope|1");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}
+
+/// Eval child readonly redeclarations discard parent defaults before constructor initialization.
+#[test]
+fn test_asymmetric_followup_eval_redeclared_readonly_initialization() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class ParentBox { public int $id = 0; }
+class ChildBox extends ParentBox {
+    public public(set) readonly int $id;
+    public function __construct() { $this->id = 7; }
+}
+class UninitializedBox extends ParentBox { public public(set) readonly int $id; }
+$box = new ChildBox();
+$empty = new UninitializedBox();
+echo $box->id, ":", isset($empty->id) ? "bad" : "empty";
+unset($empty, $box);');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "7:empty");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Eval reports initialized readonly modification before its implicit protected setter.
+#[test]
+fn test_asymmetric_followup_eval_readonly_error_precedence() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class EvalBox {
+    public readonly int $id;
+    public function __construct() { $this->id = 1; }
+}
+$box = new EvalBox();
+try { $box->id = 2; echo "bad"; }
+catch (Error $error) { echo $error->getMessage(), ":", $box->id; }');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Cannot modify readonly property EvalBox::$id:1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A failed global clone override cannot bypass readonly set access or corrupt its source.
+#[test]
+fn test_asymmetric_review_eval_clone_readonly_set_access() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class EvalCloneRestrictedReadonly {
+    public readonly int $id;
+    public function __construct() { $this->id = 1; }
+}
+$source = new EvalCloneRestrictedReadonly();
+try { clone($source, ["id" => 3]); echo "bad"; }
+catch (Error $error) { echo "blocked:", $source->id; }');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "blocked:1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Private(set) contributes implicit finality only when it restricts a wider read visibility.
+#[test]
+fn test_asymmetric_review_private_setter_reflection_finality() {
+    let out = compile_and_run(r#"<?php
+class NativePrivateSetter {
+    public private(set) int $public = 1;
+    protected private(set) int $protected = 2;
+    private private(set) int $private = 3;
+    public function __construct(public private(set) int $promoted = 4) {}
+}
+echo (new ReflectionProperty(NativePrivateSetter::class, 'public'))->isFinal() ? '1' : '0';
+echo (new ReflectionProperty(NativePrivateSetter::class, 'protected'))->isFinal() ? '1' : '0';
+echo (new ReflectionProperty(NativePrivateSetter::class, 'private'))->isFinal() ? '1' : '0';
+echo (new ReflectionProperty(NativePrivateSetter::class, 'promoted'))->isFinal() ? '1' : '0';
+eval('class EvalPrivateSetter {
+    public private(set) int $public = 1;
+    protected private(set) int $protected = 2;
+    private private(set) int $private = 3;
+    public function __construct(public private(set) int $promoted = 4) {}
+}
+foreach (["public", "protected", "private", "promoted"] as $name) {
+    $property = new ReflectionProperty("EvalPrivateSetter", $name);
+    echo $property->isFinal() ? "1" : "0";
+}');
+"#);
+    assert_eq!(out, "11011101");
+}
+
+/// An eval child may add a restricted setter to a generated getter-only virtual property.
+#[test]
+fn test_asymmetric_review_eval_child_of_native_virtual_getter() {
+    let out = compile_and_run(r#"<?php
+class NativeGetterOnly { public int $x { get => 1; } }
+$base = new NativeGetterOnly();
+echo $base->x, ':';
+eval('class EvalWritableChild extends NativeGetterOnly {
+    public protected(set) int $x { get => 2; set { } }
+}
+echo (new EvalWritableChild())->x;');
+"#);
+    assert_eq!(out, "1:2");
+}
+
+/// Skipping ordinary accessor-method variance does not bypass the native property's type contract.
+#[test]
+fn test_asymmetric_review_eval_child_rejects_changed_native_virtual_type() {
+    let error = compile_and_run_expect_failure(r#"<?php
+class NativeTypedGetter { public int $x { get => 1; } }
+$base = new NativeTypedGetter();
+echo $base->x;
+eval('class EvalWrongGetter extends NativeTypedGetter {
+    public protected(set) string $x { get => "bad"; set { } }
+}');
+"#);
+    assert!(error.contains("Fatal error: eval() runtime failed"), "{error}");
+}
+
+/// A restricted physical child slot satisfies a virtual abstract getter without a setter contract.
+#[test]
+fn test_asymmetric_review_abstract_getter_normal_storage() {
+    let out = compile_and_run(r#"<?php
+abstract class AbstractGetter { abstract public int $x { get; } }
+class ConcreteStorage extends AbstractGetter { public protected(set) int $x = 2; }
+echo (new ConcreteStorage())->x;
+"#);
+    assert_eq!(out, "2");
+}
+
+/// Explicit public(set) overrides readonly's implicit protected write visibility in reflection.
+#[test]
+fn test_asymmetric_property_readonly_explicit_public_set_reflection() {
+    let out = compile_and_run(r#"<?php
+class NativeSet {
+    public public(set) readonly int $explicit;
+    public readonly int $implicit;
+}
+$explicit = new ReflectionProperty(NativeSet::class, 'explicit');
+$implicit = new ReflectionProperty(NativeSet::class, 'implicit');
+echo $explicit->isProtectedSet() ? 'protected' : 'public', ':', $explicit->getModifiers(), "\n";
+echo $implicit->isProtectedSet() ? 'protected' : 'public', ':', $implicit->getModifiers(), "\n";
+eval('class EvalSet { public public(set) readonly int $explicit; public readonly int $implicit; }
+$explicit = new ReflectionProperty("EvalSet", "explicit");
+$implicit = new ReflectionProperty("EvalSet", "implicit");
+echo $explicit->isProtectedSet() ? "protected" : "public", ":", $explicit->getModifiers(), "\n";
+echo $implicit->isProtectedSet() ? "protected" : "public", ":", $implicit->getModifiers(), "\n";');
+"#);
+    assert_eq!(out, "public:129\nprotected:2177\npublic:129\nprotected:2177\n");
+}
+
+/// Eval reflection of native readonly slots obeys authoritative exported setter flags.
+#[test]
+fn test_asymmetric_review_eval_native_public_set_readonly_metadata() {
+    let out = compile_and_run(r#"<?php
+class NativeSet {
+    public public(set) readonly int $explicit;
+    public readonly int $implicit;
+}
+eval('$explicit = new ReflectionProperty("NativeSet", "explicit");
+$implicit = new ReflectionProperty("NativeSet", "implicit");
+echo $explicit->getModifiers(), ":", ($explicit->isProtectedSet() ? "1" : "0"), ":";
+echo $implicit->getModifiers(), ":", ($implicit->isProtectedSet() ? "1" : "0");');
+"#);
+    assert_eq!(out, "129:0:2177:1");
+}
+
+/// Native property filters distinguish explicit public(set) from implicit readonly setters.
+#[test]
+fn test_asymmetric_review_protected_set_filter_matches_modifiers() {
+    let out = compile_and_run(r#"<?php
+class NativeSet {
+    public public(set) readonly int $explicit;
+    public readonly int $implicit;
+}
+$class = new ReflectionClass(NativeSet::class);
+$properties = $class->getProperties(ReflectionProperty::IS_PROTECTED_SET);
+echo count($properties), ":";
+foreach ($properties as $property) {
+    echo $property->getName(), ":", ($property->getModifiers() & ReflectionProperty::IS_PROTECTED_SET);
+}
+"#);
+    assert_eq!(out, "1:implicit:2048");
+}
+
 /// Verifies that a `readonly` class permits property initialization inside its constructor.
 /// The property is assigned in `__construct` and read back via `$user->id`.
 #[test]

@@ -225,7 +225,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             continue;
         }
 
-        let modifiers = parse_member_modifiers(tokens, pos);
+        let modifiers = parse_member_modifiers(tokens, pos)?;
 
         if *pos >= tokens.len() {
             return Err(CompileError::new(
@@ -522,7 +522,7 @@ pub(super) struct MemberModifiers {
 /// Scans tokens to collect member modifiers (visibility, static, readonly, abstract, final).
 /// Consumes any matching modifier tokens and returns a `MemberModifiers` struct.
 /// Default visibility is `Public` if no visibility modifier is present.
-fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> MemberModifiers {
+fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<MemberModifiers, CompileError> {
     let mut visibility = Visibility::Public;
     let mut set_visibility = None;
     let mut is_static = false;
@@ -540,8 +540,12 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> MemberMod
             _ => None,
         };
         if let Some(keyword) = visibility_keyword {
+            let modifier_span = tokens[*pos].1.span;
             *pos += 1;
             if consume_set_marker(tokens, pos) {
+                if set_visibility.is_some() {
+                    return Err(CompileError::new(modifier_span, "Multiple set visibility modifiers"));
+                }
                 set_visibility = Some(keyword);
             } else {
                 visibility = keyword;
@@ -569,14 +573,14 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> MemberMod
         }
     }
 
-    MemberModifiers {
+    Ok(MemberModifiers {
         visibility,
         set_visibility,
         is_static,
         is_readonly,
         is_abstract,
         is_final,
-    }
+    })
 }
 
 /// Consumes a `(set)` marker at `*pos` (an `LParen`, the `set` identifier, and an `RParen`),
@@ -729,7 +733,7 @@ fn parse_interface_body(
             break;
         }
         let member_span = tokens[*pos].1.span;
-        let modifiers = parse_member_modifiers(tokens, pos);
+        let modifiers = parse_member_modifiers(tokens, pos)?;
         if *pos >= tokens.len() {
             return Err(CompileError::new(
                 member_span,

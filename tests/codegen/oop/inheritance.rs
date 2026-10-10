@@ -511,7 +511,7 @@ echo $c->b;
     assert_eq!(out, "12:10:2");
 }
 
-/// Verifies property redeclaration can add `readonly` to a typed property, returning "7".
+/// Adding readonly through elephc's redeclaration extension must retain a public setter.
 #[test]
 fn test_property_redeclaration_adds_readonly() {
     let out = compile_and_run(
@@ -521,7 +521,7 @@ class Base {
 }
 
 class Child extends Base {
-    public readonly int $value;
+    public public(set) readonly int $value;
 
     public function __construct() {
         $this->value = 7;

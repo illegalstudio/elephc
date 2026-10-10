@@ -12,6 +12,50 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// A readonly redeclaration without a default cannot inherit initialized parent storage.
+#[test]
+fn execute_program_readonly_followup_redeclaration_discards_parent_default() {
+    let program = parse_fragment(br#"class ParentBox { public int $id = 0; }
+    class ChildBox extends ParentBox { public public(set) readonly int $id; }
+    $box = new ChildBox();
+    return isset($box->id);"#).expect("parse redeclared readonly slot");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("allocate child slot");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// A global overwrite checks initialized readonly state before implicit protected-set access.
+#[test]
+fn execute_program_readonly_followup_initialized_write_error_precedence() {
+    let program = parse_fragment(br#"class Box {
+        public readonly int $id;
+        public function __construct() { $this->id = 1; }
+    }
+    $box = new Box();
+    try { $box->id = 2; } catch (Error $error) { echo $error->getMessage(); }
+    return $box->id;"#).expect("parse readonly overwrite");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("catch readonly Error");
+    assert_eq!(values.output, "Cannot modify readonly property Box::$id");
+    assert_eq!(values.get(result), FakeValue::Int(1));
+}
+
+/// An uninitialized readonly slot still checks the implicit setter's visibility first.
+#[test]
+fn execute_program_readonly_followup_uninitialized_write_error_precedence() {
+    let program = parse_fragment(br#"class Box { public readonly int $id; }
+    $box = new Box();
+    try { $box->id = 2; } catch (Error $error) { echo $error->getMessage(); }
+    return isset($box->id);"#).expect("parse readonly initialization");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("catch setter Error");
+    assert_eq!(values.output, "Cannot modify protected(set) readonly property Box::$id from global scope");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
 /// Verifies promoted readonly properties throw Error outside their constructor.
 #[test]
 fn execute_program_promoted_readonly_property_write_after_constructor_throws_error() {

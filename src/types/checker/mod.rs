@@ -1407,6 +1407,7 @@ mod throw_access_site_tests {
             kind: ThrowAccessKind::ReadonlyProperty {
                 class_name: "PDOStatement".to_string(),
                 property: "queryString".to_string(),
+                initialization_error: None,
             },
         }
     }

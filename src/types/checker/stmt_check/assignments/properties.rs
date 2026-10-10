@@ -19,7 +19,7 @@ use crate::types::{
 
 use super::super::super::scope_dynamic_storage;
 use super::super::super::Checker;
-use super::properties_null_coalesce::null_coalesce_property_keeps_non_null;
+use super::properties_null_coalesce::null_coalesce_property_targets_same_slot;
 
 /// Type-checks a direct property assignment (`$obj->prop = value`).
 ///
@@ -278,7 +278,7 @@ pub(super) fn check_property_array_assign(
 /// Validates a write to a named property of a class instance.
 ///
 /// Checks: property existence, `__set` magic method fallback, dynamic properties (`#[\AllowDynamicProperties]`),
-/// readonly modifier restrictions (disallows writes outside `__construct` except via null-coalesce),
+/// readonly initialization and overwrite rules,
 /// visibility via `can_access_member`, and declared-type compatibility via `require_compatible_arg_type`.
 /// StdClass properties are allowed unconditionally.
 fn check_object_property_write(
@@ -344,13 +344,12 @@ fn check_object_property_write(
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
-        validate_object_property_access(checker, class_name, property, true, span)?;
         let expected_ty = class_info
             .visible_property(property)
             .map(|(_, (_, ty))| ty.clone())
             .unwrap_or(PhpType::Int);
-        let readonly_non_null_coalesce_keep =
-            null_coalesce_property_keeps_non_null(object, property, value, &expected_ty);
+        let readonly_null_coalesce = class_info.readonly_properties.contains(property)
+            && null_coalesce_property_targets_same_slot(object, property, value);
         let internal_pdo_statement_initializer = checker
             .current_method
             .as_deref()
@@ -359,31 +358,56 @@ fn check_object_property_write(
                 .property_declaring_classes
                 .get(property)
                 .is_some_and(|owner| owner.trim_start_matches('\\').eq_ignore_ascii_case("PDOStatement"));
-        if class_info.readonly_properties.contains(property)
+        let declaring_class = class_info.property_declaring_classes.get(property)
+            .map(String::as_str).unwrap_or(class_name).to_string();
+        // Untyped readonly declarations are a legacy extension with implicitly initialized
+        // null slots. Preserve their constructor exemption, not typed one-shot write semantics.
+        let legacy_untyped_slot = class_info.visible_property(property).is_some_and(|(index, _)| {
+            !class_info.property_slot_is_declared(index, property)
+        });
+        let readonly_write_guard = class_info.readonly_properties.contains(property)
             && !(checker.current_class.as_deref()
-                == class_info
-                    .property_declaring_classes
-                    .get(property)
-                    .map(String::as_str)
-                && checker.current_method.as_deref() == Some("__construct"))
-            && !internal_pdo_statement_initializer
-            && !readonly_non_null_coalesce_keep
-        {
-            // PHP raises this as a catchable `Error` at runtime instead of a
-            // compile-time rejection. Record the throw site so EIR lowering
-            // emits the throw sequence, and let lowering proceed.
+                == Some(declaring_class.as_str())
+                && checker.current_method.as_deref() == Some("__construct")
+                && (!span.identifies_a_node() || legacy_untyped_slot))
+            && !internal_pdo_statement_initializer;
+        // Public readonly overwrites raise their catchable Error before setter access matters.
+        // Keep read visibility checks, and preserve the read-only branch of conditional writes.
+        validate_object_property_access(
+            checker, class_name, property, !(readonly_null_coalesce || readonly_write_guard), span,
+        )?;
+        if readonly_write_guard {
+            let setter = class_info.property_set_visibilities.get(property)
+                .or_else(|| class_info.property_visibilities.get(property))
+                .cloned().unwrap_or(crate::parser::ast::Visibility::Public);
+            let initialization_error = (!checker.can_access_member(&declaring_class, &setter))
+                .then(|| {
+                    let scope = checker.current_class.as_deref().map_or_else(
+                        || "global scope".to_string(),
+                        |scope| format!("scope {}", scope.trim_start_matches('\\')),
+                    );
+                    let readonly = if setter == crate::parser::ast::Visibility::Protected {
+                        "readonly "
+                    } else { "" };
+                    format!("Cannot modify {}(set) {readonly}property {}::${property} from {scope}",
+                        Checker::visibility_label(&setter), declaring_class.trim_start_matches('\\'))
+                });
+            let initialization_denied = initialization_error.is_some();
+            // An initialized slot rejects an overwrite first. An uninitialized slot
+            // instead honors its effective setter, including inherited protected access.
             crate::types::checker::record_throw_access_site(
                 &mut checker.throw_access_sites,
                 span,
                 crate::types::ThrowAccessInfo {
                     span,
                     kind: crate::types::ThrowAccessKind::ReadonlyProperty {
-                        class_name: class_name.to_string(),
+                        class_name: declaring_class,
                         property: property.to_string(),
+                        initialization_error,
                     },
                 },
             );
-            return Ok(());
+            if initialization_denied { return Ok(()); }
         }
         // A property with a `get` hook but no `set` hook is read-only: external writes are an error
         // (PHP rejects writing a virtual/get-only hooked property). Writes from inside the property's

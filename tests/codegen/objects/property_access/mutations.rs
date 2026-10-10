@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// A fallback replacing the local receiver still writes through the originally pinned object.
+#[test]
+fn test_asymmetric_followup_readonly_coalesce_replaced_local() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public readonly int $value;
+    public function __destruct() { echo 'D'; }
+}
+function fallback(&$box): int { echo 'F'; $box = new Box(); return 9; }
+$box = new Box();
+try { $box->value ??= fallback($box); echo 'bad'; }
+catch (Error $error) { echo 'E'; }
+unset($box);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "FDED");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Compiles a loop over an array of class instances, reading the `price` field
 /// of each `Item` object via `$items[$i]->price` and accumulating the sum.
 #[test]
@@ -473,6 +492,103 @@ echo $box->value;
 "#,
     );
     assert_eq!(out, "7");
+}
+
+/// Direct readonly overwrites evaluate owned operands and remain catchable with implicit set access.
+#[test]
+fn test_asymmetric_review_readonly_direct_write_is_catchable() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public readonly string $value;
+    public function __construct() { $this->value = 'kept'; }
+}
+function receiver(): Box { echo 'receiver|'; return new Box(); }
+function replacement(): string { echo 'rhs|'; return str_repeat('x', 9); }
+try { receiver()->value = replacement(); }
+catch (Error $error) { echo $error->getMessage(); }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "receiver|rhs|Cannot modify readonly property Box::$value");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Readonly coalescing keeps one receiver alive through its lazy fallback and caught Error.
+#[test]
+fn test_asymmetric_followup_readonly_coalesce_receiver_once() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public readonly int $value;
+    public function __destruct() { echo 'D'; }
+}
+function receiver(): Box { echo 'R'; return new Box(); }
+function fallback(): int { echo 'F'; return 9; }
+try { receiver()->value ??= fallback(); echo 'bad'; }
+catch (Error $error) { echo 'E'; }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "RFDE");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The keep branch releases its captured receiver once without executing the fallback.
+#[test]
+fn test_asymmetric_followup_readonly_coalesce_keep_receiver() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public readonly int $value;
+    public function __construct() { $this->value = 7; }
+    public function __destruct() { echo 'D'; }
+}
+function receiver(): Box { echo 'R'; return new Box(); }
+function fallback(): int { echo 'F'; return 9; }
+receiver()->value ??= fallback();
+echo 'K';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "RDK");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An uninitialized readonly fallback runs before the conditional write raises Error.
+#[test]
+fn test_asymmetric_review_readonly_null_coalesce_fallback_still_throws() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { public readonly int $value; }
+function fallback() { echo "fallback:"; return 9; }
+$box = new Box();
+try {
+    $box->value ??= fallback();
+    echo "unexpected";
+} catch (Error $e) {
+    echo "error:", isset($box->value) ? "set" : "unset";
+}
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "fallback:error:unset", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nullable readonly values also keep non-null values and throw only on a fallback write.
+#[test]
+fn test_asymmetric_review_nullable_readonly_coalesce_is_conditional() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public readonly ?int $value;
+    public function __construct(?int $value) { $this->value = $value; }
+}
+function fallback(): int { echo "fallback:"; return 9; }
+$none = new Box(null);
+try { $none->value ??= fallback(); } catch (Error $e) { echo "error:"; }
+echo $none->value === null ? "null|" : "bad|";
+$set = new Box(7);
+$set->value ??= fallback();
+echo $set->value;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "fallback:error:null|7", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Verifies `unset($obj->prop)` on a declared (typed) property.

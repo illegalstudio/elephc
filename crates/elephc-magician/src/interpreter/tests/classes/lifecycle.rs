@@ -178,7 +178,7 @@ return $source->id . ":" . $copy->id;"#,
 fn execute_program_clone_function_scopes_readonly_reinitialization_per_property_phase() {
     let program = parse_fragment(
         br#"class EvalCloneReadonlyPhases {
-    public readonly int $id;
+    public public(set) readonly int $id;
     public int $trigger {
         set { $this->id = $value; }
     }
@@ -206,6 +206,22 @@ return $source->id;"#,
         values.output,
         "3:Cannot modify readonly property EvalCloneReadonlyPhases::$id"
     );
+    assert_eq!(values.get(result), FakeValue::Int(1));
+}
+
+/// Clone override phases do not grant global access to an implicit protected readonly setter.
+#[test]
+fn execute_program_clone_review_respects_implicit_readonly_set_access() {
+    let program = parse_fragment(br#"class EvalCloneRestrictedReadonly {
+    public readonly int $id;
+    public function __construct() { $this->id = 1; }
+}
+$source = new EvalCloneRestrictedReadonly();
+try { clone($source, ["id" => 3]); return 0; }
+catch (Error $error) { return $source->id; }"#).expect("parse readonly clone access");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("caught inaccessible setter");
     assert_eq!(values.get(result), FakeValue::Int(1));
 }
 

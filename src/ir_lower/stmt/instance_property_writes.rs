@@ -17,28 +17,50 @@ pub(super) fn lower_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    // A statically-decided readonly-property write outside the declaring
-    // constructor raises a catchable `Error` in PHP rather than a compile-time
-    // error, but the object and RHS expressions must still be evaluated first.
-    let throw_access_message = ctx.throw_access_sites.get(&span).and_then(|info| {
-        if let ThrowAccessKind::ReadonlyProperty { class_name, property } = &info.kind {
-            Some(format!("Cannot modify readonly property {}::${}", class_name, property))
+    // Readonly errors depend on runtime initialization, after receiver and RHS effects.
+    let readonly_write = ctx.throw_access_sites.get(&span).and_then(|info| {
+        if let ThrowAccessKind::ReadonlyProperty { class_name, property, initialization_error } = &info.kind {
+            Some((format!("Cannot modify readonly property {}::${}", class_name, property),
+                initialization_error.clone()))
         } else {
             None
         }
     });
+    if readonly_write.is_some() {
+        if let ExprKind::NullCoalesce { value: read, default } = &value.kind {
+            if let ExprKind::PropertyAccess { object: read_object, property: read_property } = &read.kind {
+                if read_object.as_ref() == object && read_property == property {
+                    // The readonly Error belongs only to the fallback write, never to the
+                    // read-only keep branch of an already initialized property.
+                    lower_readonly_coalesce_update(ctx, object, property, default, span);
+                    return;
+                }
+            }
+        }
+    }
     let object = lower_expr(ctx, object);
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
-    if let Some(message) = throw_access_message {
-        if ctx.value_is_owning_temporary(object) {
-            crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    if let Some((overwrite_message, initialization_error)) = readonly_write {
+        super::readonly_receiver_guard::guard_readonly_write_receiver(
+            ctx, object, lowered_value, property, span,
+        );
+        let data = ctx.intern_string(property);
+        let initialized = ctx.emit_value(Op::PropInitialized, vec![object.value],
+            Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
+        let overwrite = ctx.builder.create_named_block("readonly.write.initialized", Vec::new());
+        let initialize = ctx.builder.create_named_block("readonly.write.uninitialized", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: initialized.value, then_target: overwrite, then_args: Vec::new(),
+            else_target: initialize, else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(overwrite);
+        lower_readonly_write_error(ctx, object, lowered_value, &overwrite_message, span);
+        ctx.builder.position_at_end(initialize);
+        if let Some(message) = initialization_error {
+            lower_readonly_write_error(ctx, object, lowered_value, &message, span);
+            return;
         }
-        if ctx.value_is_owning_temporary(lowered_value) {
-            crate::ir_lower::ownership::release_if_owned(ctx, lowered_value, Some(span));
-        }
-        lower_throw_access_error(ctx, &message, span);
-        return;
     }
     // A runtime SUBCLASS can declare `__set` where the receiver's STATIC class does not, and php
     // calls the accessor on such an instance. Only the runtime class can answer that, so the guard
@@ -57,6 +79,74 @@ pub(super) fn lower_property_assign(
         );
     }
     lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span)
+}
+
+/// Releases independent evaluated operands before a readonly write throws its catchable Error.
+pub(super) fn lower_readonly_write_error(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, value: LoweredValue,
+    message: &str, span: Span,
+) {
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    lower_throw_access_error(ctx, message, span);
+}
+
+/// Fuses the parser's readonly coalesce receiver temporary into a scoped EIR owner.
+pub(super) fn lower_synthetic_readonly_coalesce(
+    ctx: &mut LoweringContext<'_, '_>,
+    body: &[Stmt],
+) -> bool {
+    let [capture, write] = body else { return false; };
+    let StmtKind::Assign { name, value: receiver } = &capture.kind else { return false; };
+    if !crate::names::is_generated_local_name(name) { return false; }
+    let StmtKind::PropertyAssign { object, property, value } = &write.kind else { return false; };
+    let ExprKind::Variable(object_name) = &object.kind else { return false; };
+    let ExprKind::NullCoalesce { value: read, default } = &value.kind else { return false; };
+    let ExprKind::PropertyAccess { object: read_object, property: read_property } = &read.kind else {
+        return false;
+    };
+    if object_name != name || read_object != object || read_property != property
+        || !ctx.throw_access_sites.get(&write.span).is_some_and(|info| {
+            matches!(info.kind, ThrowAccessKind::ReadonlyProperty { .. })
+        })
+    {
+        return false;
+    }
+    lower_readonly_coalesce_update(ctx, receiver, property, default, write.span);
+    true
+}
+
+/// Evaluates and pins the receiver once across the probe and the lazy fallback write.
+fn lower_readonly_coalesce_update(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    default: &Expr,
+    span: Span,
+) {
+    let receiver = lower_expr(ctx, object);
+    let ty = ctx.builder.value_php_type(receiver.value);
+    let name = ctx.declare_hidden_temp(ty.clone());
+    let pinned = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+        ctx, receiver, Some(span),
+    );
+    ctx.store_local(&name, pinned, ty, Some(span));
+    crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
+    let slot = ctx.local_slots[&name];
+    ctx.emit_void(
+        Op::PushCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::PushCallOperandOwner.default_effects(), Some(span),
+    );
+    let target = Expr::new(ExprKind::PropertyAccess {
+        object: Box::new(Expr::new(ExprKind::Variable(name), object.span)),
+        property: property.to_string(),
+    }, span);
+    crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, &target, default, span);
+    crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
 }
 
 /// Emits the `instanceof` chain that hands a runtime subclass's `__set` its own call.

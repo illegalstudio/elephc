@@ -669,6 +669,7 @@ pub(super) fn eval_dynamic_class_allocate_object(
     let object = values.new_object(&backing_class)?;
     let identity = values.object_identity(object)?;
     context.register_dynamic_object(identity, class.name());
+    let object_class_name = class.name().to_string();
     let mut class_chain = context.class_chain(class.name());
     if class_chain.is_empty() {
         class_chain.push(class.clone());
@@ -679,6 +680,14 @@ pub(super) fn eval_dynamic_class_allocate_object(
             .iter()
             .filter(|property| !property.is_static() && !property.is_abstract())
         {
+            // A non-private redeclaration replaces the parent's slot and its default. In
+            // particular, a typed child property with no default must remain uninitialized.
+            if property.visibility() != EvalVisibility::Private
+                && context.class_property(&object_class_name, property.name())
+                    .is_some_and(|(owner, _)| !same_eval_class_name(&owner, class.name()))
+            {
+                continue;
+            }
             let value = if let Some(default) = property.default() {
                 Some(eval_class_like_member_default(
                     class.name(),

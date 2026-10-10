@@ -301,8 +301,8 @@ fn apply_instance_property(
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
-    apply_set_visibility(state, prop);
-    if prop.is_final {
+    apply_set_visibility(state, class, prop);
+    if property_is_effectively_final(prop) {
         state.final_properties.insert(prop.name.clone());
     } else {
         state.final_properties.remove(&prop.name);
@@ -405,8 +405,8 @@ fn apply_instance_property_redeclaration(
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
-    apply_set_visibility(state, prop);
-    if prop.is_final {
+    apply_set_visibility(state, class, prop);
+    if property_is_effectively_final(prop) {
         state.final_properties.insert(prop.name.clone());
     }
     if class.is_readonly_class || prop.readonly {
@@ -491,7 +491,7 @@ fn apply_private_parent_property_shadowing(
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
-    apply_set_visibility(state, prop);
+    apply_set_visibility(state, class, prop);
     replace_active_property_flags(state, class, checker, prop)?;
     Ok(())
 }
@@ -504,7 +504,7 @@ fn replace_active_property_flags(
     checker: &Checker,
     prop: &ClassProperty,
 ) -> Result<(), CompileError> {
-    if prop.is_final {
+    if property_is_effectively_final(prop) {
         state.final_properties.insert(prop.name.clone());
     } else {
         state.final_properties.remove(&prop.name);
@@ -563,6 +563,20 @@ fn validate_instance_property_override(
                 "Cannot reduce visibility when overriding property: {}::${}",
                 class.name, prop.name
             ),
+        ));
+    }
+
+    let parent_set_visibility = state.property_set_visibilities.get(&prop.name)
+        .unwrap_or(&inherited_visibility);
+    let child_set_visibility = effective_set_visibility(class, prop);
+    let parent_has_setter = state.property_hooks.get(&prop.name)
+        .is_none_or(|hooks| !hooks.is_virtual() || hooks.set);
+    if parent_has_setter
+        && visibility_rank(&child_set_visibility) < visibility_rank(parent_set_visibility)
+    {
+        return Err(CompileError::new(
+            prop.span,
+            &format!("Cannot reduce set visibility when overriding property: {}::${}", class.name, prop.name),
         ));
     }
 
@@ -916,14 +930,30 @@ fn validate_asymmetric_visibility(prop: &ClassProperty) -> Result<(), CompileErr
     Ok(())
 }
 
-/// Records a property's PHP 8.4 asymmetric write (`set`) visibility in the build state, but only
-/// when it differs from the read visibility. A redeclaration without one clears any inherited
-/// write restriction so the property's read visibility governs writes again.
-fn apply_set_visibility(state: &mut ClassBuildState, prop: &ClassProperty) {
-    if let Some(set_visibility) = &prop.set_visibility {
+/// Computes explicit write access or the implicit protected setter of public readonly storage.
+fn effective_set_visibility(class: &FlattenedClass, prop: &ClassProperty) -> Visibility {
+    prop.set_visibility.clone().unwrap_or_else(|| {
+        if (class.is_readonly_class || prop.readonly) && prop.visibility == Visibility::Public {
+            Visibility::Protected
+        } else { prop.visibility.clone() }
+    })
+}
+
+/// A private setter is implicitly final only when it restricts a wider read visibility.
+fn property_is_effectively_final(prop: &ClassProperty) -> bool {
+    prop.is_final || (prop.set_visibility == Some(Visibility::Private)
+        && prop.visibility != Visibility::Private)
+}
+
+/// Records effective setter access while retaining explicit public(set) for readonly Reflection.
+fn apply_set_visibility(state: &mut ClassBuildState, class: &FlattenedClass, prop: &ClassProperty) {
+    let set_visibility = effective_set_visibility(class, prop);
+    let explicit_readonly_public_set = prop.set_visibility == Some(Visibility::Public)
+        && (class.is_readonly_class || prop.readonly);
+    if explicit_readonly_public_set || set_visibility != prop.visibility {
         state
             .property_set_visibilities
-            .insert(prop.name.clone(), set_visibility.clone());
+            .insert(prop.name.clone(), set_visibility);
     } else {
         state.property_set_visibilities.remove(&prop.name);
     }

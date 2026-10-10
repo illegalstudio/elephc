@@ -12,6 +12,59 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// A private child cannot narrow a public or protected parent property, matching PHP.
+#[test]
+fn execute_program_asymmetric_oct9_rejects_private_child_narrowing() {
+    for visibility in ["public", "protected"] {
+        let source = format!("class Base {{ {visibility} int $value = 1; public function read() {{ return $this->value; }} }} class Child extends Base {{ private int $value = 2; }} return (new Child())->read();");
+        let program = parse_fragment(source.as_bytes()).expect("parse property declarations");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert_eq!(execute_program(&program, &mut scope, &mut values)
+            .expect_err("a private child reduces inherited read access"), EvalStatus::RuntimeFatal);
+    }
+}
+
+/// Legal parent and child private slots keep their own defaults and declaring scope.
+#[test]
+fn execute_program_asymmetric_oct9_private_slots_keep_defaults() {
+    let program = parse_fragment(br#"class Base { private int $value = 1; public function read() { return $this->value; } }
+class Child extends Base { private int $value = 2; public function childRead() { return $this->value; } }
+$child = new Child(); echo $child->read(), ':', $child->childRead(); return true;"#)
+        .expect("parse separate private properties");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("separate private slots");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.output, "1:2");
+}
+
+/// Public readonly properties without explicit set access accept protected-set redeclarations.
+#[test]
+fn execute_program_asymmetric_review_readonly_effective_set_visibility() {
+    for source in [
+        &b"class Base { public readonly int $x; } class Child extends Base { public protected(set) readonly int $x; } return 1;"[..],
+        &b"readonly class Base { public int $x; } readonly class Child extends Base { public protected(set) int $x; } return 1;"[..],
+        &b"class Base { public int $x { get => 1; } } class Child extends Base { public protected(set) int $x { get => 2; set { } } } return 1;"[..],
+    ] {
+        let program = parse_fragment(source).expect("parse property redeclaration");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).expect("compatible set access");
+        assert_eq!(values.get(result), FakeValue::Int(1));
+    }
+}
+
+/// Omitting set access on a readonly child cannot reduce an explicitly public parent setter.
+#[test]
+fn execute_program_asymmetric_review_rejects_implicit_set_access_reduction() {
+    let program = parse_fragment(b"class Base { public public(set) readonly int $x; } class Child extends Base { public readonly int $x; }")
+        .expect("parse readonly properties");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    assert_eq!(execute_program(&program, &mut scope, &mut values).expect_err("narrowed setter"), EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval-declared asymmetric properties allow owner and subclass writes as PHP does.
 #[test]
 fn execute_program_allows_asymmetric_property_writes_from_allowed_scopes() {
@@ -243,7 +296,7 @@ class EvalPropertyReadonlyAddBase {
     public int $count = 0;
 }
 class EvalPropertyReadonlyAddChild extends EvalPropertyReadonlyAddBase {
-    public readonly int $count;
+    public public(set) readonly int $count;
     public function __construct() { $this->count = 7; }
 }
 class EvalPropertyReadonlyWidenBase {

@@ -247,13 +247,17 @@ final class InvoiceNumber {
 - `public`, `protected`, `private` visibility
 - Optional default values
 - Optional type declarations, for example `public int $id` or `public ?string $email = null`
-- `readonly` properties (only assigned in `__construct`)
+- `readonly` properties (initialized once from a scope allowed by their setter visibility)
 - `final` properties, which can be read normally but cannot be redeclared by subclasses
 - Static properties with `public static`, `protected static`, or `private static`, including typed static properties
 - `readonly class` makes all instance properties readonly; static properties stay mutable
 - Several properties in one declaration, separated by commas: `public int $w = 40, $h = 22;`. The type and every modifier are shared by the whole list, and each name carries its own optional default. A property with a **hook block** needs a declaration of its own, as in PHP.
 
-Statically-known access violations — calling a `private`/`protected` method from an inaccessible scope, or writing a `readonly` property outside its declaring constructor — raise a catchable `Error` exception at runtime, matching PHP. Without a `try`/`catch` handler the exception is a fatal uncaught exit.
+Statically-known access violations, such as calling a `private`/`protected` method from an inaccessible scope, raise a catchable `Error` exception at runtime. Without a `try`/`catch` handler the exception is a fatal uncaught exit.
+
+A typed readonly property without an explicit setter has an implicit `protected(set)` setter. Its declaring class or a subclass can initialize it once, including outside a constructor. An explicit `public(set)` setter also permits a first assignment from global scope. A denied first assignment reports the setter-access error; an assignment to an initialized readonly property instead reports `Cannot modify readonly property Class::$property` when read visibility permits access. The same rules apply to eval-declared classes and native objects accessed from `eval()`, including writes through factory-style object unions before narrowing. A `??=` write keeps a non-null initialized value without evaluating its fallback; an initialized `null` value still rejects the fallback overwrite.
+
+elephc also accepts untyped readonly declarations as a legacy extension that PHP rejects. Their implicitly initialized `null` slots retain the declaring constructor's write exemption, rather than the typed one-shot initialization rules above.
 
 ```php
 <?php
@@ -320,6 +324,7 @@ Rules:
 - `protected(set)` allows writes from the declaring class and its subclasses; `private(set)` only from the declaring class.
 - The write visibility must not be weaker than the read visibility (`private public(set)` is rejected).
 - The property must be typed, and the modifier is not allowed on static properties.
+- A property may have only one `(set)` modifier. Explicit `public(set)` on a public readonly property suppresses the implicit `protected(set)` reflection flag.
 - Indirect writes through an array element (`$obj->items[] = x`, `$obj->items['k'] = x`) are writes too, so they honor the `set` visibility — not the (wider) read visibility.
 - Abstract and interface property hook contracts may carry asymmetric write visibility on writable (`{ set; }`) contracts. `private(set)` contracts are final and cannot be implemented or redeclared by a concrete child property.
 - Promoted constructor properties accept the same modifiers (`public private(set) int $x`, `protected(set) readonly string $label`), with the same rules, write checks, and Reflection flags as the equivalent declared property. See [Constructor](#constructor).
@@ -329,10 +334,11 @@ Rules:
 A child class may redeclare a property inherited from a non-private parent. The redeclaration is checked at compile time and must follow PHP rules:
 
 - Visibility cannot be reduced (`public` → `protected` is rejected; `protected` → `public` is allowed).
+- Effective write visibility cannot narrow the inherited setter access. Without a `(set)` modifier, public readonly properties (including properties of readonly classes) have an implicit `protected(set)`; other properties use their read visibility. A getter-only virtual parent has no setter access contract to narrow.
 - Declared types are invariant. A typed parent property must be redeclared with the same type. A typed parent property cannot become untyped, and an untyped parent property cannot gain a type in the child.
 - `readonly` is monotonic — a `readonly` parent property must stay `readonly` in the child. A non-readonly parent property may become `readonly` in the child.
 - The by-reference qualifier on a property cannot change across inheritance.
-- `final` parent properties cannot be redeclared.
+- `final` parent properties cannot be redeclared. A `private(set)` restriction on a public or protected property makes it implicitly final, including promoted properties. An entirely private property still permits a separate child property with the same name.
 - The child shares the parent's slot, so reads of the property from inherited methods see the child's value.
 
 Private parent properties are different: they are not overridden. A child may
