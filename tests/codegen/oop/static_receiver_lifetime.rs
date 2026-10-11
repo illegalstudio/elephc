@@ -10,6 +10,55 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// A replayable property hook runs once before fetching the replacement static receiver.
+#[test]
+fn test_static_receiver_third_review_plain_hook_once() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static ?O $o = null; }
+class B { public int $n { get { echo 'H'; C::$o = new O(); return 7; } } }
+C::$o = new O(); $b = new B();
+C::$o->v = $b->n; echo ':', C::$o->v; C::$o = null;
+"#, "HD1:7D7");
+}
+
+/// Indexed plain writes consume the hook value once and mutate its replacement object.
+#[test]
+fn test_static_receiver_third_review_indexed_hook_once() {
+    verify(r#"<?php
+class O { public array $items = [1]; public function __destruct() { echo 'D', json_encode($this->items); } }
+class C { public static ?O $o = null; }
+class B { public int $n { get { echo 'H'; C::$o = new O(); return 9; } } }
+C::$o = new O(); $b = new B();
+C::$o->items[0] = $b->n; echo ':', json_encode(C::$o->items); C::$o = null;
+"#, "HD[1]:[9]D[9]");
+}
+
+/// Runtime property names do not fetch their static owner before a replayable RHS hook.
+#[test]
+fn test_static_receiver_third_review_dynamic_hook_once() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static ?O $o = null; }
+class B { public int $n { get { echo 'H'; C::$o = new O(); return 7; } } }
+C::$o = new O(); $b = new B(); $name = 'v';
+C::$o->$name = $b->n; echo ':', C::$o->v; C::$o = null;
+"#, "HD1:7D7");
+}
+
+/// Computed dimensions precede a captured hook and the expression result reuses that value.
+#[test]
+fn test_static_receiver_third_review_computed_hook_result() {
+    verify(r#"<?php
+class O { public array $items = [1]; public function __destruct() { echo 'D', json_encode($this->items); } }
+class C { public static ?O $o = null; }
+class B { public int $n { get { echo 'H'; C::$o = new O(); return 9; } } }
+function pickKey(): int { echo 'K'; return 0; }
+C::$o = new O(); $b = new B();
+$result = (C::$o->items[pickKey()] = $b->n); echo ':', $result, ':', json_encode(C::$o->items); C::$o = null;
+"#, "KHD[1]:9:[9]D[9]");
+}
+
 /// Checks output and balanced lifetime state for one static-receiver write fixture.
 fn verify(source: &str, expected: &str) {
     let out = compile_and_run_with_heap_debug(source);

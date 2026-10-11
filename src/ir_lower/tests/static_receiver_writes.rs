@@ -15,6 +15,7 @@ fn verify(target: &str) {
 class O { public int $v = 1; public array $items = [1]; public array $nested = [[1]]; }
 class Root { public O $child; public function __construct() { $this->child = new O(); } }
 class C { public static O $o; public static ?O $nullable = null; }
+class Hook { public int $value { get { C::$o = new O(); return 7; } } }
 class R { public static Root $root; public static ?Root $nullable = null; }
 function replace(): int { C::$o = new O(); return 9; }
 function write(): void { C::$o->v = replace(); }
@@ -39,6 +40,10 @@ function writeComputedLeaf(): void { StaticBuckets::$items[0][computedKey()] = r
 function writeComputedCompound(): void { StaticBuckets::$items[computedKey()][0] += replace(); }
 function writeFractionalCompound(): void { StaticBuckets::$items[1.5][0] += replace(); }
 function writeNullChain(): void { R::$nullable->child->v = replace(); }
+function writeHook(Hook $box): void { C::$o->v = $box->value; }
+function writeHookIndexed(Hook $box): void { C::$o->items[0] = $box->value; }
+function writeHookDynamic(Hook $box, string $name): void { C::$o->$name = $box->value; }
+function writeHookResult(Hook $box): int { return C::$o->items[computedKey()] = $box->value; }
 interface Store { public function get(): string; }
 interface Named { public function name(): string; }
 class Both implements Store, Named {
@@ -100,6 +105,19 @@ C::$nullable->items[] = 3;
         } else {
             let read = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PropGet).unwrap();
             assert!(guard < read, "{target}: null is rejected before the compound property read");
+        }
+    }
+    for name in ["writeHook", "writeHookIndexed", "writeHookDynamic", "writeHookResult"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let calls: Vec<_> = function.instructions.iter().enumerate()
+            .filter(|(_, inst)| inst.op == crate::ir::Op::MethodCall).collect();
+        assert_eq!(calls.len(), 1, "{target}: {name} runs the RHS hook once");
+        let receiver = function.instructions.iter().position(|inst|
+            inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
+        assert!(calls[0].0 < receiver, "{target}: {name} fetches the receiver after its RHS");
+        if name == "writeHookResult" {
+            let key = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
+            assert!(key < calls[0].0, "{target}: computed dimensions precede the RHS hook");
         }
     }
     for name in ["writeComputedNested", "writeComputedLeaf", "writeComputedCompound", "writeNullChain"] {

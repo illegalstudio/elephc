@@ -27,6 +27,16 @@ pub(super) fn static_property_receiver_chain(expr: &Expr) -> bool {
     }
 }
 
+/// Recognizes object writes whose static owner must be fetched after the RHS settles.
+fn delayed_static_object_assignment_target(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. } => static_property_receiver_chain(object),
+        ExprKind::ArrayAccess { array, .. } => delayed_static_object_assignment_target(array),
+        _ => false,
+    }
+}
+
 /// Builds a plain assignment with the same capture and result rules for parsed and built ASTs.
 pub(crate) fn plain_assignment_expression(target: Expr, value: Expr, span: Span) -> Expr {
     if !is_non_local_assignment_target(&target) {
@@ -43,7 +53,13 @@ pub(crate) fn plain_assignment_expression(target: Expr, value: Expr, span: Span)
     }
     let mut lowerer = AssignmentExpressionLowerer::new(span);
     let target = lowerer.stabilize_non_local_target(target, &value);
-    let value = lowerer.bind_value(&target, value);
+    // A syntactically replayable property read can still call a hook that replaces the owner.
+    // Capture it after computed dimensions, before either the write or result uses it.
+    let value = if delayed_static_object_assignment_target(&target) {
+        lowerer.bind_result_value(value)
+    } else {
+        lowerer.bind_value(&target, value)
+    };
     Expr::new(
         ExprKind::Assignment {
             target: Box::new(target),

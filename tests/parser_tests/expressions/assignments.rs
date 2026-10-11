@@ -9,6 +9,31 @@
 
 use super::*;
 
+/// Static object writes capture even replayable RHS reads after computed dimensions.
+#[test]
+fn test_parse_static_receiver_third_review_replayable_rhs_capture() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for tail in ["->v", "->$name", "->items[0]", "->items[pickKey()]"] {
+            let source = format!("<?php {receiver}::$object{tail} = $box->value;");
+            let statements = parse_source(&source);
+            let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("{source}"); };
+            let ExprKind::Assignment { value, result_target, prelude, .. } = &expression.kind
+                else { panic!("{source}"); };
+            let StmtKind::Assign { name, value: captured } = &prelude.last()
+                .expect("capture the RHS once").kind else { panic!("{source}: {prelude:?}"); };
+            assert!(matches!(&captured.kind, ExprKind::PropertyAccess { property, .. }
+                if property == "value"), "{source}: {prelude:?}");
+            assert!(matches!(&value.kind, ExprKind::Variable(variable) if variable == name));
+            assert_eq!(result_target.as_deref(), Some(value.as_ref()));
+            if tail.contains("pickKey") {
+                assert!(matches!(&prelude[0].kind, StmtKind::Assign { value, .. }
+                    if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "pickKey")),
+                    "{source}: dimensions must precede the RHS");
+            }
+        }
+    }
+}
+
 /// Runtime-name statements use the captured expression plan rather than replaying their RHS.
 #[test]
 fn test_parse_static_receiver_followup_dynamic_capture() {
