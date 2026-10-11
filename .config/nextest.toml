@@ -227,6 +227,29 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# macOS already gives every codegen test three 60s periods (the override above, platform-
+# scoped) because the shared macOS runners routinely stretch link-heavy tests past one period
+# while staying green. Two full CI runs on a degraded ARM64 fleet showed the same randomness on
+# Linux: each attempt terminated ~200 DIFFERENT tests twice, with ZERO overlap between the two
+# attempts' lists (196 then 199 victims) — load flakiness, not hangs. The heaviest un-budgeted
+# families are the Magician-linked eval tests (already covered above and by the eval family
+# entries) and the `*_on_all_targets` lib tests, which emit one program for all five supported
+# targets (~37s on local x86_64, 89s measured in a container). Give Linux codegen the same
+# three-period tolerance macOS has, and give the all-targets family it everywhere. A real hang
+# still terminates at 180s, and the compiled-program watchdog keeps its own 60s guard.
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "linux")'
+filter = 'binary(codegen_tests)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(/_on_all_targets$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(/_on_all_targets$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # These eval fixtures live outside the Core eval GC naming family. Boxed method
 # arguments hit 60s on both macOS attempts; hook-default and post-eval instanceof
 # controls passed only on retry at 59.687s and 58.843s respectively. The latter
