@@ -22,6 +22,10 @@ class DeclaredMixedUpdate { public static array<mixed> $items = [1, [5]]; }
 class DeclaredAssocUpdate { public static array<string, mixed> $items = ["k" => [5]]; }
 function variableStringKey(string $key): void { ++DeclaredAssocUpdate::$items[$key][0]; }
 function promotedStringKey(string $key): void { ++DeclaredMixedUpdate::$items[$key][0]; }
+function promotedMixedKey(mixed $key): void { ++DeclaredMixedUpdate::$items[$key][0]; }
+function flatStringKey(string $key): void { ++DeclaredMixedUpdate::$items[$key]; }
+function flatMixedKey(mixed $key): void { ++DeclaredMixedUpdate::$items[$key]; }
+function assocFloatKey(float $key): void { ++DeclaredAssocUpdate::$items[$key][0]; }
 function fail(): int { throw new Error("stop"); }
 function finalKey(): int { echo "key"; return 0; }
 function scalarUpdate(): void { ++NestedUpdate::$items[0][0][finalKey()]; }
@@ -33,6 +37,10 @@ set_error_handler(function($level, $message) { return true; });
 DeclaredAssocUpdate::$items["k"][0] = 9;
 variableStringKey("k");
 promotedStringKey("k");
+promotedMixedKey("m");
+flatStringKey("s");
+flatMixedKey("t");
+assocFloatKey(1.5);
 echo ++NestedUpdate::$items[1.5], NestedUpdate::$items[2.5]++;
 echo ++NestedUpdate::$items[0][0]["before"];
 try { scalarUpdate(); } catch (Error $e) { echo "scalar"; }
@@ -70,13 +78,24 @@ echo json_encode(NestedUpdate::$items);
     let key = scalar.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
     let guard = scalar.instructions.iter().rposition(|inst| inst.op == Op::TypePredicate).unwrap();
     assert!(key < guard, "{target}: final computed key runs before the scalar-parent guard");
-    for name in ["variableStringKey", "promotedStringKey"] {
+    for name in ["variableStringKey", "promotedStringKey", "promotedMixedKey"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         assert!(function.instructions.iter().any(|inst| inst.op == Op::ZeroLocalSlot),
             "{target}: {name} retires snapshots without widening string storage");
         assert!(function.instructions.iter().any(|inst| inst.op == Op::HashGetForWrite),
             "{target}: {name} obtains the stored string-key parent instead of index zero");
     }
+    for (name, write) in [("flatStringKey", Op::HashSet), ("flatMixedKey", Op::ArraySetMixedKey)] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::LoadStaticPropertyRefCell),
+            "{target}: {name} publishes key-dependent container replacements through the static slot");
+        assert!(function.instructions.iter().any(|inst| inst.op == write),
+            "{target}: {name} writes its actual dimension instead of coercing to index zero");
+    }
+    let float = module.functions.iter().find(|function| function.name == "assocFloatKey").unwrap();
+    assert!(float.instructions.iter().any(|inst| {
+        inst.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed))
+    }), "{target}: associative float parents reuse their first key diagnosis");
     crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
 

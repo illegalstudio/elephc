@@ -9,6 +9,91 @@
 
 use super::*;
 
+/// Nested mixed dimensions promote the static root without changing its indexed alias.
+#[test]
+fn test_static_prefix_third_review_nested_mixed() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [[5], [7]]; }
+function bump(mixed $key): void { ++H::$items[$key][0]; }
+$alias = H::$items;
+set_error_handler(function($level, $message) { echo 'W:', $message, '|'; return true; });
+bump('k'); restore_error_handler();
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "W:Undefined array key \"k\"|W:Undefined array key 0|{\"0\":[5],\"1\":[7],\"k\":[1]}|[[5],[7]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// One-level String dimensions insert their actual key in a declared mixed static array.
+#[test]
+fn test_static_prefix_third_review_flat_string() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $flat = [5, 7]; }
+function bump(string $key): void { ++H::$flat[$key]; }
+$alias = H::$flat;
+set_error_handler(function($level, $message) { echo 'W:', $message, '|'; return true; });
+bump('k'); restore_error_handler();
+echo json_encode(H::$flat), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "W:Undefined array key \"k\"|{\"0\":5,\"1\":7,\"k\":1}|[5,7]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// One-level Mixed dimensions preserve the original static elements and by-value alias.
+#[test]
+fn test_static_prefix_third_review_flat_mixed() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $flat = [5, 7]; }
+function bump(mixed $key): void { ++H::$flat[$key]; }
+$alias = H::$flat;
+set_error_handler(function($level, $message) { echo 'W:', $message, '|'; return true; });
+bump('k'); restore_error_handler();
+echo json_encode(H::$flat), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "W:Undefined array key \"k\"|{\"0\":5,\"1\":7,\"k\":1}|[5,7]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An associative static parent reuses its first fractional-key diagnosis during writeback.
+#[test]
+fn test_static_prefix_third_review_assoc_float() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<string, mixed> $items = ['k' => [5]]; }
+function bump(float $key): void { ++H::$items[$key][0]; }
+$alias = H::$items;
+set_error_handler(function($level, $message) { echo 'W:', $message, '|'; return true; });
+bump(1.5); restore_error_handler();
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "W:Implicit conversion from float 1.5 to int loses precision|W:Undefined array key 1|W:Undefined array key 0|{\"k\":[5],\"1\":[1]}|{\"k\":[5]}", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Mixed numeric keys retain list semantics and flat writes read bare keys after their RHS.
+#[test]
+fn test_static_prefix_third_review_numeric_and_store_order() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $nested = [[5], [7]]; public static array<mixed> $flat = [5, 7]; }
+function nested(mixed $key): void { ++H::$nested[$key][0]; }
+function flat(mixed $key): void { ++H::$flat[$key]; }
+function write(string $key): void { H::$flat[$key] = ($key = 'late'); }
+$n = H::$nested; $f = H::$flat;
+set_error_handler(function($level, $message) { echo 'W:', $message, '|'; return true; });
+nested(0); nested('1'); flat(0); flat('1'); flat(1.5);
+restore_error_handler();
+echo json_encode(H::$nested), '|', json_encode(H::$flat), '|', json_encode($n), '|', json_encode($f), '|';
+write('early'); echo json_encode(H::$flat);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "W:Implicit conversion from float 1.5 to int loses precision|[[6],[8]]|[6,9]|[[5],[7]]|[5,7]|{\"0\":6,\"1\":9,\"late\":\"late\"}", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Captured variable string keys release each projected string on parent and leaf updates.
 #[test]
 fn test_static_prefix_second_review_variable_string_key_owners() {

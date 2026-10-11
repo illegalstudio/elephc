@@ -435,7 +435,7 @@ fn lower_nested_assign_parent_with_diagnosed_key(
 /// context, the possibly promoted/reallocated container is stored back into
 /// the local, and the guaranteed-present element is re-read as the parent
 /// cell. Returns `None` for shapes without a concrete for-write lowering
-/// (typed element arrays, non-Int/Str key expressions).
+/// (typed element arrays or unsupported key expressions).
 pub(super) fn lower_local_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -458,7 +458,7 @@ fn lower_local_parent_fetch_for_write_inner(
                 || is_empty_indexed_array_element(elem_ty.as_ref()) =>
         {
             let key_ty = match &index.kind {
-                ExprKind::Variable(name) if ctx.local_type(name).codegen_repr() == PhpType::Str => PhpType::Str,
+                ExprKind::Variable(name) => ctx.local_type(name).codegen_repr(),
                 _ => index_expr_key_type(ctx, index),
             };
             match key_ty {
@@ -495,11 +495,10 @@ fn lower_local_parent_fetch_for_write_inner(
                     );
                     Some(cell)
                 }
-                PhpType::Str => {
-                    // A literal string key on an indexed local is always a
-                    // hash key: promote the local to a Mixed-valued hash
-                    // first (mirrors `lower_string_key_array_promotion`),
-                    // then ensure the element through the hash path. The
+                PhpType::Str | PhpType::Mixed => {
+                    // A string or runtime-boxed key can select a hash key:
+                    // promote to a Mixed-valued hash, whose key conversion
+                    // preserves both string and numeric runtime keys. The
                     // promoted hash flows straight into the ensure call and
                     // is stored back exactly once at the end.
                     let array_value = ctx.load_local(name, Some(span));
@@ -513,7 +512,7 @@ fn lower_local_parent_fetch_for_write_inner(
                         Op::ArrayToHash.default_effects(),
                         Some(span),
                     );
-                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
+                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span, key_already_diagnosed))
                 }
                 _ => None,
             }
@@ -522,7 +521,7 @@ fn lower_local_parent_fetch_for_write_inner(
             let hash_value = ctx.load_local(name, Some(span));
             let assoc_ty = ctx.local_type(name);
             ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
-            Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span))
+            Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span, key_already_diagnosed))
         }
         _ => None,
     }
@@ -539,12 +538,17 @@ pub(super) fn lower_hash_parent_fetch_for_write(
     assoc_ty: PhpType,
     index: &Expr,
     span: Span,
+    key_already_diagnosed: bool,
 ) -> LoweredValue {
     let key = lower_expr(ctx, index);
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![hash_value.value, key.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        Some(Immediate::RuntimeCall(if key_already_diagnosed {
+            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+        } else {
+            RuntimeCallTarget::ArrayFetchForWrite
+        })),
         assoc_ty.clone(),
         effects_lookup::runtime_effects(),
         Some(span),

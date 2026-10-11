@@ -293,6 +293,21 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
+        if matches!(property_ty.codegen_repr(), PhpType::Array(element)
+            if element.codegen_repr() == PhpType::Mixed)
+        {
+            // Reuse relocating local writes so string/Mixed keys can promote
+            // the container and publish its replacement through the static slot.
+            let name = ctx.declare_synthetic_php_local(property_ty);
+            let root = Expr::new(ExprKind::StaticPropertyAccess {
+                receiver: receiver.clone(), property: property.to_string(),
+            }, span);
+            crate::ir_lower::expr::lower_ref_assign_static_property(ctx, &name, &root, span);
+            array_write_core::lower_array_assign_with_diagnosed_key(
+                ctx, &name, index, value, span, key_already_diagnosed,
+            );
+            return;
+        }
         let array_ty = property_ty.clone();
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so
