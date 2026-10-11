@@ -33,7 +33,9 @@ pub(super) fn finish_static_compound_receiver(
 pub(super) fn guard_static_compound_property_read(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, stmt: &Stmt, span: Span,
 ) -> Option<StaticCompoundReceiver> {
-    let ExprKind::PropertyAccess { object, property } = &target.kind else { return None; };
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    let ExprKind::PropertyAccess { object, property } = &root.kind else { return None; };
     if !is_static_property_write_chain(object) { return None; }
     let ExprKind::Variable(result) = &value.kind else { return None; };
     let StmtKind::Assign { name, value } = &stmt.kind else { return None; };
@@ -41,20 +43,34 @@ pub(super) fn guard_static_compound_property_read(
     if name != result || left.as_ref() != target { return None; }
     let rhs = ctx.with_borrowed_write_operand(|ctx| lower_expr(ctx, right));
     let mut receiver = lower_static_property_write_chain(ctx, object, rhs, span);
-    receiver.narrow_for_assignment(ctx, property, rhs, span);
+    if root == target {
+        receiver.narrow_for_assignment(ctx, property, rhs, span);
+    } else {
+        receiver.narrow_for_array(ctx, property, &[rhs.value], span);
+    }
     let ty = ctx.builder.value_php_type(receiver.value.value);
     let temp = ctx.declare_hidden_temp(ty.clone());
     let borrowed = ctx.emit_value(Op::Borrow, vec![receiver.value.value], None, ty.clone(),
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
     ctx.store_local(&temp, borrowed, ty, Some(span));
-    let target = Expr::new(ExprKind::PropertyAccess {
+    let cached_root = Expr::new(ExprKind::PropertyAccess {
         object: Box::new(Expr::new(ExprKind::Variable(temp.clone()), object.span)),
         property: property.clone(),
-    }, left.span);
+    }, root.span);
+    let target = replace_compound_property_root(target, cached_root);
     let value = Expr::new(ExprKind::BinaryOp {
         left: Box::new(target.clone()), op: op.clone(), right: right.clone(),
     }, value.span);
     crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(StmtKind::Assign { name: name.clone(), value }, stmt.span));
     Some(StaticCompoundReceiver { target, receiver, temp })
+}
+
+/// Replaces only the guarded property root, preserving every stabilized array dimension.
+fn replace_compound_property_root(target: &Expr, root: Expr) -> Expr {
+    if let ExprKind::ArrayAccess { array, index } = &target.kind {
+        Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(replace_compound_property_root(array, root)), index: index.clone(),
+        }, target.span)
+    } else { root }
 }

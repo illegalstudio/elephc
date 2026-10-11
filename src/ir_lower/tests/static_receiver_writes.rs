@@ -44,6 +44,14 @@ function writeHook(Hook $box): void { C::$o->v = $box->value; }
 function writeHookIndexed(Hook $box): void { C::$o->items[0] = $box->value; }
 function writeHookDynamic(Hook $box, string $name): void { C::$o->$name = $box->value; }
 function writeHookResult(Hook $box): int { return C::$o->items[computedKey()] = $box->value; }
+function writeHookArrayCompound(Hook $box): void { C::$o->items[0] += $box->value; }
+function writeHookChildCompound(Hook $box): void { R::$root->child->items[0] += $box->value; }
+function writeHookNestedCompound(Hook $box): void { C::$o->nested[0][0] += $box->value; }
+function writeStaticHookResult(Hook $box): int { return StaticBuckets::$items[0] = $box->value; }
+function writeNullChainArray(): void { R::$nullable->child->items[0] = (print 'rhs'); }
+function writeNullChainAppend(): void { R::$nullable->child->items[] = (print 'rhs'); }
+function writeNullChainDynamic(string $name): void { R::$nullable->child->$name = (print 'rhs'); }
+function writeNullArrayCompound(): void { C::$nullable->items[0] += (print 'rhs'); }
 interface Store { public function get(): string; }
 interface Named { public function name(): string; }
 class Both implements Store, Named {
@@ -107,7 +115,8 @@ C::$nullable->items[] = 3;
             assert!(guard < read, "{target}: null is rejected before the compound property read");
         }
     }
-    for name in ["writeHook", "writeHookIndexed", "writeHookDynamic", "writeHookResult"] {
+    for name in ["writeHook", "writeHookIndexed", "writeHookDynamic", "writeHookResult",
+        "writeHookArrayCompound", "writeHookChildCompound", "writeHookNestedCompound", "writeStaticHookResult"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let calls: Vec<_> = function.instructions.iter().enumerate()
             .filter(|(_, inst)| inst.op == crate::ir::Op::MethodCall).collect();
@@ -119,6 +128,13 @@ C::$nullable->items[] = 3;
             let key = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
             assert!(key < calls[0].0, "{target}: computed dimensions precede the RHS hook");
         }
+    }
+    for name in ["writeNullChainArray", "writeNullChainAppend", "writeNullChainDynamic", "writeNullArrayCompound"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let rhs = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PrintValue).unwrap();
+        let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
+        let read = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PropGet).unwrap();
+        assert!(rhs < guard && guard < read, "{target}: {name} rejects null before reading its first missing property");
     }
     for name in ["writeComputedNested", "writeComputedLeaf", "writeComputedCompound", "writeNullChain"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();

@@ -430,14 +430,22 @@ pub(super) fn lower_dynamic_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    let object = lower_expr(ctx, object);
-    let mut receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-    let property = lower_expr(ctx, property);
-    let property = crate::ir_lower::expr::property_access::coerce_runtime_property_name(
-        ctx, property, span,
-    );
-    let value = lower_expr(ctx, value);
-    let value = ctx.borrow_write_operand_if_needed(value, span);
+    let (mut receiver, property, value) = if is_static_property_write_chain(object) {
+        let property = lower_expr(ctx, property);
+        let property = property_access::coerce_runtime_property_name(ctx, property, span);
+        let value = lower_expr(ctx, value);
+        let value = ctx.borrow_write_operand_if_needed(value, span);
+        let receiver = lower_static_property_write_chain_with_operands(
+            ctx, object, &[property.value, value.value], span);
+        (receiver, property, value)
+    } else {
+        let object = lower_expr(ctx, object);
+        let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        let property = lower_expr(ctx, property);
+        let property = property_access::coerce_runtime_property_name(ctx, property, span);
+        let value = lower_expr(ctx, value);
+        (receiver, property, ctx.borrow_write_operand_if_needed(value, span))
+    };
     receiver.narrow_for_dynamic_assignment(ctx, property, value, span);
     let object = receiver.value;
     // The NAME is only known at run time, so a statically known receiver can still land this

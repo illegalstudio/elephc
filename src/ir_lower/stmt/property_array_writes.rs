@@ -17,9 +17,15 @@ pub(super) fn lower_property_array_push(
     value: &Expr,
     span: Span,
 ) {
-    let object = lower_expr(ctx, object);
-    let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-    let value = lower_expr(ctx, value);
+    let (mut receiver, value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+        let value = lower_expr(ctx, value);
+        let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, value, span);
+        (receiver, value)
+    } else {
+        let object = lower_expr(ctx, object);
+        let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        (receiver, lower_expr(ctx, value))
+    };
     receiver.narrow_for_array(ctx, property, &[value.value], span);
     lower_property_array_push_value(ctx, receiver.value, property, value, span);
     receiver.finish(ctx, span);
@@ -140,9 +146,17 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
     span: Span,
     key_already_diagnosed: bool,
 ) {
-    let object = lower_expr(ctx, object);
-    let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-    let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+    let (mut receiver, index, value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+        let receiver = crate::ir_lower::expr::lower_static_property_write_chain_with_operands(
+            ctx, object, &[index.value, value.value], span);
+        (receiver, index, value)
+    } else {
+        let object = lower_expr(ctx, object);
+        let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+        (receiver, index, value)
+    };
     receiver.narrow_for_array(ctx, property, &[index.value, value.value], span);
     lower_property_array_assign_value(ctx, receiver.value, property, index, value, span, key_already_diagnosed);
     receiver.finish(ctx, span);

@@ -210,6 +210,7 @@ pub(crate) use property_access::{
 };
 pub(crate) use property_fetch_for_write::{
     is_static_property_write_chain, lower_static_property_write_chain,
+    lower_static_property_write_chain_with_operands,
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
     lower_nested_assignment_property_source,
 };

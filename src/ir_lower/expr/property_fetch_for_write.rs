@@ -34,13 +34,20 @@ pub(crate) fn is_static_property_write_chain(expr: &Expr) -> bool {
 pub(crate) fn lower_static_property_write_chain(
     ctx: &mut LoweringContext<'_, '_>, expr: &Expr, rhs: LoweredValue, span: Span,
 ) -> crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver {
+    lower_static_property_write_chain_with_operands(ctx, expr, &[rhs.value], span)
+}
+
+/// Keeps already evaluated names, keys and values unwind-visible at every chain guard.
+pub(crate) fn lower_static_property_write_chain_with_operands(
+    ctx: &mut LoweringContext<'_, '_>, expr: &Expr, operands: &[ValueId], span: Span,
+) -> crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver {
     use crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver;
     let ExprKind::PropertyAccess { object, property } = &expr.kind else {
         let value = lower_expr(ctx, expr);
         return PropertyWriteReceiver::new(ctx, value, span);
     };
-    let mut parent = lower_static_property_write_chain(ctx, object, rhs, span);
-    parent.narrow_for_array(ctx, property, &[rhs.value], span);
+    let mut parent = lower_static_property_write_chain_with_operands(ctx, object, operands, span);
+    parent.narrow_for_array(ctx, property, operands, span);
     // The parent lease owns cleanup. Pass a borrowed view to the ordinary getter so it
     // cannot retire that same owner a second time, including when a hook performs the read.
     let ty = ctx.builder.value_php_type(parent.value.value);

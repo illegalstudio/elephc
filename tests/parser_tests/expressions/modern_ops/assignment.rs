@@ -9,6 +9,30 @@
 
 use super::*;
 
+/// Static-rooted compound array targets capture a replayable RHS before reading any dimension.
+#[test]
+fn test_static_array_compound_assignment_captures_rhs_first() {
+    for target in ["C::$o->items[0]", "C::$o->child->items[0]", "C::$o->items[0][0]", "C::$items[0]"] {
+        let stmts = parse_source(&format!("<?php echo ({target} += $rhs);"));
+        let StmtKind::Echo(expr) = &stmts[0].kind else { panic!("expected echo"); };
+        let ExprKind::Assignment { prelude, .. } = &expr.kind else { panic!("expected assignment"); };
+        assert_eq!(prelude.len(), 2, "{target}");
+        assert!(matches!(&prelude[0].kind,
+            StmtKind::Assign { value: Expr { kind: ExprKind::Variable(name), .. }, .. } if name == "rhs"), "{target}");
+    }
+}
+
+/// Static array assignment expressions capture their RHS once for the write and result.
+#[test]
+fn test_static_array_assignment_result_captures_replayable_hook() {
+    let stmts = parse_source("<?php echo (C::$items[0] = $hook->value);");
+    let StmtKind::Echo(expr) = &stmts[0].kind else { panic!("expected echo"); };
+    let ExprKind::Assignment { value, result_target, prelude, .. } = &expr.kind else { panic!("expected assignment"); };
+    assert_eq!(prelude.len(), 1);
+    assert!(matches!(value.kind, ExprKind::Variable(_)));
+    assert_eq!(result_target.as_deref(), Some(value.as_ref()));
+}
+
 /// Static property chains capture even a replayable compound RHS before traversing the receiver.
 #[test]
 fn test_static_chain_compound_assignment_captures_rhs_first() {

@@ -10,6 +10,84 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Compound array reads follow a replayable RHS hook for direct, child and nested dimensions.
+#[test]
+fn test_static_receiver_fourth_review_compound_hook_arrays() {
+    verify(r#"<?php
+class O { public array $items = [1]; public array $nested = [[1]]; }
+class Root { public O $child; public function __construct() { $this->child = new O(); } }
+class C { public static O $o; public static Root $root; }
+class Hook {
+    public int $flat { get { echo 'H'; C::$o->items = [7]; return 9; } }
+    public int $child { get { echo 'H'; C::$root->child->items = [7]; return 9; } }
+    public int $nested { get { echo 'H'; C::$o->nested = [[7]]; return 9; } }
+}
+C::$o = new O(); C::$root = new Root(); $hook = new Hook();
+C::$o->items[0] += $hook->flat; echo json_encode(C::$o->items), '|';
+C::$root->child->items[0] += $hook->child; echo json_encode(C::$root->child->items), '|';
+C::$o->nested[0][0] += $hook->nested; echo json_encode(C::$o->nested);
+"#, "H[16]|H[16]|H[[16]]");
+}
+
+/// Static array assignment results reuse the captured hook once, after computed dimensions.
+#[test]
+fn test_static_receiver_fourth_review_static_array_hook_result() {
+    verify(r#"<?php
+class C { public static array $items = [1]; public static array $nested = [[1]]; }
+class Hook {
+    public int $flat { get { echo 'H'; C::$items = [7]; return 9; } }
+    public int $nested { get { echo 'H'; C::$nested = [[7]]; return 9; } }
+}
+function hookIndex(): int { echo 'K'; return 0; }
+$hook = new Hook();
+$result = (C::$items[0] = $hook->flat); echo ':', json_encode(C::$items), ':', $result, '|';
+$result = (C::$items[hookIndex()] = $hook->flat); echo ':', json_encode(C::$items), ':', $result, '|';
+$result = (C::$nested[0][0] = $hook->nested); echo ':', json_encode(C::$nested), ':', $result;
+"#, "H:[9]:9|KH:[9]:9|H:[[9]]:9");
+}
+
+/// Array and runtime-name writes diagnose the first missing chain property without read warnings.
+#[test]
+fn test_static_receiver_fourth_review_null_chain_writes() {
+    verify(r#"<?php
+class Leaf { public array $items = []; public int $v = 0; }
+class O { public Leaf $child; }
+class C { public static ?O $o = null; }
+$name = 'v';
+try { C::$o->child->items[0] = (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { C::$o->child->items[] = (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { C::$o->child->$name = (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(); }
+"#, "rhs:Attempt to modify property \"child\" on null|rhs:Attempt to modify property \"child\" on null|rhs:Attempt to modify property \"child\" on null");
+}
+
+/// Compound array updates run the RHS before refusing the missing write-context parent.
+#[test]
+fn test_static_receiver_fourth_review_null_compound_arrays() {
+    verify(r#"<?php
+class Leaf { public array $items = []; }
+class O { public Leaf $child; public array $items = []; }
+class C { public static ?O $o = null; }
+try { C::$o->items[0] += (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { C::$o->child->items[0] += (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { C::$o->items[0][0] += (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(); }
+"#, "rhs:Attempt to modify property \"items\" on null|rhs:Attempt to modify property \"child\" on null|rhs:Attempt to modify property \"items\" on null");
+}
+
+/// Owned keys, dynamic names and values unwind when an intermediate static receiver is null.
+#[test]
+fn test_static_receiver_fourth_review_null_chain_owners() {
+    verify(r#"<?php
+class Leaf { public array $items = []; public string $v = ''; }
+class O { public Leaf $child; }
+class C { public static ?O $o = null; }
+for ($i = 0; $i < 8; $i++) {
+    try { C::$o->child->items[str_repeat('k', 8)] = str_repeat('v', 8); } catch (Error $error) { echo 'a'; }
+    try { C::$o->child->items[] = str_repeat('v', 8); } catch (Error $error) { echo 'b'; }
+    try { C::$o->child->{str_repeat('v', 8)} = str_repeat('v', 8); } catch (Error $error) { echo 'c'; }
+}
+"#, "abcabcabcabcabcabcabcabc");
+}
+
 /// A replayable property hook runs once before fetching the replacement static receiver.
 #[test]
 fn test_static_receiver_third_review_plain_hook_once() {
