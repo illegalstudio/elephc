@@ -104,8 +104,7 @@ fn assert_final_operand_root_spans_call(
 }
 
 /// Merged callable storage is extracted and rooted before positional, named and spread calls.
-#[test]
-fn merged_callable_parameters_have_owned_descriptor_storage_on_all_targets() {
+fn merged_callable_parameters_have_owned_descriptor_storage(target: &str) {
     use crate::ir::{Op, Ownership};
     use crate::types::PhpType;
     let source = r#"<?php
@@ -121,61 +120,74 @@ function invokeMergedCallback(int $choice, string $code): void {
 }
 invokeMergedCallback($argc, "");
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let function = module.functions.iter().find(|f| f.name == "invokeMergedCallback").unwrap();
-        let extractions: Vec<_> = function.instructions.iter().filter(|inst| {
-            inst.op == Op::MixedUnbox && inst.result_php_type == PhpType::Callable
-        }).collect();
-        assert_eq!(extractions.len(), 3, "{target}: every call surface must repair the callable ABI");
-        for extraction in extractions {
-            let value = extraction.result.unwrap();
-            assert_eq!(function.value(value).unwrap().ownership, Ownership::Owned, "{target}");
-            let extraction_index = function.instructions.iter().position(|inst| {
-                inst.result == Some(value)
-            }).unwrap();
-            let call_index = function.instructions.iter().enumerate().skip(extraction_index + 1)
-                .find_map(|(index, inst)| (inst.op == Op::Call).then_some(index))
-                .expect("the extracted descriptor must be followed by its call");
-            let operand = function.instructions[call_index].operands[0];
-            let mut source = operand;
-            loop {
-                let crate::ir::ValueDef::Instruction { inst, .. } =
-                    function.value(source).unwrap().def
-                else {
-                    break;
-                };
-                let producer = function.instruction(inst).unwrap();
-                if !matches!(producer.op, Op::Acquire | Op::Borrow) {
-                    break;
-                }
-                source = producer.operands[0];
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let function = module.functions.iter().find(|f| f.name == "invokeMergedCallback").unwrap();
+    let extractions: Vec<_> = function.instructions.iter().filter(|inst| {
+        inst.op == Op::MixedUnbox && inst.result_php_type == PhpType::Callable
+    }).collect();
+    assert_eq!(extractions.len(), 3, "{target}: every call surface must repair the callable ABI");
+    for extraction in extractions {
+        let value = extraction.result.unwrap();
+        assert_eq!(function.value(value).unwrap().ownership, Ownership::Owned, "{target}");
+        let extraction_index = function.instructions.iter().position(|inst| {
+            inst.result == Some(value)
+        }).unwrap();
+        let call_index = function.instructions.iter().enumerate().skip(extraction_index + 1)
+            .find_map(|(index, inst)| (inst.op == Op::Call).then_some(index))
+            .expect("the extracted descriptor must be followed by its call");
+        let operand = function.instructions[call_index].operands[0];
+        let mut source = operand;
+        loop {
+            let crate::ir::ValueDef::Instruction { inst, .. } =
+                function.value(source).unwrap().def
+            else {
+                break;
+            };
+            let producer = function.instruction(inst).unwrap();
+            if !matches!(producer.op, Op::Acquire | Op::Borrow) {
+                break;
             }
-            assert_eq!(source, value, "{target}: final root must retain the extracted descriptor");
-            assert_final_operand_root_spans_call(
-                function,
-                call_index,
-                operand,
-                target,
-                "extracted callable descriptor",
-            );
-            assert_eq!(
-                function
-                    .instructions
-                    .iter()
-                    .filter(|inst| inst.op == Op::Release && inst.operands == [value])
-                    .count(),
-                1,
-                "{target}: extracted descriptor must transfer exactly once into its final root",
-            );
+            source = producer.operands[0];
         }
-        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert!(asm.contains("__rt_mixed_unbox"), "{target}");
+        assert_eq!(source, value, "{target}: final root must retain the extracted descriptor");
+        assert_final_operand_root_spans_call(
+            function,
+            call_index,
+            operand,
+            target,
+            "extracted callable descriptor",
+        );
+        assert_eq!(
+            function
+                .instructions
+                .iter()
+                .filter(|inst| inst.op == Op::Release && inst.operands == [value])
+                .count(),
+            1,
+            "{target}: extracted descriptor must transfer exactly once into its final root",
+        );
     }
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    assert!(asm.contains("__rt_mixed_unbox"), "{target}");
 }
+
+/// Gives each supported target its own normal CI timeout and failure attribution.
+macro_rules! merged_callable_target_case {
+    ($name:ident, $target:literal) => {
+        /// Verifies merged callable descriptor storage and unwind roots on one target.
+        #[test]
+        fn $name() { merged_callable_parameters_have_owned_descriptor_storage($target); }
+    };
+}
+
+merged_callable_target_case!(merged_callable_parameters_owned_macos_aarch64, "macos-aarch64");
+merged_callable_target_case!(merged_callable_parameters_owned_ios_arm64, "ios-arm64");
+merged_callable_target_case!(merged_callable_parameters_owned_ios_sim_arm64, "ios-sim-arm64");
+merged_callable_target_case!(merged_callable_parameters_owned_linux_aarch64, "linux-aarch64");
+merged_callable_target_case!(merged_callable_parameters_owned_linux_x86_64, "linux-x86_64");
 
 /// Statically resolved CUF, FCC and closure calls protect temporary arguments on every ABI.
 #[test]
