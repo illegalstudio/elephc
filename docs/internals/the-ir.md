@@ -1715,21 +1715,41 @@ instantiated bodies the backend actually emits.
 
 ### Why scalar type arguments do not collapse
 
-`Int`/`Bool`/`Float` type arguments are deliberately NOT collapsed to one shape, unlike
-object names. The backend stores scalars in raw untagged `I64` slots and bakes the
-runtime value tag only when boxing a value into a `Mixed` cell
-(`codegen_support/value_boxing.rs`), reading it from the exact `PhpType`: an int boxes
-with tag 0, a bool with tag 3. The tag is not an EIR immediate, so two bodies differing
-only by the scalar's static type compare equal under a collapsed shape while emitting
-different boxing code — the survivor's tag would be applied to the other instantiation.
+The invariant the merge relies on is: `shape()` may erase exactly the type information
+that **no codegen path observes**, and every erased dimension needs its own guard. For
+objects the guard is `has_nominal_use`; for scalars it is simply that `shape()` never
+collapses them — which is sound, but by construction rather than by proof.
+
+`Int`/`Bool`/`Float` type arguments are therefore kept exact. The backend stores scalars
+in raw untagged `I64` slots and bakes the runtime value tag only when boxing a value
+into a `Mixed` cell (`codegen_support/value_boxing.rs`), reading it from the exact
+`PhpType`: an int boxes with tag 0, a bool with tag 3. The tag is not an EIR immediate,
+so two bodies differing only by the scalar's static type compare equal under a collapsed
+shape while emitting different boxing code — the survivor's tag would be applied to the
+other instantiation.
 
 The distinction is load-bearing PHP semantics, not a lowering artifact: the runtime must
-remember that a stored `false` is a bool. The same exact-type consultation appears in
-truthiness lowering (`conversions.rs`), FFI boundary coercion (`externs.rs`), reference
-arguments, call operands and static property stores. The `id<int>` / `id<bool>` bodies of
-a pass-through identity happen to be byte-identical because they never box, which is
-exactly the condition the EIR cannot check. Collapsing scalars would require a
-body-wide audit of every scalar-consulting lowering, so the merge keeps scalars exact.
+remember that a stored `false` is a bool. Not every exact-type consultation implies
+different machine code — an FFI `(Int, Bool)` pair forwards the payload, and raw int and
+bool call operands materialize identically — but the sites that DO differ are the ones
+the EIR cannot see: boxing tags, truthiness as a cast destination (`conversions.rs`),
+boolean versus integer stringification (`strings.rs`: raw `0` is `""` for `false` and
+`"0"` for integer zero), and the `Mixed`-to-scalar coercion helpers.
+
+Two further constraints close the door on a naive widening:
+
+- **Identical bodies do not imply interchangeable signatures.** A direct call resolves
+  the callee's parameter types at codegen time and picks its coercion from them, so
+  redirecting an `int` instantiation to a `bool` survivor would change the CALLER's
+  coercion even when the callee's instructions happen to match. The object merge is safe
+  precisely because object coercion is class-independent; a scalar merge is not. Concrete
+  PHP signatures must therefore be retained independently of shared machine-code
+  ownership.
+- **The only sound widening is post-lowering identical-body folding**: compare the final
+  instructions, relocation targets and cleanup/unwind obligations — not bytes or
+  normalized assembly text — so the differing boxing tag and the per-function cleanup
+  symbol are both visible. That is the LLVM `MergeFunctions` analogue, and it is the path
+  to take only if a measurement ever shows scalar duplication to be material.
 
 ## Dominance Analysis
 

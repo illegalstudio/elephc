@@ -2626,6 +2626,43 @@ echo get_class($u), "|", get_class($o);
     );
 }
 
+/// A body that BOXES its scalar parameter is NOT merged.
+///
+/// `value_boxing.rs` bakes the runtime value tag from the exact `PhpType` (int 0, bool 3) when a
+/// concrete scalar is stored into a `mixed` slot. The tag is not an EIR immediate, so the two
+/// bodies compare equal under a scalar shape while emitting different boxing code; the merge keeps
+/// scalars exact, which is what this test pins.
+#[test]
+fn test_shape_merge_keeps_boxing_scalar_bodies() {
+    let source = r#"<?php
+class Sink<T> {
+    public function __construct(private mixed $slot = null) {}
+    public function box(T $v): void { $this->slot = $v; }
+}
+class User {}
+class Order {}
+$int = new Sink<int>();
+$int->box(1);
+$bool = new Sink<bool>();
+$bool->box(true);
+echo get_class($int), "|", get_class($bool);
+"#;
+    assert_eq!(compile_and_run(source), "Sink<int>|Sink<bool>");
+
+    let user_asm = compile_cli_to_asm("boxscalar", source);
+    let key = elephc::names::php_symbol_key("box");
+    let int_body = elephc::names::method_symbol("Sink<int>", &key);
+    let bool_body = elephc::names::method_symbol("Sink<bool>", &key);
+    assert!(
+        user_asm.contains(&format!("{int_body}:")),
+        "the int boxing body must stay (the runtime tag is baked from the exact PhpType)"
+    );
+    assert!(
+        user_asm.contains(&format!("{bool_body}:")),
+        "the bool boxing body must stay (the runtime tag is baked from the exact PhpType)"
+    );
+}
+
 /// A dynamic property access on a `mixed` (runtime-typed) receiver dispatches on the runtime class,
 /// so its emitted code is identical across instantiations and the method merges.
 #[test]
