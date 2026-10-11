@@ -2732,6 +2732,50 @@ echo $bool->flag(), $no->flag();
     );
 }
 
+/// A scalar instantiation whose lowered body is identical to its sibling is FOLDED at emission: the
+/// survivor keeps the body and the victim's entry becomes a jump to it. The victim keeps its EIR
+/// function, so a caller still resolves the instantiation's own parameter types and picks its own
+/// coercion — which is what makes the int/bool fold sound where a name redirect would not be.
+#[test]
+fn test_shape_merge_folds_identical_scalar_bodies() {
+    let source = r#"<?php
+function id<T>(T $x): T { return $x; }
+echo id(1), id(true) ? "y" : "n";
+"#;
+    assert_eq!(compile_and_run(source), "1y");
+
+    let user_asm = compile_cli_to_asm("fold", source);
+    let int_entry = elephc::names::function_symbol("id<int>");
+    let bool_entry = elephc::names::function_symbol("id<bool>");
+    // Both entries stay addressable.
+    assert!(user_asm.contains(&format!("{int_entry}:")), "{int_entry}");
+    assert!(user_asm.contains(&format!("{bool_entry}:")), "{bool_entry}");
+    // Exactly one of them is the shared body and the other is a jump to it.
+    let int_is_thunk = body_is_branch_to(&user_asm, &int_entry, &bool_entry);
+    let bool_is_thunk = body_is_branch_to(&user_asm, &bool_entry, &int_entry);
+    assert!(
+        int_is_thunk ^ bool_is_thunk,
+        "one instantiation must be the body and the other a jump (int_thunk={int_is_thunk}, bool_thunk={bool_is_thunk})"
+    );
+}
+
+/// Whether a function's entry body is exactly a branch to `target` (a folded body's thunk).
+fn body_is_branch_to(asm: &str, entry: &str, target: &str) -> bool {
+    let lines: Vec<&str> = asm.lines().collect();
+    let Some(position) = lines
+        .iter()
+        .position(|line| line.trim() == format!("{entry}:"))
+    else {
+        return false;
+    };
+    lines[position + 1..]
+        .iter()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty() && !line.starts_with('.'))
+        .map(|first| first == format!("b {target}") || first == format!("jmp {target}"))
+        .unwrap_or(false)
+}
+
 /// A dynamic property access on a `mixed` (runtime-typed) receiver dispatches on the runtime class,
 /// so its emitted code is identical across instantiations and the method merges.
 #[test]

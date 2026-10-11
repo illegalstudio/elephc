@@ -115,14 +115,27 @@ pub(super) fn emit_module(
             data.add_comm(crate::names::ir_global_symbol(name), sg_size);
         }
     }
+    // A folded candidate keeps its EIR function — so a caller still resolves its parameter types
+    // and picks its own coercion from the original instantiation — but emits a jump to the
+    // survivor's body. The map is computed from the shape-normalized assembly oracle, so only
+    // bodies that lower to the same machine code are folded.
+    let body_aliases = generic_body_aliases(module, regalloc_linear);
     for function in module
         .functions
         .iter()
         .filter(|function| !is_main(function))
     {
+        if let Some(survivor) = body_aliases.get(&function.name) {
+            emit_folded_body(function, survivor, emitter)?;
+            continue;
+        }
         emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)?;
     }
     for method in &module.class_methods {
+        if let Some(survivor) = body_aliases.get(&method.name) {
+            emit_folded_body(method, survivor, emitter)?;
+            continue;
+        }
         emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)?;
     }
     for closure in &module.closures {
@@ -1361,7 +1374,24 @@ fn emit_endfn_marker(emitter: &mut Emitter, name: &str) {
 ///
 /// The result is the measured case for widening the merge — nothing here changes the emitted
 /// program; it is reported under `--report-generics` only.
-pub fn generic_body_sharing_oracle(module: &Module, regalloc_linear: bool) -> String {
+/// One dispatch slot's fold: the surviving candidate and the bodies folded into it.
+pub(crate) struct BodyShareGroup {
+    /// The slot's readable name, for the report.
+    pub slot: String,
+    /// How many candidates the slot carries in total (folded and kept).
+    pub slot_candidates: usize,
+    /// The candidate kept as the shared implementation.
+    pub survivor: String,
+    /// The candidates folded into the survivor, by EIR function name.
+    pub victims: Vec<String>,
+}
+
+/// Groups the module's type-argument candidates whose lowered bodies are byte-identical.
+///
+/// Within a slot the candidates are lowered in isolation and bucketed by their normalized text;
+/// each bucket keeps its first candidate as the survivor and folds the rest into it. A candidate
+/// whose body did not lower is left alone.
+pub(crate) fn foldable_body_groups(module: &Module, regalloc_linear: bool) -> Vec<BodyShareGroup> {
     // (slot, candidate bodies, is_method)
     let mut rows: Vec<(String, Vec<&Function>, bool)> = Vec::new();
     let mut row_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1405,28 +1435,60 @@ pub fn generic_body_sharing_oracle(module: &Module, regalloc_linear: bool) -> St
             }
         }
     }
-    let mut measured: Vec<(String, usize, usize)> = rows
-        .iter()
+    rows.iter()
         .filter(|(_, candidates, _)| candidates.len() >= 2)
-        .map(|(slot, candidates, is_method)| {
-            let lowered: Vec<Option<String>> = candidates
-                .iter()
-                .map(|function| {
+        .filter_map(|(slot, candidates, is_method)| {
+            let mut buckets: Vec<(String, Vec<&Function>)> = Vec::new();
+            for function in candidates {
+                let Some(text) =
                     normalized_candidate_body(module, function, *is_method, regalloc_linear)
+                else {
+                    continue;
+                };
+                match buckets.iter_mut().find(|(existing, _)| *existing == text) {
+                    Some((_, members)) => members.push(function),
+                    None => buckets.push((text, vec![function])),
+                }
+            }
+            if buckets.len() == candidates.len() {
+                return None;
+            }
+            let groups = buckets
+                .into_iter()
+                .filter(|(_, members)| members.len() >= 2)
+                .map(|(_, members)| BodyShareGroup {
+                    slot: slot.clone(),
+                    slot_candidates: candidates.len(),
+                    survivor: members[0].name.clone(),
+                    victims: members[1..].iter().map(|body| body.name.clone()).collect(),
                 })
-                .collect();
-            let emitted = lowered.iter().filter(|entry| entry.is_some()).count();
-            let mut distinct: Vec<&String> = lowered.iter().flatten().collect();
-            distinct.sort();
-            distinct.dedup();
-            (slot.clone(), emitted, distinct.len())
+                .collect::<Vec<_>>();
+            (!groups.is_empty()).then_some(groups)
         })
-        .filter(|(_, emitted, distinct)| *emitted >= 2 && distinct < emitted)
-        .collect();
-    measured.sort_by(|a, b| (b.1 - b.2).cmp(&(a.1 - a.2)).then(a.0.cmp(&b.0)));
-    if measured.is_empty() {
+        .flatten()
+        .collect()
+}
+
+/// The measured fold opportunity, reported under `--report-generics`.
+pub fn generic_body_sharing_oracle(module: &Module, regalloc_linear: bool) -> String {
+    let groups = foldable_body_groups(module, regalloc_linear);
+    if groups.is_empty() {
         return "shape-oracle: no further foldable bodies".to_string();
     }
+    // (slot, candidates, folded bodies) — a slot's distinct bodies are its candidates minus its
+    // folded ones.
+    let mut slots: Vec<(String, usize, usize)> = Vec::new();
+    for group in &groups {
+        match slots.iter_mut().find(|(slot, _, _)| *slot == group.slot) {
+            Some((_, _, folded)) => *folded += group.victims.len(),
+            None => slots.push((group.slot.clone(), group.slot_candidates, group.victims.len())),
+        }
+    }
+    let mut measured: Vec<(String, usize, usize)> = slots
+        .into_iter()
+        .map(|(slot, candidates, folded)| (slot, candidates, candidates - folded))
+        .collect();
+    measured.sort_by(|a, b| (b.1 - b.2).cmp(&(a.1 - a.2)).then(a.0.cmp(&b.0)));
     let total_candidates: usize = measured.iter().map(|(_, candidates, _)| candidates).sum();
     let total_distinct: usize = measured.iter().map(|(_, _, distinct)| distinct).sum();
     let removable = total_candidates - total_distinct;
@@ -1441,6 +1503,62 @@ pub fn generic_body_sharing_oracle(module: &Module, regalloc_linear: bool) -> St
         lines.push(format!("  {slot}: {candidates} instantiations → {distinct} body"));
     }
     lines.join("\n")
+}
+
+/// The folded-candidate map: a victim's EIR function name to its survivor's.
+///
+/// The victim KEEPS its EIR function, so a caller still resolves its parameter types and picks its
+/// own coercion from the original instantiation; only the machine code is shared.
+pub(crate) fn generic_body_aliases(
+    module: &Module,
+    regalloc_linear: bool,
+) -> std::collections::HashMap<String, String> {
+    foldable_body_groups(module, regalloc_linear)
+        .into_iter()
+        .flat_map(|group| {
+            group
+                .victims
+                .into_iter()
+                .map(move |victim| (victim, group.survivor.clone()))
+        })
+        .collect()
+}
+
+/// Emits a folded candidate's entry as a jump to the survivor's body.
+///
+/// The exceptional-cleanup symbol is emitted too, because the unwinder tables reference it by
+/// name; the epilogue is internal to the body this replaces, so it has no external reference.
+pub(super) fn emit_folded_body(
+    function: &Function,
+    survivor: &str,
+    emitter: &mut Emitter,
+) -> Result<()> {
+    let is_static = function.flags.is_static;
+    let entry = entry_symbol_for_name(&function.name, is_static);
+    let survivor_entry = entry_symbol_for_name(survivor, is_static);
+    emitter.raw(&format!(".globl {entry}\n{entry}:\n"));
+    abi::emit_jump(emitter, &survivor_entry);
+    let cleanup = format!("{entry}__cdylib_exception_cleanup");
+    emitter.raw(&format!(
+        ".globl {cleanup}\n{cleanup}:\n"
+    ));
+    abi::emit_jump(emitter, &format!("{survivor_entry}__cdylib_exception_cleanup"));
+    Ok(())
+}
+
+/// Returns the entry symbol of an EIR function name, method or free function.
+fn entry_symbol_for_name(name: &str, is_static: bool) -> String {
+    match name.rsplit_once("::") {
+        Some((class, method)) => {
+            let key = php_symbol_key(method);
+            if is_static {
+                static_method_symbol(class, &key)
+            } else {
+                method_symbol(class, &key)
+            }
+        }
+        None => function_symbol(name),
+    }
 }
 
 /// Lowers one candidate body into an isolated emitter and returns its shape-normalized text.
