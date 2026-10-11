@@ -231,6 +231,9 @@ pub(super) fn emit_packed_field_store(
             abi::emit_push_reg(ctx.emitter, base_reg);
             ctx.load_value_to_reg(value, int_reg)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
+            if slot.php_type == PhpType::False {
+                emit_false_slot_payload_guard(ctx, slot);
+            }
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
         }
         _ => {

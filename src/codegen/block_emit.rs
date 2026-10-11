@@ -73,6 +73,14 @@ pub(super) fn emit_module(
     web_isolation: WebIsolation,
 ) -> Result<SharedCodegenState> {
     let mut shared = SharedCodegenState::default();
+    // Folding compares isolated emissions built with diagnostics off, so it must only run when
+    // the FINAL emission is diagnostics-off too (captured before `instrument` moves into the
+    // shared state below).
+    let diagnostics_off = !counters
+        && instrument == crate::codegen::Instrumentation::Off
+        && !probe
+        && !heap_debug
+        && !gc_stats;
     shared.counters = counters;
     shared.instrument = instrument;
     if probe {
@@ -119,7 +127,17 @@ pub(super) fn emit_module(
     // and picks its own coercion from the original instantiation — but emits a jump to the
     // survivor's body. The map is computed from the shape-normalized assembly oracle, so only
     // bodies that lower to the same machine code are folded.
-    let body_aliases = generic_body_aliases(module, regalloc_linear);
+    //
+    // Diagnostics modes are excluded: counters and instrumentation embed PER-NAME state into the
+    // final emission that the isolated comparison (which runs with diagnostics off) cannot see,
+    // so a folded victim would attribute its calls to the survivor or lose them entirely. Heap
+    // debug, probes and gc stats are gated the same conservative way — folding is a size
+    // optimization, and those modes exist to observe per-body behavior.
+    let body_aliases = if diagnostics_off {
+        generic_body_aliases(module, regalloc_linear)
+    } else {
+        Default::default()
+    };
     for function in module
         .functions
         .iter()
@@ -1549,8 +1567,12 @@ pub(super) fn emit_folded_body(
     let is_static = function.flags.is_static;
     let entry = entry_symbol_for_name(&function.name, is_static);
     let survivor_entry = entry_symbol_for_name(survivor, is_static);
+    // The source map discovers functions through `@fn`/`@endfn` regions; a folded body is a real
+    // function whose range happens to be one jump, so it still needs its record.
+    emit_fn_marker(emitter, &function.name, &entry, false);
     emitter.raw(&format!(".globl {entry}\n{entry}:\n"));
     abi::emit_jump(emitter, &survivor_entry);
+    emit_endfn_marker(emitter, &function.name);
     Ok(())
 }
 
@@ -1620,28 +1642,44 @@ fn normalized_candidate_body(
 /// structurally identical bodies compare byte-equal.
 ///
 /// The candidate's own mangled name reaches the text as its entry, epilogue and exceptional
-/// cleanup symbols, and reaches internal labels as part of their prefix; replacing it with a
-/// placeholder and renaming labels by first appearance leaves only what the body actually does.
+/// cleanup symbols, and reaches internal labels as part of their prefix. The erasure is
+/// operand-aware: a symbol is replaced only where it ENDS at a word boundary, so a sibling
+/// callee whose mangled name merely has the candidate's entry as a prefix (method `foobar`
+/// alongside method `foo`) keeps its own name — a blanket substring replace would fold the two
+/// distinct callees into one and send the folded body to the wrong call target. Each suffix
+/// symbol is erased under its own exact spelling for the same reason. The raw name is what the
+/// source-map `@fn` marker quotes.
+///
+/// The erasure deliberately SKIPS `.ascii` payload lines: a body may embed its own instantiated
+/// name as data, and that data is a real difference between two instantiations — erasing it
+/// would fold bodies whose runtime output differs.
 fn normalize_body_text(text: &str, function: &Function) -> String {
     let self_symbol = crate::names::mangle_fqn(&function.name);
     let entry_symbol = entry_symbol_for_name(&function.name, function.flags.is_static);
+    // Order matters: the longer suffix symbols must be erased before the entry symbol, or the
+    // entry erasure would consume their prefix and leave a mangled remainder behind.
+    let own_symbols = [
+        format!("{entry_symbol}__cdylib_exception_cleanup"),
+        format!("{entry_symbol}_epilogue"),
+        entry_symbol.clone(),
+        self_symbol,
+        function.name.clone(),
+    ];
     // A method's symbols are NOT derived from the mangled full name: `method_symbol(class, key)`
     // mangles the class and the method separately, so the entry symbol has to be erased on its
     // own. Replacing it also erases its epilogue and exceptional-cleanup symbols, which are built
-    // as suffixes of it. The raw name is what the source-map `@fn` marker quotes.
-    //
-    // The erasure deliberately SKIPS `.ascii` payload lines: a body may embed its own instantiated
-    // name as data, and that data is a real difference between two instantiations — erasing it
-    // would fold bodies whose runtime output differs.
+    // as suffixes of it.
     let erased: String = text
         .split_inclusive('\n')
         .map(|line| {
             if line.trim_start().starts_with(".ascii") {
                 return line.to_string();
             }
-            line.replace(&self_symbol, "<SELF>")
-                .replace(&entry_symbol, "<SELF>")
-                .replace(&function.name, "<SELF>")
+            let mut erased_line = line.to_string();
+            for symbol in &own_symbols {
+                erased_line = erase_word_bounded(&erased_line, symbol);
+            }
+            erased_line
         })
         .collect();
     let mut mapping: Vec<(String, String)> = Vec::new();
@@ -1677,6 +1715,34 @@ fn normalize_body_text(text: &str, function: &Function) -> String {
 /// meaning. The Linux assembler spells them `.L_eir_…` where Apple spells them `L_eir_…`.
 fn is_internal_label(token: &str) -> bool {
     token.starts_with("L_") || token.starts_with(".L")
+}
+
+/// Replaces every occurrence of `symbol` whose next character is not part of a mangled symbol
+/// (ASCII letters, digits, underscore). A symbol followed by more symbol characters belongs to a
+/// DIFFERENT name that merely embeds this one, and must keep its identity.
+fn erase_word_bounded(line: &str, symbol: &str) -> String {
+    if symbol.is_empty() {
+        return line.to_string();
+    }
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(start) = rest.find(symbol) {
+        let after = &rest[start + symbol.len()..];
+        let boundary = after
+            .chars()
+            .next()
+            .map(|c| !c.is_ascii_alphanumeric() && c != '_')
+            .unwrap_or(true);
+        out.push_str(&rest[..start]);
+        if boundary {
+            out.push_str("<SELF>");
+        } else {
+            out.push_str(symbol);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Maps an internal label token to its canonical name by order of first appearance.

@@ -3021,3 +3021,135 @@ echo (new Box(new A()))->visible(), "|", (new Box(new B()))->visible();
 "#;
     assert_eq!(compile_and_run(source), "1|1");
 }
+
+/// The body erasure must not swallow a sibling callee whose mangled name merely has the
+/// candidate's entry as a PREFIX: `foobar` embeds `foo`, so a substring replace would normalize
+/// two distinct call operands to the same text and fold both `foo` instantiations into one body
+/// that calls the wrong `foobar` — `Box<bool>::foo` would answer `integer`.
+#[test]
+fn test_fold_keeps_distinct_sibling_callee_symbols() {
+    let source = r#"<?php
+class Box<T> {
+    public static function foo(T $x): string {
+        return self::foobar($x);
+    }
+    public static function foobar(T $x): string {
+        return gettype($x);
+    }
+}
+echo Box<int>::foo(1), "|", Box<bool>::foo(true);
+"#;
+    assert_eq!(
+        compile_cli_file_and_run_with_flags(source, &["--no-ir-opt"]),
+        "integer|boolean"
+    );
+}
+
+/// A `false`-declared property slot only accepts a false payload. `value_php_type()` erases the
+/// marker to `Bool` on the way to the store, so the check lives at the store: a `true` payload
+/// throws php's catchable TypeError with php's own wording instead of being stored.
+#[test]
+fn test_false_property_slot_rejects_a_true_payload() {
+    let source = r#"<?php
+class C {
+    public function __construct(public false $v) {}
+}
+function wrap(mixed $x): C {
+    return new C($x);
+}
+$c = wrap(false);
+var_dump($c->v);
+try {
+    $d = wrap(true);
+    var_dump($d->v);
+} catch (TypeError $e) {
+    echo "TypeError: ", $e->getMessage();
+}
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "bool(false)\nTypeError: Cannot assign true to property C::$v of type false"
+    );
+}
+
+/// Counters embed PER-NAME state the isolated fold comparison cannot see, so a diagnostics build
+/// must keep every body unfolded — otherwise both call sites would attribute to the survivor and
+/// the victim would report nothing.
+#[test]
+fn test_counters_keep_per_instantiation_bodies_and_attribution() {
+    let source = r#"<?php
+function idf<T>(T $x): T { return $x; }
+echo idf(1), idf(true);
+"#;
+    let dir = make_cli_test_dir("elephc_fold_counters");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .arg("--no-ir-opt")
+        .arg("--counters")
+        .arg(&php_path)
+        .output()
+        .expect("run elephc CLI");
+    assert!(
+        compile.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = std::process::Command::new(dir.join("main"))
+        .output()
+        .expect("run the counters binary");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "11");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("idf<int> 1"), "{stderr}");
+    assert!(stderr.contains("idf<bool> 1"), "{stderr}");
+    assert!(
+        !stderr.contains("idf<bool> 2"),
+        "the survivor must not absorb the victim's calls: {stderr}"
+    );
+}
+
+/// The source map discovers functions through `@fn`/`@endfn` regions; a folded body is a real
+/// function whose range is one jump, so both instantiations must stay in the map.
+#[test]
+fn test_source_map_records_folded_entries() {
+    let source = r#"<?php
+function idf<T>(T $x): T { return $x; }
+echo idf(1), idf(true);
+"#;
+    let dir = make_cli_test_dir("elephc_fold_source_map");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-asm")
+        .arg("--source-map")
+        .arg(&php_path)
+        .output()
+        .expect("run elephc CLI");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let map = fs::read_to_string(dir.join("main.map")).expect("source map sidecar");
+    assert!(map.contains("\"idf<int>\""), "{map}");
+    assert!(map.contains("\"idf<bool>\""), "{map}");
+}
+
+/// A doc-comment line may open with an annotation this pass does not READ (`@deprecated`); the
+/// recognized tags after it must still be read, because the line has entered annotation syntax.
+#[test]
+fn test_docblock_unread_leading_annotation_keeps_the_generic_bound() {
+    let error = compile_cli_file_with_flags_expect_failure(
+        r#"<?php
+/** @deprecated @template T of int @param T $v @return T */
+function f($v) { return $v; }
+echo f("bad");
+"#,
+        &[],
+    );
+    assert!(error.contains("does not satisfy its bound"), "{error}");
+}

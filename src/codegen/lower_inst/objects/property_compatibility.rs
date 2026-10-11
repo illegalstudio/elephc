@@ -287,7 +287,11 @@ pub(super) fn can_coerce_tagged_scalar_to_int_property(value_ty: &PhpType, slot_
 /// `False` and `Never` are checker-only markers: `codegen_repr` lowers them to `Bool`/`Void`, the
 /// boxing tag is baked from that same representation, and nothing downstream distinguishes the
 /// marker on a stored payload — so a bool-repr value stores into a bool-repr slot without
-/// conversion (this is the same invariant the scalar shape collapse relies on).
+/// conversion (this is the same invariant the scalar shape collapse relies on). Representation
+/// equality is NOT value compatibility: a slot declared `false` only accepts a false payload, and
+/// because `value_php_type()` erases the marker to `Bool`, the STORE emits the payload check
+/// (`property_stores::emit_false_slot_payload_guard`) — a `true` payload throws php's catchable
+/// `TypeError` there instead of being stored.
 pub(super) fn can_store_bool_repr_into_bool_repr_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     value_ty.codegen_repr() == PhpType::Bool && slot_ty.codegen_repr() == PhpType::Bool
 }

@@ -327,10 +327,16 @@ fn tag_segments(line: &str) -> Vec<&str> {
             starts.push(index);
         }
     }
-    // A line that does not BEGIN with a recognized tag is prose: a description mentioning
-    // `@template T` in passing must not become an annotation. Only once a line has entered
-    // annotation syntax — at its very start — may later tags on that line be split out.
-    if starts.first() != Some(&0) {
+    // A line that does not BEGIN with annotation syntax is prose: a description mentioning
+    // `@template T` in passing must not become an annotation. Annotation syntax is a `@` tag at
+    // the very start — a recognized one, or ANY `@word` (an annotation this pass does not read,
+    // like `@deprecated`, still marks the line as annotation territory for the tags after it).
+    let begins_with_annotation = line.starts_with('@')
+        && line[1..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if starts.first() != Some(&0) && !begins_with_annotation {
         return Vec::new();
     }
     starts
@@ -530,6 +536,25 @@ mod tests {
             "<?php\n/**\n * Demonstrates @template T syntax.\n * @param int $v\n */\nfunction f($v) {}\n",
         );
         assert_eq!(block.type_params.len(), 0, "prose must not become a template");
+    }
+
+    /// A line may open with an annotation this pass does not READ (`@deprecated`); the line has
+    /// still entered annotation syntax, so the recognized tags after it must be read.
+    #[test]
+    fn an_unread_leading_annotation_keeps_the_tags_after_it() {
+        let block = block_of(
+            "<?php\n/** @deprecated @template T of int @param T $v @return T */\nfunction f($v) {}\n",
+        );
+        assert_eq!(block.type_params.len(), 1);
+        assert_eq!(block.type_params[0].name, "T");
+        assert_eq!(
+            block.params.get("v"),
+            Some(&TypeExpr::Named(Name::unqualified("T")))
+        );
+        assert_eq!(
+            block.return_type,
+            Some(TypeExpr::Named(Name::unqualified("T")))
+        );
     }
 
     /// A one-line block may carry several tags; every tag is read, not only the first.
