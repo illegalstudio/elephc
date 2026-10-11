@@ -412,19 +412,25 @@ pub(crate) fn attach_exact_source(graph: &mut crate::call_graph::CallGraph, targ
         return;
     };
     let root_ns = graph.nodes.iter().map(|n| n.inclusive).max().unwrap_or(1).max(1);
-    let measured: HashMap<&str, &crate::call_graph::GraphNode> =
-        graph.nodes.iter().map(|n| (n.name.as_str(), n)).collect();
+    let mut measured: HashMap<std::borrow::Cow<'_, str>, (u128, u128, u64)> = HashMap::new();
+    for node in &graph.nodes {
+        let Some(name) = generic_template_profile_name(&node.name) else { continue; };
+        let totals = measured.entry(name).or_insert((0, 0, 0));
+        totals.0 += u128::from(node.exclusive);
+        totals.1 += u128::from(node.inclusive);
+        totals.2 = totals.2.saturating_add(node.call_count.unwrap_or(0));
+    }
     let funcs: Vec<crate::call_graph::SourceFunc> = php_decl_ranges(&text)
         .into_iter()
         .filter_map(|range| {
-            let node = measured.get(range.name.as_str())?;
+            let &(exclusive, inclusive, calls) = measured.get(range.name.as_str())?;
             Some(crate::call_graph::SourceFunc {
                 name: range.name,
                 start: range.start,
                 end: range.end,
-                self_pct: 100.0 * node.exclusive as f64 / root_ns as f64,
-                incl_pct: 100.0 * node.inclusive as f64 / root_ns as f64,
-                calls: node.call_count.unwrap_or(0),
+                self_pct: 100.0 * exclusive as f64 / root_ns as f64,
+                incl_pct: 100.0 * inclusive as f64 / root_ns as f64,
+                calls,
             })
         })
         .collect();
@@ -570,6 +576,53 @@ pub(crate) fn instrument_table(graph: &crate::call_graph::CallGraph) -> String {
     out
 }
 
+/// Matches source declarations to sampled symbols, which fold only method names.
+pub(crate) fn same_sampled_declaration(source: &str, symbol: &str) -> bool {
+    match (source.rsplit_once("::"), symbol.rsplit_once("::")) {
+        (Some((source_class, source_method)), Some((symbol_class, symbol_method))) => {
+            let Some(symbol_class) = generic_template_segment(symbol_class) else { return false; };
+            let Some(symbol_method) = generic_template_segment(symbol_method) else { return false; };
+            source_class == symbol_class && source_method.eq_ignore_ascii_case(symbol_method)
+        }
+        (None, None) => generic_template_segment(symbol).is_some_and(|name| source == name),
+        _ => false,
+    }
+}
+
+/// Builds exact-profile declaration keys without allocating for plain or free-function names.
+fn generic_template_profile_name(symbol: &str) -> Option<std::borrow::Cow<'_, str>> {
+    let Some((class, method)) = symbol.rsplit_once("::") else {
+        return generic_template_segment(symbol).map(std::borrow::Cow::Borrowed);
+    };
+    let class_template = generic_template_segment(class)?;
+    let method_template = generic_template_segment(method)?;
+    Some(if class == class_template && method == method_template {
+        std::borrow::Cow::Borrowed(symbol)
+    } else { std::borrow::Cow::Owned(format!("{class_template}::{method_template}")) })
+}
+
+/// Removes one nonempty, balanced trailing generic argument list without accepting partial names.
+fn generic_template_segment(symbol: &str) -> Option<&str> {
+    let Some(start) = symbol.find('<') else {
+        return (!symbol.contains('>')).then_some(symbol);
+    };
+    if start == 0 || symbol.get(start + 1..symbol.len().checked_sub(1)?)?.trim().is_empty() {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (index, ch) in symbol[start..].char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 && start + index + 1 != symbol.len() { return None; }
+            }
+            _ => {}
+        }
+    }
+    (depth == 0).then_some(&symbol[..start])
+}
+
 /// Rewrites sample stacks so a PHP frame sampled on a line owned by ANOTHER
 /// function's declaration range grows a virtual `(inlined)` child frame — the
 /// call boundary the inliner erased, recovered from the source span it kept.
@@ -619,7 +672,7 @@ pub(crate) fn inject_inlined_frames(
                 .iter()
                 .find(|range| range.start <= *line && *line <= range.end)
             {
-                if owner.name != own_name {
+                if !same_sampled_declaration(&owner.name, &own_name) {
                     rewritten.push(Frame {
                         symbol: format!("inlined:{}", owner.name),
                         address: None,

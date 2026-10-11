@@ -131,7 +131,9 @@ fn test_integer_range_rewrites_bounded_example() {
     assert!(body.contains("= isub "), "{optimized}");
     assert!(body.contains("= iadd "), "{optimized}");
     assert!(!body.contains("= ichecked_"), "{optimized}");
-    assert!(update.contains("= iadd "), "{optimized}");
+    assert_eq!(body.matches("= iadd ").count(), 3, "counter update joins the two checksum additions: {optimized}");
+    assert!(body.contains("br bb1("), "body returns directly to the header: {optimized}");
+    assert!(update.trim().starts_with("unreachable"), "{optimized}");
     assert!(!update.contains("= ichecked_add_to_int "), "{optimized}");
     assert!(optimized.contains("origin: integer_range"), "{optimized}");
 

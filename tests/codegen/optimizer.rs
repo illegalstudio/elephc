@@ -73,3 +73,6 @@ mod memory_model_propagation;
 mod mem2reg;
 #[path = "optimizer/warning_globals.rs"]
 mod warning_globals;
+
+#[path = "optimizer/loop_optimization.rs"]
+mod loop_optimization;

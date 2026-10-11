@@ -27,6 +27,7 @@ mod intervals_test;
 mod licm_test;
 mod liveness_test;
 mod loops_test;
+mod loop_optimize_test;
 mod mem2reg_test;
 mod peephole_test;
 mod regalloc_edges_test;

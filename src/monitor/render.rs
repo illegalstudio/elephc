@@ -219,6 +219,7 @@ pub(crate) fn decode_field(value: &str) -> String {
 /// placeholder swap stops `_u_` from being read as the separator.
 pub(crate) fn demangle(symbol: &str) -> String {
     let stem = symbol.trim_start_matches('_');
+    let stem = strip_generator_suffix(stem);
     if stem == "main" {
         return "{main}".to_string();
     }
@@ -248,7 +249,7 @@ pub(crate) fn demangle(symbol: &str) -> String {
     symbol.to_string()
 }
 
-/// Demangles the tail of a method symbol to `Class::method` when it is exactly the two
+/// Demangles the suffix-free tail of a method symbol to `Class::method` when it is exactly the two
 /// fragments `names::method_symbol` / `names::static_method_symbol` joined, in either
 /// separator regime; `None` for anything else, such as a suffixed internal label.
 fn demangle_member(tail: &str) -> Option<String> {
@@ -263,49 +264,26 @@ fn demangle_member(tail: &str) -> Option<String> {
     ))
 }
 
-/// Extracts function and method declaration ranges from PHP source with a
-/// brace scanner. Best-effort by design: braces inside strings can skew a
-/// range, which at worst misplaces one virtual frame — never a wrong weight.
-pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
-    let lines: Vec<&str> = source.lines().collect();
-    let mut ranges = Vec::new();
-    let mut classes: Vec<(String, u32)> = Vec::new(); // (name, end line)
-    let mut i = 0usize;
-    while i < lines.len() {
-        let line = lines[i].trim_start();
-        let decl_line = (i + 1) as u32;
-        if let Some(name) = declared_name(line, "class ")
-            .or_else(|| declared_name(line, "interface "))
-            .or_else(|| declared_name(line, "trait "))
-        {
-            let end = brace_span_end(&lines, i);
-            classes.push((name, end));
-            i += 1;
-            continue;
-        }
-        if let Some(name) = declared_name(line, "function ") {
-            let end = brace_span_end(&lines, i);
-            let owner = classes
-                .iter()
-                .rev()
-                .find(|(_, class_end)| decl_line <= *class_end)
-                .map(|(class, _)| class.clone());
-            let display = match owner {
-                Some(class) => format!("{class}::{name}"),
-                None => name,
-            };
-            ranges.push(DeclRange {
-                name: display,
-                start: decl_line,
-                end,
-            });
-            // Skip past the body so nested closures don't shadow the range.
-            i = (end as usize).max(i + 1);
-            continue;
-        }
-        i += 1;
+/// Removes a generator entry suffix only when the complete encoded PHP name fails to decode.
+/// Escaped separators followed by literal `genbody` or `gencb` methods are complete names.
+pub(super) fn strip_generator_suffix(stem: &str) -> &str {
+    if complete_php_symbol(stem) {
+        return stem;
     }
-    ranges
+    stem.strip_suffix("__genbody")
+        .or_else(|| stem.strip_suffix("__gencb"))
+        .filter(|candidate| complete_php_symbol(candidate))
+        .unwrap_or(stem)
+}
+
+/// Recognizes complete function or two-fragment method names without the classifier's fallback.
+fn complete_php_symbol(stem: &str) -> bool {
+    if let Some(name) = stem.strip_prefix("fn_") {
+        return !name.is_empty() && crate::names::demangle_fqn(name).is_some();
+    }
+    stem.strip_prefix("method")
+        .or_else(|| stem.strip_prefix("static"))
+        .is_some_and(|tail| demangle_member(tail).is_some())
 }
 
 /// Resolves sampled addresses to source lines with `atos` against the dSYM.

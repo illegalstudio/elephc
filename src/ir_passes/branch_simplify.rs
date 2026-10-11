@@ -1,7 +1,8 @@
 //! Purpose:
 //! Branch simplification over EIR functions: fold constant-condition `CondBr`
 //! and `Switch` terminators to unconditional `Br`, thread empty forwarding
-//! blocks, and neutralize blocks that become unreachable.
+//! blocks with SSA argument composition, neutralize unreachable blocks, and merge
+//! single-predecessor update blocks within natural loops.
 //!
 //! Called from:
 //! - The fixed-point pass driver in `crate::ir_passes::driver`.
@@ -18,17 +19,17 @@
 //!   handler blocks are reachable through implicit edges not present in the
 //!   terminator graph, so terminator-only reachability could wrongly neutralize
 //!   a live handler.
-//! - Removing edges only enlarges dominator sets, and threaded forwarding blocks
-//!   carry no definitions, so simplification never invalidates a use that was
-//!   valid before.
+//! - Forwarding parameters may be used only by their outgoing branch. Composing
+//!   each incoming edge preserves parallel argument assignment; escaping definitions
+//!   keep their block. Loop merging rewrites parameters before relocating definitions.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{BlockId, DataPool, Function, Immediate, Op, Terminator, ValueId};
 
-use super::cfg::{has_exception_handlers, successors};
+use super::cfg::{has_exception_handlers, successor_edges, successors};
 use super::driver::IrPass;
-use super::rewrite::{defining_instruction, neutralize_to_nop};
+use super::rewrite::{count_value_uses, defining_instruction, neutralize_to_nop};
 
 /// CFG branch simplification pass.
 pub struct BranchSimplify;
@@ -50,6 +51,7 @@ impl IrPass for BranchSimplify {
         changed |= fold_constant_terminators(function);
         changed |= thread_empty_forwarding_blocks(function);
         changed |= neutralize_unreachable_blocks(function);
+        changed |= super::loop_cfg::merge_loop_blocks(function);
         changed
     }
 }
@@ -135,99 +137,48 @@ fn fold_constant_terminators(function: &mut Function) -> bool {
     changed
 }
 
-/// Threads predecessors through empty forwarding blocks.
-///
-/// A forwarding block is a non-entry block with no parameters, no real
-/// instructions (only `nop`s), and an unconditional `Br` to a different block.
-/// Edges targeting such a block are redirected to the end of the forwarding
-/// chain. Because forwarding blocks have no parameters, every edge into them
-/// carries empty arguments, so retargeting needs no argument rewriting. Returns
-/// whether any edge changed.
+/// Threads empty blocks by composing each incoming edge's SSA arguments independently.
+/// Parameters may only be used by the forwarding terminator: escaping definitions
+/// must remain available to their dominated users. Cycles are left unchanged.
 fn thread_empty_forwarding_blocks(function: &mut Function) -> bool {
-    let forwards = forwarding_targets(function);
-    if forwards.is_empty() {
-        return false;
+    let uses = count_value_uses(function);
+    let mut forwards = HashMap::new();
+    for block in &function.blocks {
+        if block.id == function.entry { continue; }
+        let Some(Terminator::Br { target, args }) = &block.terminator else { continue; };
+        if *target == block.id { continue; }
+        if !block.instructions.iter().all(|id| function.instruction(*id).is_some_and(|inst| {
+            inst.op == Op::Nop && inst.result.is_none_or(|value| uses.get(&value).copied().unwrap_or(0) == 0)
+        })) { continue; }
+        if block.params.iter().any(|param| {
+            uses.get(param).copied().unwrap_or(0) != args.iter().filter(|arg| *arg == param).count()
+        }) { continue; }
+        forwards.insert(block.id, (block.params.clone(), *target, args.clone()));
     }
-
     let mut changed = false;
-    for index in 0..function.blocks.len() {
-        let Some(mut term) = function.blocks[index].terminator.clone() else {
-            continue;
-        };
-        let mut edge_changed = false;
-        for target in terminator_targets_mut(&mut term) {
-            let resolved = resolve_forwarding(*target, &forwards);
-            if resolved != *target {
-                *target = resolved;
-                edge_changed = true;
+    for block in &mut function.blocks {
+        let Some(term) = &mut block.terminator else { continue; };
+        for (target, args) in successor_edges(term) {
+            let (mut next, mut values) = (*target, args.clone());
+            let mut seen = HashSet::new();
+            while let Some((params, destination, outgoing)) = forwards.get(&next) {
+                if !seen.insert(next) {
+                    next = *target;
+                    values = args.clone();
+                    break;
+                }
+                let replacements: HashMap<_, _> = params.iter().copied().zip(values).collect();
+                values = outgoing.iter().map(|value| replacements.get(value).copied().unwrap_or(*value)).collect();
+                next = *destination;
             }
-        }
-        if edge_changed {
-            function.blocks[index].terminator = Some(term);
-            changed = true;
+            if next != *target || values != *args {
+                *target = next;
+                *args = values;
+                changed = true;
+            }
         }
     }
     changed
-}
-
-/// Collects each empty forwarding block and the block its `Br` targets.
-fn forwarding_targets(function: &Function) -> HashMap<BlockId, BlockId> {
-    let mut forwards = HashMap::new();
-    for block in &function.blocks {
-        if block.id == function.entry || !block.params.is_empty() {
-            continue;
-        }
-        let all_nop = block
-            .instructions
-            .iter()
-            .all(|inst_id| function.instruction(*inst_id).map(|inst| inst.op == Op::Nop).unwrap_or(true));
-        if !all_nop {
-            continue;
-        }
-        if let Some(Terminator::Br { target, args }) = &block.terminator {
-            if args.is_empty() && *target != block.id {
-                forwards.insert(block.id, *target);
-            }
-        }
-    }
-    forwards
-}
-
-/// Follows a forwarding chain to its final target, stopping on a cycle.
-fn resolve_forwarding(start: BlockId, forwards: &HashMap<BlockId, BlockId>) -> BlockId {
-    let mut current = start;
-    let mut seen: HashSet<BlockId> = HashSet::new();
-    while let Some(&next) = forwards.get(&current) {
-        if !seen.insert(current) {
-            // Cycle of empty blocks: stop where we entered it.
-            return start;
-        }
-        current = next;
-    }
-    current
-}
-
-/// Returns mutable references to every successor block id carried by a
-/// terminator, so callers can retarget edges without rebuilding the terminator.
-fn terminator_targets_mut(term: &mut Terminator) -> Vec<&mut BlockId> {
-    match term {
-        Terminator::Br { target, .. } => vec![target],
-        Terminator::CondBr {
-            then_target,
-            else_target,
-            ..
-        } => vec![then_target, else_target],
-        Terminator::Switch { cases, default, .. } => {
-            let mut targets: Vec<&mut BlockId> = cases.iter_mut().map(|case| &mut case.target).collect();
-            targets.push(default);
-            targets
-        }
-        Terminator::GeneratorSuspend { resume, .. } => vec![resume],
-        Terminator::Return { .. }
-        | Terminator::Throw { .. }
-        | Terminator::Fatal { .. }
-        | Terminator::Unreachable => Vec::new(),
-    }
 }
 
 /// Neutralizes every block unreachable from the entry: its terminator becomes

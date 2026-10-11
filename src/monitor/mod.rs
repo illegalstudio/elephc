@@ -63,6 +63,8 @@ pub(crate) use sampled::*;
 mod exact;
 pub(crate) use exact::*;
 mod render;
+mod decl_ranges;
+pub(crate) use decl_ranges::php_decl_ranges;
 pub(crate) use render::*;
 mod exports;
 pub(crate) use exports::*;
@@ -768,6 +770,7 @@ pub(crate) fn is_php_symbol(symbol: &str) -> bool {
 /// prefix; storage adds an owner and member. Escaped method names instead start
 /// with `static___`, as emitted by `names::static_method_symbol`.
 fn is_static_method_symbol(stem: &str) -> bool {
+    let stem = render::strip_generator_suffix(stem);
     let Some(rest) = stem.strip_prefix("static_") else { return false };
     match rest.strip_prefix("prop_").or_else(|| rest.strip_prefix("local_")) {
         Some(method) => !method.is_empty() && !method.contains('_'),
@@ -820,49 +823,6 @@ pub(crate) struct DeclRange {
     name: String,
     start: u32,
     end: u32,
-}
-
-/// Returns the identifier following `keyword` on the line, tolerating leading
-/// modifiers (`public function step`, `final class Engine`). The keyword must
-/// sit at a word boundary; anonymous closures yield no name and are skipped.
-pub(crate) fn declared_name(line: &str, keyword: &str) -> Option<String> {
-    let index = line.find(keyword)?;
-    if index > 0
-        && !line[..index]
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_ascii_whitespace())
-    {
-        return None;
-    }
-    let rest = line[index + keyword.len()..].trim_start_matches(['&', ' ']);
-    let name: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-        .collect();
-    (!name.is_empty()).then_some(name)
-}
-
-/// Returns the 1-based line where the brace block opened at/after `start` closes.
-pub(crate) fn brace_span_end(lines: &[&str], start: usize) -> u32 {
-    let mut depth = 0i32;
-    let mut opened = false;
-    for (index, line) in lines.iter().enumerate().skip(start) {
-        for byte in line.bytes() {
-            match byte {
-                b'{' => {
-                    depth += 1;
-                    opened = true;
-                }
-                b'}' => depth -= 1,
-                _ => {}
-            }
-        }
-        if opened && depth <= 0 {
-            return (index + 1) as u32;
-        }
-    }
-    lines.len() as u32
 }
 
 /// Per-line self cost, recovered from the sampled addresses via the dSYM.

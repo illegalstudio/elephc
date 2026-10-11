@@ -68,6 +68,7 @@ pub enum PassOrigin {
     ConstFold,
     IntegerRange,
     Licm,
+    LoopOptimize,
 }
 
 impl PassOrigin {
@@ -77,6 +78,7 @@ impl PassOrigin {
             PassOrigin::ConstFold => "const_fold",
             PassOrigin::IntegerRange => "integer_range",
             PassOrigin::Licm => "licm",
+            PassOrigin::LoopOptimize => "loop_optimize",
         }
     }
 }

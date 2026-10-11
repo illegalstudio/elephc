@@ -3,7 +3,7 @@
 //! budget assertions, and the stitching.
 //!
 //! Called from:
-//! - `cargo test -p elephc --lib`, through `mod tests` in `monitor/mod.rs`.
+//! - `cargo test -p elephc --bin elephc monitor::tests`, through `mod tests` in `monitor/mod.rs`.
 //!
 //! Key details:
 //! - Fixtures are canned captures with known numbers, so assertions are literal
@@ -1233,6 +1233,52 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
         assert_eq!(demangle("_rt_heap_alloc"), "_rt_heap_alloc");
     }
 
+    /// Generator labels decode their PHP owner without confusing user underscores with suffixes.
+    #[test]
+    fn demangles_generator_entry_symbols() {
+        use elephc::names::{function_symbol, method_symbol, static_method_symbol};
+        for suffix in ["__genbody", "__gencb"] {
+            for (class, method) in [
+                ("App\\Foo", "gen"), ("My_Class", "hot_gen"), ("Engine", "gen"),
+                ("prop", "gen"), ("local", "gen"),
+            ] {
+                assert_eq!(demangle(&format!("{}{suffix}", method_symbol(class, method))), format!("{class}::{method}"));
+                let static_symbol = format!("{}{suffix}", static_method_symbol(class, method));
+                assert_eq!(demangle(&static_symbol), format!("{class}::{method}"));
+                assert!(is_php_symbol(&static_symbol), "{static_symbol}");
+            }
+            for name in ["App\\hot_gen", "hot_gen", "gen"] {
+                assert_eq!(demangle(&format!("{}{suffix}", function_symbol(name))), name);
+            }
+        }
+        for name in ["gen__genbody", "gen__gencb"] {
+            assert_eq!(demangle(&function_symbol(name)), name);
+            assert_eq!(demangle(&method_symbol("App\\Foo", name)), format!("App\\Foo::{name}"));
+        }
+        assert_eq!(demangle("_rt_helper__genbody"), "_rt_helper__genbody");
+        assert!(!is_php_symbol("_static_prop_Owner_field__genbody"));
+    }
+
+    /// Escaped method separators must not turn literal method names into generator suffixes.
+    #[test]
+    fn monitor_review_preserves_generator_named_methods() {
+        use elephc::names::{method_symbol, static_method_symbol};
+        for class in ["App\\Foo", "My_Class", "Engine", "prop", "local"] {
+            for method in ["genbody", "gencb"] {
+                for symbol in [method_symbol(class, method), static_method_symbol(class, method)] {
+                    let expected = format!("{class}::{method}");
+                    assert_eq!(demangle(&symbol), expected, "{symbol}");
+                    assert!(is_php_symbol(&symbol), "{symbol}");
+                    for suffix in ["__genbody", "__gencb"] {
+                        let entry = format!("{symbol}{suffix}");
+                        assert_eq!(demangle(&entry), expected, "{entry}");
+                        assert!(is_php_symbol(&entry), "{entry}");
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     /// Runtime helpers are named as costs; PHP functions are left alone, since
     /// a user function is not a 'cause' of anything.
@@ -1374,6 +1420,307 @@ echo call_hot(1);
         );
     }
 
+    /// Semicolon namespaces qualify both free functions and methods across namespace changes.
+    #[test]
+    fn decl_ranges_qualify_semicolon_namespaces() {
+        let source = "<?php\nnamespace App\\One;\nfunction top() {\n return 1;\n}\nclass Foo {\n public function gen() {\n  yield 1;\n }\n}\nnamespace Other;\nfunction top() {\n return 2;\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\top".into(), start: 3, end: 5 },
+            DeclRange { name: "App\\One\\Foo::gen".into(), start: 7, end: 9 },
+            DeclRange { name: "Other\\top".into(), start: 12, end: 14 },
+        ]);
+    }
+
+    /// Braced namespaces expire at their closing brace and an explicit global block stays global.
+    #[test]
+    fn decl_ranges_qualify_braced_and_global_namespaces() {
+        let source = "<?php\nnamespace App\\Foo {\n class Worker {\n  public function run() {\n   return 1;\n  }\n }\n}\nnamespace {\n function global_run() {\n  return 2;\n }\n}\nnamespace\tNext {\n function run() {\n  return 3;\n }\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\Foo\\Worker::run".into(), start: 4, end: 6 },
+            DeclRange { name: "global_run".into(), start: 10, end: 12 },
+            DeclRange { name: "Next\\run".into(), start: 15, end: 17 },
+        ]);
+    }
+
+    /// Declaration ranges retain source spelling for exact instrumentation names.
+    #[test]
+    fn monitor_followup_method_symbol_case() {
+        let source = "<?php namespace App; function FreeName() {} class Widget { function getName() {} function yieldValues() { yield 1; } }";
+        let names = php_decl_ranges(source).into_iter().map(|range| range.name).collect::<Vec<_>>();
+        assert_eq!(names, ["App\\FreeName", "App\\Widget::getName", "App\\Widget::yieldValues"]);
+        assert!(same_sampled_declaration(&names[1], "App\\Widget::getname"));
+        assert!(same_sampled_declaration(&names[2], "App\\Widget::yieldvalues"));
+        assert!(!same_sampled_declaration(&names[1], "Other\\Widget::getname"));
+        assert!(!same_sampled_declaration(&names[1], "App\\widget::getname"));
+        assert!(!same_sampled_declaration(&names[1], "App\\Widget::other"));
+        assert!(!same_sampled_declaration(&names[0], "App\\freename"));
+    }
+
+    /// Generic function headers preserve qualified ranges that own sampled source lines.
+    #[test]
+    fn monitor_generic_review_free_function_ranges() {
+        let source = "<?php\nnamespace App;\nfunction firstOf<T>(array<T> $items): T {\n return $items[0];\n}\nfunction after() {}";
+        let ranges = php_decl_ranges(source);
+        assert_eq!(ranges, vec![
+            DeclRange { name: "App\\firstOf".into(), start: 3, end: 5 },
+            DeclRange { name: "App\\after".into(), start: 6, end: 6 },
+        ]);
+        let owner = ranges.iter().find(|range| range.start <= 4 && 4 <= range.end)
+            .expect("sampled generic body has a declaration owner");
+        assert_eq!(owner.name, "App\\firstOf");
+    }
+
+    /// Nested generic defaults, by-reference methods and abstract methods retain source spelling.
+    #[test]
+    fn monitor_generic_review_method_ranges() {
+        let source = "<?php\nnamespace App;\nclass Widget<T> {\n function &getName<U = Box<array<int>>>(U $value): U {\n  return $value;\n }\n}\ninterface Mapper { function map<U>(callable $f); }\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\Widget::getName".into(), start: 4, end: 6 },
+            DeclRange { name: "App\\Mapper::map".into(), start: 8, end: 8 },
+        ]);
+    }
+
+    /// An incomplete generic header cannot borrow the next declaration's parameter list.
+    #[test]
+    fn monitor_generic_review_incomplete_header() {
+        let source = "<?php function broken<T; function after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "after".into(), start: 1, end: 1 },
+        ]);
+    }
+
+    /// Balanced instantiation suffixes do not create spurious sampled inline children.
+    #[test]
+    fn monitor_generic_second_review_sampled_names() {
+        for (source, symbol) in [
+            ("App\\firstOf", "App\\firstOf<int>"),
+            ("App\\Widget::getName", "App\\Widget::getname<array<string, Box<int>>>"),
+            ("App\\Widget::run", "App\\Widget<int>::run"),
+            ("App\\Widget::run", "App\\Widget<array<int>>::run<string>"),
+        ] { assert!(same_sampled_declaration(source, symbol), "{source}: {symbol}"); }
+        for symbol in ["App\\firstOf<int", "App\\firstOf<int>tail", "App\\firstOf<>",
+            "App\\firstOf<int>>", "Other\\firstOf<int>", "App\\firstof<int>"] {
+            assert!(!same_sampled_declaration("App\\firstOf", symbol), "{symbol}");
+        }
+        assert!(!same_sampled_declaration("App\\Widget::run", "App\\widget<int>::run"));
+    }
+
+    /// Exact source metrics aggregate all instantiations without folding namespace or method identity.
+    #[test]
+    fn monitor_generic_second_review_exact_source_totals() {
+        use std::io::Write;
+        struct SourceFixture(std::path::PathBuf);
+        impl Drop for SourceFixture {
+            /// Retires this uniquely created fixture on success and assertion failure.
+            fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+        }
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .expect("clock").as_nanos();
+        let path = std::env::temp_dir().join(format!("elephc-monitor-generic-{}-{nonce}.php", std::process::id()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(&path).expect("create fixture");
+        let fixture = SourceFixture(path);
+        file.write_all(b"<?php\nnamespace App;\nfunction firstOf<T>(T $value): T { return $value; }\nclass Widget<T> {\n function getName<U>(U $value): U { return $value; }\n function run() { return 1; }\n}\n").expect("source fixture");
+        drop(file);
+        let mut graph = parse_instrument_dump("elephc-instr: main calls=1 incl_ns=100 excl_ns=0\n\
+elephc-instr: App\\firstOf<int> calls=2 incl_ns=20 excl_ns=10\n\
+elephc-instr: App\\firstOf<string> calls=3 incl_ns=30 excl_ns=15\n\
+elephc-instr: App\\Widget::getName<int> calls=4 incl_ns=10 excl_ns=8\n\
+elephc-instr: App\\Widget<int>::run calls=5 incl_ns=40 excl_ns=30\n\
+elephc-instr: App\\Widget<string>::run calls=6 incl_ns=45 excl_ns=35\n\
+elephc-instr: Other\\firstOf<int> calls=50 incl_ns=10 excl_ns=9\n");
+        attach_exact_source(&mut graph, fixture.0.to_str().expect("source path"));
+        let funcs = &graph.lines.as_ref().expect("source view").funcs;
+        assert_eq!(funcs.len(), 3);
+        assert_eq!((funcs[0].name.as_str(), funcs[0].calls, funcs[0].self_pct, funcs[0].incl_pct),
+            ("App\\firstOf", 5, 25.0, 50.0));
+        assert_eq!((funcs[1].name.as_str(), funcs[1].calls, funcs[1].self_pct),
+            ("App\\Widget::getName", 4, 8.0));
+        assert_eq!((funcs[2].name.as_str(), funcs[2].calls, funcs[2].self_pct, funcs[2].incl_pct),
+            ("App\\Widget::run", 11, 65.0, 85.0));
+    }
+
+    /// Exact captures retain the measured calls and costs of mixed-case methods.
+    #[test]
+    fn monitor_followup_exact_source_method_case() {
+        use std::io::Write;
+        struct SourceFixture(std::path::PathBuf);
+        impl Drop for SourceFixture {
+            /// Removes only this test's source fixture, including on assertion failures.
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "elephc-monitor-exact-method-{}-{nonce}.php", std::process::id()
+        ));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(&path).expect("create source fixture");
+        let fixture = SourceFixture(path);
+        file.write_all(b"<?php\nnamespace App;\nclass Widget {\n function getName() { return 1; }\n}\n")
+            .expect("write source fixture");
+        drop(file);
+        let mut graph = instr_graph();
+        graph.nodes[1].name = "App\\Widget::getName".into();
+        attach_exact_source(&mut graph, fixture.0.to_str().expect("source path"));
+        let lines = graph.lines.as_ref().expect("attached source");
+        assert_eq!(lines.funcs.len(), 1, "measured method disappeared from source view");
+        let method = &lines.funcs[0];
+        assert_eq!((method.name.as_str(), method.start, method.end, method.calls),
+            ("App\\Widget::getName", 4, 4, 1200));
+        assert_eq!(method.self_pct, 99.0);
+        assert_eq!(method.incl_pct, 99.0);
+    }
+
+    /// Nested braced namespaces restore their outer attribution and then the root namespace.
+    #[test]
+    fn monitor_followup_nested_braced_namespace_restoration() {
+        let source = "<?php namespace Root; namespace Outer { function before() {} namespace Inner { function nested() {} } function after() {} } function rootAgain() {}";
+        let names = php_decl_ranges(source).into_iter().map(|range| range.name).collect::<Vec<_>>();
+        assert_eq!(names, ["Outer\\before", "Inner\\nested", "Outer\\after", "Root\\rootAgain"]);
+    }
+
+    /// An inner semicolon namespace ends with its containing braced namespace.
+    #[test]
+    fn monitor_followup_nested_semicolon_namespace_restoration() {
+        let source = "<?php namespace Root; namespace Outer { namespace Inner { namespace Deep; function nested() {} } function after() {} namespace Last; function last() {} } function rootAgain() {}";
+        let names = php_decl_ranges(source).into_iter().map(|range| range.name).collect::<Vec<_>>();
+        assert_eq!(names, ["Deep\\nested", "Outer\\after", "Last\\last", "Root\\rootAgain"]);
+    }
+
+    /// Declarations on the same line keep namespace and class ownership at each token.
+    #[test]
+    fn monitor_review_same_line_namespace_and_class_declarations() {
+        let source = "<?php namespace App\\One; function top() {} class Foo { function gen() { yield 1; } } function after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\top".into(), start: 1, end: 1 },
+            DeclRange { name: "App\\One\\Foo::gen".into(), start: 1, end: 1 },
+            DeclRange { name: "App\\One\\after".into(), start: 1, end: 1 },
+        ]);
+    }
+
+    /// Namespace declaration delimiters can follow their names on another line.
+    #[test]
+    fn monitor_review_multiline_namespace_delimiters() {
+        for delimiter in [";", "{"] {
+            let source = format!("<?php\nnamespace App\\One\n{delimiter}\nfunction inside() {{}}\n{}", if delimiter == "{" { "}" } else { "" });
+            assert_eq!(php_decl_ranges(&source), vec![
+                DeclRange { name: "App\\One\\inside".into(), start: 4, end: 4 },
+            ]);
+        }
+    }
+
+    /// A closing scope takes effect before a later declaration on the same source line.
+    #[test]
+    fn monitor_review_namespace_expires_within_closing_line() {
+        let source = "<?php\nnamespace App {\n function inside() {}\n} function after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\inside".into(), start: 3, end: 3 },
+            DeclRange { name: "after".into(), start: 4, end: 4 },
+        ]);
+    }
+
+    /// Comments and string contents cannot create namespace scopes or declaration braces.
+    #[test]
+    fn monitor_review_namespace_keywords_inside_comments_and_strings() {
+        let source = "<?php\nnamespace App\\One;\n// namespace Other;\n# namespace Another;\n/* namespace Block { */\n/* multi\nnamespace Hidden;\n*/\n$label = 'namespace Literal; } function fake() {}';\nfunction real() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\real".into(), start: 10, end: 10 },
+        ]);
+    }
+
+    /// A semicolon namespace stays active even when its declaration has a trailing comment.
+    #[test]
+    fn monitor_review_semicolon_namespace_comment_keeps_scope() {
+        let source = "<?php\nnamespace App\\One; // primary\nfunction first() {\n return 1;\n}\nfunction second() {\n return 2;\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\first".into(), start: 3, end: 5 },
+            DeclRange { name: "App\\One\\second".into(), start: 6, end: 8 },
+        ]);
+    }
+
+    /// A semicolon inside a trailing comment must not make a braced namespace persistent.
+    #[test]
+    fn monitor_review_braced_namespace_comment_expires_scope() {
+        let source = "<?php\nnamespace App\\Foo { // keep;\n function inside() {\n  return 1;\n }\n}\nnamespace {\n function after() {\n  return 2;\n }\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\Foo\\inside".into(), start: 3, end: 5 },
+            DeclRange { name: "after".into(), start: 8, end: 10 },
+        ]);
+        let without_global_marker = source.replace("namespace {\n", "{\n");
+        assert_eq!(php_decl_ranges(&without_global_marker), php_decl_ranges(source));
+    }
+
+    /// Namespace declarations following the PHP opening tag qualify functions and methods.
+    #[test]
+    fn monitor_review_namespace_after_opening_tag() {
+        let source = "<?php namespace App\\One;\nfunction top() {\n return 1;\n}\nclass Foo {\n public function gen() {\n  yield 1;\n }\n}\n";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\One\\top".into(), start: 2, end: 4 },
+            DeclRange { name: "App\\One\\Foo::gen".into(), start: 6, end: 8 },
+        ]);
+    }
+
+    /// Parameter attributes cannot end a header at a closure default's opening brace.
+    #[test]
+    fn monitor_review_parameter_attribute_with_closure_default() {
+        let source = "<?php\nfunction attributed(#[A([1, 2])] $value = function () { return 1; }) {\n echo $value();\n}\nfunction after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "attributed".into(), start: 2, end: 4 },
+            DeclRange { name: "after".into(), start: 5, end: 5 },
+        ]);
+    }
+
+    /// A match expression inside an attributed parameter remains part of the header.
+    #[test]
+    fn monitor_review_parameter_attribute_with_match_default() {
+        let source = "<?php\nfunction attributed(#[A] $value = match (1) { 1 => 2, default => 3 }) {\n echo $value;\n}\nfunction after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "attributed".into(), start: 2, end: 4 },
+            DeclRange { name: "after".into(), start: 5, end: 5 },
+        ]);
+    }
+
+    /// An attributed anonymous-class default cannot replace its enclosing method's body.
+    #[test]
+    fn monitor_review_parameter_attribute_with_anonymous_class_default() {
+        let source = "<?php\nclass Holder {\n function attributed(#[A] $value = new class { function value() { return 1; } }) {\n  echo $value->value();\n }\n function after() {}\n}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "Holder::attributed".into(), start: 3, end: 5 },
+            DeclRange { name: "Holder::after".into(), start: 6, end: 6 },
+        ]);
+    }
+
+    /// Anonymous classes have no recoverable source name and must not invent virtual frames.
+    #[test]
+    fn monitor_review_anonymous_class_inheritance_is_not_a_name() {
+        let source = "<?php\nnamespace App;\n$first = new class extends Counter { function step() {} };\n$second = new class implements Foo { function step() {} };\n$third = new class(1) extends Counter implements Foo { function step() {} };\nfunction after() {}\nclass Named { function step() {} }";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\after".into(), start: 6, end: 6 },
+            DeclRange { name: "App\\Named::step".into(), start: 7, end: 7 },
+        ]);
+    }
+
+    /// Class-name literals must not cause subsequent declarations to be skipped.
+    #[test]
+    fn monitor_review_class_literal_does_not_hide_next_declaration() {
+        let source = "<?php $name = Counter::class; function after() {}";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "after".into(), start: 1, end: 1 },
+        ]);
+    }
+
+    /// Legal contextual keywords remain declaration names under the shared parser grammar.
+    #[test]
+    fn monitor_review_contextual_keyword_class_name() {
+        let source = "<?php namespace App; class enum { function match() {} }";
+        assert_eq!(php_decl_ranges(source), vec![
+            DeclRange { name: "App\\enum::match".into(), start: 1, end: 1 },
+        ]);
+    }
+
     #[test]
     /// A sample landing on a line owned by another function grows a virtual
     /// frame for it, which is how inlined callees stay visible.
@@ -1404,7 +1751,7 @@ echo call_hot(1);
                         .iter()
                         .find(|range| range.start <= *line && *line <= range.end)
                     {
-                        if owner.name != demangle(&frame.symbol) {
+                        if !same_sampled_declaration(&owner.name, &demangle(&frame.symbol)) {
                             rewritten.push(Frame {
                                 symbol: format!("inlined:{}", owner.name),
                                 address: None,
