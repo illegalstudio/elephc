@@ -217,9 +217,8 @@ echo staticCufOwner($argc), staticFccOwner($argc), staticClosureOwner($argc);
     }
 }
 
-/// Eval-backed class names detach their strings and retire both temporary owners on every target.
-#[test]
-fn eval_class_name_results_release_bridge_cells_and_strings_on_all_targets() {
+/// Checks eval class-name ownership for one independently scheduled target.
+fn assert_eval_class_name_results_release_bridge_cells_and_strings(target: &str) {
     use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
     let source = r#"<?php
 class BridgeNameBase {}
@@ -228,39 +227,54 @@ $source = 'return new BridgeNameChild();' . ' // ' . $argc;
 $object = eval($source);
 echo get_class($object), ":", get_parent_class($object);
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let mut lookups = 0;
-        for function in &module.functions {
-            for call in &function.instructions {
-                if !matches!(call.immediate, Some(Immediate::RuntimeCall(
-                    RuntimeCallTarget::Function(RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)
-                    | RuntimeCallTarget::ProfiledFunction {
-                        target: RuntimeFnId::GetClass | RuntimeFnId::GetParentClass, ..
-                    }
-                ))) { continue; }
-                lookups += 1;
-                assert!(function.instructions.iter().any(|inst| {
-                    inst.op == Op::Release && inst.operands == [call.result.unwrap()]
-                }), "{target}: each native class-name result has a release");
-            }
-        }
-        assert_eq!(lookups, 2, "{target}");
-        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        let calls: Vec<_> = asm.match_indices("__elephc_eval_object_class_name").collect();
-        assert_eq!(calls.len(), 2, "{target}: both Mixed operands must use the eval bridge");
-        for (offset, _) in calls {
-            let path = asm[offset..].split("eval_object_class_non_object").next().unwrap();
-            let persist = path.find("__rt_str_persist").expect("detach bridge string");
-            let release = path.find("__rt_decref_mixed").expect("release bridge result cell");
-            assert!(persist < release, "{target}: keep the copied bytes before releasing the cell");
-            assert!(!path.contains("__rt_mixed_box_bool"), "{target}: class names are not booleans");
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let mut lookups = 0;
+    for function in &module.functions {
+        for call in &function.instructions {
+            if !matches!(call.immediate, Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)
+                | RuntimeCallTarget::ProfiledFunction {
+                    target: RuntimeFnId::GetClass | RuntimeFnId::GetParentClass, ..
+                }
+            ))) { continue; }
+            lookups += 1;
+            assert!(function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands == [call.result.unwrap()]
+            }), "{target}: each native class-name result has a release");
         }
     }
+    assert_eq!(lookups, 2, "{target}");
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let calls: Vec<_> = asm.match_indices("__elephc_eval_object_class_name").collect();
+    assert_eq!(calls.len(), 2, "{target}: both Mixed operands must use the eval bridge");
+    for (offset, _) in calls {
+        let path = asm[offset..].split("eval_object_class_non_object").next().unwrap();
+        let persist = path.find("__rt_str_persist").expect("detach bridge string");
+        let release = path.find("__rt_decref_mixed").expect("release bridge result cell");
+        assert!(persist < release, "{target}: keep the copied bytes before releasing the cell");
+        assert!(!path.contains("__rt_mixed_box_bool"), "{target}: class names are not booleans");
+    }
 }
+
+/// Gives each supported target its own unchanged nextest timeout budget.
+macro_rules! eval_class_name_target_test {
+    ($name:ident, $target:literal) => {
+        /// Eval class names release native strings and boxed bridge results on this target.
+        #[test]
+        fn $name() {
+            assert_eval_class_name_results_release_bridge_cells_and_strings($target);
+        }
+    };
+}
+
+eval_class_name_target_test!(eval_class_name_results_release_macos_aarch64, "macos-aarch64");
+eval_class_name_target_test!(eval_class_name_results_release_ios_arm64, "ios-arm64");
+eval_class_name_target_test!(eval_class_name_results_release_ios_sim_arm64, "ios-sim-arm64");
+eval_class_name_target_test!(eval_class_name_results_release_linux_aarch64, "linux-aarch64");
+eval_class_name_target_test!(eval_class_name_results_release_linux_x86_64, "linux-x86_64");
 
 /// Echo retires widened-slot string copies while concrete parameter reads remain borrowed.
 #[test]
