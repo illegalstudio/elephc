@@ -25,6 +25,8 @@ function promotedStringKey(string $key): void { ++DeclaredMixedUpdate::$items[$k
 function promotedMixedKey(mixed $key): void { ++DeclaredMixedUpdate::$items[$key][0]; }
 function flatStringKey(string $key): void { ++DeclaredMixedUpdate::$items[$key]; }
 function flatMixedKey(mixed $key): void { ++DeclaredMixedUpdate::$items[$key]; }
+function promotedNullableKey(?int $key): void { ++DeclaredMixedUpdate::$items[$key][0]; }
+function flatNullableKey(?int $key): void { ++DeclaredMixedUpdate::$items[$key]; }
 function assocFloatKey(float $key): void { ++DeclaredAssocUpdate::$items[$key][0]; }
 function fail(): int { throw new Error("stop"); }
 function finalKey(): int { echo "key"; return 0; }
@@ -40,6 +42,8 @@ promotedStringKey("k");
 promotedMixedKey("m");
 flatStringKey("s");
 flatMixedKey("t");
+promotedNullableKey(null);
+flatNullableKey(null);
 assocFloatKey(1.5);
 echo ++NestedUpdate::$items[1.5], NestedUpdate::$items[2.5]++;
 echo ++NestedUpdate::$items[0][0]["before"];
@@ -78,14 +82,15 @@ echo json_encode(NestedUpdate::$items);
     let key = scalar.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
     let guard = scalar.instructions.iter().rposition(|inst| inst.op == Op::TypePredicate).unwrap();
     assert!(key < guard, "{target}: final computed key runs before the scalar-parent guard");
-    for name in ["variableStringKey", "promotedStringKey", "promotedMixedKey"] {
+    for name in ["variableStringKey", "promotedStringKey", "promotedMixedKey", "promotedNullableKey"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         assert!(function.instructions.iter().any(|inst| inst.op == Op::ZeroLocalSlot),
             "{target}: {name} retires snapshots without widening string storage");
         assert!(function.instructions.iter().any(|inst| inst.op == Op::HashGetForWrite),
             "{target}: {name} obtains the stored string-key parent instead of index zero");
     }
-    for (name, write) in [("flatStringKey", Op::HashSet), ("flatMixedKey", Op::ArraySetMixedKey)] {
+    for (name, write) in [("flatStringKey", Op::HashSet), ("flatMixedKey", Op::ArraySetMixedKey),
+        ("flatNullableKey", Op::ArraySetMixedKey)] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         assert!(function.instructions.iter().any(|inst| inst.op == Op::LoadStaticPropertyRefCell),
             "{target}: {name} publishes key-dependent container replacements through the static slot");

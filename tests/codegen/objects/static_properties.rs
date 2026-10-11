@@ -9,6 +9,51 @@
 
 use super::*;
 
+/// Nullable integer parents preserve null's empty key and the original COW sibling.
+#[test]
+fn test_static_prefix_fourth_review_nested_nullable_int() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [[5], [7]]; }
+function bump(?int $key): void { ++H::$items[$key][0]; }
+$alias = H::$items;
+set_error_handler(function($level, $message) {
+    if ($level === E_WARNING) { echo 'W:', $message, '|'; }
+    return true;
+});
+bump(1); echo json_encode(H::$items), '|';
+bump(null); bump(null); restore_error_handler();
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[5],[8]]|W:Undefined array key \"\"|W:Undefined array key 0|{\"0\":[5],\"1\":[8],\"\":[2]}|[[5],[7]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nullable integer and boolean flat keys insert an empty key instead of updating zero.
+#[test]
+fn test_static_prefix_fourth_review_flat_nullable_scalars() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H {
+    public static array<mixed> $flat = [5, 7];
+    public static array<mixed> $flags = [5, 7];
+}
+function bump(?int $key): void { ++H::$flat[$key]; }
+function flag(?bool $key): void { ++H::$flags[$key]; }
+$flat = H::$flat; $flags = H::$flags;
+set_error_handler(function($level, $message) {
+    if ($level === E_WARNING) { echo 'W:', $message, '|'; }
+    return true;
+});
+bump(1); echo json_encode(H::$flat), '|';
+bump(null); bump(null); echo json_encode(H::$flat), '|';
+flag(false); flag(null); restore_error_handler();
+echo json_encode(H::$flags), '|', json_encode($flat), '|', json_encode($flags);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[5,8]|W:Undefined array key \"\"|{\"0\":5,\"1\":8,\"\":2}|W:Undefined array key \"\"|{\"0\":6,\"1\":7,\"\":1}|[5,7]|[5,7]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Nested mixed dimensions promote the static root without changing its indexed alias.
 #[test]
 fn test_static_prefix_third_review_nested_mixed() {

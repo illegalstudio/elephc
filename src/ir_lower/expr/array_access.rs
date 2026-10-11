@@ -224,6 +224,11 @@ pub(super) fn lower_array_access_from_value(
     let mut index_value = lower_expr(ctx, index);
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
+            // Nullable scalar keys carry an inline tag. Preserve null as the empty-string
+            // key instead of coercing its payload to integer zero before the runtime lookup.
+            if index_value.ir_type == IrType::TaggedScalar {
+                index_value = ctx.box_value_as_mixed(index_value, PhpType::Mixed, Some(index.span));
+            }
             let index_ty = lowered_index_expr_key_type(ctx, index, index_value.value);
             // A genuinely boxed Mixed key is materialized by array codegen. Do not coerce it
             // here: string keys would become integer zero, while checked integer loop counters

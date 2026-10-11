@@ -495,10 +495,10 @@ fn lower_local_parent_fetch_for_write_inner(
                     );
                     Some(cell)
                 }
-                PhpType::Str | PhpType::Mixed => {
-                    // A string or runtime-boxed key can select a hash key:
+                PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar => {
+                    // A string, boxed key, or nullable scalar can select a hash key:
                     // promote to a Mixed-valued hash, whose key conversion
-                    // preserves both string and numeric runtime keys. The
+                    // preserves string/numeric keys and null's empty-string key. The
                     // promoted hash flows straight into the ensure call and
                     // is stored back exactly once at the end.
                     let array_value = ctx.load_local(name, Some(span));

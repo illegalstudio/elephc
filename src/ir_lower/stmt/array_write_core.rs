@@ -192,6 +192,16 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         lower_string_key_array_promotion(ctx, array, array_value, index_value, value_value, span);
         return;
     }
+    if op == Op::ArraySet && index_value.ir_type == IrType::TaggedScalar {
+        // The mixed-key helper reads a boxed key. Preserve null's tag while
+        // adapting an inline nullable scalar, then retire the unconsumed box.
+        let key = ctx.box_value_as_mixed(index_value, PhpType::Mixed, Some(index.span));
+        lower_mixed_key_array_set(
+            ctx, array, array_value, key, value_value, span, key_already_diagnosed,
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(index.span));
+        return;
+    }
     if op == Op::ArraySet
         && index_is_boxed_mixed_key(index_value.ir_type)
         && !index_is_foreach_int_key(ctx, index)
