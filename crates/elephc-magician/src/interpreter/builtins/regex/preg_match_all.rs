@@ -47,6 +47,10 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all_call(
         let subject = required_evaluated_ref_arg(&bound, 1)?;
         let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
         let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
+            let flags = eval_preg_match_all_flags(flags, values)?;
+            if !eval_preg_match_all_flags_supported(flags) {
+                return values.int(0);
+            }
             return eval_preg_match_all_result(pattern.value, subject.value, values);
         };
         let target = matches
@@ -79,12 +83,16 @@ pub(in crate::interpreter) fn eval_preg_match_all_capture_result(
     flags: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
+    let flags = eval_preg_match_all_flags(flags, values)?;
+    if !eval_preg_match_all_flags_supported(flags) {
+        // Match AOT's fail-closed result for invalid bits or mutually exclusive order modes.
+        return Ok((values.int(0)?, values.array_new(0)?));
+    }
     let regex = eval_preg_regex(pattern, values)?;
     let capture_count = regex.captures_len();
     let subject = values.string_bytes(subject)?;
     let captures: Vec<Captures<'_>> = regex.captures_iter(&subject).collect();
     let count = values.int(i64::try_from(captures.len()).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-    let flags = eval_preg_match_all_flags(flags, values)?;
     let matches = if flags & EVAL_PREG_SET_ORDER != 0 {
         eval_preg_match_all_set_order_array(&subject, &captures, capture_count, flags, values)?
     } else {
@@ -93,7 +101,7 @@ pub(in crate::interpreter) fn eval_preg_match_all_capture_result(
     Ok((count, matches))
 }
 
-/// Returns supported `preg_match_all()` flags.
+/// Reads the flag value before selecting the count-only or capture path.
 pub(in crate::interpreter) fn eval_preg_match_all_flags(
     flags: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
@@ -101,15 +109,18 @@ pub(in crate::interpreter) fn eval_preg_match_all_flags(
     let Some(flags) = flags else {
         return Ok(EVAL_PREG_PATTERN_ORDER);
     };
-    let flags = eval_int_value(flags, values)?;
+    eval_int_value(flags, values)
+}
+
+/// Shares AOT's fail-closed policy across count-only, capture and callable eval paths.
+fn eval_preg_match_all_flags_supported(flags: i64) -> bool {
     let supported = EVAL_PREG_PATTERN_ORDER
         | EVAL_PREG_SET_ORDER
         | EVAL_PREG_OFFSET_CAPTURE
         | EVAL_PREG_UNMATCHED_AS_NULL;
-    if flags & !supported != 0 {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    Ok(flags)
+    flags & !supported == 0
+        && flags & (EVAL_PREG_PATTERN_ORDER | EVAL_PREG_SET_ORDER)
+            != (EVAL_PREG_PATTERN_ORDER | EVAL_PREG_SET_ORDER)
 }
 
 /// Builds PHP's default `preg_match_all()` pattern-order capture matrix.

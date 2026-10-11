@@ -270,7 +270,9 @@ fn lower_planned_builtin_call_args(
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
-    let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
+    let output_locals = prepare_write_only_output_locals(ctx, &canonical, sig, args);
+    let capture_regex_output = (canonical == "preg_match" || canonical == "preg_match_all")
+        && !output_locals.is_empty();
     if matches!(argument_lowering,
         crate::builtins::semantics::BuiltinArgumentLowering::Standard
         | crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
@@ -285,15 +287,16 @@ fn lower_planned_builtin_call_args(
         }
     }
     if !crate::types::call_args::has_named_args(args)
+        && !capture_regex_output
         && !matches!(argument_lowering,
             crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted
             | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues)
     {
         if let Some(sig) = sig {
             if let Some(operands) = lower_positional_spread_args_with_signature(
-                ctx, sig, args, Some(name), false,
+                ctx, sig, args, Some(name), false, None,
             ) {
-                for (name, ty) in pcntl_outputs {
+                for (name, ty) in output_locals {
                     ctx.set_local_logical_type(&name, ty);
                 }
                 return operands;
@@ -332,6 +335,17 @@ fn lower_planned_builtin_call_args(
                 && !args.iter().any(is_spread_arg) =>
         {
             lower_preg_replace_callback_args(ctx, sig, args)
+        }
+        crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex
+            if capture_regex_output =>
+        {
+            // Publish an owner at the output's source-order evaluation point, not
+            // while preparing storage before earlier arguments have run.
+            lower_args_with_signature_options_for_capture(
+                ctx, sig, args, true, false, Some((2, if canonical == "preg_match" {
+                    PhpType::Array(Box::new(PhpType::Str))
+                } else { PhpType::Array(Box::new(PhpType::Mixed)) })),
+            )
         }
         crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex
             if !crate::types::call_args::has_named_args(args)
@@ -387,14 +401,19 @@ fn lower_planned_builtin_call_args(
         }
         _ => lower_args_with_signature(ctx, sig, args),
     };
-    for (name, ty) in pcntl_outputs {
+    for (name, ty) in output_locals {
+        let ty = if capture_regex_output {
+            if ctx.local_type(&name).codegen_repr() == ty.codegen_repr() {
+                ctx.local_type(&name)
+            } else { PhpType::Mixed }
+        } else { ty };
         ctx.set_local_logical_type(&name, ty);
     }
     lowered
 }
 
-/// Widens PCNTL output storage before its write-only by-reference loads are lowered.
-fn prepare_pcntl_output_locals(
+/// Finds regex outputs without changing flow types, and prepares concrete PCNTL writeback slots.
+fn prepare_write_only_output_locals(
     ctx: &mut LoweringContext<'_, '_>,
     canonical: &str,
     sig: Option<&FunctionSig>,
@@ -403,7 +422,7 @@ fn prepare_pcntl_output_locals(
     let mut outputs = Vec::new();
     if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
         for (index, arg) in args.iter().enumerate() {
-            if let Some(output) = prepare_pcntl_output_local(ctx, canonical, index, arg) {
+            if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, arg) {
                 outputs.push(output);
             }
         }
@@ -432,24 +451,47 @@ fn prepare_pcntl_output_locals(
         let crate::types::call_args::PlannedRegularArg::Source { expr, .. } = arg else {
             continue;
         };
-        if let Some(output) = prepare_pcntl_output_local(ctx, canonical, index, expr) {
+        if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, expr) {
             outputs.push(output);
         }
     }
     outputs
 }
 
-/// Widens one direct PCNTL output slot without reinterpreting its pre-call value.
-fn prepare_pcntl_output_local(
+/// Plans an output's frame representation without reinterpreting its pre-call value.
+fn prepare_write_only_output_local(
     ctx: &mut LoweringContext<'_, '_>,
     canonical: &str,
     parameter_index: usize,
     value: &Expr,
 ) -> Option<(String, PhpType)> {
-    let ty = pcntl_output_type(canonical, parameter_index)?;
+    let ty = match (canonical, parameter_index) {
+        ("preg_match", 2) => PhpType::Array(Box::new(PhpType::Str)),
+        ("preg_match_all", 2) => PhpType::Array(Box::new(PhpType::Mixed)),
+        _ => pcntl_output_type(canonical, parameter_index)?,
+    };
     let ExprKind::Variable(name) = &value.kind else {
         return None;
     };
+    if (canonical == "preg_match" || canonical == "preg_match_all")
+        && matches!(ctx.local_kinds.get(name),
+            Some(crate::ir::LocalKind::StaticLocal | crate::ir::LocalKind::GlobalAlias))
+    {
+        // The regex backend diagnoses these unsupported output destinations itself.
+        return None;
+    }
+    if canonical == "preg_match" || canonical == "preg_match_all" {
+        // The shared argument planner promotes this slot when evaluating the
+        // output argument. Earlier arguments must still see its original type.
+        // Frame representation is whole-function metadata, not an evaluation:
+        // expose it now so earlier narrowed loads receive their detached owner.
+        if ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
+            if let Some(slot) = ctx.local_slots.get(name).copied() {
+                ctx.builder.widen_local_storage_type(slot, PhpType::Mixed);
+            }
+        }
+        return Some((name.clone(), ty));
+    }
     if ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
         ctx.set_local_type(name, PhpType::Mixed);
     }
@@ -599,7 +641,8 @@ fn lower_builtin_args_preserving_values(
         .and_then(|contract| contract.params.iter().position(|param| param.by_ref));
     ctx.begin_argument_guard_scope();
     let operands = lower_args_with_signature_options_for_capture(
-        ctx, Some(&storage), args, true, true, capture_output_index,
+        ctx, Some(&storage), args, true, true,
+        capture_output_index.map(|index| (index, PhpType::Mixed)),
     );
     ctx.end_argument_guard_scope();
     operands

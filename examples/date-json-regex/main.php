@@ -69,10 +69,14 @@ if (mb_ereg_match("foo", $handle, "i")) {
     echo "Case-insensitive mb regex prefix\n";
 }
 
-// Count matches
+// Count matches and collect captures
 $text = "The quick brown fox jumps over the lazy dog";
-$words = preg_match_all("/[a-z]+/", $text);
+$words = preg_match_all("/[a-z]+/", $text, $wordMatches);
 echo "Word count: " . $words . "\n";
+echo "First word: " . $wordMatches[0][0] . "\n";
+
+preg_match_all("/[a-z]+/", "ab cd", $offsets, PREG_OFFSET_CAPTURE);
+echo "Second word at: " . $offsets[0][1][1] . "\n";
 
 $unicode = "日本語123";
 if (preg_match("/\p{L}+/u", $unicode)) {

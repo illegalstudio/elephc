@@ -10,6 +10,53 @@
 use super::super::*;
 use super::support::*;
 
+/// Named count-only calls reject conflicting order bits and unsupported flag bits.
+#[test]
+fn execute_program_preg_third_review_omitted_invalid_flags() {
+    let program = parse_fragment(br#"
+foreach ([3, 4, 7, -1] as $flag) { echo preg_match_all('/(a)/', 'aaa', flags: $flag), '|'; }
+return preg_match_all('/(a)/', 'aaa', flags: PREG_OFFSET_CAPTURE);
+"#).expect("parse omitted capture fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute omitted captures");
+    assert_eq!(values.output, "0|0|0|0|");
+    assert_eq!(values.get(result), FakeValue::Int(3));
+}
+
+/// Unsupported flags clear aliased captures instead of aborting the eval program.
+#[test]
+fn execute_program_preg_third_review_extra_flag_bits() {
+    let program = parse_fragment(br#"
+$matches = ['old']; $alias =& $matches;
+foreach ([4, -1, PREG_SET_ORDER | 4] as $flag) {
+    echo preg_match_all('/(a)/', 'aaa', $alias, $flag), ':', count($matches), '|';
+}
+return true;
+"#).expect("parse unsupported flags fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute unsupported flags");
+    assert_eq!(values.output, "0:0|0:0|0:0|");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Global regex iteration retains UTF-8 progress, terminal empty matches and prefix context.
+#[test]
+fn execute_program_preg_review_empty_match_progression() {
+    let program = parse_fragment(r#"
+echo preg_match_all('//u', 'éé', $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE), ':', $matches[2][0][1], '|';
+echo preg_match_all('/^/', ''), '|', preg_match_all('/(?:|a)/', 'a'), '|';
+echo preg_match_all('/(?=b)/', 'ab'), '|', preg_match_all('/a|^b/', 'ab'), '|';
+echo preg_match_all('/a|(?<=a)b/', 'ab');
+return true;"#.as_bytes()).expect("parse global matching fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute global matches");
+    assert_eq!(values.output, "3:4|1|3|1|1|2");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Keeps invalid UTF-8 literal bytes intact through ASCII case conversion and retained function defaults.
 #[test]
 fn string_literal_bytes_survive_case_conversion_and_defaults() {
@@ -309,6 +356,22 @@ return preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);"#,
 
     assert_eq!(values.output, "1:id42:id:42:2:b2:2:");
     assert_eq!(values.get(result), FakeValue::Int(1));
+}
+
+/// Conflicting preg order bits fail closed instead of producing a set-order matrix.
+#[test]
+fn execute_program_preg_oct9_conflicting_order() {
+    let program = parse_fragment(br#"
+$matches = ["old"];
+echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER), ":", count($matches), "|";
+echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_OFFSET_CAPTURE), ":", count($matches), "|";
+return preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+"#).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.output, "0:0|0:0|");
+    assert_eq!(values.get(result), FakeValue::Int(0));
 }
 
 /// Verifies eval HTML entity builtins encode, decode, and dispatch as callables.

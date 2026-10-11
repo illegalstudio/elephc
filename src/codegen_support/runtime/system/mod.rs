@@ -45,6 +45,7 @@ mod pcntl;
 mod pcntl_data;
 mod preg_match;
 mod preg_match_all;
+mod preg_match_all_capture;
 mod preg_replace;
 mod preg_replace_callback;
 mod preg_split;
