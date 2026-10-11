@@ -2703,6 +2703,35 @@ echo get_class($int), "|", get_class($bool);
     );
 }
 
+/// `false` is a marker the backend reads exactly as `bool` (`codegen_repr` maps it and nothing
+/// consults it on its own), so `Box<false>` and `Box<bool>` merge.
+#[test]
+fn test_shape_merge_merges_false_into_bool() {
+    let source = r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function flag(): int { return $this->value ? 1 : 0; }
+}
+class User {}
+class Order {}
+$bool = new Box<bool>(true);
+$no = new Box<false>(false);
+echo $bool->flag(), $no->flag();
+"#;
+    assert_eq!(compile_and_run(source), "10");
+
+    let user_asm = compile_cli_to_asm("falsebool", source);
+    let key = elephc::names::php_symbol_key("flag");
+    let bool_body = elephc::names::method_symbol("Box<bool>", &key);
+    let false_body = elephc::names::method_symbol("Box<false>", &key);
+    let has_bool = user_asm.contains(&format!("{bool_body}:"));
+    let has_false = user_asm.contains(&format!("{false_body}:"));
+    assert!(
+        has_bool ^ has_false,
+        "a false instantiation must merge into its bool sibling (bool={has_bool}, false={has_false})"
+    );
+}
+
 /// A dynamic property access on a `mixed` (runtime-typed) receiver dispatches on the runtime class,
 /// so its emitted code is identical across instantiations and the method merges.
 #[test]

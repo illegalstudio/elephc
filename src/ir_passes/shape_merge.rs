@@ -38,6 +38,11 @@ use crate::types::PhpType;
 fn shape(ty: &PhpType) -> PhpType {
     match ty {
         PhpType::Object(_) => PhpType::Object(String::new()),
+        // `False` and `Never` are return-type markers the backend never consults on their own: it
+        // reads them exactly as `codegen_repr()`'s Bool/Void, so collapsing them is the same
+        // equivalence the backend already applies.
+        PhpType::False => PhpType::Bool,
+        PhpType::Never => PhpType::Void,
         PhpType::Array(inner) => PhpType::Array(Box::new(shape(inner))),
         PhpType::AssocArray { key, value } => PhpType::AssocArray {
             key: Box::new(shape(key)),
@@ -710,5 +715,11 @@ mod tests {
         );
         // A scalar keeps its identity, so `Int` and `Bool` never collapse together.
         assert_ne!(shape(&PhpType::Int), shape(&PhpType::Bool));
+        // `False` and `Never` are return-type markers the backend never consults on their own, so
+        // they collapse onto the type the backend actually reads.
+        assert_eq!(shape(&PhpType::False), PhpType::Bool);
+        assert_eq!(shape(&PhpType::Never), PhpType::Void);
+        // A `Resource` keeps its identity: the conversions read it exactly.
+        assert_ne!(shape(&PhpType::Resource(Some("gd".to_string()))), PhpType::Int);
     }
 }
