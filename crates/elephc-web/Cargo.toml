@@ -2,7 +2,7 @@
 name = "elephc-web"
 version = "0.1.0"
 edition = "2021"
-description = "Prefork HTTP server staticlib for the elephc --web flag (hyper + tokio)."
+description = "Cross-platform HTTP server staticlib for the elephc --web flag (hyper + tokio)."
 license = "MIT"
 publish = false
 
@@ -29,3 +29,9 @@ libc = "0.2"
 flate2 = "1"
 # memchr provides a two-way byte-search primitive for adversarial multipart bodies.
 memchr = "2"
+
+[target.'cfg(windows)'.dependencies]
+# The single-process Windows server installs a Ctrl-C shutdown handler instead
+# of Unix signal handlers, and session files use native whole-file locks.
+ctrlc = "3"
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_IO"] }

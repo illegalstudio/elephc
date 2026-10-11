@@ -18,14 +18,25 @@ function pattern(): string { echo 'P'; return '/(a)/'; }
 function subject(): string { echo 'S'; return 'aaa'; }
 function flags(int $value): int { echo 'F'; return $value; }
 foreach ([3, 4, 7, -1] as $flag) {
-    echo \PrEg_MaTcH_AlL(pattern: pattern(), subject: subject(), flags: flags($flag)), '|';
+    try {
+        echo \PrEg_MaTcH_AlL(pattern: pattern(), subject: subject(), flags: flags($flag));
+    } catch (ValueError $error) {
+        echo $error->getMessage();
+    }
+    echo '|';
 }
-foreach ([0, PREG_PATTERN_ORDER, PREG_SET_ORDER, PREG_OFFSET_CAPTURE, PREG_UNMATCHED_AS_NULL] as $flag) {
+foreach ([0, PREG_PATTERN_ORDER, PREG_SET_ORDER, PREG_OFFSET_CAPTURE, PREG_UNMATCHED_AS_NULL, 1024, PREG_OFFSET_CAPTURE | 1024] as $flag) {
     echo preg_match_all('/(a)/', 'aaa', flags: $flag), '|';
 }
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "PSF0|PSF0|PSF0|PSF0|3|3|3|3|3|");
+    assert_eq!(out.stdout, concat!(
+        "PSFpreg_match_all(): Argument #4 ($flags) must be a PREG_* constant|",
+        "PSFpreg_match_all(): Argument #4 ($flags) must be a PREG_* constant|",
+        "PSFpreg_match_all(): Argument #4 ($flags) must be a PREG_* constant|",
+        "PSFpreg_match_all(): Argument #4 ($flags) must be a PREG_* constant|",
+        "3|3|3|3|3|3|3|",
+    ));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
@@ -33,28 +44,36 @@ foreach ([0, PREG_PATTERN_ORDER, PREG_SET_ORDER, PREG_OFFSET_CAPTURE, PREG_UNMAT
 #[test]
 fn preg_match_all_third_review_eval_omitted_invalid_flags() {
     let out = compile_and_run_with_regex(r#"<?php
-$source = 'foreach ([3, 4, 7, -1] as $flag) { echo preg_match_all("/(a)/", "aaa", flags: $flag), "|"; }
-foreach ([0, PREG_PATTERN_ORDER, PREG_SET_ORDER, PREG_OFFSET_CAPTURE, PREG_UNMATCHED_AS_NULL] as $flag) {
+$source = 'foreach ([3, 4, 7, -1] as $flag) { try { preg_match_all("/(a)/", "aaa", flags: $flag); } catch (ValueError $error) { echo $error->getMessage(), "|"; } }
+foreach ([0, PREG_PATTERN_ORDER, PREG_SET_ORDER, PREG_OFFSET_CAPTURE, PREG_UNMATCHED_AS_NULL, 1024, PREG_OFFSET_CAPTURE | 1024] as $flag) {
     echo preg_match_all("/(a)/", "aaa", flags: $flag), "|";
 }' . ' // ' . $argc;
 eval($source);
 "#);
-    assert_eq!(out, "0|0|0|0|3|3|3|3|3|");
+    assert_eq!(out, concat!(
+        "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant|",
+        "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant|",
+        "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant|",
+        "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant|",
+        "3|3|3|3|3|3|3|",
+    ));
 }
 
-/// Extra bits clear an existing capture destination identically in native and eval calls.
+/// Invalid low-byte order flags throw after clearing native and eval capture destinations.
 #[test]
 fn preg_match_all_third_review_eval_extra_flag_bits() {
     let out = compile_and_run_with_regex(r#"<?php
 $matches = ['old'];
-echo preg_match_all('/(a)/', 'aaa', $matches, PREG_SPLIT_OFFSET_CAPTURE), ':', count($matches), '|';
+try { preg_match_all('/(a)/', 'aaa', $matches, PREG_SPLIT_OFFSET_CAPTURE); }
+catch (ValueError) { echo count($matches), '|'; }
 $source = '$eval_matches = ["old"]; $alias =& $eval_matches;
 foreach ([PREG_SPLIT_OFFSET_CAPTURE, -1, PREG_SET_ORDER | PREG_SPLIT_OFFSET_CAPTURE] as $flag) {
-    echo preg_match_all("/(a)/", "aaa", $alias, $flag), ":", count($eval_matches), "|";
+    try { preg_match_all("/(a)/", "aaa", $alias, $flag); }
+    catch (ValueError) { echo count($eval_matches), "|"; }
 }' . ' // ' . $argc;
 eval($source);
 "#);
-    assert_eq!(out, "0:0|0:0|0:0|0:0|");
+    assert_eq!(out, "0|0|0|0|");
 }
 
 /// A subject aliased with its output is captured as a string before output storage widens.
@@ -165,16 +184,40 @@ echo preg_match(matches: $single, pattern: '/(a)/', subject: 'a'), ':', $single[
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Conflicting order flags fail closed without a capture matrix on both execution routes.
+/// Conflicting dynamic order flags throw identically through native and opaque eval paths.
 #[test]
 fn preg_match_all_oct9_conflicting_eval_order() {
     let out = compile_and_run_with_regex(r#"<?php
-echo preg_match_all('/(a)/', 'a', $native, PREG_PATTERN_ORDER | PREG_SET_ORDER), ':', count($native), '|';
-$source = 'echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER), ":", count($matches);'
+try {
+    preg_match_all('/(a)/', 'a', $native, PREG_PATTERN_ORDER | PREG_SET_ORDER);
+    echo 'missed';
+} catch (ValueError $error) {
+    echo $error->getMessage();
+}
+echo '|';
+$source = 'try { preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER); echo "missed"; }
+catch (ValueError $error) { echo $error->getMessage(); }'
     . ' // ' . $argc;
 eval($source);
 "#);
-    assert_eq!(out, "0:0|0:0");
+    assert_eq!(
+        out,
+        "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant|preg_match_all(): Argument #4 ($flags) must be a PREG_* constant"
+    );
+}
+
+/// SET_ORDER omits only trailing unmatched groups unless null preservation is requested.
+#[test]
+fn preg_match_all_set_order_omits_trailing_unmatched_groups() {
+    let out = compile_and_run(r#"<?php
+preg_match_all('/(a)(b)?/', 'ab a', $plain, PREG_SET_ORDER);
+preg_match_all('/(a)(b)?/', 'ab a', $nulls, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+echo json_encode($plain), '|', json_encode($nulls);
+"#);
+    assert_eq!(
+        out,
+        r#"[["ab","a","b"],["a","a"]]|[["ab","a","b"],["a","a",null]]"#
+    );
 }
 
 /// Keeps the original subject visible for later alternatives in both count and capture modes.

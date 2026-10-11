@@ -35,7 +35,6 @@ pub(super) fn emit_static_method_callback_wrapper_aarch64(
     target: &StaticMethodCallbackTarget,
     visible_arg_types: &[PhpType],
 ) {
-    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, callback_arg_abi_slots(visible_arg_types));
     let frame = callback_wrapper_frame(&target.param_types, visible_arg_types);
     abi::emit_reserve_temporary_stack(ctx.emitter, frame.total_bytes);
     abi::emit_store_to_sp(ctx.emitter, "x30", frame.return_address_offset);
@@ -45,13 +44,18 @@ pub(super) fn emit_static_method_callback_wrapper_aarch64(
             abi::emit_load_int_immediate(ctx.emitter, "x3", class_id as i64);
         }
         StaticCallbackCalledClass::Env => {
-            abi::emit_load_from_address(ctx.emitter, "x3", env_reg, 0);
+            load_callback_environment_to_reg(ctx, visible_arg_types, "x3");
+            abi::emit_load_from_address(ctx.emitter, "x3", "x3", 0);
         }
     }
     save_callback_hidden_arg(ctx, &frame, "x3");
     box_callback_mixed_args(ctx, &frame, &target.param_types, visible_arg_types);
-    load_callback_target_args(ctx, &frame, visible_arg_types);
+    let overflow_bytes = load_callback_target_args(ctx, &frame, visible_arg_types);
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, call_pad_bytes);
     emit_static_callback_dispatch(ctx, target);
+    abi::emit_release_temporary_stack(ctx.emitter, call_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     cleanup_callback_boxed_args(ctx, &frame, &target.return_ty);
     abi::emit_load_temporary_stack_slot(ctx.emitter, "x30", frame.return_address_offset);
     abi::emit_release_temporary_stack(ctx.emitter, frame.total_bytes);
@@ -64,7 +68,6 @@ pub(super) fn emit_static_method_callback_wrapper_x86_64(
     target: &StaticMethodCallbackTarget,
     visible_arg_types: &[PhpType],
 ) {
-    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, callback_arg_abi_slots(visible_arg_types));
     let frame = callback_wrapper_frame(&target.param_types, visible_arg_types);
     ctx.emitter.instruction("push rbp");                                        // preserve the runtime helper frame pointer for the nested static method call
     ctx.emitter.instruction("mov rbp, rsp");                                    // establish a wrapper frame while shifting callback arguments
@@ -75,13 +78,18 @@ pub(super) fn emit_static_method_callback_wrapper_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, "rcx", class_id as i64);
         }
         StaticCallbackCalledClass::Env => {
-            abi::emit_load_from_address(ctx.emitter, "rcx", env_reg, 0);
+            load_callback_environment_to_reg(ctx, visible_arg_types, "rcx");
+            abi::emit_load_from_address(ctx.emitter, "rcx", "rcx", 0);
         }
     }
     save_callback_hidden_arg(ctx, &frame, "rcx");
     box_callback_mixed_args(ctx, &frame, &target.param_types, visible_arg_types);
-    load_callback_target_args(ctx, &frame, visible_arg_types);
+    let overflow_bytes = load_callback_target_args(ctx, &frame, visible_arg_types);
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, call_pad_bytes);
     emit_static_callback_dispatch(ctx, target);
+    abi::emit_release_temporary_stack(ctx.emitter, call_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     cleanup_callback_boxed_args(ctx, &frame, &target.return_ty);
     abi::emit_release_temporary_stack(ctx.emitter, frame.total_bytes);
     ctx.emitter.instruction("pop rbp");                                         // restore the runtime helper frame pointer before returning
@@ -116,16 +124,20 @@ pub(super) fn emit_instance_method_callback_wrapper_aarch64(
     target: &InstanceMethodCallbackTarget,
     visible_arg_types: &[PhpType],
 ) {
-    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, callback_arg_abi_slots(visible_arg_types));
     let frame = callback_wrapper_frame(&target.param_types, visible_arg_types);
     abi::emit_reserve_temporary_stack(ctx.emitter, frame.total_bytes);
     abi::emit_store_to_sp(ctx.emitter, "x30", frame.return_address_offset);
     save_callback_visible_args(ctx, &frame, visible_arg_types);
-    abi::emit_load_from_address(ctx.emitter, "x3", env_reg, 0);
+    load_callback_environment_to_reg(ctx, visible_arg_types, "x3");
+    abi::emit_load_from_address(ctx.emitter, "x3", "x3", 0);
     save_callback_hidden_arg(ctx, &frame, "x3");
     box_callback_mixed_args(ctx, &frame, &target.param_types, visible_arg_types);
-    load_callback_target_args(ctx, &frame, visible_arg_types);
+    let overflow_bytes = load_callback_target_args(ctx, &frame, visible_arg_types);
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, call_pad_bytes);
     abi::emit_call_label(ctx.emitter, &target.entry_label);
+    abi::emit_release_temporary_stack(ctx.emitter, call_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     cleanup_callback_boxed_args(ctx, &frame, &target.return_ty);
     abi::emit_load_temporary_stack_slot(ctx.emitter, "x30", frame.return_address_offset);
     abi::emit_release_temporary_stack(ctx.emitter, frame.total_bytes);
@@ -138,17 +150,21 @@ pub(super) fn emit_instance_method_callback_wrapper_x86_64(
     target: &InstanceMethodCallbackTarget,
     visible_arg_types: &[PhpType],
 ) {
-    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, callback_arg_abi_slots(visible_arg_types));
     let frame = callback_wrapper_frame(&target.param_types, visible_arg_types);
     ctx.emitter.instruction("push rbp");                                        // preserve the runtime helper frame pointer for the nested instance method call
     ctx.emitter.instruction("mov rbp, rsp");                                    // establish a wrapper frame while shifting callback arguments
     abi::emit_reserve_temporary_stack(ctx.emitter, frame.total_bytes);
     save_callback_visible_args(ctx, &frame, visible_arg_types);
-    abi::emit_load_from_address(ctx.emitter, "rcx", env_reg, 0);
+    load_callback_environment_to_reg(ctx, visible_arg_types, "rcx");
+    abi::emit_load_from_address(ctx.emitter, "rcx", "rcx", 0);
     save_callback_hidden_arg(ctx, &frame, "rcx");
     box_callback_mixed_args(ctx, &frame, &target.param_types, visible_arg_types);
-    load_callback_target_args(ctx, &frame, visible_arg_types);
+    let overflow_bytes = load_callback_target_args(ctx, &frame, visible_arg_types);
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, call_pad_bytes);
     abi::emit_call_label(ctx.emitter, &target.entry_label);
+    abi::emit_release_temporary_stack(ctx.emitter, call_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     cleanup_callback_boxed_args(ctx, &frame, &target.return_ty);
     abi::emit_release_temporary_stack(ctx.emitter, frame.total_bytes);
     ctx.emitter.instruction("pop rbp");                                         // restore the runtime helper frame pointer before returning
@@ -269,4 +285,3 @@ pub(super) fn load_static_callback_env_arg(ctx: &mut FunctionContext<'_>, env_re
         abi::emit_temporary_stack_address(ctx.emitter, env_reg, 0);
     }
 }
-

@@ -215,8 +215,8 @@ pub(super) fn lower_trigger_error(
     );
     super::super::callables::emit_invoker_arg_mixed(ctx, &[level, message, file, line])?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let arg0 = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     abi::emit_load_symbol_to_reg(ctx.emitter, arg0, "_php_error_handler_callable", 0);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, 0);
     abi::emit_call_label(ctx.emitter, "__rt_error_handler_invoke");

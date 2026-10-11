@@ -67,7 +67,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label_global("__rt_mbstring_request_reset");
     enter(emitter);
     abi::emit_call_label(emitter, "__rt_mbstring_release_catalog");
-    emitter.bl_c("elephc_mbstring_reset_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_reset_v1", 0);
     leave(emitter);
 }
 

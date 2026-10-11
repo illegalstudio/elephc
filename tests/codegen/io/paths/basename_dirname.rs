@@ -9,6 +9,20 @@
 
 use super::*;
 
+/// Returns the string `dirname()` yields when the parent resolves to the
+/// filesystem root on the target under test.
+///
+/// PHP on Windows rewrites that result to `PHP_WIN32_IOUTIL_DEFAULT_SLASH`, which
+/// win32/ioutil.h defines as `'\\'`, so a rooted path reports a backslash there
+/// no matter which separator the caller wrote.
+fn platform_root_dir() -> &'static str {
+    if target().platform == Platform::Windows {
+        "\\"
+    } else {
+        "/"
+    }
+}
+
 /// Verifies `basename()` extracts the filename from a simple absolute path.
 /// Fixture: `/etc/passwd` → expects `passwd`.
 #[test]
@@ -135,20 +149,25 @@ fn test_dirname_no_separator() {
     assert_eq!(out, ".");
 }
 
-/// Verifies `dirname()` on a direct child of root returns `/`.
-/// Fixture: `/foo` → expects `/`.
+/// Verifies `dirname()` on a direct child of root returns the platform root.
+/// Fixture: `/foo` → expects `/` on POSIX and `\` on Windows.
+///
+/// php-src rewrites the root result to `PHP_WIN32_IOUTIL_DEFAULT_SLASH`
+/// (win32/ioutil.h defines it as `'\\'`), so PHP on Windows normalises the root
+/// to a backslash even when the input used a forward slash.
 #[test]
 fn test_dirname_root_child() {
     let out = compile_and_run(r#"<?php echo dirname("/foo");"#);
-    assert_eq!(out, "/");
+    assert_eq!(out, platform_root_dir());
 }
 
-/// Verifies `dirname()` on root-only path returns `/`.
-/// Fixture: `/` → expects `/`.
+/// Verifies `dirname()` on root-only path returns the platform root.
+/// Fixture: `/` → expects `/` on POSIX and `\` on Windows (see
+/// `test_dirname_root_child` for the php-src reference).
 #[test]
 fn test_dirname_root_only() {
     let out = compile_and_run(r#"<?php echo dirname("/");"#);
-    assert_eq!(out, "/");
+    assert_eq!(out, platform_root_dir());
 }
 
 /// Verifies `dirname()` preserves redundant slashes in the resulting path.
@@ -176,9 +195,10 @@ fn test_dirname_levels() {
 }
 
 /// Verifies `dirname()` with level parameter stops at root (does not go past root).
-/// Fixture: `/usr` with level 3 → expects `/`. Prevents underflow beyond root.
+/// Fixture: `/usr` with level 3 → expects the platform root. Prevents underflow
+/// beyond root.
 #[test]
 fn test_dirname_levels_past_root_stays_root() {
     let out = compile_and_run(r#"<?php echo dirname("/usr", 3);"#);
-    assert_eq!(out, "/");
+    assert_eq!(out, platform_root_dir());
 }

@@ -2,7 +2,7 @@
 title: "imagecharup() - internals"
 description: "Compiler internals for imagecharup(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 463
+  order: 467
 ---
 
 ## `imagecharup()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2947](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2947) (`imagecharup`)
+- **Lowering**: [`src/image_prelude.rs`:3018](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3018) (`imagecharup`)
 - **Function symbol**: `imagecharup()`
 
 

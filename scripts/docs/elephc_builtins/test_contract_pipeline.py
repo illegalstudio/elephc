@@ -52,9 +52,9 @@ class ContractPipelineTests(unittest.TestCase):
                     # Four hash_*, the thirty-four PHP-visible curl_* contracts the
                     # canonical `--features curl` docs configuration publishes (see
                     # extract.run_gen_builtins), the fifty-four xml_* / xmlwriter_*
-                    # functions of the xml prelude, and the 288 functions the other
+                    # functions of the xml prelude, and the 290 functions the other
                     # injected preludes declare.
-                    "prelude": 380,
+                    "prelude": 382,
                     # Calls rewritten from their enclosing lexical function frame.
                     "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.
@@ -142,7 +142,9 @@ class ContractPipelineTests(unittest.TestCase):
     def test_host_only_process_availability_keeps_eval_independent(self) -> None:
         """Label iOS AOT refusal without implying the Magician path is target-gated."""
         rendered = render._availability_section(self.render_by_name["system"])
-        self.assertIn("three executable/release hosts", rendered)
+        self.assertIn("four executable/release hosts", rendered)
+        self.assertIn("Windows x86_64", rendered)
+        self.assertIn("macOS ARM64, Linux ARM64, Linux x86_64", rendered)
         self.assertIn("refused at compile time for iOS library targets", rendered)
         self.assertIn("`eval()` (magician interpreter)**: supported", rendered)
 

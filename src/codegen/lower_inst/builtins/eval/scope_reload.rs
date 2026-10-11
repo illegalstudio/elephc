@@ -180,10 +180,10 @@ pub(super) fn retire_eval_replacement_owner(
     };
     let Some(entry) = entry else { return; };
     if let Some(offset) = pending_throw {
-        let payload = abi::int_arg_reg_name(emitter.target, 1);
+        let payload = abi::runtime_helper_int_arg_reg(emitter, 1);
         abi::emit_reg_move(emitter, payload, abi::int_result_reg(emitter));
-        abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), entry);
-        abi::emit_temporary_stack_address(emitter, abi::int_arg_reg_name(emitter.target, 2), offset);
+        abi::emit_symbol_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), entry);
+        abi::emit_temporary_stack_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 2), offset);
         abi::emit_call_label(emitter, "__rt_cleanup_invoke");
     } else {
         abi::emit_call_label(emitter, entry);
@@ -324,7 +324,14 @@ mod tests {
             PhpType::Array(Box::new(PhpType::Mixed)),
             PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
         ];
-        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+            "windows-x86_64",
+        ] {
             for ty in &cases {
                 let mut emitter = Emitter::new(Target::parse(target).unwrap());
                 replace_owned_eval_global(&mut emitter, "_eval_guarded_reload_global", ty, Some(88));
@@ -332,14 +339,19 @@ mod tests {
                 let publication = asm.rfind("_eval_guarded_reload_global").unwrap();
                 let cleanup = asm.find("__rt_cleanup_invoke").unwrap();
                 assert!(publication < cleanup, "{target}: {ty}: {asm}");
-                let pending: &[&str] = if target == "linux-x86_64" {
-                    &["lea rdx, [rsp + 88]"]
-                } else {
-                    &["mov x2, sp", "add x2, x2, #88"]
+                let pending: &[&str] = match target {
+                    "linux-x86_64" | "windows-x86_64" => &["lea rdx, [rsp + 88]"],
+                    _ => &["mov x2, sp", "add x2, x2, #88"],
                 };
                 for &instruction in pending {
                     assert!(asm.contains(instruction), "{target}: {asm}");
                     assert!(asm.find(instruction).unwrap() < cleanup, "{target}: {asm}");
+                }
+                if target == "windows-x86_64" {
+                    assert!(asm.contains("lea rdi, [rip + "), "{target}: {asm}");
+                    assert!(asm.contains("mov rsi, rax"), "{target}: {asm}");
+                    assert!(!asm.contains("lea rcx, [rip + "), "{target}: {asm}");
+                    assert!(!asm.contains("mov rdx, rax"), "{target}: {asm}");
                 }
                 assert!(!asm.contains("__rt_throw_current"), "{target}: {asm}");
             }

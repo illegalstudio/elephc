@@ -68,6 +68,11 @@ pub enum BuiltinKind {
     DedicatedSyntax,
     /// Function supplied by an injected elephc-PHP prelude.
     PreludeProvided,
+    /// Windows-only function supplied by an injected elephc-PHP prelude.
+    ///
+    /// Keeping the target restriction in the neutral contract lets documentation and
+    /// compatibility tooling distinguish a PHP_WIN32 surface from a missing Linux builtin.
+    WindowsOnlyPreludeProvided,
     /// PHP function the name resolver rewrites into a constructor or method call on a builtin
     /// class before type checking (the `date_*` and `cal_*` procedural families).
     NameResolverRewrite,
@@ -272,6 +277,11 @@ pub struct BuiltinContract {
 }
 
 impl BuiltinContract {
+    /// Returns whether php-src registers this builtin on the selected platform.
+    pub const fn is_php_available_on(&self, target: crate::PhpTarget) -> bool {
+        crate::php_builtin_is_available(self.id, target)
+    }
+
     /// Returns the canonical callable signature stored on this contract.
     pub const fn signature(&self) -> BuiltinSignature {
         BuiltinSignature {

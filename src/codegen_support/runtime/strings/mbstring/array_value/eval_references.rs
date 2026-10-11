@@ -16,8 +16,8 @@ pub(super) fn aarch64(emitter: &mut Emitter, graph: bool) {
     let name = if graph { "__rt_mbstring_graph_value" } else { "__rt_mbstring_array_value" };
     emitter.instruction("ldr x0, [sp, #320]");                                  // recover the optional active eval context
     emitter.instruction(&format!("cbz x0, {name}_eval_no_alias"));              // ordinary native calls read their retained physical array
-    for (offset, symbol) in [(72, "__rt_mbstring_clone"), (80, "__rt_mbstring_release"), (88, "__rt_mbstring_publish_throw")] {
-        abi::emit_symbol_address(emitter, "x9", symbol);
+    for (offset, symbol) in [(72, "__rt_mbstring_cabi_0"), (80, "__rt_mbstring_cabi_5"), (88, "__rt_mbstring_publish_throw")] {
+        abi::emit_symbol_address(emitter, "x9", &emitter.target.extern_symbol(symbol));
         emitter.instruction(&format!("str x9, [sp, #{offset}]"));               // provide one non-unwinding ownership action to the eval adapter
     }
     emitter.instruction("ldr x1, [sp, #328]");                                  // recover the retained/source identity descriptor
@@ -27,7 +27,7 @@ pub(super) fn aarch64(emitter: &mut Emitter, graph: bool) {
     emitter.instruction("ldr x4, [sp, #344]");                                  // recover the caller-owned entry output
     emitter.instruction("add x4, x4, #8");                                      // publish directly into its native owner slot
     if graph { emitter.instruction("add x5, x4, #32"); }                        // publish a separate nested identity owner beside the copied value
-    emitter.bl_c(if graph { "__elephc_eval_array_graph_reference_value" } else { "__elephc_eval_array_reference_value" });
+    emitter.emit_native_bridge_symbol_call(if graph { "__elephc_eval_array_graph_reference_value" } else { "__elephc_eval_array_reference_value" }, if graph { 6 } else { 5 });
     emitter.instruction(&format!("cbnz x0, {name}_eval_failed"));               // inspect failures only after any copied owner was published
     emitter.instruction("ldr x9, [sp, #344]");                                  // recover the copied-entry output
     emitter.instruction("ldr x9, [x9, #8]");                                    // distinguish a resolved reference from an ordinary physical entry
@@ -51,8 +51,8 @@ pub(super) fn x86_64(emitter: &mut Emitter, graph: bool) {
     emitter.instruction("mov rdi, QWORD PTR [rsp + 320]");                      // recover the optional active eval context
     emitter.instruction("test rdi, rdi");                                       // context-free native calls have no eval reference side table
     emitter.instruction(&format!("jz {name}_eval_no_alias"));                   // read the retained native array when no context exists
-    for (offset, symbol) in [(72, "__rt_mbstring_clone"), (80, "__rt_mbstring_release"), (88, "__rt_mbstring_publish_throw")] {
-        abi::emit_symbol_address(emitter, "r10", symbol);
+    for (offset, symbol) in [(72, "__rt_mbstring_cabi_0"), (80, "__rt_mbstring_cabi_5"), (88, "__rt_mbstring_publish_throw")] {
+        abi::emit_symbol_address(emitter, "r10", &emitter.target.extern_symbol(symbol));
         emitter.instruction(&format!("mov QWORD PTR [rsp + {offset}], r10"));   // supply a non-unwinding native ownership action
     }
     emitter.instruction("mov rsi, QWORD PTR [rsp + 328]");                      // recover the copied/original array source descriptor
@@ -62,7 +62,7 @@ pub(super) fn x86_64(emitter: &mut Emitter, graph: bool) {
     emitter.instruction("mov r8, QWORD PTR [rsp + 344]");                       // recover the caller-owned entry output
     emitter.instruction("add r8, 8");                                           // publish ownership directly into the coordinator's cleanup slot
     if graph { emitter.instruction("lea r9, [r8 + 32]"); }                      // preserve the original nested array box through the sixth C argument
-    emitter.bl_c(if graph { "__elephc_eval_array_graph_reference_value" } else { "__elephc_eval_array_reference_value" });
+    emitter.emit_native_bridge_symbol_call(if graph { "__elephc_eval_array_graph_reference_value" } else { "__elephc_eval_array_reference_value" }, if graph { 6 } else { 5 });
     emitter.instruction("test eax, eax");                                       // failures may already have published a copied owner
     emitter.instruction(&format!("jnz {name}_eval_failed"));                    // preserve pending or fatal failure semantics
     emitter.instruction("mov r10, QWORD PTR [rsp + 344]");                      // recover the caller's entry output

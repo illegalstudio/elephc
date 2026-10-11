@@ -15,7 +15,22 @@ use super::{canonical_builtin_function_name, namespace_name, Symbols};
 
 
 impl Symbols {
-    /// canonical_function
+    /// Creates an empty symbol table tied to the target platform's PHP builtin surface.
+    pub(super) fn new(platform: crate::codegen::platform::Platform) -> Self {
+        Self {
+            functions: Default::default(),
+            conditional_functions: Default::default(),
+            classes: Default::default(),
+            interfaces: Default::default(),
+            traits: Default::default(),
+            constants: Default::default(),
+            extern_functions: Default::default(),
+            extern_classes: Default::default(),
+            platform,
+        }
+    }
+
+    /// Resolves a declared, extern, or target-available builtin function name.
     pub(super) fn canonical_function(&self, name: &str) -> Option<String> {
         let key = php_symbol_key(name);
         let extension_builtin =
@@ -32,7 +47,12 @@ impl Symbols {
             .get(&key)
             .or_else(|| self.extern_functions.get(&key))
             .cloned()
-            .or_else(|| canonical_builtin_function_name(name))
+            .or_else(|| {
+                crate::types::checker::builtins::canonical_builtin_function_name_on_platform(
+                    name,
+                    self.platform,
+                )
+            })
     }
 
     /// Returns whether `name` resolves to a user-declared (or extern) function,

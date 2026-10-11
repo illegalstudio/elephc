@@ -44,7 +44,8 @@ fn aarch64(emitter: &mut Emitter, operation: &str) {
         emitter.instruction("mov x0, x1");                                      // pass the native string result pointer after preserving all live registers
         emitter.instruction("mov x1, x2");                                      // pass its exact logical byte length to the origin registry
     }
-    emitter.bl_c(&format!("elephc_mbstring_native_string_{operation}_v1"));
+    emitter.emit_native_bridge_symbol_call(
+        &format!("elephc_mbstring_native_string_{operation}_v1"), operation_arity(operation));
     emitter.instruction(&format!("cbz x0, {label}_success"));                   // propagate internal metadata failures as fatal process failures
     emitter.instruction("mov x0, #1");                                          // preserve a nonzero status for a broken identity contract
     emitter.bl_c("exit");
@@ -96,7 +97,8 @@ fn x86_64(emitter: &mut Emitter, operation: &str) {
             }
         }
     }
-    emitter.bl_c(&format!("elephc_mbstring_native_string_{operation}_v1"));
+    emitter.emit_native_bridge_symbol_call(
+        &format!("elephc_mbstring_native_string_{operation}_v1"), operation_arity(operation));
     emitter.instruction("test eax, eax");                                       // distinguish successful metadata ownership from an internal failure
     emitter.instruction(&format!("jz {label}_success"));                        // restore the native caller only after the bridge accepted the operation
     emitter.instruction("mov edi, 1");                                          // preserve nonzero fatal status for a broken identity contract
@@ -116,3 +118,13 @@ fn x86_64(emitter: &mut Emitter, operation: &str) {
 
 /// Gates retirement and legacy copies until a creation or explicit binding has recorded an origin.
 fn dormant_gate(operation: &str) -> bool { matches!(operation, "copy" | "forget" | "reset") }
+
+fn operation_arity(operation: &str) -> usize {
+    match operation {
+        "reset" => 0,
+        "forget" => 1,
+        "fresh" | "literal" => 2,
+        "bind" | "copy" | "persist" => 3,
+        _ => unreachable!("unknown native INI identity operation"),
+    }
+}

@@ -22,7 +22,7 @@ use super::builtins::collection_builder::EvalArrayBuilder;
 use super::*;
 use crate::eval_ir::EVAL_CLI_POPULATED_SUPERGLOBALS;
 use std::cell::Cell;
-use std::os::unix::ffi::OsStrExt;
+use std::ffi::OsStr;
 
 thread_local! {
     /// One bit per `EVAL_CLI_POPULATED_SUPERGLOBALS` entry that eval code has unset.
@@ -110,8 +110,9 @@ fn eval_cli_server_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let arguments = std::env::args_os()
-        .map(|argument| argument.as_bytes().to_vec())
-        .collect::<Vec<_>>();
+        .map(|argument| eval_os_string_bytes(&argument))
+        .collect::<Option<Vec<_>>>()
+        .ok_or(EvalStatus::RuntimeFatal)?;
     let argc = i64::try_from(arguments.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
     let invoked = arguments.first().cloned().unwrap_or_default();
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
@@ -134,4 +135,18 @@ fn eval_cli_server_value(
     })?;
     server.string("argc", |values| values.int(argc))?;
     Ok(server.finish())
+}
+
+/// Preserves exact process-argument bytes on Unix.
+#[cfg(unix)]
+fn eval_os_string_bytes(value: &OsStr) -> Option<Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt;
+
+    Some(value.as_bytes().to_vec())
+}
+
+/// Converts Windows UTF-16 process arguments only when they are valid Unicode.
+#[cfg(windows)]
+fn eval_os_string_bytes(value: &OsStr) -> Option<Vec<u8>> {
+    Some(value.to_str()?.as_bytes().to_vec())
 }

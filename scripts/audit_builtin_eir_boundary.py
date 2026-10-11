@@ -32,6 +32,7 @@ SUPPORTED_TARGETS = [
     "ios-sim-arm64",
     "linux-aarch64",
     "linux-x86_64",
+    "windows-x86_64",
 ]
 
 # Compiler-resident AOT routes a shared contract may declare instead of a `builtin!`
@@ -44,9 +45,39 @@ NON_REGISTRY_ROUTES = {
     "prelude",
     "name-resolver-rewrite",
 }
-HOST_ONLY_TARGETS = ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
+HOST_ONLY_TARGETS = [
+    "macos-aarch64",
+    "linux-aarch64",
+    "linux-x86_64",
+    "windows-x86_64",
+]
+UNIX_HOST_ONLY_TARGETS = ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
 SOURCE_SUFFIXES = {".php", ".rs", ".snap"}
 COMPILER_TRANSFORM_NAMES = {"func_get_arg", "func_get_args", "func_num_args"}
+
+
+def targets_for_policy(kind: str) -> list[str]:
+    """Return the supported-target set named by one shared metadata policy."""
+    policies = {
+        "all": SUPPORTED_TARGETS,
+        "host_only": HOST_ONLY_TARGETS,
+        "unix_host_only": UNIX_HOST_ONLY_TARGETS,
+        "unix": [target for target in SUPPORTED_TARGETS if target != "windows-x86_64"],
+        "linux": ["linux-aarch64", "linux-x86_64"],
+        "macos": ["macos-aarch64"],
+        "windows": ["windows-x86_64"],
+        "windows_only": ["windows-x86_64"],
+    }
+    if kind not in policies:
+        raise ValueError(f"unknown target policy: {kind!r}")
+    return list(policies[kind])
+
+
+def effective_targets(target_support_kind: str, php_availability_kind: str) -> list[str]:
+    """Intersect backend support with neutral PHP platform availability."""
+    backend = set(targets_for_policy(target_support_kind))
+    availability = set(targets_for_policy(php_availability_kind))
+    return [target for target in SUPPORTED_TARGETS if target in backend & availability]
 
 
 def read(path: Path) -> str:
@@ -247,12 +278,15 @@ def build_inventory() -> dict[str, Any]:
         semantics = exported_record.get("semantics", {})
         declared_target_support = semantics.get("target_support", [])
         target_support_kind = semantics.get("target_support_kind")
-        required_target_support = {
-            "all": SUPPORTED_TARGETS,
-            "host_only": HOST_ONLY_TARGETS,
-            "linux": ["linux-aarch64", "linux-x86_64"],
-            "macos": ["macos-aarch64"],
-        }.get(target_support_kind, [])
+        php_availability_kind = semantics.get("php_availability_kind", "all")
+        policy_error = None
+        try:
+            required_target_support = effective_targets(
+                target_support_kind, php_availability_kind
+            )
+        except ValueError as error:
+            required_target_support = []
+            policy_error = str(error)
         strategy = semantics.get("target_strategy")
         category = {
             "eir_primitive": 1,
@@ -313,7 +347,11 @@ def build_inventory() -> dict[str, Any]:
                 "targets": {
                     "required": required_target_support,
                     "declared_support": declared_target_support,
+                    "backend_kind": target_support_kind,
+                    "php_availability_kind": php_availability_kind,
+                    "policy_error": policy_error,
                     "verified": bool(required_target_support)
+                    and policy_error is None
                     and declared_target_support == required_target_support,
                 },
                 "tests": test_index.get(canonical, []),
@@ -432,7 +470,9 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
     for record in inventory["registry_builtins"]:
         if record["lowering"]["legacy_hook"] is not None:
             errors.append(f"{record['home_file']}: {record['name']} still has a legacy lower hook")
-        if not record["targets"]["verified"]:
+        if record["targets"]["policy_error"]:
+            errors.append(f"{record['name']}: {record['targets']['policy_error']}")
+        elif not record["targets"]["verified"]:
             errors.append(f"{record['name']}: supported-target implementation is not verified")
         strategy = record["lowering"].get("target_strategy")
         lowering_kind = record["lowering"].get("kind")

@@ -2,7 +2,7 @@
 title: "pcntl_setcpuaffinity() - internals"
 description: "Compiler internals for pcntl_setcpuaffinity(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 656
+  order: 663
 ---
 
 ## `pcntl_setcpuaffinity()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_setcpuaffinity.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_setcpuaffinity.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

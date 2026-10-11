@@ -5,7 +5,7 @@ sidebar:
   order: 0
 ---
 
-elephc compiles PHP to native code for five supported targets without PHP, the Zend Engine, or an external VM. macOS ARM64, Linux ARM64, and Linux x86_64 are standalone-executable targets and the host triples for compiler release archives; from macOS, the compiler also cross-compiles libraries for iOS ARM64 devices and the iOS ARM64 Simulator. Ordinary source is AOT-compiled; experimental `eval()` may embed an optional interpreter bridge when a fragment requires runtime parsing. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
+elephc compiles PHP to native code for five first-class targets without PHP, the Zend Engine, or an external VM. macOS ARM64, Linux ARM64, and Linux x86_64 are standalone-executable targets and the host triples for compiler release archives; from macOS, the compiler also cross-compiles libraries for iOS ARM64 devices and the iOS ARM64 Simulator. The additional experimental Windows x86_64 GNU/MinGW target produces native PE32+ binaries but is not yet a release host. Ordinary source is AOT-compiled; experimental `eval()` may embed an optional interpreter bridge when a fragment requires runtime parsing. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
 
 ## Getting Started
 

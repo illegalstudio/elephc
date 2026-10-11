@@ -2,13 +2,13 @@
 title: "pcntl_sigtimedwait()"
 description: "Waits up to a timeout for one selected Linux signal and returns its number or false."
 sidebar:
-  order: 664
+  order: 671
 ---
 
 ## pcntl_sigtimedwait()
 
 ```php
-function pcntl_sigtimedwait(mixed $signals, mixed $info = [], int $seconds = 0, int $nanoseconds = 0): mixed
+function pcntl_sigtimedwait(mixed $signals, mixed &$info = [], int $seconds = 0, int $nanoseconds = 0): mixed
 ```
 
 Waits up to a timeout for one selected Linux signal and returns its number or false.

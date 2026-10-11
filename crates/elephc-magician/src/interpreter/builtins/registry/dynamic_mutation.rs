@@ -327,6 +327,16 @@ fn eval_dynamic_preg_match_call(
         return Ok(None);
     };
     let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let checked_flags = eval_preg_match_all_flags(flags, values)?;
+    if !eval_preg_match_all_flags_supported(checked_flags) {
+        let empty = values.array_new(0)?;
+        eval_write_preg_matches_target(target, empty, context, values)?;
+        return eval_throw_builtin_value_error(
+            "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant",
+            context,
+            values,
+        );
+    }
     let (result, matches_array) =
         eval_preg_match_capture_result(pattern.value, subject.value, flags, values)?;
     eval_write_preg_matches_target(target, matches_array, context, values)?;
@@ -354,7 +364,7 @@ fn eval_dynamic_preg_match_all_call(
     };
     let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
     let (result, matches_array) =
-        eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
+        eval_preg_match_all_capture_result(pattern.value, subject.value, flags, context, values)?;
     eval_write_preg_matches_target(target, matches_array, context, values)?;
     Ok(Some(result))
 }

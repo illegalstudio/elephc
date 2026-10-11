@@ -2,7 +2,7 @@
 title: "set_exception_handler()"
 description: "Installs an uncaught-exception handler and returns the previous handler."
 sidebar:
-  order: 688
+  order: 702
 ---
 
 ## set_exception_handler()

@@ -23,7 +23,7 @@ pub(in crate::codegen) fn load_value_to_first_int_arg(
 pub(in crate::codegen) fn emit_mixed_string_for_persistent_store(ctx: &mut FunctionContext<'_>) {
     let non_string = ctx.next_label("mixed_string_persist_non_string");
     let done = ctx.next_label("mixed_string_persist_done");
-    let mixed_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let mixed_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     abi::emit_push_reg(ctx.emitter, mixed_arg);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
@@ -97,7 +97,7 @@ pub(in crate::codegen) fn resolve_int_operand_to_result(
 /// Moves the canonical integer result register into the target's first argument register.
 pub(super) fn move_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     if result_reg == arg_reg {
         return;
     }

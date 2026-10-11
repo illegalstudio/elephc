@@ -102,6 +102,7 @@ fn activation(req_cookie: Option<&str>) -> Option<Activation> {
 ///
 /// Inactive and non-HTML responses retain the immediate streaming path. A
 /// same-origin `Location` is still rewritten before headers are committed.
+#[cfg(unix)]
 pub(crate) fn prepare_streaming_response(
     req_cookie: Option<&str>,
     req_host: Option<&str>,

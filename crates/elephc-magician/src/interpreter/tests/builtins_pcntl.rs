@@ -15,6 +15,7 @@ static PCNTL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Rejects a standalone Magician Fiber start while an eval signal handler is running.
 #[test]
+#[cfg(unix)]
 fn eval_handler_cannot_switch_fibers_without_aot_runtime_hooks() {
     let _guard = PCNTL_TEST_LOCK.lock().expect("PCNTL test lock poisoned");
     let register = parse_fragment(
@@ -59,6 +60,7 @@ fn eval_handler_cannot_switch_fibers_without_aot_runtime_hooks() {
 
 /// Rejects a Fiber switch reached through an object-method `call_user_func` callback.
 #[test]
+#[cfg(unix)]
 fn eval_handler_cannot_switch_fibers_through_call_user_func() {
     let _guard = PCNTL_TEST_LOCK.lock().expect("PCNTL test lock poisoned");
     let register = parse_fragment(
@@ -97,6 +99,7 @@ fn eval_handler_cannot_switch_fibers_through_call_user_func() {
 /// `EvaluatedCallable::StaticMethod` native path instead of
 /// `eval_static_method_call_result_resolved`, which already rejected.
 #[test]
+#[cfg(unix)]
 fn eval_handler_cannot_switch_fibers_through_call_user_func_static() {
     let _guard = PCNTL_TEST_LOCK.lock().expect("PCNTL test lock poisoned");
     let register = parse_fragment(
@@ -135,6 +138,7 @@ fn eval_handler_cannot_switch_fibers_through_call_user_func_static() {
 
 /// Rejects switching method names on an eval-declared class whose receiver is named Fiber.
 #[test]
+#[cfg(unix)]
 fn eval_handler_cannot_switch_eval_declared_fiber_class() {
     let _guard = PCNTL_TEST_LOCK.lock().expect("PCNTL test lock poisoned");
     let register = parse_fragment(

@@ -57,7 +57,7 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
     }
     if let Some(provider) = provider {
         abi::emit_symbol_address(emitter, if arm { "x0" } else { "rdi" }, &provider);
-        emitter.bl_c("elephc_mbstring_mime_provider_v1");
+        emitter.emit_native_bridge_symbol_call("elephc_mbstring_mime_provider_v1", 1);
         if arm {
             emitter.instruction(&format!("cbnz w0, {status_done}"));            // reject an invalid provider before requesting any bridge result
         } else {
@@ -69,10 +69,10 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
     abi::emit_load_symbol_to_reg(emitter, if arm { "x1" } else { "rsi" }, &count, 0);
     abi::emit_symbol_address(emitter, if arm { "x2" } else { "rdx" }, &host);
     emitter.instruction(if arm { "mov x3, sp" } else { "mov rcx, rsp" });       // provide empty bridge result storage for this initialization
-    emitter.bl_c("elephc_mbstring_configure_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_configure_v1", 4);
     emitter.instruction(if arm { "str w0, [sp, #48]" } else { "mov DWORD PTR [rsp + 48], eax" }); // preserve initialization status while reclaiming result buffers
     emitter.instruction(if arm { "mov x0, sp" } else { "mov rdi, rsp" });       // return all result storage to its owning Rust allocator
-    emitter.bl_c("elephc_mbstring_release_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_release_v1", 1);
     emitter.instruction(if arm { "ldr w0, [sp, #48]" } else { "mov eax, DWORD PTR [rsp + 48]" }); // recover status after releasing every published bridge buffer
     emitter.label(&status_done);
     if arm {

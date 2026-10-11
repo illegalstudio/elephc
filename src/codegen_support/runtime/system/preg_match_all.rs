@@ -13,7 +13,14 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// Every supported target preserves the original subject and absolute capture offsets.
 #[test]
 fn preg_match_all_review_runtime_context_on_all_targets() {
-    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-x86_64",
+    ] {
         let target = crate::codegen_support::platform::Target::parse(name).unwrap();
         let mut emitter = Emitter::new(target);
         emit_preg_match_all(&mut emitter);
@@ -27,6 +34,45 @@ fn preg_match_all_review_runtime_context_on_all_targets() {
         assert!(runtime.contains(absolute_capture), "{name}");
         assert!(!runtime.contains("advance one byte after a match"), "{name}");
     }
+}
+
+/// Windows count-only regex calls use CRT shims and the MSx64 native-bridge planner.
+#[test]
+fn preg_match_all_count_uses_windows_native_call_boundaries() {
+    let target = crate::codegen_support::platform::Target::new(
+        crate::codegen_support::platform::Platform::Windows,
+        Arch::X86_64,
+    );
+    let mut emitter = Emitter::new(target);
+    emit_preg_match_all(&mut emitter);
+    let assembly = emitter.output();
+    let count = assembly
+        .split_once("__rt_preg_match_all:\n")
+        .expect("count helper")
+        .1
+        .split_once("--- runtime: preg_match_all_capture ---")
+        .expect("capture helper follows count helper")
+        .0;
+
+    assert!(count.contains("call __rt_sys_strlen"));
+    assert!(!count.lines().any(|line| {
+        line.split("//").next().unwrap_or("").trim() == "call strlen"
+    }));
+    for symbol in [
+        "elephc_pcre2_v1_compile",
+        "elephc_pcre2_v1_exec",
+        "elephc_pcre2_v1_free",
+    ] {
+        assert!(count.contains(&format!("lea r11, [rip + {symbol}]")));
+        assert!(!count.contains(&format!("call {symbol}")));
+    }
+    assert!(count.contains("sub rsp, 48"));
+    assert!(count.contains("mov QWORD PTR [rsp + 32], r8"));
+    assert!(count.contains("mov r9, rcx"));
+    assert!(count.contains("mov r8, rdx"));
+    assert!(count.contains("mov rdx, rsi"));
+    assert!(count.contains("mov rcx, rdi"));
+    assert!(count.contains("call r11"));
 }
 
 /// Selects initial or PCRE2-managed continuation through the private shim flag.
@@ -105,7 +151,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass null-terminated pattern
     emitter.instruction(&format!("ldr x2, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.instruction(&format!("add x3, sp, #{}", match_slot_count_off));     // receive the compiled match-slot count
-    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_compile", 4);      // compile through the target C ABI without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_preg_match_all_fail");                   // fail
 
     // -- null-terminate subject --
@@ -113,7 +159,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // subject len
     emitter.instruction("bl __rt_cstr2");                                       // → x0=subject C string
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save subject C string
-    emitter.bl_c("strlen");                                                      // retain the established C-string subject boundary
+    emitter.emit_call_c("strlen");                                              // retain the established C-string subject boundary through the target C ABI
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_len_off));        // save the complete subject length for offset matching
 
     // -- count matches loop --
@@ -133,7 +179,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_len_off));        // load the complete C-string subject length
     emitter.instruction("str x9, [x3, #8]");                                    // publish the input range end
     emit_global_iteration_flags(emitter, match_count_off);
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_exec", 5);         // execute through the target C ABI without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_preg_match_all_done");                   // no more matches
 
     // -- found a match, increment count --
@@ -146,7 +192,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_match_all_done");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_free", 1);         // release compiled regex resources through the target C ABI
     emitter.instruction(&format!("ldr x0, [sp, #{}]", match_count_off));        // return count
     emitter.instruction("b __rt_preg_match_all_ret");                           // return
 
@@ -197,7 +243,7 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass the null-terminated PCRE pattern C string as the second regcomp() argument
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_slot_count_off)); // receive the compiled match-slot count
-    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_compile", 4);      // compile through the target C ABI without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regcomp() succeed and produce a compiled regex object?
     emitter.instruction("jnz __rt_preg_match_all_fail_linux_x86_64");           // failed regex compilation maps to a zero-count result
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload the elephc subject pointer before null-terminating it in the secondary scratch buffer
@@ -209,7 +255,7 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
         &format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)
     );
     emitter.instruction("mov rdi, rax");                                        // pass the subject C string to strlen
-    emitter.bl_c("strlen");                                                      // retain the established C-string subject boundary
+    emitter.emit_call_c("strlen");                                              // retain the established C-string subject boundary through the target C ABI
     emitter.instruction(                                                        // save the complete subject length for offset matching
         &format!("mov QWORD PTR [rsp + {}], rax", subject_len_off)
     );
@@ -230,7 +276,7 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     );
     emitter.instruction("mov QWORD PTR [rcx + 8], r9");                         // publish the input range end
     emit_global_iteration_flags(emitter, match_count_off);
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_exec", 5);         // execute through the target C ABI without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regexec() find another match at or after the current cursor?
     emitter.instruction("jnz __rt_preg_match_all_done_linux_x86_64");           // stop counting when regexec() reports no further matches
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", match_count_off)); // reload the running non-overlapping match count before incrementing it
@@ -241,7 +287,7 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_match_all_done_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources before returning the match count
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_free", 1);         // release compiled regex resources through the target C ABI before returning the match count
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", match_count_off)); // return the total number of non-overlapping regex matches discovered in the subject
     emitter.instruction("jmp __rt_preg_match_all_ret_linux_x86_64");            // share the common epilogue after the successful match-count path
 

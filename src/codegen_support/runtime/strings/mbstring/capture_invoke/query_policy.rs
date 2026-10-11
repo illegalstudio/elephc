@@ -19,7 +19,7 @@ pub(super) fn table(emitter: &mut Emitter, state: usize) {
             else { format!("mov QWORD PTR [rsp + {offset}], 0") };
         emitter.instruction(&instruction);                                      // initialize optional capabilities before inspecting caller metadata
     }
-    table_entry(emitter, 136, "__rt_mbstring_query_register");
+    c_table_entry(emitter, 136, "__rt_mbstring_query_register");
     let instruction = if arm { format!("ldr x11, [sp, #{state}]") }
         else { format!("mov r11, QWORD PTR [rsp + {state}]") };
     emitter.instruction(&instruction);                                          // recover the immutable policy record after provider initialization
@@ -33,7 +33,7 @@ pub(super) fn table(emitter: &mut Emitter, state: usize) {
         emitter.instruction("cmp QWORD PTR [r11 + 24], 0");                     // require a configuration provider for query output
         emitter.instruction("je __rt_mbstring_query_policy_ready");             // let shared host validation reject incomplete state before side effects
     }
-    table_entry(emitter, 120, "__rt_mbstring_query_configuration_context");
+    c_table_entry(emitter, 120, "__rt_mbstring_query_configuration_context");
     if arm {
         emitter.instruction("ldr x12, [x11, #32]");                             // inspect the optional SAPI input filter
         emitter.instruction("cbz x12, __rt_mbstring_query_policy_ready");       // a missing filter selects the shared identity behavior
@@ -41,7 +41,7 @@ pub(super) fn table(emitter: &mut Emitter, state: usize) {
         emitter.instruction("cmp QWORD PTR [r11 + 32], 0");                     // inspect the independently optional input filter
         emitter.instruction("je __rt_mbstring_query_policy_ready");             // preserve null filtering as an explicit identity capability
     }
-    table_entry(emitter, 128, "__rt_mbstring_query_filter_context");
+    c_table_entry(emitter, 128, "__rt_mbstring_query_filter_context");
     emitter.label("__rt_mbstring_query_policy_ready");
 }
 
@@ -49,7 +49,7 @@ pub(super) fn table(emitter: &mut Emitter, state: usize) {
 pub(super) fn emit(emitter: &mut Emitter) {
     for (name, offset) in [("__rt_mbstring_query_configuration_context", 24),
         ("__rt_mbstring_query_filter_context", 32)] {
-        emitter.label_global(name);
+        abi::emit_c_callback_entry(emitter, name);
         if emitter.target.arch == Arch::AArch64 {
             emitter.instruction("ldr x9, [x0, #8]");                            // recover the native query state from the wrapped invocation context
             emitter.instruction(&format!("ldr x10, [x9, #{offset}]"));          // select the caller's protected callback without altering later arguments

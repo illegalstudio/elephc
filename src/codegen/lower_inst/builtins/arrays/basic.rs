@@ -259,7 +259,7 @@ pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
                 "boxed array_flip requires a boxed array result".to_string(),
             ));
         }
-        ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+        ctx.load_value_to_reg(array, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
         abi::emit_call_label(ctx.emitter, "__rt_array_flip_boxed");
         let valid = ctx.next_label("array_flip_boxed_valid");
         abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);

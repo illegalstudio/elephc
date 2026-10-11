@@ -40,3 +40,70 @@ fn regex_builtins_follow_provider_availability() {
         assert!(builtin_is_available(spec, false, false, true), "{name}");
     }
 }
+
+/// PHP's `HAVE_LCHOWN` guard removes both names from every Windows eval
+/// registry surface without weakening shared-contract coverage elsewhere.
+#[test]
+fn link_ownership_builtins_follow_build_target_availability() {
+    for name in ["lchown", "lchgrp"] {
+        let contract = elephc_builtin_contract::lookup(name).unwrap();
+        assert_eq!(
+            builtin_contract_is_available_on_build_target(contract),
+            !cfg!(windows),
+            "{name}",
+        );
+        assert_eq!(
+            eval_raw_declared_builtin_spec(name).is_some(),
+            !cfg!(windows),
+            "{name}",
+        );
+        assert_eq!(eval_declared_builtin_exists(name), !cfg!(windows), "{name}");
+        assert_eq!(
+            eval_declared_builtin_function_names().contains(&name),
+            !cfg!(windows),
+            "{name}",
+        );
+    }
+    for name in ["chown", "chgrp"] {
+        assert!(builtin_contract_is_available_on_build_target(
+            elephc_builtin_contract::lookup(name).unwrap()
+        ));
+    }
+}
+
+/// Windows SAPI bindings remain inventoried for parity validation but are
+/// visible only when the shared contract admits the build platform.
+#[test]
+fn windows_sapi_builtins_follow_shared_contract_availability() {
+    for name in [
+        "sapi_windows_vt100_support",
+        "sapi_windows_cp_set",
+        "sapi_windows_cp_get",
+        "sapi_windows_cp_conv",
+        "sapi_windows_cp_is_utf8",
+        "sapi_windows_set_ctrl_handler",
+        "sapi_windows_generate_ctrl_event",
+    ] {
+        let contract = elephc_builtin_contract::lookup(name).unwrap();
+        assert_eq!(
+            builtin_contract_is_available_on_build_target(contract),
+            cfg!(windows),
+            "{name}",
+        );
+        assert_eq!(eval_declared_builtin_exists(name), cfg!(windows), "{name}");
+        assert!(
+            eval_unfiltered_declared_builtin_spec(name).is_some(),
+            "{name} must remain in the cross-target implementation inventory",
+        );
+    }
+}
+
+/// Platform filtering changes runtime exposure, never the implementation
+/// inventory consumed by cross-target documentation and parity audits.
+#[test]
+fn unavailable_builtins_keep_unfiltered_implementation_metadata() {
+    for name in ["lchown", "lchgrp"] {
+        assert!(eval_unfiltered_declared_builtin_spec(name).is_some(), "{name}");
+        assert_eq!(eval_raw_declared_builtin_spec(name).is_some(), !cfg!(windows), "{name}");
+    }
+}

@@ -34,6 +34,13 @@
 use std::cell::RefCell;
 use std::io::Write;
 
+#[cfg(windows)]
+unsafe extern "C" {
+    /// Windows CRT equivalent of `localtime`, with caller-owned output storage.
+    #[link_name = "_localtime64_s"]
+    fn windows_localtime64_s(output: *mut libc::tm, timestamp: *const i64) -> libc::c_int;
+}
+
 /// php-src's `ACCEL_LOG_*` levels, with their exact numeric values: the gate is a
 /// `<=` against `opcache.log_verbosity_level`, so the ORDER and the NUMBERS are the
 /// contract, not an internal detail.
@@ -164,19 +171,38 @@ pub(crate) fn accel_log(level: AccelLogLevel, message: &str) {
 /// `Sat Sep 12 08:33:47 2026`, with the trailing newline `asctime` appends chopped off by
 /// the truncation.
 fn local_time_string() -> String {
-    // SAFETY: `time` accepts a null pointer and returns the timestamp; `localtime` returns a
-    // pointer to a static `struct tm` owned by libc, which is read out here before any other
-    // libc call on this thread can overwrite it. It can answer null (a timestamp it cannot
-    // represent), which is why it is checked rather than dereferenced blind.
-    let tm = unsafe {
-        let now = libc::time(std::ptr::null_mut());
-        let tm = libc::localtime(&now);
-        if tm.is_null() {
-            return String::new();
-        }
-        *tm
+    // SAFETY: `time` accepts a null pointer and returns the current timestamp.
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    let Some(tm) = local_time(now) else {
+        return String::new();
     };
     format_asctime(&tm)
+}
+
+/// Converts one timestamp through the host CRT while keeping the output storage caller-owned.
+#[cfg(unix)]
+fn local_time(now: libc::time_t) -> Option<libc::tm> {
+    // SAFETY: `localtime` returns a pointer to a static `struct tm` owned by libc, which is
+    // copied before another libc call can overwrite it. A non-representable timestamp returns
+    // null and is reported as `None`.
+    unsafe {
+        let tm = libc::localtime(&now);
+        if tm.is_null() {
+            return None;
+        }
+        Some(*tm)
+    }
+}
+
+/// Converts one timestamp with the secure Windows CRT signature and initialized output storage.
+#[cfg(windows)]
+fn local_time(now: libc::time_t) -> Option<libc::tm> {
+    let timestamp = now as i64;
+    // SAFETY: an all-zero `tm` is a valid initialized C value, both pointers remain live for the
+    // call, and `_localtime64_s` writes the output only on success.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let status = unsafe { windows_localtime64_s(&mut tm, &timestamp) };
+    (status == 0).then_some(tm)
 }
 
 /// C's `asctime`, truncated to 24 bytes the way php-src truncates it.
@@ -288,5 +314,14 @@ mod tests {
     #[test]
     fn the_live_clock_produces_a_24_byte_line() {
         assert_eq!(local_time_string().len(), 24);
+    }
+
+    /// The Windows CRT path must populate caller-owned storage with a usable calendar value.
+    #[cfg(windows)]
+    #[test]
+    fn windows_localtime_uses_the_secure_crt_signature() {
+        let tm = local_time(0).expect("the Unix epoch must be representable by the Windows CRT");
+        assert!((0..12).contains(&tm.tm_mon));
+        assert!((0..7).contains(&tm.tm_wday));
     }
 }

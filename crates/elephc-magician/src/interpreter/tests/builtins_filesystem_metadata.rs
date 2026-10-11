@@ -10,6 +10,24 @@
 use super::super::*;
 use super::support::*;
 
+/// Creates a file symlink through the host-specific standard-library surface.
+#[cfg(unix)]
+fn create_file_symlink(
+    original: impl AsRef<std::path::Path>,
+    link: impl AsRef<std::path::Path>,
+) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(original, link)
+}
+
+/// Creates a file symlink through the host-specific standard-library surface.
+#[cfg(windows)]
+fn create_file_symlink(
+    original: impl AsRef<std::path::Path>,
+    link: impl AsRef<std::path::Path>,
+) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(original, link)
+}
+
 /// Verifies eval path component builtins mirror static basename/dirname edge cases.
 #[test]
 fn execute_program_dispatches_path_component_builtins() {
@@ -221,7 +239,7 @@ return true;"#
     let _ = std::fs::remove_file(&filename);
     let _ = std::fs::remove_file(&link);
     std::fs::write(&filename, b"hello").expect("write stat fixture");
-    std::os::unix::fs::symlink(&filename, &link).expect("create stat symlink");
+    create_file_symlink(&filename, &link).expect("create stat symlink");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
@@ -261,7 +279,7 @@ return true;"#
     let _ = std::fs::remove_file(&filename);
     let _ = std::fs::remove_file(&link);
     std::fs::write(&filename, b"hello").expect("write stat array fixture");
-    std::os::unix::fs::symlink(&filename, &link).expect("create stat array symlink");
+    create_file_symlink(&filename, &link).expect("create stat array symlink");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 

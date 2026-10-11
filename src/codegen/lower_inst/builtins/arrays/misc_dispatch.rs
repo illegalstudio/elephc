@@ -266,7 +266,7 @@ pub(crate) fn lower_array_is_list(ctx: &mut FunctionContext<'_>, inst: &Instruct
     super::super::ensure_arg_count(inst, "array_is_list", 1)?;
     let array = expect_operand(inst, 0)?;
     require_array_like_operand(ctx.value_php_type(array)?, "array_is_list")?;
-    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg0 = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(array, arg0)?;
     abi::emit_call_label(ctx.emitter, "__rt_array_is_list");
     store_if_result(ctx, inst)
@@ -302,8 +302,8 @@ pub(super) fn lower_array_edge_key(
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
     require_array_like_operand(ctx.value_php_type(array)?, name)?;
-    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let arg0 = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     ctx.load_value_to_reg(array, arg0)?;
     abi::emit_load_int_immediate(ctx.emitter, arg1, which);
     abi::emit_call_label(ctx.emitter, "__rt_array_edge_key");

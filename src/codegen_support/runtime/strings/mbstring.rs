@@ -27,6 +27,7 @@ mod array_value;
 mod stringable;
 mod input;
 mod materialize;
+mod mail_date;
 mod exception;
 mod invoke;
 mod capture_invoke;
@@ -44,7 +45,7 @@ mod regex;
 mod callback;
 
 /// Emits boxed invocation entries with caller strictness/context plus the separate wire-result adapter.
-pub fn emit_mbstring(emitter: &mut Emitter, eval_bridge: bool, mbregex: bool) {
+pub fn emit_mbstring(emitter: &mut Emitter, eval_bridge: bool, mbregex: bool, mail: bool) {
     native::emit(emitter, mbregex);
     match emitter.target.arch {
         Arch::AArch64 => emit_aarch64(emitter),
@@ -63,9 +64,10 @@ pub fn emit_mbstring(emitter: &mut Emitter, eval_bridge: bool, mbregex: bool) {
     stringable::emit(emitter);
     input::emit(emitter, eval_bridge);
     materialize::emit(emitter);
+    mail_date::emit(emitter, eval_bridge, mail);
     exception::emit(emitter);
     if mbregex { regex::emit(emitter); callback::emit(emitter, eval_bridge); }
-    invoke::emit(emitter, mbregex);
+    invoke::emit(emitter, mbregex, mail);
     capture_invoke::emit(emitter, mbregex);
     callbacks::emit(emitter);
     capture_hash::emit(emitter);
@@ -87,7 +89,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp xzr, xzr, [sp, #64]");                             // initialize the returned byte length and kind
     emitter.instruction("stp x1, x2, [sp, #80]");                               // retain mutable argument slots for transferred array-owner cleanup
     emitter.instruction("mov x3, sp");                                          // pass writable bridge result storage
-    emitter.bl_c("elephc_mbstring_call_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_call_v1", 4);
     emitter.instruction("ldp x0, x1, [sp, #80]");                               // restore the argument array and supplied count after Rust returns
     emitter.instruction("bl __rt_mbstring_release_array_arguments");            // release array wire owners before diagnostics or exception construction
     emitter.label_shared("__rt_mbstring_status_diagnostics");
@@ -139,7 +141,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x1");                                          // pass the new native allocation to the identity registry
     emitter.instruction("mov x1, x2");                                          // bind its complete logical byte range
     emitter.instruction("ldr x2, [sp, #8]");                                    // borrow the wire result's still-live identity lease
-    emitter.bl_c("elephc_mbstring_native_string_bind_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_native_string_bind_v1", 3);
     emitter.instruction("cbz x0, __rt_mbstring_status_ini_string_ready");       // normalize successful INI results only after acquiring native ownership
     emitter.instruction("ldr x0, [sp, #48]");                                   // recover the unbound string owner after metadata rejection
     emitter.instruction("bl __rt_decref_any");                                  // release the failed native allocation before wire cleanup
@@ -189,7 +191,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp xzr, x0, [sp, #48]");                              // retain the non-unwinding error status without a successful value
     emitter.label("__rt_mbstring_status_release");
     emitter.instruction("mov x0, sp");                                          // pass the complete result to its owning allocator
-    emitter.bl_c("elephc_mbstring_release_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_release_v1", 1);
     emitter.instruction("ldp x2, x3, [sp, #64]");                               // restore result byte length and kind for boxed callers
     emitter.instruction("ldp x0, x1, [sp, #48]");                               // restore the primary result and runtime status
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore caller linkage after all Rust calls have returned
@@ -207,7 +209,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 80], rsi");                       // retain mutable wire slots for transferred array-owner cleanup
     emitter.instruction("mov QWORD PTR [rsp + 88], rdx");                       // retain the supplied argument count until Rust returns
     emitter.instruction("lea rcx, [rsp + 0]");                                  // pass writable bridge result storage
-    emitter.bl_c("elephc_mbstring_call_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_call_v1", 4);
     emitter.instruction("mov rdi, QWORD PTR [rsp + 80]");                       // restore the mutable argument array after Rust returns
     emitter.instruction("mov rsi, QWORD PTR [rsp + 88]");                       // restore the supplied argument count
     emitter.instruction("call __rt_mbstring_release_array_arguments");          // release array wire owners before diagnostics or exception construction
@@ -264,7 +266,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // bind the newly acquired native string allocation
     emitter.instruction("mov rsi, rdx");                                        // pass its complete logical byte length
     emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // borrow the wire result's still-live identity lease
-    emitter.bl_c("elephc_mbstring_native_string_bind_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_native_string_bind_v1", 3);
     emitter.instruction("test eax, eax");                                       // distinguish successful binding from rejected identity metadata
     emitter.instruction("jz __rt_mbstring_status_ini_string_ready");            // normalize successful INI values after native ownership is retained
     emitter.instruction("mov rax, QWORD PTR [rsp + 48]");                       // recover the unbound string owner after metadata rejection
@@ -319,7 +321,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 56], rax");                       // preserve the non-unwinding materialization status through release
     emitter.label("__rt_mbstring_status_release");
     emitter.instruction("lea rdi, [rsp + 0]");                                  // pass the complete result to its owning allocator
-    emitter.bl_c("elephc_mbstring_release_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_release_v1", 1);
     emitter.instruction("mov rax, QWORD PTR [rsp + 48]");                       // restore the primary result
     emitter.instruction("mov rdx, QWORD PTR [rsp + 56]");                       // restore the runtime status
     emitter.instruction("mov rcx, QWORD PTR [rsp + 64]");                       // restore the result byte length
@@ -340,7 +342,7 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
-            emit_mbstring(&mut emitter, false, true);
+            emit_mbstring(&mut emitter, false, true, true);
             let asm = emitter.output();
             assert!(asm.contains(&target.extern_symbol("elephc_mbstring_call_v1")), "{name}");
             assert!(asm.contains(&target.extern_symbol("elephc_mbstring_release_v1")), "{name}");

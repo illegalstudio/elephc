@@ -2,7 +2,7 @@
 title: "imagecolorallocate() - internals"
 description: "Compiler internals for imagecolorallocate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 464
+  order: 468
 ---
 
 ## `imagecolorallocate()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2223](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2223) (`imagecolorallocate`)
+- **Lowering**: [`src/image_prelude.rs`:2294](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2294) (`imagecolorallocate`)
 - **Function symbol**: `imagecolorallocate()`
 
 

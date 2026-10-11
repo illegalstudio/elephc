@@ -2,7 +2,7 @@
 title: "exp()"
 description: "Returns e raised to the power of a number."
 sidebar:
-  order: 575
+  order: 581
 ---
 
 ## exp()

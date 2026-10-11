@@ -17,6 +17,7 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.mbstring |= features.mbstring;
     module.required_runtime_features.mbregex |= features.mbregex;
     module.required_runtime_features.mbstring_mime |= features.mbstring_mime;
+    module.required_runtime_features.mbstring_mail |= features.mbstring_mail;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
     module.required_runtime_features.pdo_udf |= features.pdo_udf;
@@ -105,6 +106,11 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
             function,
             is_mbstring_mime_callable_name,
         );
+        features.mbstring_mail |= function_references_callable_runtime(
+            module,
+            function,
+            is_mbstring_mail_callable_name,
+        );
         if function_contains_eval_scope_state(function) {
             features.eval_scope = true;
         }
@@ -152,6 +158,7 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                         features.mbstring |= target.uses_mbstring_runtime();
                         features.mbregex |= target.uses_mbregex_runtime();
                         features.mbstring_mime |= target.uses_mbstring_mime_runtime();
+                        features.mbstring_mail |= target.uses_mbstring_mail_runtime();
                         features.phar_archive |= target.publishes_phar_symbols()
                             && function_belongs_to_phar_archive_helper_class(function);
                         features.descriptor_invoker |=
@@ -165,7 +172,8 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                             Some(ResourceCleanupKind::Directory) => {
                                 features.directory_resource = true
                             }
-                            Some(ResourceCleanupKind::StreamFd) | None => {}
+                            Some(ResourceCleanupKind::StreamFd | ResourceCleanupKind::Process)
+                            | None => {}
                         }
                         features.object_clone |= target == RuntimeFnId::CloneWith;
                     }
@@ -219,6 +227,8 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
             }
         }
     }
+    // Opaque eval can name mb_send_mail even when no AOT call site exposes it.
+    features.mbstring_mail |= features.eval_bridge;
     features
 }
 
@@ -574,5 +584,14 @@ fn is_mbstring_mime_callable_name(name: &str) -> bool {
         matches!(def.spec.semantics.runtime_functions,
             crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
                 if target.uses_mbstring_mime_runtime())
+    })
+}
+
+/// Resolves mail callables through the typed mbstring mail operation.
+fn is_mbstring_mail_callable_name(name: &str) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        matches!(def.spec.semantics.runtime_functions,
+            crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                if target.uses_mbstring_mail_runtime())
     })
 }

@@ -2,7 +2,7 @@
 title: "cairo_curve_to() - internals"
 description: "Compiler internals for cairo_curve_to(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 403
+  order: 407
 ---
 
 ## `cairo_curve_to()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13502](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13502) (`cairo_curve_to`)
+- **Lowering**: [`src/image_prelude.rs`:13573](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13573) (`cairo_curve_to`)
 - **Function symbol**: `cairo_curve_to()`
 
 

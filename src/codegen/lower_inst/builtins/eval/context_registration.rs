@@ -20,11 +20,8 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
     register_eval_regex_provider(ctx);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_context_new");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    ctx.emitter
+        .emit_native_bridge_symbol_call("__elephc_eval_context_new", 0);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
     register_eval_declared_symbols(ctx, offset);
     register_eval_native_global_constants(ctx, offset)?;
@@ -159,24 +156,32 @@ fn register_eval_native_user_constant_array(
     elements: &[EvalNativeCallableArrayDefaultElement],
 ) {
     let spec = encode_eval_native_array_default_elements(elements);
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    emit_eval_constant_name_args(ctx, name);
+    push_eval_context_local_for_native_constant(ctx, context_offset);
+    push_eval_constant_name_args(ctx, name);
     let (spec_label, spec_len) = ctx.data.add_string(&spec);
     abi::emit_symbol_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        abi::int_result_reg(ctx.emitter),
         &spec_label,
     );
+    push_eval_native_constant_word(ctx, PhpType::Pointer(None));
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        abi::int_result_reg(ctx.emitter),
         spec_len as i64,
     );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_user_constant_array");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    push_eval_native_constant_word(ctx, PhpType::Int);
+    emit_eval_native_constant_c_abi_call(
+        ctx,
+        "__elephc_eval_register_native_user_constant_array",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Int,
+        ],
+    );
 }
 
 /// Emits one scalar constant registration call against the requested bridge symbol.
@@ -191,54 +196,88 @@ fn register_eval_native_scalar_constant(
     string_value: Option<&str>,
     symbol_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    emit_eval_constant_name_args(ctx, name);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        kind,
-    );
+    push_eval_context_local_for_native_constant(ctx, context_offset);
+    push_eval_constant_name_args(ctx, name);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), kind);
+    push_eval_native_constant_word(ctx, PhpType::Int);
     if let Some(string_value) = string_value {
         let (value_label, value_len) = ctx.data.add_string(string_value.as_bytes());
         abi::emit_symbol_address(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 4),
+            abi::int_result_reg(ctx.emitter),
             &value_label,
         );
+        push_eval_native_constant_word(ctx, PhpType::Pointer(None));
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 5),
+            abi::int_result_reg(ctx.emitter),
             value_len as i64,
         );
+        push_eval_native_constant_word(ctx, PhpType::Int);
     } else {
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 4),
-            word,
-        );
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 5),
-            0,
-        );
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), word);
+        push_eval_native_constant_word(ctx, PhpType::Int);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        push_eval_native_constant_word(ctx, PhpType::Int);
     }
-    let symbol = ctx.emitter.target.extern_symbol(symbol_name);
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_native_constant_c_abi_call(
+        ctx,
+        symbol_name,
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+        ],
+    );
+}
+
+/// Stages the persistent eval-context handle as a native C ABI pointer argument.
+fn push_eval_context_local_for_native_constant(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+) {
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result, context_offset);
+    push_eval_native_constant_word(ctx, PhpType::Pointer(None));
+}
+
+/// Stages one integer or pointer result word for a native eval-constant registration call.
+fn push_eval_native_constant_word(ctx: &mut FunctionContext<'_>, ty: PhpType) {
+    stage_eval_native_word(ctx, ty);
+}
+
+/// Materializes and invokes an eval-constant Rust `extern "C"` registration function.
+///
+/// These targets are Rust FFI exports, rather than internal `__rt_*` helpers: their argument
+/// layout must therefore follow each target's native C ABI. In particular, MS x64 receives the
+/// fifth and later words after its 32-byte shadow space; staging through the shared C-ABI planner
+/// both reserves those slots and keeps SysV/AAPCS register placement unchanged on other targets.
+fn emit_eval_native_constant_c_abi_call(
+    ctx: &mut FunctionContext<'_>,
+    symbol_name: &str,
+    argument_types: &[PhpType],
+) {
+    emit_eval_native_c_abi_call(ctx, symbol_name, argument_types);
 }
 
 /// Materializes one constant name into the shared name pointer/length argument pair.
-fn emit_eval_constant_name_args(ctx: &mut FunctionContext<'_>, name: &str) {
+fn push_eval_constant_name_args(ctx: &mut FunctionContext<'_>, name: &str) {
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
     abi::emit_symbol_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        abi::int_result_reg(ctx.emitter),
         &name_label,
     );
+    push_eval_native_constant_word(ctx, PhpType::Pointer(None));
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        abi::int_result_reg(ctx.emitter),
         name_len as i64,
     );
+    push_eval_native_constant_word(ctx, PhpType::Int);
 }
 
 /// Encodes one prescanned scalar constant for the eval registration ABI.
@@ -328,25 +367,24 @@ pub(crate) fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
             .max_accelerated_files
             .saturating_sub(crate::codegen_support::opcache_manifest_len() as u64) as i64,
     ];
-    for (index, value) in arguments.into_iter().enumerate() {
-        let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
-        abi::emit_load_int_immediate(ctx.emitter, arg_reg, value);
+    for value in arguments {
+        stage_eval_native_int(ctx, value);
     }
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_configure_opcache");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_configure_opcache",
+        &[const { PhpType::Int }; 6],
+    );
     configure_eval_opcache_file_cache(ctx, &config);
 }
 
 /// Installs the accelerator diagnostic channel and triggers php-src's startup validation
 /// of `opcache.file_cache`.
 ///
-/// A SECOND call, not four more arguments on the one above, because that one already
-/// spends all six integer argument registers x86_64 provides — a seventh would need a
-/// stack slot the emitter cannot express. It is emitted immediately after, because the
-/// validation reads the enabled flag the first call installs.
+/// A SECOND call, not four more arguments on the one above, to preserve the stable Rust FFI
+/// contract. It is emitted immediately after because validation reads the enabled flag the
+/// first call installs. Both calls use the shared target-native C ABI planner, including MS x64
+/// shadow space and overflow slots.
 ///
 /// The bridge fatals (and exits 254) on a bad directory exactly as reference PHP's
 /// startup does, so this call can terminate the process before the program runs.
@@ -356,41 +394,24 @@ fn configure_eval_opcache_file_cache(
 ) {
     let (file_cache_label, file_cache_len) = ctx.data.add_string(config.file_cache.as_bytes());
     let (error_log_label, error_log_len) = ctx.data.add_string(config.error_log.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        &file_cache_label,
+    stage_eval_native_label(ctx, &file_cache_label);
+    stage_eval_native_int(ctx, file_cache_len as i64);
+    stage_eval_native_int(ctx, i64::from(config.file_cache_read_only));
+    stage_eval_native_int(ctx, config.log_verbosity_level);
+    stage_eval_native_label(ctx, &error_log_label);
+    stage_eval_native_int(ctx, error_log_len as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_configure_opcache_file_cache",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Int,
+        ],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        file_cache_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        i64::from(config.file_cache_read_only),
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        config.log_verbosity_level,
-    );
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &error_log_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        error_log_len as i64,
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_configure_opcache_file_cache");
-    abi::emit_call_label(ctx.emitter, &symbol);
     load_eval_opcache_blacklist(ctx, config);
     configure_eval_opcache_swapped_directives(ctx, config);
 }
@@ -411,21 +432,13 @@ fn load_eval_opcache_blacklist(
         return;
     }
     let (label, len) = ctx.data.add_string(config.blacklist_filename.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        &label,
+    stage_eval_native_label(ctx, &label);
+    stage_eval_native_int(ctx, len as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_opcache_load_blacklist",
+        &[PhpType::Pointer(None), PhpType::Int],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        len as i64,
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_opcache_load_blacklist");
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// `opcache.file_update_protection`, as the bridge's `swap_directive` addresses it.
@@ -466,18 +479,14 @@ fn configure_eval_opcache_swapped_directives(
 /// Passes `as_override = 0`: this is the value `--ini` baked, not an `ini_set()`, so it
 /// writes the base configuration and leaves any override in place.
 fn emit_opcache_directive_swap(ctx: &mut FunctionContext<'_>, id: i64, value: i64) {
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), id);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        value,
+    stage_eval_native_int(ctx, id);
+    stage_eval_native_int(ctx, value);
+    stage_eval_native_int(ctx, 0);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_opcache_swap_directive",
+        &[const { PhpType::Int }; 3],
     );
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 0);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_opcache_swap_directive");
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.
@@ -488,23 +497,19 @@ pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
     if !ctx.module.required_runtime_features.regex {
         return;
     }
-    for (index, provider_symbol) in [
+    for provider_symbol in [
         "elephc_pcre2_v1_compile",
         "elephc_pcre2_v1_exec",
         "elephc_pcre2_v1_free",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
+    ] {
         let symbol = ctx.emitter.target.extern_symbol(provider_symbol);
-        abi::emit_symbol_address(ctx.emitter, arg_reg, &symbol);
+        stage_eval_native_symbol_address(ctx, &symbol);
     }
-    let register = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_regex_provider");
-    abi::emit_call_label(ctx.emitter, &register);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_register_regex_provider",
+        &[const { PhpType::Pointer(None) }; 3],
+    );
 }
 
 /// Writes the physical eval call site's strict profile before every runtime dispatch.
@@ -519,13 +524,8 @@ pub(super) fn mark_eval_strict_php(ctx: &mut FunctionContext<'_>, inst: &Instruc
             ..
         })
     );
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    abi::emit_load_int_immediate(ctx.emitter, arg_reg, i64::from(strict_php));
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_set_strict_php");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    stage_eval_native_int(ctx, i64::from(strict_php));
+    emit_eval_native_c_abi_call(ctx, "__elephc_eval_set_strict_php", &[PhpType::Int]);
 }
 
 /// Writes the compilation's PHP profile before every runtime dispatch.
@@ -535,13 +535,12 @@ pub(super) fn mark_eval_strict_php(ctx: &mut FunctionContext<'_>, inst: &Instruc
 /// bridge defaults to the newest profile, so this call is what makes the older ones true.
 pub(super) fn mark_eval_php_version(ctx: &mut FunctionContext<'_>) {
     let version_id = i64::from(crate::codegen::compile_php_version().version_id());
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    abi::emit_load_int_immediate(ctx.emitter, arg_reg, version_id);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_set_php_version_id");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    stage_eval_native_int(ctx, version_id);
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_set_php_version_id",
+        &[PhpType::Int],
+    );
 }
 
 /// Returns the hidden frame slot that owns this function's persistent eval context.
@@ -630,18 +629,13 @@ pub(super) fn register_eval_declared_symbol_name(
     symbol_name: &str,
     name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    stage_eval_native_local_word(ctx, context_offset, PhpType::Pointer(None));
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &name_label,
+    stage_eval_native_label(ctx, &name_label);
+    stage_eval_native_int(ctx, name_len as i64);
+    emit_eval_native_c_abi_call(
+        ctx,
+        symbol_name,
+        &[PhpType::Pointer(None), PhpType::Pointer(None), PhpType::Int],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    let symbol = ctx.emitter.target.extern_symbol(symbol_name);
-    abi::emit_call_label(ctx.emitter, &symbol);
 }

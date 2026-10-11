@@ -53,7 +53,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("test r10, r10");                                   // inspect whether a runtime eval hook is installed
         emitter.instruction("jz __rt_ob_eval_result");                          // missing hooks retain a null pass-through result
         emitter.instruction("mov rdi, rsp");                                    // pass exclusive request storage with the C ABI
-        emitter.instruction("call r10");                                        // finish Rust execution before any PHP propagation
+        emitter.emit_native_bridge_call("r10", 1);                             // stage the request pointer and shadow space for the native callback ABI
         emitter.instruction("test rax, rax");                                   // inspect callback success independently of its returned value
         emitter.instruction("jz __rt_ob_eval_result");                          // convert the successful owned result
         emitter.instruction("cmp rax, 2");                                      // recognize a pending PHP Throwable

@@ -62,9 +62,6 @@ pub struct State {
     strict_detection: bool,
     illegal_chars: u64,
     cached_encoding: Option<(Vec<u8>, Encoding)>,
-    mail_command: Vec<u8>,
-    mail_force_extra_parameters: Option<Vec<u8>>,
-    mail_mixed_lf_and_crlf: bool,
 }
 
 impl Default for State {
@@ -76,9 +73,7 @@ impl Default for State {
             http_input: None, output_mimetypes: br"^(text/|application/xhtml\+xml)".to_vec(),
             output_conversion: output::OutputState::default(), encoding_translation: false,
             http_input_sources: [None; 4], http_input_encodings: vec![OutputEncoding::Convert(internal)],
-            detect_order: language.detect_order(), substitute: Substitute::default(), strict_detection: false, illegal_chars: 0, cached_encoding: None,
-            mail_command: b"/usr/sbin/sendmail -t -i".to_vec(),
-            mail_force_extra_parameters: None, mail_mixed_lf_and_crlf: false }
+            detect_order: language.detect_order(), substitute: Substitute::default(), strict_detection: false, illegal_chars: 0, cached_encoding: None }
     }
 }
 
@@ -86,15 +81,32 @@ impl State {
     /// Returns the current language without altering auto expansion or active detection order.
     pub fn language(&self) -> Language { self.language }
 
-    /// Returns the request's configured sendmail transport command.
-    pub fn mail_command(&self) -> &[u8] { &self.mail_command }
+    /// Returns the request's configured process transport, or empty for Windows' SMTP default.
+    pub fn mail_command(&self) -> &[u8] { self.mail_sendmail_path().unwrap_or_default() }
+
+    /// Returns the configured process transport while preserving PHP's null Windows default.
+    pub fn mail_sendmail_path(&self) -> Option<&[u8]> { self.core_ini.sendmail_path() }
 
     /// Returns configured extra transport arguments, including an explicitly empty override.
-    pub fn mail_force_extra_parameters(&self) -> Option<&[u8]> { self.mail_force_extra_parameters.as_deref() }
+    pub fn mail_force_extra_parameters(&self) -> Option<&[u8]> {
+        self.core_ini.mail_force_extra_parameters()
+    }
+
+    /// Returns the active SMTP host.
+    pub fn smtp_host(&self) -> &[u8] { self.core_ini.smtp_host() }
+
+    /// Returns PHP's effective SMTP port after integer conversion and zero fallback.
+    pub fn smtp_port(&self) -> u16 { self.core_ini.smtp_port() }
+
+    /// Returns the configured envelope sender while preserving its null default.
+    pub fn sendmail_from(&self) -> Option<&[u8]> { self.core_ini.sendmail_from() }
+
+    /// Returns the validated `mail.cr_lf_mode` spelling.
+    pub fn mail_cr_lf_mode(&self) -> &[u8] { self.core_ini.mail_cr_lf_mode() }
 
     /// Selects PHP's legacy mail line separator for the generated message.
     pub fn mail_line_separator(&self) -> &'static [u8] {
-        if self.mail_mixed_lf_and_crlf { b"\n" } else { b"\r\n" }
+        if self.core_ini.mail_mixed_lf_and_crlf() { b"\n" } else { b"\r\n" }
     }
 
     /// Changes the language and future auto expansion, preserving the active detection order.

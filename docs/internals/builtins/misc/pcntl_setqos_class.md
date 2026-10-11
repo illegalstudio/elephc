@@ -2,7 +2,7 @@
 title: "pcntl_setqos_class() - internals"
 description: "Compiler internals for pcntl_setqos_class(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 659
+  order: 666
 ---
 
 ## `pcntl_setqos_class()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_setqos_class.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_setqos_class.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

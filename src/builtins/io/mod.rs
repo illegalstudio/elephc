@@ -22,7 +22,7 @@
 //!   readlink (Union(Str, Bool)), chmod (mode must be int),
 //!   chown/chgrp/lchown/lchgrp (owner/group must be int or string), touch (timestamp
 //!   validation via `check_touch`).
-//! - Library-linking check hooks: file_get_contents (TLS / PHAR / z / bz2),
+//! - Library-linking check hooks: file_get_contents (TLS / pure-Rust PHAR),
 //!   file_put_contents (PHAR / crypto), hash_file (crypto), unlink (PHAR).
 //! - Internal PHAR intrinsics (`internal: true`): all 16 `__elephc_phar_*` builtins
 //!   migrated from `src/types/checker/builtins/io/files.rs` (io batch C2).
@@ -135,6 +135,10 @@ pub mod pclose;
 pub mod pfsockopen;
 pub mod popen;
 pub mod print_r;
+pub mod proc_close;
+pub mod proc_get_status;
+pub mod proc_open;
+pub mod proc_terminate;
 pub mod readdir;
 pub mod readfile;
 pub mod readline;

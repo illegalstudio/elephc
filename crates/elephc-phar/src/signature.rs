@@ -319,6 +319,7 @@ pub(super) fn read_zip_signature(data: &[u8]) -> Option<Vec<u8>> {
             return None;
         }
         let method = le16(data, p + 10)?;
+        let crc = le32(data, p + 16)?;
         let mut compressed_size = le32(data, p + 20)? as usize;
         let mut uncompressed_size = le32(data, p + 24)? as usize;
         let name_len = le16(data, p + 28)? as usize;
@@ -345,6 +346,7 @@ pub(super) fn read_zip_signature(data: &[u8]) -> Option<Vec<u8>> {
                 uncompressed_size,
                 false,
                 0,
+                crc,
             );
         }
         p = name_start
@@ -413,6 +415,7 @@ pub(super) fn verify_zip_phar_signature(
             return None;
         }
         let method = le16(data, p + 10)?;
+        let crc = le32(data, p + 16)?;
         let mut compressed_size = le32(data, p + 20)? as usize;
         let mut uncompressed_size = le32(data, p + 24)? as usize;
         let name_len = le16(data, p + 28)? as usize;
@@ -445,6 +448,7 @@ pub(super) fn verify_zip_phar_signature(
                 uncompressed_size,
                 false,
                 0,
+                crc,
             )?;
             let (flag, expected) = parse_signature_bin(&payload)?;
             if flag != PHAR_OPENSSL_SIGNATURE_TYPE {

@@ -12,7 +12,7 @@
 use std::ffi::c_void;
 
 use elephc_builtin_contract::mbstring_abi::variables::{
-    MbInvokeHostV6, MbVariableChildNextV1, MbVariableChildV1, MbVariableHandleV1,
+    MbInvokeHostV6, MbInvokeHostV7, MbVariableChildNextV1, MbVariableChildV1, MbVariableHandleV1,
     MbVariableInspectV1, MbVariablePrepareWriteV1, MbVariableViewV1,
     MbVariableWriteStringV1, VARIABLE_ARRAY, VARIABLE_CHILD_END, VARIABLE_CHILD_ENTRY,
     VARIABLE_OBJECT, VARIABLE_OTHER, VARIABLE_STRING,
@@ -41,10 +41,14 @@ pub struct HostAdapter {
 }
 
 impl HostAdapter {
-    /// Requires a complete version-six extension before touching caller storage.
+    /// Requires a complete V6 prefix from a version-six or version-seven host.
     pub fn new(host: &MbInvokeHostV6) -> Option<Self> {
-        if host.base.base.base.base.base.version != 6 || host.base.base.base.base.base.size as usize
-            != std::mem::size_of::<MbInvokeHostV6>() { return None; }
+        let header = &host.base.base.base.base.base;
+        let complete = (header.version == 6
+            && header.size as usize == std::mem::size_of::<MbInvokeHostV6>())
+            || (header.version == 7
+                && header.size as usize == std::mem::size_of::<MbInvokeHostV7>());
+        if !complete { return None; }
         Some(Self {
             context: host.base.base.base.base.base.context,
             inspect: host.variable_inspect?,

@@ -2,7 +2,7 @@
 title: "imagerotate() - internals"
 description: "Compiler internals for imagerotate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 525
+  order: 531
 ---
 
 ## `imagerotate()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3185](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3185) (`imagerotate`)
+- **Lowering**: [`src/image_prelude.rs`:3256](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3256) (`imagerotate`)
 - **Function symbol**: `imagerotate()`
 
 

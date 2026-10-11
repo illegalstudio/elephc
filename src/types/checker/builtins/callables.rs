@@ -1109,6 +1109,14 @@ fn check_callback_builtin_call_in_engine_frame(
         // same library requirements, so `'strlen'` and `strlen(...)` cannot drift apart.
         if crate::name_resolver::is_builtin_function(cb_name.as_str()) {
             let key = crate::names::php_symbol_key(cb_name.trim_start_matches('\\'));
+            if crate::builtins::registry::lookup(&key).is_some()
+                && !super::catalog::builtin_is_available_for_target(&key, checker.target)
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!("Undefined function: {cb_name}"),
+                ));
+            }
             if let Some(message) = crate::builtins::registry::first_class_callable_rejection(&key) {
                 return Err(CompileError::new(span, message));
             }

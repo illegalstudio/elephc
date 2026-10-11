@@ -134,6 +134,24 @@ fn mbstring_output_handler_lowering_requires_mime_provider() {
         .required_runtime_features.mbstring_mime);
 }
 
+/// Selects mail-only host callbacks for direct and reachable callable surfaces.
+#[test]
+fn mbstring_mail_lowering_is_precise() {
+    for source in [
+        "<?php mb_send_mail('to@example.test', 'subject', 'body');",
+        "<?php $mail = mb_send_mail(...); $mail('to@example.test', 'subject', 'body');",
+        "<?php $name = $argc > 0 ? 'mb_send_mail' : 'mb_strlen'; call_user_func($name, 'x', 'y', 'z');",
+    ] {
+        let features = lower_source(source).required_runtime_features;
+        assert!(features.mbstring && features.mbstring_mail, "{source}: {features:?}");
+    }
+    let text = lower_source("<?php echo mb_strlen('text');").required_runtime_features;
+    assert!(text.mbstring && !text.mbstring_mail, "{text:?}");
+
+    let eval = lower_source("<?php eval($argv[1]);").required_runtime_features;
+    assert!(eval.eval_bridge && eval.mbstring_mail, "{eval:?}");
+}
+
 /// Assembles actual capture and query calls after frontend lowering on every supported target.
 #[test]
 #[ignore = "requires clang with ELF AArch64/x86_64 and Apple AArch64 assembler support"]

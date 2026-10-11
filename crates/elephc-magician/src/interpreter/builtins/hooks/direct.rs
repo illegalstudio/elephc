@@ -203,6 +203,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Rad2deg,
     /// Dispatches `rand(...)`.
     Rand,
+    /// Dispatches `random_bytes(...)`.
+    RandomBytes,
     /// Dispatches `random_int(...)`.
     RandomInt,
     /// Dispatches `round(...)`.
@@ -457,6 +459,7 @@ impl EvalDirectHook {
             }
             Self::Rad2deg => eval_builtin_rad2deg(args, context, scope, values),
             Self::Rand => eval_builtin_rand(args, context, scope, values),
+            Self::RandomBytes => eval_builtin_random_bytes(args, context, scope, values),
             Self::RandomInt => eval_builtin_random_int(args, context, scope, values),
             Self::Round => eval_builtin_round(args, context, scope, values),
             Self::PregMatch => eval_builtin_preg_match(args, context, scope, values),
@@ -488,6 +491,8 @@ impl EvalDirectHook {
             Self::Sinh => eval_builtin_sinh(args, context, scope, values),
             Self::Slashes => match name {
                 "addslashes" => eval_builtin_addslashes(args, context, scope, values),
+                "escapeshellarg" => eval_builtin_escapeshellarg(args, context, scope, values),
+                "escapeshellcmd" => eval_builtin_escapeshellcmd(args, context, scope, values),
                 "stripslashes" => eval_builtin_stripslashes(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },

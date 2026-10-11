@@ -2,7 +2,7 @@
 title: "gd_info() - internals"
 description: "Compiler internals for gd_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 451
+  order: 455
 ---
 
 ## `gd_info()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3656](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3656) (`gd_info`)
+- **Lowering**: [`src/image_prelude.rs`:3727](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3727) (`gd_info`)
 - **Function symbol**: `gd_info()`
 
 

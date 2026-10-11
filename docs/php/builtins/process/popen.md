@@ -2,7 +2,7 @@
 title: "popen()"
 description: "Opens process file pointer."
 sidebar:
-  order: 754
+  order: 768
 ---
 
 ## popen()
@@ -21,7 +21,7 @@ Opens process file pointer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
+- **Compiled (AOT)**: supported on the four executable/release hosts (macOS ARM64, Linux ARM64, Linux x86_64, and Windows x86_64); calls are refused at compile time for iOS library targets.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/popen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/popen.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

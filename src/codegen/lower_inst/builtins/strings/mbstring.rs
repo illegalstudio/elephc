@@ -61,11 +61,10 @@ pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
 
     }
     super::load_optional_sprintf_eval_context(ctx, 4)?;
-    let target = ctx.emitter.target;
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 0), operation.as_u32() as i64);
-    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(target, 1), 0);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), inst.operands.len() as i64);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), i64::from(strict));
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0), operation.as_u32() as i64);
+    abi::emit_temporary_stack_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2), inst.operands.len() as i64);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 3), i64::from(strict));
     if query {
         crate::codegen_support::mbstring_query::stage(ctx.emitter, state_offset);
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_query_native");
@@ -73,7 +72,7 @@ pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
         capture::stage_state(ctx, state_offset);
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_capture_native");
     } else if variables {
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 5), 1);
+        abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 5), 1);
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_variables_native");
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_native");
@@ -114,7 +113,7 @@ fn lower_packed(ctx: &mut FunctionContext<'_>, inst: &Instruction, operation: Ru
     let target = ctx.emitter.target;
     let scratch = match target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r10" };
     ctx.load_value_to_reg(array, scratch)?;
-    abi::emit_load_from_address(ctx.emitter, abi::int_arg_reg_name(target, 2), scratch, 0);
+    abi::emit_load_from_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2), scratch, 0);
     // Native heap arrays can be byte-aligned. Rust's pointer slice requires aligned storage.
     // Stage only the bounded accepted argument prefix; the coordinator retains actual arity.
     let ready = ctx.next_label("mbstring_packed_arguments_ready");
@@ -135,9 +134,9 @@ fn lower_packed(ctx: &mut FunctionContext<'_>, inst: &Instruction, operation: Ru
         }
     }
     ctx.emitter.label(&ready);
-    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(target, 1), 0);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 0), operation.as_u32() as i64);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), i64::from(strict));
+    abi::emit_temporary_stack_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0), operation.as_u32() as i64);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 3), i64::from(strict));
     abi::emit_call_label(ctx.emitter, "__rt_mbstring_native");
     abi::emit_release_temporary_stack(ctx.emitter, size);
     finish_result(ctx, inst, contract.returns)

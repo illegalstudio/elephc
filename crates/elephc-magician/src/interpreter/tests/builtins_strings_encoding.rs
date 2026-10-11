@@ -14,30 +14,41 @@ use super::support::*;
 #[test]
 fn execute_program_preg_third_review_omitted_invalid_flags() {
     let program = parse_fragment(br#"
-foreach ([3, 4, 7, -1] as $flag) { echo preg_match_all('/(a)/', 'aaa', flags: $flag), '|'; }
-return preg_match_all('/(a)/', 'aaa', flags: PREG_OFFSET_CAPTURE);
+foreach ([3, 4, 7, -1] as $flag) {
+    try { preg_match_all('/(a)/', 'aaa', flags: $flag); }
+    catch (ValueError $error) { echo $error->getMessage(), '|'; }
+}
+echo preg_match_all('/(a)/', 'aaa', flags: 1024), '|';
+return preg_match_all('/(a)/', 'aaa', flags: PREG_OFFSET_CAPTURE | 1024);
 "#).expect("parse omitted capture fixture");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     let result = execute_program(&program, &mut scope, &mut values).expect("execute omitted captures");
-    assert_eq!(values.output, "0|0|0|0|");
+    assert_eq!(
+        values.output,
+        format!(
+            "{}3|",
+            "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant|".repeat(4)
+        )
+    );
     assert_eq!(values.get(result), FakeValue::Int(3));
 }
 
-/// Unsupported flags clear aliased captures instead of aborting the eval program.
+/// Invalid low-byte order flags throw after clearing aliased captures.
 #[test]
 fn execute_program_preg_third_review_extra_flag_bits() {
     let program = parse_fragment(br#"
 $matches = ['old']; $alias =& $matches;
 foreach ([4, -1, PREG_SET_ORDER | 4] as $flag) {
-    echo preg_match_all('/(a)/', 'aaa', $alias, $flag), ':', count($matches), '|';
+    try { preg_match_all('/(a)/', 'aaa', $alias, $flag); }
+    catch (ValueError) { echo count($matches), '|'; }
 }
 return true;
 "#).expect("parse unsupported flags fixture");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     let result = execute_program(&program, &mut scope, &mut values).expect("execute unsupported flags");
-    assert_eq!(values.output, "0:0|0:0|0:0|");
+    assert_eq!(values.output, "0|0|0|");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
@@ -358,20 +369,40 @@ return preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);"#,
     assert_eq!(values.get(result), FakeValue::Int(1));
 }
 
-/// Conflicting preg order bits fail closed instead of producing a set-order matrix.
+/// Conflicting preg order bits throw after replacing the previous matrix with an empty array.
 #[test]
 fn execute_program_preg_oct9_conflicting_order() {
     let program = parse_fragment(br#"
 $matches = ["old"];
-echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER), ":", count($matches), "|";
-echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_OFFSET_CAPTURE), ":", count($matches), "|";
-return preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+foreach ([3, 3 | PREG_OFFSET_CAPTURE, 3 | PREG_UNMATCHED_AS_NULL] as $flags) {
+    try { preg_match_all("/(a)/", "a", $matches, $flags); }
+    catch (ValueError) { echo count($matches), "|"; }
+}
+return true;
 "#).expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-    assert_eq!(values.output, "0:0|0:0|");
-    assert_eq!(values.get(result), FakeValue::Int(0));
+    assert_eq!(values.output, "0|0|0|");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Eval SET_ORDER omits trailing unmatched groups unless null preservation is requested.
+#[test]
+fn execute_program_preg_set_order_omits_trailing_unmatched_groups() {
+    let program = parse_fragment(br#"
+preg_match_all('/(a)(b)?/', 'ab a', $plain, PREG_SET_ORDER);
+preg_match_all('/(a)(b)?/', 'ab a', $nulls, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+echo count($plain[0]), ':', count($plain[1]), '|', count($nulls[0]), ':', count($nulls[1]);
+return true;
+"#).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "3:2|3:3");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies eval HTML entity builtins encode, decode, and dispatch as callables.

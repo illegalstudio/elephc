@@ -2,7 +2,7 @@
 title: "imagestring() - internals"
 description: "Compiler internals for imagestring(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 531
+  order: 537
 ---
 
 ## `imagestring()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2896](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2896) (`imagestring`)
+- **Lowering**: [`src/image_prelude.rs`:2967](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2967) (`imagestring`)
 - **Function symbol**: `imagestring()`
 
 

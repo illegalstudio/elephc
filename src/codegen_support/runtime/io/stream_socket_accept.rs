@@ -33,7 +33,7 @@ fn family_byte_offset(platform: Platform) -> i64 {
     match platform {
         Platform::MacOS => 1,
         Platform::Linux => 0,
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        Platform::Windows => 0, // Windows WinSock sockaddr puts the 16-bit family at offset 0, same as Linux
     }
 }
 
@@ -136,6 +136,8 @@ pub fn emit_stream_socket_accept(emitter: &mut Emitter) {
 
     emitter.label("__rt_ssa_accept_ok");
     emitter.instruction("str x0, [sp, #200]");                                  // save the accepted fd
+    emitter.instruction("ldr x0, [sp, #16]");                                   // listener fd
+    emitter.instruction("bl __rt_stream_listener_prepare_accept");              // publish inherited context/flags/TLS method
 
     // -- dispatch on the captured sockaddr's address family --
     emitter.instruction("ldr w9, [sp, #160]");                                  // reload addrlen returned by accept
@@ -279,6 +281,8 @@ fn emit_stream_socket_accept_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did accept() return a valid descriptor?
     emitter.instruction("js __rt_ssa_fail_clear_x86");                          // accept() failed: clear globals and report -1
     emitter.instruction("mov QWORD PTR [rbp - 192], rax");                      // save the accepted fd
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // listener fd
+    emitter.instruction("call __rt_stream_listener_prepare_accept");            // publish inherited context/flags/TLS method
 
     // -- dispatch on the captured sockaddr's address family --
     emitter.instruction("movsxd r10, DWORD PTR [rbp - 152]");                   // reload addrlen returned by accept (signed widen)

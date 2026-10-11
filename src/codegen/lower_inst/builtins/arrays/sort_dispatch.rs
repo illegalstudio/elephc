@@ -132,7 +132,7 @@ pub(super) fn lower_hash_reindexing_sort(
     ensure_unique_hash_sort_source(ctx, array)?;
 
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg0 = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
 
     // Park the table being replaced; it is released once its values have been copied out.
     ctx.load_value_to_result(array)?;
@@ -153,7 +153,7 @@ pub(super) fn lower_hash_reindexing_sort(
     for index in 1..=3 {
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, index),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, index),
             0,
         );
     }
@@ -309,9 +309,9 @@ pub(super) fn lower_user_sort_static_callback(
                 callback_arg_types.to_vec(),
                 PhpType::Int,
                 |ctx, wrapper_label, env_bytes| {
-                    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-                    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-                    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+                    let callback_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+                    let array_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
+                    let env_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
@@ -340,9 +340,9 @@ pub(super) fn lower_user_sort_static_callback(
                 super::super::instruction_strict_php_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
-                    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-                    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-                    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+                    let callback_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+                    let array_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
+                    let env_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
@@ -396,9 +396,9 @@ pub(super) fn lower_user_sort_with_static_callback_binding(
 ) -> Result<()> {
     let callback_label = sort_callback_label_returning_int(ctx, &callback_binding)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
-    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let callback_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let array_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
+    let env_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
@@ -469,7 +469,7 @@ pub(super) fn emit_sort_callback_mixed_return_int_adapter(
 /// Casts the current owned Mixed result to int and releases the consumed Mixed cell.
 pub(super) fn emit_owned_mixed_result_cast_to_int(ctx: &mut FunctionContext<'_>) {
     move_sort_callback_int_result_to_first_arg(ctx);
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_push_reg(ctx.emitter, arg_reg);
@@ -490,7 +490,7 @@ pub(super) fn emit_owned_mixed_result_cast_to_int(ctx: &mut FunctionContext<'_>)
 /// Moves the integer result register into the first argument register when required.
 pub(super) fn move_sort_callback_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     if result_reg == arg_reg {
         return;
     }
@@ -700,7 +700,7 @@ pub(super) fn ensure_unique_sort_source(ctx: &mut FunctionContext<'_>, array: Va
 
 /// Splits a shared hash table before a sort helper relinks its iteration order in place.
 pub(super) fn ensure_unique_hash_sort_source(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
-    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let array_arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
     ctx.store_result_value(array)

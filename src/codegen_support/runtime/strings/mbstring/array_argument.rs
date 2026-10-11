@@ -26,10 +26,10 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #64]");                                  // clear the unused root high word
     emitter.instruction("stp xzr, xzr, [sp, #80]");                             // default failed snapshot output to absent wire bytes
     emitter.instruction("add x0, sp, #48");                                     // pass the borrowed root descriptor
-    abi::emit_symbol_address(emitter, "x1", "__rt_mbstring_array_next");
+    abi::emit_symbol_address(emitter, "x1", &emitter.target.extern_symbol("__rt_mbstring_cabi_6"));
     emitter.instruction("mov x2, xzr");                                         // the native reader needs no external context
     emitter.instruction("mov x3, sp");                                          // pass owned bridge result storage
-    emitter.bl_c("elephc_mbstring_snapshot_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_snapshot_v1", 4);
     emitter.instruction("ldr x9, [sp]");                                        // inspect snapshot success before borrowing its packed data
     emitter.instruction(&format!("cmp x9, #{}", RESULT_ARRAY));                 // require a complete validated graph result
     emitter.instruction("b.ne __rt_mbstring_array_argument_release");           // retain absent bytes on explicit snapshot failure
@@ -38,7 +38,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #80]");                               // save the transferred argument storage across Rust release
     emitter.label("__rt_mbstring_array_argument_release");
     emitter.instruction("mov x0, sp");                                          // pass the snapshot result to its owning allocator
-    emitter.bl_c("elephc_mbstring_release_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_release_v1", 1);
     emitter.instruction("ldp x1, x2, [sp, #80]");                               // return owned wire bytes or an invalid empty array payload
     emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore the PHP caller frame and return address
     emitter.instruction("add sp, sp, #112");                                    // release staging after all bridge buffers have been reclaimed
@@ -81,10 +81,10 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 80], 0");                         // default failed snapshot output to absent wire storage
     emitter.instruction("mov QWORD PTR [rsp + 88], 0");                         // default failed snapshot output to zero bytes
     emitter.instruction("lea rdi, [rsp + 48]");                                 // pass the borrowed root descriptor
-    abi::emit_symbol_address(emitter, "rsi", "__rt_mbstring_array_next");
+    abi::emit_symbol_address(emitter, "rsi", &emitter.target.extern_symbol("__rt_mbstring_cabi_6"));
     emitter.instruction("xor edx, edx");                                        // the native reader needs no external context
     emitter.instruction("mov rcx, rsp");                                        // pass owned bridge result storage
-    emitter.bl_c("elephc_mbstring_snapshot_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_snapshot_v1", 4);
     emitter.instruction(&format!("cmp QWORD PTR [rsp], {}", RESULT_ARRAY));     // require a complete validated graph result
     emitter.instruction("jne __rt_mbstring_array_argument_release");            // retain absent bytes on explicit snapshot failure
     emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                       // borrow the packed graph bytes
@@ -94,7 +94,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 88], rdx");                       // save its complete byte length
     emitter.label("__rt_mbstring_array_argument_release");
     emitter.instruction("mov rdi, rsp");                                        // pass the snapshot result to its owning allocator
-    emitter.bl_c("elephc_mbstring_release_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_release_v1", 1);
     emitter.instruction("mov rax, QWORD PTR [rsp + 80]");                       // return owned wire bytes or an invalid absent payload
     emitter.instruction("mov rdx, QWORD PTR [rsp + 88]");                       // return the packed byte length
     emitter.instruction("mov rsp, rbp");                                        // release staging after all bridge buffers have been reclaimed

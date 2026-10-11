@@ -43,13 +43,17 @@ fn lower_comparator(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &st
         "array_uintersect(): Argument #3 ($callback) must be a valid callback"
     };
     super::boxed_predicates::acquire_callback_descriptor(ctx, inst, callback, name, error)?;
-    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), abi::int_result_reg(ctx.emitter));
-    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
-    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 64);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), mode);
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
+        abi::int_result_reg(ctx.emitter),
+    );
+    abi::emit_temporary_stack_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 0);
+    abi::emit_temporary_stack_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2), 64);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 3), mode);
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 4),
         ctx.lexical_class_id(),
     );
     abi::emit_call_label(ctx.emitter, "__rt_array_udiff_uintersect");

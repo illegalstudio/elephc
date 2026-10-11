@@ -43,7 +43,7 @@ const PENDING: usize = 184;
 const OTHER: usize = 192;
 const INVOCATION_SCOPE: usize = 200;
 
-/// Takes descriptor/first/second/mode in C arguments and returns an owned boxed keyed array.
+/// Takes descriptor/first/second/mode in runtime ABI arguments and returns an owned boxed keyed array.
 /// Mode zero keeps unmatched entries; mode one keeps entries with any comparator-equal value.
 pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
@@ -51,11 +51,15 @@ pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_udiff_uintersect");
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [CALLBACK, BORROWED_FIRST, BORROWED_SECOND, MODE].into_iter().enumerate() {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::store_at_offset(
+            emitter,
+            abi::runtime_helper_int_arg_reg(emitter, index),
+            offset,
+        );
     }
     abi::store_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 4),
+        abi::runtime_helper_int_arg_reg(emitter, 4),
         INVOCATION_SCOPE,
     );
     for offset in [FIRST, SECOND, INPUT, OTHER, KEY, ARGUMENTS, NEXT, ANSWER, FIRST_CURSOR, PENDING] {
@@ -71,7 +75,7 @@ pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
         box_unboxed_value(emitter);
         abi::store_at_offset(emitter, result, owner);
     }
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 4);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), 4);
     abi::emit_call_label(emitter, "__rt_hash_new");
     value_boxing::emit_box_current_owned_value_as_mixed(emitter, &PhpType::AssocArray {
         key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed),
@@ -90,11 +94,11 @@ pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
     iterate(emitter, SECOND_PAYLOAD, SECOND_CURSOR, "__rt_array_udiff_uintersect_absent", false);
     box_entry(emitter, OTHER);
     prepare_arguments(emitter);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CALLBACK);
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENTS);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), CALLBACK);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), ARGUMENTS);
     abi::load_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 2),
+        abi::runtime_helper_int_arg_reg(emitter, 2),
         INVOCATION_SCOPE,
     );
     clear_slot(emitter, ARGUMENTS);
@@ -114,7 +118,7 @@ pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_udiff_uintersect_advance");
     emitter.label("__rt_array_udiff_uintersect_keep");
     for (index, offset) in [ANSWER, KEY_LO, KEY_HI, INPUT].into_iter().enumerate() {
-        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     clear_slot(emitter, INPUT);
     abi::emit_call_label(emitter, "__rt_mixed_array_set");
@@ -129,7 +133,7 @@ pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
 /// Advances an array iterator, saving the complete value triple and optionally its original key.
 fn iterate(emitter: &mut Emitter, payload: usize, cursor: usize, done: &str, preserve_key: bool) {
     for (index, offset) in [payload, cursor].into_iter().enumerate() {
-        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     abi::emit_call_label(emitter, "__rt_array_iter_next");
     ins(emitter, "cmn x0, #1", "cmp rax, -1");
@@ -174,8 +178,8 @@ fn box_key(emitter: &mut Emitter) {
 /// Builds a two-cell argument array, retaining the left input and transferring the right candidate.
 fn prepare_arguments(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
+    let arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
     abi::emit_load_int_immediate(emitter, arg0, 2);
     abi::emit_load_int_immediate(emitter, arg1, 8);
     abi::emit_call_label(emitter, "__rt_array_new");
@@ -259,7 +263,7 @@ fn install_boundary(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
+    abi::emit_frame_slot_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.bl_c("setjmp");                                                    // preserve every comparator owner across callback and cleanup throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_udiff_uintersect_caught");
 }
@@ -338,6 +342,30 @@ mod tests {
             assert!(asm.contains("__rt_exception_chain"), "{name}");
             assert!(asm.contains("__rt_throw_current"), "{name}");
             assert!(!asm.contains("__rt_mixed_clone"), "{name}");
+        }
+    }
+
+    /// Keeps the fifth lexical-scope word in the internal SysV register sequence on Windows.
+    #[test]
+    fn boxed_set_comparator_windows_x86_64_uses_sysv_runtime_entry_abi() {
+        let mut emitter = Emitter::new(Target::parse("windows-x86_64").unwrap());
+        emit_array_udiff_uintersect(&mut emitter);
+        let asm = emitter.output();
+        let entry = asm
+            .split_once("__rt_array_udiff_uintersect:\n")
+            .expect("boxed set comparator entry")
+            .1
+            .split_once("call __rt_mixed_unbox")
+            .expect("boxed set comparator first unbox")
+            .0;
+        for expected in [
+            "mov QWORD PTR [rbp - 8], rdi",
+            "mov QWORD PTR [rbp - 16], rsi",
+            "mov QWORD PTR [rbp - 24], rdx",
+            "mov QWORD PTR [rbp - 32], rcx",
+            "mov QWORD PTR [rbp - 200], r8",
+        ] {
+            assert!(entry.contains(expected), "missing comparator runtime ABI save: {expected}\n{entry}");
         }
     }
 }

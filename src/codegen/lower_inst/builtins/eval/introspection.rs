@@ -27,11 +27,16 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_callable_call_array(
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_array_arg, EVAL_CALLABLE_ARG_ARRAY_OFFSET);
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_callable_call_array");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_loaded_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_callable_call_array",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+        ],
+    );
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -51,11 +56,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_is_callable(
     load_eval_context_to_arg(ctx, 0);
     let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, EVAL_TEMP_CELL_OFFSET);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_is_callable");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_loaded_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_is_callable",
+        &[PhpType::Pointer(None), PhpType::Pointer(None)],
+    );
     retire_eval_metadata_operand_boxes(ctx, &[(callback, EVAL_TEMP_CELL_OFFSET)])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     box_eval_bool_result_if_mixed(ctx, inst);
@@ -85,11 +90,16 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_member_exists(
         abi::int_arg_reg_name(ctx.emitter.target, 3),
         lookup_kind,
     );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_member_exists");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_loaded_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_member_exists",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+        ],
+    );
     retire_eval_metadata_operand_boxes(ctx, &[
         (target, EVAL_TEMP_CELL_OFFSET), (member, EVAL_CODE_PTR_OFFSET),
     ])?;
@@ -119,11 +129,16 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_relation(
     );
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_class_relation");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_loaded_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_class_relation",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+        ],
+    );
     retire_eval_metadata_operand_boxes(ctx, &[(target, EVAL_TEMP_CELL_OFFSET)])?;
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -157,11 +172,16 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
     );
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_object_class_name");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_loaded_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_object_class_name",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+        ],
+    );
     retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -215,27 +235,21 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
     store_eval_object_operand(ctx, object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_eval_unboxed_not_object(ctx, &false_label);
-    load_eval_context_to_arg(ctx, 0);
-    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
-    let (target_label, target_len) = ctx.data.add_string(target_class.as_bytes());
-    let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_symbol_address(ctx.emitter, target_arg, &target_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        target_len as i64,
+    stage_eval_native_context(ctx);
+    stage_eval_native_stack_word(ctx, EVAL_TEMP_CELL_OFFSET);
+    stage_eval_native_string(ctx, target_class);
+    stage_eval_native_int(ctx, i64::from(exclude_self));
+    emit_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_object_is_a",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Int,
+        ],
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        i64::from(exclude_self),
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_object_is_a");
-    abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&false_label);
@@ -286,11 +300,16 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a_dynamic(
         abi::int_arg_reg_name(ctx.emitter.target, 3),
         i64::from(exclude_self),
     );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_object_is_a_dynamic");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_loaded_eval_native_c_abi_call(
+        ctx,
+        "__elephc_eval_object_is_a_dynamic",
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+        ],
+    );
     emit_branch_if_eval_c_int_negative(ctx, &invalid_label);
     abi::emit_jump(ctx.emitter, &done_label);
 

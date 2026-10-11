@@ -28,9 +28,13 @@
 
 use super::accel_log::{accel_error, AccelLogLevel};
 use std::cell::RefCell;
+#[cfg(unix)]
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path;
+
+#[cfg(windows)]
+mod windows_access;
 
 /// The `opcache.*` pair that describes the on-disk file cache php-src validates.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -135,25 +139,50 @@ fn is_usable_cache_directory(path: &str, read_only: bool) -> bool {
     if !Path::new(path).is_dir() {
         return false;
     }
-    // A NUL byte cannot reach `access()` as a C string; php-src's own INI value is
-    // NUL-terminated and so could never carry one either. Refusing is the same answer
-    // its `zend_stat` would give.
-    let Ok(c_path) = CString::new(path) else {
-        return false;
-    };
-    // SEARCH PERMISSION IN BOTH MODES. Entries live INSIDE the directory, so a directory that
-    // can be read and written but not traversed holds nothing usable, and php-src asks
-    // `access()` for `X_OK` alongside the rest. MEASURED as a non-root user: a `0600`
-    // directory is a startup fatal in reference and was accepted here; under
-    // `file_cache_read_only=1`, `0400` is fatal and `0500` runs.
-    let mode = if read_only {
-        libc::R_OK | libc::X_OK
-    } else {
-        libc::R_OK | libc::W_OK | libc::X_OK
-    };
-    // SAFETY: `c_path` is a live NUL-terminated C string for the duration of the call
-    // and `mode` is a valid `access(2)` mode mask.
-    unsafe { libc::access(c_path.as_ptr(), mode) == 0 }
+    // On Unix, require search permission in both modes. Entries live inside the directory, so
+    // a directory that can be read and written but not traversed holds nothing usable. MEASURED
+    // as a non-root user: a `0600` directory is a startup fatal in reference; under
+    // `file_cache_read_only=1`, `0400` is fatal and `0500` runs. Windows follows OPcache's
+    // separate `_access(path, 04/06)` branch in `windows_access`.
+    #[cfg(unix)]
+    {
+        // A NUL byte cannot reach `access()` as a C string; php-src's own INI value is
+        // NUL-terminated and so could never carry one either.
+        let Ok(c_path) = CString::new(path) else {
+            return false;
+        };
+        // SAFETY: `c_path` remains live and the mode is a valid POSIX access mask.
+        unsafe { libc::access(c_path.as_ptr(), cache_directory_access_mode(read_only)) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        windows_access::directory_access(Path::new(path), read_only)
+    }
+}
+
+/// Returns php-src's effective directory access mask for the host C runtime.
+fn cache_directory_access_mode(read_only: bool) -> libc::c_int {
+    #[cfg(unix)]
+    {
+        if read_only {
+            libc::R_OK | libc::X_OK
+        } else {
+            libc::R_OK | libc::W_OK | libc::X_OK
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Windows' access vocabulary retains PHP's numeric R_OK/W_OK values. Directory search
+        // has no separate Windows permission bit; the DACL check evaluates read/write access.
+        const WINDOWS_R_OK: libc::c_int = 4;
+        const WINDOWS_W_OK: libc::c_int = 2;
+        const WINDOWS_X_OK: libc::c_int = 0;
+        if read_only {
+            WINDOWS_R_OK | WINDOWS_X_OK
+        } else {
+            WINDOWS_R_OK | WINDOWS_W_OK | WINDOWS_X_OK
+        }
+    }
 }
 
 #[cfg(test)]
@@ -215,6 +244,7 @@ mod tests {
 
     /// Returns whether this process bypasses permission checks, which makes the mode fixtures
     /// below meaningless: root reads and writes a `0600` directory regardless.
+    #[cfg(unix)]
     fn bypasses_permission_checks() -> bool {
         // SAFETY: `geteuid` has no preconditions.
         unsafe { libc::geteuid() == 0 }
@@ -227,6 +257,7 @@ mod tests {
     /// a non-root user: `0600` is fatal in reference, and under `file_cache_read_only=1`,
     /// `0400` is fatal while `0500` runs.
     #[test]
+    #[cfg(unix)]
     fn a_directory_without_search_permission_is_refused() {
         use std::os::unix::fs::PermissionsExt;
         if bypasses_permission_checks() {
@@ -265,12 +296,14 @@ mod tests {
 
     /// Verifies a missing path is refused.
     #[test]
+    #[cfg(unix)]
     fn a_missing_directory_is_refused() {
         assert!(!is_usable_cache_directory("/no/such/directory", false));
     }
 
     /// Verifies an existing FILE is refused, since php-src requires `S_ISDIR`.
     #[test]
+    #[cfg(unix)]
     fn a_file_is_refused() {
         assert!(!is_usable_cache_directory("/etc/hosts", false));
     }
@@ -287,6 +320,7 @@ mod tests {
     /// made this fail on CI, which runs as root on the Linux runners. The read-only half is
     /// the half that discriminates the directive, and it is asserted either way.
     #[test]
+    #[cfg(unix)]
     fn the_access_mode_follows_read_only() {
         assert!(is_usable_cache_directory("/", true));
 
@@ -320,5 +354,34 @@ mod tests {
         let path = path.to_str().expect("the temp dir should be UTF-8");
 
         assert!(is_usable_cache_directory(path, false));
+    }
+
+    /// Windows uses the CRT's supported read/write masks while directory metadata supplies
+    /// the traversal check that POSIX expresses through `X_OK`.
+    #[cfg(windows)]
+    #[test]
+    fn windows_access_modes_match_the_crt_contract() {
+        assert_eq!(cache_directory_access_mode(true), 4);
+        assert_eq!(cache_directory_access_mode(false), 6);
+        let path = std::env::temp_dir();
+        let path = path.to_str().expect("the temp dir should be UTF-8");
+        assert!(is_usable_cache_directory(path, true));
+        assert!(is_usable_cache_directory(path, false));
+    }
+
+    /// UTF-16 paths must reach the same DACL check without conversion through the active ACP.
+    #[cfg(windows)]
+    #[test]
+    fn windows_accepts_a_unicode_cache_directory() {
+        let directory = std::env::temp_dir().join(format!(
+            "elephc-cache-é🐘-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("Unicode cache directory");
+        let path = directory.to_str().expect("fixture is valid Unicode");
+        assert!(is_usable_cache_directory(path, true));
+        assert!(is_usable_cache_directory(path, false));
+        std::fs::remove_dir_all(directory).expect("remove Unicode cache directory");
     }
 }

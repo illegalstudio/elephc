@@ -96,7 +96,7 @@ pub(super) fn emit_owned_reference_property_cell(
         abi::secondary_scratch_reg(ctx.emitter)
     };
     abi::emit_push_reg(ctx.emitter, object_reg);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0),
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         crate::codegen_support::runtime::reference_cells::payload_tag(php_type));
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
     if starts_uninitialized {
@@ -228,7 +228,7 @@ pub(super) fn emit_clone_dynamic_property_hash(
     }
     abi::emit_push_reg(ctx.emitter, source_reg);
     abi::emit_push_reg(ctx.emitter, dest_reg);
-    let hash_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let hash_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     if hash_arg != result_reg {
         abi::emit_reg_move(ctx.emitter, hash_arg, result_reg);
     }

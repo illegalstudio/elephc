@@ -9,19 +9,26 @@
 //! - Deduplication is best-effort and falls back to the original bridge archive.
 //! - Only whole-archived bridge inputs participate; managed native archives are untouched.
 
+#[cfg(target_os = "macos")]
 use std::collections::{HashMap, HashSet};
+#[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
-use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan};
+#[cfg(target_os = "macos")]
+use crate::link_plan::{LinkItem, LinkOrigin};
+use crate::link_plan::LinkPlan;
 
 /// A possibly rewritten plan and the temporary directory that owns rewritten archives.
+#[cfg(target_os = "macos")]
 pub(super) struct PreparedArchives {
     /// Plan whose later whole-archive bridges may point at deduplicated copies.
     pub(super) plan: LinkPlan,
     scratch: Option<PathBuf>,
 }
 
+#[cfg(target_os = "macos")]
 impl PreparedArchives {
     /// Removes temporary archive copies after the linker has consumed the plan.
     pub(super) fn cleanup(self) {
@@ -32,6 +39,7 @@ impl PreparedArchives {
 }
 
 /// Prepares deduplicated copies when a plan force-loads two or more Rust bridges.
+#[cfg(target_os = "macos")]
 pub(super) fn prepare(plan: &LinkPlan) -> PreparedArchives {
     let whole_archives: Vec<PathBuf> = plan
         .items()
@@ -97,6 +105,7 @@ pub(super) fn prepare(plan: &LinkPlan) -> PreparedArchives {
 }
 
 /// Replaces one whole bridge archive path while preserving all typed metadata.
+#[cfg(target_os = "macos")]
 fn replace_archive(item: LinkItem, replacements: &HashMap<PathBuf, PathBuf>) -> LinkItem {
     match item {
         LinkItem::StaticArchive {
@@ -124,6 +133,7 @@ fn replace_archive(item: LinkItem, replacements: &HashMap<PathBuf, PathBuf>) -> 
 /// could predict or race the compiler's pid, pre-create that directory with permissive
 /// access, and plant a symlink named after a bridge archive; the copy would then truncate and
 /// overwrite the symlink's target with the compiler user's permissions (issue #889).
+#[cfg(target_os = "macos")]
 fn create_private_scratch() -> Option<PathBuf> {
     use std::ffi::{CString, OsStr};
     use std::os::unix::ffi::OsStrExt;
@@ -144,6 +154,7 @@ fn create_private_scratch() -> Option<PathBuf> {
 }
 
 /// Lists object member names in an archive through `ar t`.
+#[cfg(target_os = "macos")]
 fn ar_members(archive: &Path) -> Option<Vec<String>> {
     let output = Command::new("ar").arg("t").arg(archive).output().ok()?;
     if !output.status.success() {
@@ -161,6 +172,7 @@ fn ar_members(archive: &Path) -> Option<Vec<String>> {
 }
 
 /// Parses the readable member headers and global symbols emitted by macOS `nm -gU`.
+#[cfg(target_os = "macos")]
 fn nm_member_globals(archive: &Path) -> Vec<(String, Vec<String>)> {
     let Ok(output) = Command::new("nm").args(["-gU"]).arg(archive).output() else {
         return Vec::new();
@@ -193,6 +205,7 @@ fn nm_member_globals(archive: &Path) -> Vec<(String, Vec<String>)> {
 }
 
 /// Copies an archive and removes members already provided by earlier whole archives.
+#[cfg(target_os = "macos")]
 fn dedup_macos_archive(
     archive: &Path,
     provider_names: &mut HashSet<String>,
@@ -278,7 +291,30 @@ fn dedup_macos_archive(
     Some(copy)
 }
 
-#[cfg(test)]
+/// No archive member surgery is needed outside Mach-O links.
+///
+/// Windows GNU uses COFF archives and Linux links the bridge archives without the
+/// macOS duplicate-object failure this workaround addresses.  Returning the typed
+/// plan unchanged is therefore deliberate rather than a best-effort attempt to
+/// invoke Apple `ar`/`nm` conventions on another platform.
+#[cfg(not(target_os = "macos"))]
+pub(super) struct PreparedArchives {
+    /// The original plan, preserved verbatim for the target linker.
+    pub(super) plan: LinkPlan,
+}
+
+#[cfg(not(target_os = "macos"))]
+impl PreparedArchives {
+    /// There is no temporary archive copy outside the macOS deduplication path.
+    pub(super) fn cleanup(self) {}
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn prepare(plan: &LinkPlan) -> PreparedArchives {
+    PreparedArchives { plan: plan.clone() }
+}
+
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

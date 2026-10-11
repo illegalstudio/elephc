@@ -75,7 +75,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_gc_eval_object_children_done");                // programs without eval have no external object edges
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the owner identity using the C ABI
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the current child index
-    emitter.instruction("call r10");                                            // borrow one retained child without changing ownership
+    emitter.emit_native_bridge_call("r10", 2);                                  // borrow one retained child through the target Rust ABI without changing ownership
     emitter.instruction("test rax, rax");                                       // check for the end of this object's child sequence
     emitter.instruction("jz __rt_gc_eval_object_children_done");                // zero terminates enumeration
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // select the requested collector phase
@@ -122,12 +122,12 @@ fn emit_final_release(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::{platform::Target, RuntimeFeatures};
+    use crate::codegen_support::{platform::{Platform, Target}, RuntimeFeatures};
 
     /// Every target traverses external edges in both GC phases and releases them after PHP destructors.
     #[test]
     fn eval_object_edges_cover_all_supported_collectors_and_release_paths() {
-        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64", "windows-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             emit_gc_eval_object_children(&mut emitter);
@@ -137,6 +137,18 @@ mod tests {
             assert!(helper.contains("__rt_gc_mark_reachable"), "{name}");
             let indirect = if target.arch == Arch::AArch64 { "blr x10" } else { "call r10" };
             assert!(helper.contains(indirect), "{name}");
+            if (target.platform, target.arch) == (Platform::Windows, Arch::X86_64) {
+                let traversal = helper
+                    .split_once("__rt_gc_eval_object_children_loop:")
+                    .expect("expected x86 traversal loop")
+                    .1
+                    .split_once("__rt_gc_eval_object_children_mark:")
+                    .expect("expected x86 traversal mark branch")
+                    .0;
+                for instruction in ["mov r11, r10", "sub rsp, 32", "mov rdx, rsi", "mov rcx, rdi", "call r11", "add rsp, 32"] {
+                    assert!(traversal.contains(instruction), "windows traversal must use the native bridge ABI: {instruction}");
+                }
+            }
             let release_body = helper.split_once("__rt_eval_object_release_children:").unwrap().1;
             assert!(release_body.find(indirect).unwrap() < release_body.find("__rt_throw_boxed_destructor_exception").unwrap(), "{name}");
             assert!(release_body.contains("__rt_eval_object_release_children_done:"), "{name}");

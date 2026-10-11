@@ -62,3 +62,22 @@ fn mbstring_startup_mime_symbols_follow_runtime_capability() {
         assert!(assembly.contains("elephc_mbstring_configure_v1"));
     }
 }
+
+#[test]
+fn windows_mbstring_startup_uses_native_bridge_calls() {
+    let target = Target::parse("windows-x86_64").unwrap();
+    let mut module = Module::new(target);
+    module.required_runtime_features.mbstring_mime = true;
+    module.mbstring_startup = Some(vec![b"UTF-8".to_vec(); 3]);
+    let mut emitter = Emitter::new(target);
+    let mut data = DataSection::new();
+    emit(&module, &mut emitter, &mut data);
+    let assembly = emitter.output();
+    for symbol in ["elephc_mbstring_mime_provider_v1", "elephc_mbstring_configure_v1",
+        "elephc_mbstring_release_v1"] {
+        assert!(assembly.contains(&format!("lea r11, [rip + {symbol}]")), "{symbol}");
+        assert!(!assembly.contains(&format!("call {symbol}")), "{symbol}");
+    }
+    assert!(assembly.contains("mov rcx, rdi"));
+    assert!(assembly.contains("call r11"));
+}

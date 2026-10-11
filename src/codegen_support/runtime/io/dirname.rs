@@ -8,7 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
 
 /// Emits the `__rt_dirname` runtime helper for the current target.
 ///
@@ -30,6 +30,10 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// - trailing slashes are stripped before locating the final separator
 /// - result drops the trailing slash unless the parent is the filesystem root
 pub fn emit_dirname(emitter: &mut Emitter) {
+    if emitter.platform == Platform::Windows {
+        emit_dirname_windows_x86_64(emitter);
+        return;
+    }
     if emitter.target.arch == Arch::X86_64 {
         emit_dirname_linux_x86_64(emitter);
         return;
@@ -179,4 +183,127 @@ fn emit_dirname_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_dirname_done_x86");
     emitter.instruction("ret");                                                 // return parent-dir slice in rax/rdx
+}
+
+/// Emits the Windows x86_64 implementation of `__rt_dirname`.
+///
+/// Windows is an x86_64-only target, so this replaces the POSIX emitter outright
+/// rather than threading platform tests through it. It follows php-src
+/// `php_win32_ioutil_dirname` (win32/ioutil.c):
+///
+/// 1. an `<alpha>:` drive prefix is skipped and never scanned, so the result keeps
+///    it; a bare `"C:"` is returned unchanged;
+/// 2. both `/` and `\` are separators (`PHP_WIN32_IOUTIL_IS_SLASHW`, mirroring
+///    `IS_SLASH` in Zend/zend_virtual_cwd.h);
+/// 3. trailing separators are stripped, then the filename, then the separators
+///    before it;
+/// 4. running out of bytes yields the root, and finding no separator yields `"."`.
+///
+/// # ABI
+/// - Input: `rax` = path pointer, `rdx` = path length
+/// - Output: `rax` = parent pointer (a slice of the input), `rdx` = parent length
+///
+/// # Known divergence
+/// php-src rewrites the root case to `PHP_WIN32_IOUTIL_DEFAULT_SLASH`, so it
+/// normalises `dirname("C:/x")` to `"C:\"`. This returns the input's own bytes,
+/// `"C:/"`, because the helper is contractually allocation-free and hands back a
+/// slice. The separator is preserved rather than rewritten; every other result is
+/// byte-identical to PHP.
+fn emit_dirname_windows_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: dirname (windows) ---");
+    emitter.label_global("__rt_dirname");
+
+    // ABI: rax=path_ptr, rdx=path_len. Returns rax/rdx.
+    // r11 holds the drive-prefix length: the scan never steps below it, which is
+    // what keeps "C:\x" from collapsing past the drive into "C".
+
+    emitter.instruction("test rdx, rdx");                                       // empty input?
+    emitter.instruction("jz __rt_dirname_dot_win");                             // empty path → "."
+    emitter.instruction("xor r11d, r11d");                                      // assume no drive prefix
+    emitter.instruction("cmp rdx, 2");                                          // room for an "<alpha>:" prefix?
+    emitter.instruction("jb __rt_dirname_scan_init_win");                       // too short to carry a drive letter
+    emitter.instruction("movzx r9d, BYTE PTR [rax + 1]");                       // second byte of the path
+    emitter.instruction("cmp r9b, 0x3A");                                       // is it a colon?
+    emitter.instruction("jne __rt_dirname_scan_init_win");                      // not a drive-qualified path
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // first byte of the path
+    emitter.instruction("or r9b, 0x20");                                        // fold the drive letter to lower case
+    emitter.instruction("cmp r9b, 0x61");                                       // below 'a'?
+    emitter.instruction("jb __rt_dirname_scan_init_win");                       // not a letter, so not a drive
+    emitter.instruction("cmp r9b, 0x7A");                                       // above 'z'?
+    emitter.instruction("ja __rt_dirname_scan_init_win");                       // not a letter, so not a drive
+    emitter.instruction("mov r11d, 2");                                         // the drive prefix is off-limits to the scan
+    emitter.instruction("cmp rdx, 2");                                          // is the path exactly "C:"?
+    emitter.instruction("je __rt_dirname_done_win");                            // php returns the drive unchanged
+
+    // -- strip trailing separators --
+    emitter.label("__rt_dirname_scan_init_win");
+    emitter.instruction("mov r8, rdx");                                         // r8 = exclusive end index of the live slice
+    emitter.label("__rt_dirname_strip_win");
+    emitter.instruction("cmp r8, r11");                                         // consumed everything after the drive?
+    emitter.instruction("jbe __rt_dirname_root_win");                           // only separators remained → root
+    emitter.instruction("mov r9, r8");                                          // index of the last byte
+    emitter.instruction("sub r9, 1");                                           // step into the slice
+    emitter.instruction("movzx r10d, BYTE PTR [rax + r9]");                     // load the last byte
+    emitter.instruction("cmp r10b, 0x2F");                                      // forward-slash separator?
+    emitter.instruction("je __rt_dirname_strip_step_win");                      // drop it
+    emitter.instruction("cmp r10b, 0x5C");                                      // backslash separator?
+    emitter.instruction("jne __rt_dirname_name_win");                           // neither: the filename starts here
+    emitter.label("__rt_dirname_strip_step_win");
+    emitter.instruction("mov r8, r9");                                          // shrink past the trailing separator
+    emitter.instruction("jmp __rt_dirname_strip_win");                          // keep stripping
+
+    // -- strip the filename --
+    emitter.label("__rt_dirname_name_win");
+    emitter.instruction("cmp r8, r11");                                         // reached the drive with no separator?
+    emitter.instruction("jbe __rt_dirname_dot_win");                            // → "."
+    emitter.instruction("mov r9, r8");                                          // candidate index
+    emitter.instruction("sub r9, 1");                                           // step the candidate left
+    emitter.instruction("movzx r10d, BYTE PTR [rax + r9]");                     // load the candidate byte
+    emitter.instruction("cmp r10b, 0x2F");                                      // forward-slash separator?
+    emitter.instruction("je __rt_dirname_parent_win");                          // found the parent boundary
+    emitter.instruction("cmp r10b, 0x5C");                                      // backslash separator?
+    emitter.instruction("je __rt_dirname_parent_win");                          // found the parent boundary
+    emitter.instruction("mov r8, r9");                                          // step left over the filename
+    emitter.instruction("jmp __rt_dirname_name_win");                           // keep scanning
+
+    // -- strip the separators that preceded the filename --
+    emitter.label("__rt_dirname_parent_win");
+    emitter.instruction("mov r8, r9");                                          // r8 = index of the separator itself
+    emitter.label("__rt_dirname_parent_loop_win");
+    emitter.instruction("cmp r8, r11");                                         // nothing but separators before it?
+    emitter.instruction("jbe __rt_dirname_root_win");                           // → root
+    emitter.instruction("mov r9, r8");                                          // index of the preceding byte
+    emitter.instruction("sub r9, 1");                                           // step into the slice
+    emitter.instruction("movzx r10d, BYTE PTR [rax + r9]");                     // load it
+    emitter.instruction("cmp r10b, 0x2F");                                      // another forward slash?
+    emitter.instruction("je __rt_dirname_parent_step_win");                     // collapse it
+    emitter.instruction("cmp r10b, 0x5C");                                      // another backslash?
+    emitter.instruction("jne __rt_dirname_finish_win");                         // parent ends on a real byte
+    emitter.label("__rt_dirname_parent_step_win");
+    emitter.instruction("mov r8, r9");                                          // collapse the repeated separator
+    emitter.instruction("jmp __rt_dirname_parent_loop_win");                    // keep collapsing
+
+    emitter.label("__rt_dirname_finish_win");
+    emitter.instruction("mov rdx, r8");                                         // the parent is the prefix up to r8
+    emitter.instruction("ret");                                                 // return the parent slice
+
+    // -- the parent is the root: "<drive>" plus one separator, or a bare "\" --
+    emitter.label("__rt_dirname_root_win");
+    emitter.instruction("test r11, r11");                                       // was there a drive prefix?
+    emitter.instruction("jz __rt_dirname_root_literal_win");                    // no drive: return the separator literal
+    emitter.instruction("mov rdx, 3");                                          // keep "<drive>:" plus the separator byte
+    emitter.instruction("ret");                                                 // e.g. "C:\" for "C:\file"
+    emitter.label("__rt_dirname_root_literal_win");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rax", "_dirname_backslash"); // result = "\"
+    emitter.instruction("mov rdx, 1");                                          // length = 1
+    emitter.instruction("ret");                                                 // php normalises a rooted path to DEFAULT_SLASH
+
+    emitter.label("__rt_dirname_dot_win");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rax", "_dirname_dot");       // result = "."
+    emitter.instruction("mov rdx, 1");                                          // length = 1
+    emitter.instruction("ret");                                                 // return "."
+
+    emitter.label("__rt_dirname_done_win");
+    emitter.instruction("ret");                                                 // return the path unchanged (bare drive)
 }

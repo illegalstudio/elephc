@@ -14,6 +14,9 @@
 //! - `font8x8` packs each glyph as eight row bytes with the least-significant bit
 //!   as the leftmost column. Horizontal text advances 8 px per character;
 //!   `imagestringup` rotates the layout 90° counter-clockwise.
+//! - All bundled Unicode tables are consulted, so Latin accents, Greek,
+//!   Hiragana, box drawing, blocks, and miscellaneous symbols render without
+//!   filesystem fonts. Unsupported code points remain blank glyphs.
 //! - Rendering honors the image's alpha-blending mode via the shared
 //!   `draw::plot` helper.
 
@@ -25,7 +28,10 @@ use crate::{ffi_guard, lock_recover, cstr_arg, images, unpack_color};
 /// set the layout is rotated 90° counter-clockwise (`imagestringup`). The `font`
 /// number is accepted for API parity but does not change the cell size.
 fn render_builtin(handle: i64, x: i64, y: i64, color: i64, text: &str, vertical: bool) {
-    use font8x8::{UnicodeFonts, BASIC_FONTS};
+    use font8x8::{
+        UnicodeFonts, BASIC_FONTS, BLOCK_FONTS, BOX_FONTS, GREEK_FONTS, HIRAGANA_FONTS,
+        LATIN_FONTS, MISC_FONTS,
+    };
 
     let mut guard = lock_recover(images());
     let Some(obj) = guard.get_mut(&handle) else {
@@ -34,7 +40,15 @@ fn render_builtin(handle: i64, x: i64, y: i64, color: i64, text: &str, vertical:
     let blending = obj.alpha_blending;
     let src = unpack_color(color);
     for (index, ch) in text.chars().enumerate() {
-        let glyph = BASIC_FONTS.get(ch).unwrap_or([0u8; 8]);
+        let glyph = BASIC_FONTS
+            .get(ch)
+            .or_else(|| LATIN_FONTS.get(ch))
+            .or_else(|| GREEK_FONTS.get(ch))
+            .or_else(|| HIRAGANA_FONTS.get(ch))
+            .or_else(|| BLOCK_FONTS.get(ch))
+            .or_else(|| BOX_FONTS.get(ch))
+            .or_else(|| MISC_FONTS.get(ch))
+            .unwrap_or([0u8; 8]);
         let i = index as i64;
         for row in 0..8i64 {
             let bits = glyph[row as usize];

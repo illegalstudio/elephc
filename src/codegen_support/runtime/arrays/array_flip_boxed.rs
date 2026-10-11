@@ -38,7 +38,7 @@ pub fn emit_array_flip_boxed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.label_global("__rt_array_flip_boxed");
     abi::emit_frame_prologue(emitter, FRAME);
-    abi::emit_reg_move(emitter, result, abi::int_arg_reg_name(emitter.target, 0));
+    abi::emit_reg_move(emitter, result, abi::runtime_helper_int_arg_reg(emitter, 0));
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
     ins(emitter, "sub x9, x0, #4", "lea r10, [rax - 4]");
     ins(emitter, "cmp x9, #1", "cmp r10, 1");
@@ -81,8 +81,11 @@ pub fn emit_array_flip_boxed(emitter: &mut Emitter) {
 fn emit_body(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
+    // This body only calls hand-written `__rt_*` helpers. Unlike generated PHP
+    // functions, those helpers keep the repository's internal SysV-shaped x86_64
+    // ABI on Windows, including all six integer argument registers.
+    let arg0 = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let arg1 = abi::runtime_helper_int_arg_reg(emitter, 1);
     let (low, high) = if emitter.target.arch == Arch::AArch64 { ("x1", "x2") } else { ("rdi", "rdx") };
     emitter.blank();
     emitter.label_global("__rt_array_flip_boxed_body");
@@ -146,9 +149,9 @@ fn emit_body(emitter: &mut Emitter) {
     abi::emit_store_zero_to_local_slot(emitter, VALUE_HI);
     abi::emit_load_int_immediate(emitter, result, 0);
     emitter.label("__rt_array_flip_boxed_insert");
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 5), result);
+    abi::emit_reg_move(emitter, abi::runtime_helper_int_arg_reg(emitter, 5), result);
     for (index, offset) in [(1, FLIPPED_LO), (2, FLIPPED_HI), (3, VALUE_LO), (4, VALUE_HI)] {
-        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     abi::load_at_offset(emitter, arg0, CONTEXT);
     abi::emit_load_from_address(emitter, arg0, arg0, 0);
@@ -195,5 +198,45 @@ mod tests {
                 assert!(body.contains(helper), "{name}: {helper}");
             }
         }
+    }
+
+    /// Pins the six-word internal `__rt_hash_set` ABI under the Windows runtime dispatcher.
+    ///
+    /// The hand-written x86_64 runtime remains SysV-shaped even when generated PHP entry
+    /// points use MSx64. In particular, value_hi and value_tag must stay in r8/r9 rather
+    /// than selecting nonexistent fifth/sixth MSx64 argument registers.
+    #[test]
+    fn boxed_flip_windows_x86_64_uses_the_internal_six_word_hash_set_abi() {
+        let mut emitter = Emitter::new(Target::new(
+            crate::codegen_support::platform::Platform::Windows,
+            crate::codegen_support::platform::Arch::X86_64,
+        ));
+        emit_array_flip_boxed(&mut emitter);
+        let asm = emitter.output();
+        let insert = asm
+            .split_once("__rt_array_flip_boxed_insert:\n")
+            .expect("array_flip boxed insert label")
+            .1
+            .split_once("call __rt_hash_set")
+            .expect("array_flip boxed hash-set call")
+            .0;
+
+        for expected in [
+            "mov r9, rax",
+            "mov rsi, QWORD PTR [rbp - 64]",
+            "mov rdx, QWORD PTR [rbp - 72]",
+            "mov rcx, QWORD PTR [rbp - 48]",
+            "mov r8, QWORD PTR [rbp - 40]",
+            "mov rdi, QWORD PTR [rbp - 8]",
+        ] {
+            assert!(
+                insert.contains(expected),
+                "missing internal hash-set ABI move: {expected}\n{insert}"
+            );
+        }
+        assert!(
+            !insert.contains("mov QWORD PTR [rsp + 32]"),
+            "the internal SysV helper must not use MSx64 stack arguments:\n{insert}"
+        );
     }
 }

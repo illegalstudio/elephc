@@ -39,7 +39,7 @@ pub fn emit_resolve_host(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr");                                        // x0 = null-terminated host name
 
     // -- resolve the name through libc gethostbyname --
-    emitter.bl_c("gethostbyname");                                              // x0 = struct hostent* (null when unresolved)
+    emitter.emit_call_c("gethostbyname");                                              // x0 = struct hostent* (null when unresolved)
     emitter.instruction("cbz x0, __rt_resolve_host_fail");                      // a null hostent means resolution failed
     emitter.instruction("ldr x0, [x0, #24]");                                   // hostent.h_addr_list
     emitter.instruction("cbz x0, __rt_resolve_host_fail");                      // guard a missing address list
@@ -75,7 +75,7 @@ fn emit_resolve_host_linux_x86_64(emitter: &mut Emitter) {
 
     // -- resolve the name through libc gethostbyname --
     emitter.instruction("mov rdi, rax");                                        // host name into the gethostbyname argument register
-    emitter.instruction("call gethostbyname");                                  // rax = struct hostent* (null when unresolved)
+    emitter.emit_call_c("gethostbyname");                                       // rax = struct hostent* (null when unresolved)
     emitter.instruction("test rax, rax");                                       // did resolution fail?
     emitter.instruction("jz __rt_resolve_host_fail_x86");                       // a null hostent means resolution failed
     emitter.instruction("mov rax, QWORD PTR [rax + 24]");                       // hostent.h_addr_list

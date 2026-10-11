@@ -466,7 +466,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_decode_mixed_float_copy_done");
     emitter.instruction("strb wzr, [x11, x9]");                                 // append the NUL terminator atof needs
     emitter.instruction("mov x0, x11");                                         // pass the C-string pointer to atof in x0
-    emitter.bl_c("atof");                                                       // libc atof → d0 = double
+    emitter.emit_call_c("atof");                                                       // libc atof → d0 = double
     emitter.instruction("fmov x1, d0");                                         // move the double bits into the integer payload register
     emitter.instruction("mov x0, #2");                                          // tag = float
     emitter.instruction("mov x2, #0");                                          // load or prepare JSON decoder state

@@ -97,8 +97,8 @@ pub(super) fn warn_assoc_nonreference_roots(
     abi::emit_load_int_immediate(emitter, cursor, 0);
     abi::emit_load_int_immediate(emitter, ordinal, 0);
     emitter.label(&loop_label);
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), hash_reg);
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 1), cursor);
+    abi::emit_reg_move(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), hash_reg);
+    abi::emit_reg_move(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), cursor);
     abi::emit_call_label(emitter, "__rt_hash_iter_next");
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -297,11 +297,11 @@ pub(super) fn emit_assoc(
         abi::emit_temporary_stack_address(emitter, scratch, record);
         abi::emit_store_to_sp(emitter, scratch, index * 8);
     }
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(target, 0), operation.as_u32() as i64);
-    abi::emit_temporary_stack_address(emitter, abi::int_arg_reg_name(target, 1), 0);
-    abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(target, 2), count_slot);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(target, 3), 0);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(target, 4), 0);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), operation.as_u32() as i64);
+    abi::emit_temporary_stack_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), 0);
+    abi::emit_load_temporary_stack_slot(emitter, abi::runtime_helper_int_arg_reg(emitter, 2), count_slot);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 3), 0);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 4), 0);
     abi::emit_call_label(emitter, "__rt_mbstring_native");
     abi::emit_release_temporary_stack(emitter, frame);
     abi::emit_call_label(emitter, "__rt_mbstring_box_result");
@@ -355,7 +355,7 @@ pub(super) fn emit_indexed(
     let array_reg = match target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r10" };
     emit_loaded_array_source_to_reg(source, array_reg, emitter);
     abi::emit_reserve_temporary_stack(emitter, bytes);
-    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(target, 2), array_reg, 0);
+    abi::emit_load_from_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 2), array_reg, 0);
     let ready = ctx.next_label("mbstring_pointers_ready");
     for index in 0..capacity {
         match target.arch {
@@ -374,10 +374,10 @@ pub(super) fn emit_indexed(
         }
     }
     emitter.label(&ready);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(target, 0), operation.as_u32() as i64);
-    abi::emit_temporary_stack_address(emitter, abi::int_arg_reg_name(target, 1), 0);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(target, 3), 0);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(target, 4), 0);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), operation.as_u32() as i64);
+    abi::emit_temporary_stack_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), 0);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 3), 0);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 4), 0);
     abi::emit_call_label(emitter, "__rt_mbstring_native");
     abi::emit_release_temporary_stack(emitter, bytes);
     abi::emit_call_label(emitter, "__rt_mbstring_box_result");

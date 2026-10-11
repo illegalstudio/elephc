@@ -140,7 +140,8 @@ fn execute_program_namespace_const_fetch_falls_back_to_global() {
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.get(result), FakeValue::String("\n".to_string()));
+    let expected = if cfg!(target_os = "windows") { "\r\n" } else { "\n" };
+    assert_eq!(values.get(result), FakeValue::String(expected.to_string()));
 }
 /// Verifies namespaced dynamic constants take precedence over global fallback.
 #[test]

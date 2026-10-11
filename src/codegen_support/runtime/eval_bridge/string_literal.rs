@@ -13,9 +13,11 @@ use super::*;
 /// Boxes literal bytes through the ordinary constructor, then marks the owned payload before publication.
 pub(crate) fn emit(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_string_literal");
+    let string_constructor =
+        abi::c_callback_internal_symbol(emitter.target, "__elephc_eval_value_string");
     if emitter.target.arch == Arch::AArch64 {
         emitter.instruction("stp x29, x30, [sp, #-16]!");                       // preserve C linkage across native allocation and origin registration
-        emitter.bl_c("__elephc_eval_value_string");
+        abi::emit_call_label(emitter, &string_constructor);                     // arguments already use the internal callback convention
         emitter.instruction("ldr x1, [x0, #8]");                                // select the owned string payload without retaining Rust input storage
         emitter.instruction("ldr x2, [x0, #16]");                               // recover the complete native string length from its Mixed cell
         abi::emit_call_label(emitter, "__rt_mbstring_ini_literal");
@@ -24,7 +26,7 @@ pub(crate) fn emit(emitter: &mut Emitter) {
         emitter.instruction("push rbp");                                        // preserve C linkage and align calls before constructing the literal
         emitter.instruction("mov rbp, rsp");                                    // retain a stable frame for the owned cell result
         emitter.instruction("sub rsp, 16");                                     // reserve one boxed-result slot and call-alignment padding
-        emitter.bl_c("__elephc_eval_value_string");
+        abi::emit_call_label(emitter, &string_constructor);                     // arguments already use the internal callback convention
         emitter.instruction("mov QWORD PTR [rsp], rax");                        // preserve the owning Mixed cell while passing its payload to the origin hook
         emitter.instruction("mov rdx, QWORD PTR [rax + 16]");                   // retain the native string's exact logical byte count
         emitter.instruction("mov rax, QWORD PTR [rax + 8]");                    // register only the owned native payload address
@@ -33,4 +35,35 @@ pub(crate) fn emit(emitter: &mut Emitter) {
         emitter.instruction("leave");                                           // restore C linkage and release the boxed-result slot
     }
     emitter.instruction("ret");                                                 // publish a complete literal whose future copies preserve logical identity
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// The literal callback body already received adapter-normalized arguments;
+    /// it must bypass the public Windows C entry when nesting the string constructor.
+    #[test]
+    fn literal_constructor_calls_the_internal_string_entry_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+            "windows-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit(&mut emitter);
+            let asm = emitter.output();
+            let internal = abi::c_callback_internal_symbol(target, "__elephc_eval_value_string");
+            let call = match target.arch {
+                Arch::AArch64 => format!("bl {internal}"),
+                Arch::X86_64 => format!("call {internal}"),
+            };
+            assert!(asm.contains(&call), "{name}: {asm}");
+        }
+    }
 }

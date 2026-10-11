@@ -2,13 +2,15 @@
 //! Builds the pinned Oniguruma library and opaque mbregex provider for every supported target.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for oniguruma revision 3.
+//! - `crate::native_deps::recipe::CuratedRecipes` for oniguruma revision 4.
 //!
 //! Key details:
 //! - Retains static PIC archives and public headers; no system library fallback is used.
+//! - MinGW uses its canonical Autoconf host tuple and the selected compiler/sysroot for both
+//!   upstream Oniguruma and the opaque provider shim.
 
 use std::{fs, path::Path};
-use crate::codegen_support::platform::Target;
+use crate::codegen_support::platform::{Platform, Target};
 use super::super::{error::NativeError, recipe::RecipeRequest, toolchain::run_checked};
 use super::util::{copy_regular, require_regular};
 
@@ -27,11 +29,11 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     }
     let configure = request.source.join("configure");
     require_regular("Oniguruma", &configure)?;
-    let mut command = request.toolchain.command(Path::new("/bin/sh"));
+    let mut command = request.toolchain.command(configure_shell());
     command.current_dir(&build).arg(configure).args([
         "--disable-shared", "--enable-static", "--with-pic", "--disable-posix-api",
     ]);
-    if request.target != Target::detect_host() {
+    if request.target.platform == Platform::Windows || request.target != Target::detect_host() {
         command.arg(format!("--host={}", request.toolchain.autoconf_host()));
     }
     run_checked(&mut command, "configure trusted Oniguruma recipe")?;
@@ -47,7 +49,8 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     let object = build.join("provider.o");
     fs::write(&source, SHIM_SOURCE).map_err(|error| NativeError::io("write Oniguruma provider source", &source, error))?;
     let mut compile = request.toolchain.command(&request.toolchain.cc);
-    compile.args(["-std=c11", "-fPIC", "-DONIG_EXTERN=extern", "-I"]).arg(&include)
+    request.toolchain.append_compiler_flags(&mut compile);
+    compile.args(["-std=c11", "-DONIG_EXTERN=extern", "-I"]).arg(&include)
         .arg("-c").arg(&source).arg("-o").arg(&object);
     run_checked(&mut compile, "compile Oniguruma provider")?;
     let shim = library.join("libelephc_oniguruma_shim.a");
@@ -64,4 +67,21 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     }
     fs::remove_dir_all(&build).map_err(|error| NativeError::io("remove Oniguruma build intermediates", &build, error))?;
     Ok(())
+}
+
+/// Selects a host-executable shell; native Windows does not resolve MSYS virtual `/bin` paths.
+fn configure_shell() -> &'static Path {
+    if cfg!(windows) { Path::new("sh") } else { Path::new("/bin/sh") }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Native Windows resolves its installed MSYS shell through the reviewed toolchain PATH.
+    #[test]
+    fn oniguruma_configure_shell_is_host_executable() {
+        let expected = if cfg!(windows) { "sh" } else { "/bin/sh" };
+        assert_eq!(configure_shell(), Path::new(expected));
+    }
 }

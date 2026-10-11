@@ -51,12 +51,12 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     ctx.emitter.label(&ready);
     abi::emit_store_to_sp(ctx.emitter, result, DESCRIPTOR_OFFSET);
     normalize_filter_mode(ctx);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), DESCRIPTOR_OFFSET);
-    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), MODE_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0), DESCRIPTOR_OFFSET);
+    abi::emit_temporary_stack_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2), MODE_OFFSET);
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 3),
         ctx.lexical_class_id(),
     );
     abi::emit_call_label(ctx.emitter, "__rt_array_predicate_boxed");

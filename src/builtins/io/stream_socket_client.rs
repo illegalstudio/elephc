@@ -18,6 +18,7 @@ builtin! {
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSocketClient,
     ),
+    requirements: crate::builtins::semantics::stream_socket_client_requirements,
 }
 
 /// Returns `Union(stream_resource, Bool)` reflecting PHP's false-on-failure return.

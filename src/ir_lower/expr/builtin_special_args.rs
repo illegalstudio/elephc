@@ -145,6 +145,92 @@ pub(super) fn lower_preg_replace_callback_args(
     vec![pattern.value, callback.value, subject.value]
 }
 
+/// Lowers `proc_open()` through the shared planner, then appends the three hidden
+/// Windows marshalling operands consumed by the typed `RuntimeFnId::ProcOpen` ABI.
+///
+/// The planner evaluates named arguments in source order and presents the six public
+/// arguments in PHP parameter order. Static command-array and environment literals
+/// become compact pre-marshalled strings; dynamic arrays intentionally retain their
+/// public operands so the Windows runtime can marshal them after all source effects.
+/// Non-Windows hosts receive null hidden values, preserving their established process
+/// runtime ABI without leaking Windows-only static settings into the call boundary.
+pub(super) fn lower_proc_open_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let mut operands = lower_args_with_signature(ctx, sig, args);
+    let pipes_output = crate::builtins::proc_open_argument_at(args, 2, "pipes");
+    let Some(command) = crate::builtins::proc_open_argument_at(args, 0, "command") else {
+        // A dynamic unpack can satisfy the required argument at runtime but has no
+        // source expression to inspect statically. Its public planned operands still
+        // reach the runtime marshallers; the hidden static overrides stay absent.
+        let null = Expr::new(ExprKind::Null, crate::span::Span::dummy());
+        operands.push(lower_expr(ctx, &null).value);
+        operands.push(lower_expr(ctx, &null).value);
+        let flags = Expr::new(ExprKind::IntLiteral(0), crate::span::Span::dummy());
+        operands.push(lower_expr(ctx, &flags).value);
+        record_proc_open_pipes_storage(ctx, pipes_output);
+        return operands;
+    };
+    let environment_expr = crate::builtins::proc_open_argument_at(args, 4, "env_vars");
+    let command_line = crate::builtins::static_windows_command_line(command);
+    let environment = environment_expr
+        .and_then(crate::builtins::static_windows_environment_block);
+    let option_flags = crate::builtins::proc_open_argument_at(args, 5, "options")
+        .and_then(crate::builtins::static_windows_options)
+        .unwrap_or(0);
+
+    let command_override = command_line
+        .as_ref()
+        .map(|line| Expr::new(ExprKind::StringLiteral(line.clone()), command.span))
+        .unwrap_or_else(|| Expr::new(ExprKind::Null, command.span));
+    operands.push(lower_expr(ctx, &command_override).value);
+
+    let environment_override = environment
+        .as_ref()
+        .map(|block| {
+            Expr::new(
+                ExprKind::StringLiteral(block.clone()),
+                environment_expr.map_or(command.span, |expr| expr.span),
+            )
+        })
+        .unwrap_or_else(|| Expr::new(ExprKind::Null, command.span));
+    operands.push(lower_expr(ctx, &environment_override).value);
+
+    let environment_len = environment.as_ref().map_or(0, String::len) as i64;
+    let flags = (environment_len << crate::builtins::WINDOWS_PROC_OPTION_BITS)
+        | option_flags
+        | i64::from(command_line.is_some());
+    let flags = Expr::new(ExprKind::IntLiteral(flags), command.span);
+    operands.push(lower_expr(ctx, &flags).value);
+    record_proc_open_pipes_storage(ctx, pipes_output);
+    operands
+}
+
+/// Records the keyed boxed-Mixed container that the proc runtime writes back through `$pipes`.
+///
+/// Descriptor keys are sparse integers, so even an initially packed empty array may be promoted
+/// to hash storage. The runtime returns that replacement container and the backend stores it in
+/// the original local; keeping the pre-call packed type here would make subsequent reads use
+/// `ArrayGet` against hash storage and interpret a boxed resource pointer as a raw scalar.
+fn record_proc_open_pipes_storage(ctx: &mut LoweringContext<'_, '_>, pipes: Option<&Expr>) {
+    let Some(Expr {
+        kind: ExprKind::Variable(name),
+        ..
+    }) = pipes
+    else {
+        return;
+    };
+    ctx.set_local_type(
+        name,
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+}
+
 /// Lowers a `preg_replace_callback()` closure with match-array parameter context.
 pub(super) fn lower_preg_replace_callback_closure(
     ctx: &mut LoweringContext<'_, '_>,

@@ -145,7 +145,7 @@ fn test_c_compiler(target: Target) -> &'static str {
     match target.platform {
         Platform::MacOS => "cc",
         Platform::Linux => target.linker_cmd(),
-        Platform::Windows => panic!("managed native fixtures do not support Windows"),
+        Platform::Windows => "x86_64-w64-mingw32-gcc",
     }
 }
 
@@ -185,7 +185,7 @@ fn test_pcre2_provider(target: Target) -> &'static TestPcre2Provider {
                     ("/usr/include".into(), format!("/lib/{tuple}").into()),
                 ]
             }
-            Platform::Windows => panic!("managed native fixtures do not support Windows"),
+            Platform::Windows => windows_mingw_pcre2_candidates(),
         };
         for (include_dir, library_dir) in candidates {
             let has_headers = include_dir.join("pcre2.h").is_file()
@@ -212,6 +212,29 @@ fn test_pcre2_provider(target: Target) -> &'static TestPcre2Provider {
         "managed-PCRE2 provider cache cannot mix targets in one test process"
     );
     provider
+}
+
+/// Returns the MinGW include/library layouts exported by the Windows test sysroot.
+///
+/// Native Windows and Wine codegen jobs provision PCRE2 through MSYS2 or an
+/// equivalent MinGW tree, then expose its root via `ELEPHC_MINGW_SYSROOT`.
+/// The opaque provider consumes only headers and static archives from that
+/// root; it never consults host libraries, which would be ELF/Mach-O and cannot
+/// be linked into the PE fixture.
+fn windows_mingw_pcre2_candidates() -> Vec<(PathBuf, PathBuf)> {
+    let root = std::env::var_os("ELEPHC_MINGW_SYSROOT").unwrap_or_else(|| {
+        panic!(
+            "Windows managed-PCRE2 fixtures require ELEPHC_MINGW_SYSROOT with MinGW pcre2 headers and archives"
+        )
+    });
+    let root = PathBuf::from(root);
+    assert!(
+        root.is_dir(),
+        "ELEPHC_MINGW_SYSROOT '{}' is not a directory",
+        root.display()
+    );
+    let include = root.join("include");
+    vec![(include.clone(), root.join("lib")), (include, root.join("lib64"))]
 }
 
 /// Returns one header from the target-aligned PCRE2 test provider.
@@ -345,9 +368,9 @@ fn resolve_test_native_toolchain(target: Target) -> TestNativeToolchain {
         .as_str()
         .replace('-', "_")
         .to_ascii_uppercase();
-    let cc = selected_native_tool("CC", &suffix);
-    let ar = selected_native_tool("AR", &suffix);
-    let ranlib = selected_native_tool("RANLIB", &suffix);
+    let cc = selected_native_tool(target, "CC", &suffix);
+    let ar = selected_native_tool(target, "AR", &suffix);
+    let ranlib = selected_native_tool(target, "RANLIB", &suffix);
     let tuple = normalized_success(
         Command::new(&cc).arg("-dumpmachine").output(),
         "query native test compiler tuple",
@@ -372,9 +395,19 @@ fn resolve_test_native_toolchain(target: Target) -> TestNativeToolchain {
     let cc_name = cc.to_string_lossy().into_owned();
     let ar_name = ar.to_string_lossy().into_owned();
     let ranlib_name = ranlib.to_string_lossy().into_owned();
+    let mingw_sysroot = if target.platform == Platform::Windows {
+        let root = std::env::var_os("ELEPHC_MINGW_SYSROOT")
+            .expect("Windows managed-PCRE2 fixtures require ELEPHC_MINGW_SYSROOT");
+        fs::canonicalize(root)
+            .expect("canonicalize Windows managed-PCRE2 sysroot")
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        String::new()
+    };
     let environment = fingerprinted_test_environment();
     let payload = format!(
-        "target={}\nabi={}\ntuple={}\ncc={}\ncc-version={}\nar={}\nar-version={}\nranlib={}\nranlib-version={}\nsdk={}\nCFLAGS=-fPIC\n{}",
+        "target={}\nabi={}\ntuple={}\ncc={}\ncc-version={}\nar={}\nar-version={}\nranlib={}\nranlib-version={}\nsdk={}\nmingw-sysroot={}\nCFLAGS=-fPIC\n{}",
         target.as_str(),
         abi,
         tuple,
@@ -385,6 +418,7 @@ fn resolve_test_native_toolchain(target: Target) -> TestNativeToolchain {
         ranlib_name,
         ranlib_version,
         sdk,
+        mingw_sysroot,
         environment
     );
     TestNativeToolchain {
@@ -401,7 +435,7 @@ fn resolve_test_native_toolchain(target: Target) -> TestNativeToolchain {
 }
 
 /// Applies the production target-specific, generic, then conventional tool precedence.
-fn selected_native_tool(tool: &str, suffix: &str) -> PathBuf {
+fn selected_native_tool(target: Target, tool: &str, suffix: &str) -> PathBuf {
     for name in [
         format!("ELEPHC_NATIVE_{tool}_{suffix}"),
         format!("ELEPHC_NATIVE_{tool}"),
@@ -410,6 +444,14 @@ fn selected_native_tool(tool: &str, suffix: &str) -> PathBuf {
             assert!(!value.is_empty(), "{name} must not be empty");
             return PathBuf::from(value);
         }
+    }
+    if target.platform == Platform::Windows {
+        return PathBuf::from(match tool {
+            "CC" => "x86_64-w64-mingw32-gcc",
+            "AR" => "x86_64-w64-mingw32-ar",
+            "RANLIB" => "x86_64-w64-mingw32-ranlib",
+            _ => unreachable!("unknown native test tool {tool}"),
+        });
     }
     PathBuf::from(tool.to_ascii_lowercase())
 }
@@ -435,7 +477,7 @@ fn native_test_abi(target: Target, tuple: &str) -> String {
             };
             format!("{arch}-unknown-linux-{environment}")
         }
-        Platform::Windows => panic!("managed native fixtures do not support Windows"),
+        Platform::Windows => "x86_64-pc-windows-gnu".to_string(),
     }
 }
 
@@ -554,17 +596,45 @@ fn sha256_bytes(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Keeps the CLI fixture's catalog identity aligned with its embedded project lock.
-#[test]
-fn managed_pcre2_fixture_identity_matches_embedded_lock() {
-    let lock: toml::Value = toml::from_str(
-        include_str!("../../examples/date-json-regex/elephc.lock"),
-    ).unwrap();
-    let package = lock["package"].as_array().unwrap().iter()
-        .find(|package| package["name"].as_str() == Some("pcre2"))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Keeps the CLI fixture's catalog identity aligned with its embedded project lock.
+    #[test]
+    fn managed_pcre2_fixture_identity_matches_embedded_lock() {
+        let lock: toml::Value = toml::from_str(
+            include_str!("../../examples/date-json-regex/elephc.lock"),
+        )
         .unwrap();
-    let version = fixture_pcre2_version();
-    assert_eq!(package["version"].as_str(), Some(version.version));
-    assert_eq!(package["recipe"].as_integer(), Some(i64::from(version.recipe_revision)));
-    assert_eq!(package["source"]["sha256"].as_str(), Some(version.source.sha256));
+        let package = lock["package"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|package| package["name"].as_str() == Some("pcre2"))
+            .unwrap();
+        let version = fixture_pcre2_version();
+        assert_eq!(package["version"].as_str(), Some(version.version));
+        assert_eq!(
+            package["recipe"].as_integer(),
+            Some(i64::from(version.recipe_revision))
+        );
+        assert_eq!(
+            package["source"]["sha256"].as_str(),
+            Some(version.source.sha256)
+        );
+    }
+
+    /// Verifies the opaque provider uses the GNU Windows ABI cache key expected
+    /// by MinGW-produced PCRE2 archives.
+    #[test]
+    fn windows_provider_uses_mingw_gnu_abi() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+
+        assert_eq!(
+            native_test_abi(target, "x86_64-w64-mingw32"),
+            "x86_64-pc-windows-gnu"
+        );
+        assert_eq!(test_c_compiler(target), "x86_64-w64-mingw32-gcc");
+    }
 }

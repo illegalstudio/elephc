@@ -33,5 +33,6 @@ fn test_emitter_x86() -> Emitter {
 
 mod basics;
 mod arguments;
+mod callbacks;
 mod symbols;
 mod linux_x86_64;

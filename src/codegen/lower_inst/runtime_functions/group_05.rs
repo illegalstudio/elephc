@@ -43,6 +43,18 @@ pub(super) fn lower(
         RuntimeFnId::Popen => Some({
             crate::codegen::lower_inst::builtins::io::lower_popen(ctx, inst)
         }),
+        RuntimeFnId::ProcClose => Some({
+            crate::codegen::lower_inst::builtins::io::lower_proc_close(ctx, inst)
+        }),
+        RuntimeFnId::ProcGetStatus => Some({
+            crate::codegen::lower_inst::builtins::io::lower_proc_get_status(ctx, inst)
+        }),
+        RuntimeFnId::ProcOpen => Some({
+            crate::codegen::lower_inst::builtins::io::lower_proc_open(ctx, inst)
+        }),
+        RuntimeFnId::ProcTerminate => Some({
+            crate::codegen::lower_inst::builtins::io::lower_proc_terminate(ctx, inst)
+        }),
         RuntimeFnId::PrintR => Some({
             crate::codegen::lower_inst::builtins::debug::lower_print_r(ctx, inst)
         }),

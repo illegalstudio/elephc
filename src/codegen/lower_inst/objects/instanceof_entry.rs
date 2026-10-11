@@ -37,11 +37,11 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     };
     match value_ty {
         PhpType::Object(_) => {
-            ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+            ctx.load_value_to_reg(value, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
             emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+            ctx.load_value_to_reg(value, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
             emit_match_call(ctx, target_id, target_kind, "__rt_mixed_instanceof");
         }
         _ => emit_false(ctx),

@@ -2,7 +2,7 @@
 title: "imagecolorclosesthwb() - internals"
 description: "Compiler internals for imagecolorclosesthwb(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 469
+  order: 473
 ---
 
 ## `imagecolorclosesthwb()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2433](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2433) (`imagecolorclosesthwb`)
+- **Lowering**: [`src/image_prelude.rs`:2504](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2504) (`imagecolorclosesthwb`)
 - **Function symbol**: `imagecolorclosesthwb()`
 
 

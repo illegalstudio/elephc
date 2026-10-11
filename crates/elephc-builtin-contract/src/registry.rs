@@ -38,6 +38,8 @@ pub fn contracts() -> &'static [BuiltinContract] {
                 crate::catalog_data::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
+                    + crate::catalog_process::CONTRACTS.len()
+                    + crate::catalog_windows::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
                     + curl_capacity,
@@ -45,6 +47,8 @@ pub fn contracts() -> &'static [BuiltinContract] {
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_process::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_windows::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
             #[cfg(feature = "curl")]
@@ -156,9 +160,9 @@ mod tests {
         // The PHP-visible `curl_*` surface is published only with the `curl`
         // feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        // +11 over main: the `__elephc_opcache_rt_*` runtime script-cache helpers this
-        // branch adds (see `support.rs` for the roll-call).
-        assert_eq!(contracts().len(), 1146 + curl_surface);
+        // The eleven `__elephc_opcache_rt_*` runtime script-cache helpers and sixteen
+        // Windows/process contracts are additive to the shared base catalog.
+        assert_eq!(contracts().len(), 1162 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

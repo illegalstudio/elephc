@@ -2,7 +2,7 @@
 title: "imagecreatefromtga()"
 description: "Creates an image from a TGA file."
 sidebar:
-  order: 492
+  order: 496
 ---
 
 ## imagecreatefromtga()

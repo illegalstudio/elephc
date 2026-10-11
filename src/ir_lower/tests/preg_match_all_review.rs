@@ -34,13 +34,26 @@ $named_subject = 'ab'; echo preg_match_all(matches: $named_subject, subject: $na
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__rt_preg_match_all_capture"));
     assert!(assembly.contains("__rt_decref_array"), "the replaced output owns its old captures");
-    assert!(assembly.contains("preg_match_all_count_invalid"),
-        "count-only calls validate flags before executing the count helper");
-    let mask = match target.arch {
-        crate::codegen_support::platform::Arch::AArch64 => "bic x9, x5, x9",
-        crate::codegen_support::platform::Arch::X86_64 => "and r9, -772",
+    assert!(assembly.contains("preg_match_all_flags_invalid"),
+        "all preg_match_all forms share the catchable invalid-flags branch");
+    let (mask, bound, helper_call) = match target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => (
+            "and x9, x5, #255",
+            "cmp x9, #2",
+            "bl __rt_preg_match_all",
+        ),
+        crate::codegen_support::platform::Arch::X86_64 => (
+            "and r9, 255",
+            "cmp r9, 2",
+            "call __rt_preg_match_all",
+        ),
     };
-    assert!(assembly.contains(mask), "count-only validation rejects every unsupported flag bit");
+    let mask_position = assembly.find(mask).expect("low-byte flags mask");
+    let helper_position = assembly.find(helper_call).expect("count helper call");
+    assert!(assembly.contains(bound), "only PHP order selectors 0, 1, and 2 are accepted");
+    assert!(mask_position < helper_position, "flag ValueError guard must precede regex execution");
+    assert!(assembly.contains("_spl_value_error_class_id"));
+    assert!(assembly.contains("__rt_throw_current"));
 }
 
 /// Keeps every target independently scheduled under the CI timeout.
@@ -57,3 +70,4 @@ target_test!(preg_match_all_review_ios, "ios-arm64");
 target_test!(preg_match_all_review_ios_sim, "ios-sim-arm64");
 target_test!(preg_match_all_review_linux_arm, "linux-aarch64");
 target_test!(preg_match_all_review_linux_x86, "linux-x86_64");
+target_test!(preg_match_all_review_windows_x86, "windows-x86_64");

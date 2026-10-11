@@ -71,6 +71,21 @@ fn test_emit_frame_helpers_small_frame() {
     );
 }
 
+/// Windows Fiber guarding must not clobber the internal result/input register
+/// before a runtime helper has established its frame and spilled that value.
+#[test]
+fn test_windows_frame_prologue_preserves_rax() {
+    let mut emitter = Emitter::new(Target::parse("windows-x86_64").unwrap());
+    emit_frame_prologue(&mut emitter, 64);
+    let asm = emitter.output();
+
+    assert!(asm.contains("mov r11, QWORD PTR [rip + _fiber_current]"));
+    assert!(asm.contains("mov r10, QWORD PTR [r11 + 16]"));
+    assert!(asm.contains("lea r11, [rsp - 16440]"));
+    assert!(asm.contains("cmp r11, r10"));
+    assert!(!asm.contains("lea rax, [rsp - 16440]"));
+}
+
 /// Verifies the frame prologue rejects a frame too small to hold the x29/x30 footer
 /// (`frame_size < 16`) with a clear assertion message in every build, instead of
 /// underflowing the `frame_size - 16` footer-offset subtraction into a corrupt offset.

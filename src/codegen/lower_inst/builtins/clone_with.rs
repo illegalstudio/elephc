@@ -34,6 +34,10 @@
 //!   still REPORTS rather than dropping the write.
 
 use crate::codegen::abi;
+use crate::codegen::lower_inst::builtins::eval::native_calls::{
+    emit_eval_native_c_abi_call_reg_from_stack, stage_eval_native_stack_address,
+    stage_eval_native_stack_word_as,
+};
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
 use crate::codegen::{emit_box_current_value_as_mixed, CodegenIrError, Result};
@@ -213,39 +217,25 @@ fn emit_eval_clone_bridge(
     let owns_properties_box = emit_eval_clone_properties_operand(ctx, properties)?;
     emit_eval_clone_invocation_scope(ctx, invocation_scope)?;
 
-    let target = ctx.emitter.target;
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
-        EVAL_CLONE_OBJECT_OFFSET,
+    stage_eval_native_stack_word_as(ctx, EVAL_CLONE_OBJECT_OFFSET, PhpType::Pointer(None));
+    stage_eval_native_stack_word_as(ctx, EVAL_CLONE_PROPERTIES_OFFSET, PhpType::Pointer(None));
+    stage_eval_native_stack_word_as(ctx, EVAL_CLONE_SCOPE_PTR_OFFSET, PhpType::Pointer(None));
+    stage_eval_native_stack_word_as(ctx, EVAL_CLONE_SCOPE_LEN_OFFSET, PhpType::Int);
+    stage_eval_native_stack_address(ctx, EVAL_CLONE_OUT_OFFSET);
+    stage_eval_native_stack_address(ctx, EVAL_CLONE_THROWABLE_OFFSET);
+    emit_eval_native_c_abi_call_reg_from_stack(
+        ctx,
+        &scratch,
+        EVAL_CLONE_CALLBACK_OFFSET,
+        &[
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+        ],
     );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 1),
-        EVAL_CLONE_PROPERTIES_OFFSET,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
-        EVAL_CLONE_SCOPE_PTR_OFFSET,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 3),
-        EVAL_CLONE_SCOPE_LEN_OFFSET,
-    );
-    abi::emit_temporary_stack_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 4),
-        EVAL_CLONE_OUT_OFFSET,
-    );
-    abi::emit_temporary_stack_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 5),
-        EVAL_CLONE_THROWABLE_OFFSET,
-    );
-    abi::emit_load_temporary_stack_slot(ctx.emitter, &scratch, EVAL_CLONE_CALLBACK_OFFSET);
-    abi::emit_call_reg(ctx.emitter, &scratch);
 
     abi::emit_store_to_sp(ctx.emitter, &result_reg, EVAL_CLONE_STATUS_OFFSET);
     if owns_properties_box {
@@ -560,7 +550,7 @@ fn emit_mixed_object_type_guard(
 
 /// Calls the shared boxed shallow-clone adapter through its first argument register.
 fn emit_clone_adapter_call(ctx: &mut FunctionContext<'_>) {
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_reg_move(ctx.emitter, arg_reg, &result_reg);
     abi::emit_call_label(ctx.emitter, "__rt_object_clone_shallow_boxed");

@@ -13,6 +13,26 @@ use super::*;
 #[cfg(target_os = "linux")]
 const PCNTL_CPU_CAPACITY: usize = 1024;
 
+/// Reads process priority through the Unix bridge while keeping non-Unix stubs warning-free.
+#[cfg(unix)]
+fn pcntl_getpriority(
+    process_id: i64,
+    mode: libc::c_int,
+    priority: *mut libc::c_int,
+) -> libc::c_int {
+    unsafe { elephc_pcntl::elephc_pcntl_getpriority(process_id, mode, priority) }
+}
+
+/// Reads process priority through the non-Unix ENOSYS stub.
+#[cfg(not(unix))]
+fn pcntl_getpriority(
+    process_id: i64,
+    mode: libc::c_int,
+    priority: *mut libc::c_int,
+) -> libc::c_int {
+    elephc_pcntl::elephc_pcntl_getpriority(process_id, mode, priority)
+}
+
 /// Evaluates scalar PCNTL functions backed directly by the shared bridge.
 pub(super) fn eval_pcntl_scalar_result(
     name: &str,
@@ -131,9 +151,7 @@ fn eval_pcntl_getpriority(
         values,
     )?;
     let mut priority = 0;
-    let success = unsafe {
-        elephc_pcntl::elephc_pcntl_getpriority(process_id, mode as libc::c_int, &mut priority)
-    };
+    let success = pcntl_getpriority(process_id, mode as libc::c_int, &mut priority);
     if success == 0 {
         values.warning(&elephc_pcntl::pcntl_last_error_warning(
             elephc_pcntl::PCNTL_WARNING_GETPRIORITY,
@@ -225,6 +243,11 @@ fn eval_validate_priority_mode(
         (0..=2).contains(&mode),
         "PRIO_PGRP, PRIO_USER, or PRIO_PROCESS",
     );
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let (valid, allowed) = {
+        let _ = mode;
+        (false, "PRIO_PGRP, PRIO_USER, or PRIO_PROCESS")
+    };
     if valid {
         return Ok(());
     }

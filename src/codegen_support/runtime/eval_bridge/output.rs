@@ -16,6 +16,12 @@ const RESULT: usize = std::mem::offset_of!(OutputRequestV1, result);
 const BYTES: usize = std::mem::offset_of!(OutputRequestV1, bytes);
 const LENGTH: usize = std::mem::offset_of!(OutputRequestV1, length);
 
+/// Calls a generated output callback body with already-normalized internal arguments.
+fn call_generated_callback(emitter: &mut Emitter, symbol: &str) {
+    let internal = abi::c_callback_internal_symbol(emitter.target, symbol);
+    abi::emit_call_label(emitter, &internal);
+}
+
 /// Routes shared boxed ob_* builtins through the same protected request as interpreter adapters.
 pub(super) fn emit_boxed_builtin(emitter: &mut Emitter, id: elephc_builtin_contract::RuntimeBuiltinId) {
     use elephc_builtin_contract::RuntimeBuiltinId;
@@ -37,11 +43,11 @@ pub(super) fn emit_boxed_builtin(emitter: &mut Emitter, id: elephc_builtin_contr
         emitter.instruction(&format!("mov x9, #{flag}"));                       // select clean or flush behavior for end operations
         emitter.instruction("str x9, [sp, #8]");                                // retain the first C operation argument
         emitter.instruction("mov x0, sp");                                      // pass the complete request to the protected output entry
-        emitter.bl_c("__elephc_eval_output_v1");
+        call_generated_callback(emitter, "__elephc_eval_output_v1");
         emitter.instruction(&format!("cbnz x0, {failed}"));                     // return pending exceptions before allocating a result box
         emitter.instruction(&format!("ldr x0, [sp, #{RESULT}]"));               // recover the successful PHP boolean result
         emitter.instruction("add sp, sp, #80");                                 // retire borrowed request storage before boxing
-        emitter.bl_c("__elephc_eval_value_bool");
+        call_generated_callback(emitter, "__elephc_eval_value_bool");
         emitter.instruction("b __elephc_runtime_builtin_v1_result");            // transfer the new boolean box through the shared ABI
         emitter.label(&failed);
         emitter.instruction("add sp, sp, #80");                                 // preserve the returned status while discarding request storage
@@ -54,12 +60,12 @@ pub(super) fn emit_boxed_builtin(emitter: &mut Emitter, id: elephc_builtin_contr
         emitter.instruction(&format!("mov QWORD PTR [rsp], {}", action as u64)); // select the typed output action
         emitter.instruction(&format!("mov QWORD PTR [rsp + 8], {flag}"));       // retain the clean or flush selector
         emitter.instruction("mov rdi, rsp");                                    // pass caller-owned request storage to the protected entry
-        emitter.bl_c("__elephc_eval_output_v1");
+        call_generated_callback(emitter, "__elephc_eval_output_v1");
         emitter.instruction("test eax, eax");                                   // inspect success before materializing any result owner
         emitter.instruction(&format!("jnz {failed}"));                          // propagate the native status after Rust receives control again
         emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {RESULT}]"));   // recover the successful operation's PHP truth value
         emitter.instruction("add rsp, 80");                                     // restore the shared dispatcher frame before result allocation
-        emitter.bl_c("__elephc_eval_value_bool");
+        call_generated_callback(emitter, "__elephc_eval_value_bool");
         emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");      // transfer exactly one new boolean box
         emitter.label(&failed);
         emitter.instruction("add rsp, 80");                                     // discard request storage while preserving fatal or pending status
@@ -69,8 +75,11 @@ pub(super) fn emit_boxed_builtin(emitter: &mut Emitter, id: elephc_builtin_contr
 
 /// Emits the versioned request entry using the complete native exception-handler record.
 pub(super) fn emit(emitter: &mut Emitter) {
-    let symbol = emitter.target.extern_symbol("__elephc_eval_output_v1");
-    emit_protected_status(emitter, &symbol, body);
+    let name = "__elephc_eval_output_v1";
+    abi::emit_c_callback_entry_with_arity(emitter, name, 1);
+    let protected = "__elephc_eval_output_v1_protected";
+    abi::emit_jump(emitter, protected);
+    emit_protected_status(emitter, protected, body);
 }
 
 /// Dispatches the retained request while keeping the native return values separate from status.
@@ -142,17 +151,17 @@ fn action_body(emitter: &mut Emitter, action: OutputAction) {
     match action {
         OutputAction::Echo => {
             argument(emitter, 0);
-            emitter.bl_c("__elephc_eval_value_echo");
+            call_generated_callback(emitter, "__elephc_eval_value_echo");
         },
         OutputAction::Start => {
             for index in 0..6 { argument(emitter, index); }
-            emitter.bl_c("__elephc_eval_ob_start_ex");
+            call_generated_callback(emitter, "__elephc_eval_ob_start_ex");
         },
-        OutputAction::Clean => emitter.bl_c("__elephc_eval_ob_clean"),
-        OutputAction::Flush => emitter.bl_c("__elephc_eval_ob_flush"),
+        OutputAction::Clean => call_generated_callback(emitter, "__elephc_eval_ob_clean"),
+        OutputAction::Flush => call_generated_callback(emitter, "__elephc_eval_ob_flush"),
         OutputAction::End => {
             argument(emitter, 0);
-            emitter.bl_c("__elephc_eval_ob_end");
+            call_generated_callback(emitter, "__elephc_eval_ob_end");
         },
         OutputAction::GetEnd => {
             if emitter.target.arch == Arch::AArch64 {
@@ -167,10 +176,10 @@ fn action_body(emitter: &mut Emitter, action: OutputAction) {
                 emitter.instruction("test r10, r10");                           // distinguish get_clean from get_flush
                 emitter.instruction("jz __rt_eval_output_get_clean");           // run the requested non-flushing path
             }
-            emitter.bl_c("__elephc_eval_ob_get_flush_pop");
+            call_generated_callback(emitter, "__elephc_eval_ob_get_flush_pop");
             abi::emit_jump(emitter, "__rt_eval_output_get_done");
             emitter.label("__rt_eval_output_get_clean");
-            emitter.bl_c("__elephc_eval_ob_get_clean_pop");
+            call_generated_callback(emitter, "__elephc_eval_ob_get_clean_pop");
             emitter.label("__rt_eval_output_get_done");
         },
     }
@@ -178,3 +187,76 @@ fn action_body(emitter: &mut Emitter, action: OutputAction) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod internal_callback_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Protected output bodies retain public exports but nest through internal callback entries.
+    #[test]
+    fn output_bodies_call_generated_internal_entries() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+            "windows-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            super::super::emit_eval_bridge_runtime(&mut emitter, RuntimeFeatures::all());
+            let assembly = emitter.output();
+            for symbol in [
+                "__elephc_eval_value_echo",
+                "__elephc_eval_ob_start_ex",
+                "__elephc_eval_ob_clean",
+                "__elephc_eval_ob_flush",
+                "__elephc_eval_ob_end",
+                "__elephc_eval_ob_get_flush_pop",
+                "__elephc_eval_ob_get_clean_pop",
+            ] {
+                let public = target.extern_symbol(symbol);
+                let internal = abi::c_callback_internal_symbol(target, symbol);
+                assert!(assembly.contains(&format!("{public}:\n")), "{name}: missing {public}");
+                assert!(assembly.contains(&format!("{internal}:\n")), "{name}: missing {internal}");
+                let call = match target.arch {
+                    Arch::AArch64 => format!("bl {internal}"),
+                    Arch::X86_64 => format!("call {internal}"),
+                };
+                assert!(assembly.contains(&call), "{name}: missing {call}");
+                if name == "windows-x86_64" {
+                    let nested_public = format!("call {public}");
+                    assert!(
+                        !assembly.lines().any(|line| {
+                            line.split("//").next().unwrap_or("").trim() == nested_public
+                        }),
+                        "{name}: nested through {public}"
+                    );
+                }
+            }
+            if name == "windows-x86_64" {
+                let public = target.extern_symbol("__elephc_eval_output_v1");
+                let internal = abi::c_callback_internal_symbol(
+                    target,
+                    "__elephc_eval_output_v1",
+                );
+                let adapter = assembly
+                    .split_once(&format!("{public}:\n"))
+                    .expect("public output entry")
+                    .1
+                    .split_once(&format!("{internal}:\n"))
+                    .expect("internal output entry")
+                    .0;
+                assert!(adapter.contains("mov rdi, rcx"));
+                assert!(!adapter.contains("QWORD PTR [rsp + 40]"));
+                let internal_body = assembly
+                    .split_once(&format!("{internal}:\n"))
+                    .expect("internal output body")
+                    .1;
+                assert!(internal_body.contains("jmp __elephc_eval_output_v1_protected"));
+            }
+        }
+    }
+}

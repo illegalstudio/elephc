@@ -68,12 +68,23 @@ pub(super) fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instr
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
     abi::emit_frame_slot_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        setjmp_argument_reg(ctx.emitter),
         handler_offset - TRY_HANDLER_JMP_BUF_OFFSET,
     );
     ctx.emitter.bl_c("setjmp");
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &handler_label);
     Ok(())
+}
+
+/// Returns the first argument register for the hand-written `__rt_setjmp` helper.
+///
+/// Generated PHP calls use the platform ABI, but `__rt_setjmp` is one of the
+/// hand-written runtime helpers that deliberately keeps the internal SysV-shaped
+/// x86_64 ABI on Windows.  Using `int_arg_reg_name()` here would put the jump
+/// buffer in `rcx`, while the Windows helper reads `rdi`, corrupting the handler
+/// record before the first exception is thrown.
+fn setjmp_argument_reg(emitter: &crate::codegen::emit::Emitter) -> &'static str {
+    abi::runtime_helper_int_arg_reg(emitter, 0)
 }
 
 /// Pops an EIR exception handler and restores the saved diagnostic-suppression depth.
@@ -142,8 +153,8 @@ pub(super) fn lower_guard_owned(ctx: &mut FunctionContext<'_>, inst: &Instructio
     abi::store_at_offset(ctx.emitter, scratch, offset - 8);
     let anchor = expect_operand(inst, 1)?;
     ctx.load_value_to_result(anchor)?;
-    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), abi::int_result_reg(ctx.emitter));
-    abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
+    abi::emit_reg_move(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), abi::int_result_reg(ctx.emitter));
+    abi::emit_frame_slot_address(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0), offset);
     abi::emit_call_label(ctx.emitter, "__rt_exception_guard_owned");
     store_if_result(ctx, inst)
 }
@@ -151,7 +162,7 @@ pub(super) fn lower_guard_owned(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Removes a capture guard before normal EIR cleanup releases or transfers its argument owner.
 pub(super) fn lower_unguard_owned(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let token = expect_operand(inst, 0)?;
-    load_value_to_first_int_arg(ctx, token)?;
+    ctx.load_value_to_reg(token, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_exception_unguard_owned");
     Ok(())
 }
@@ -166,4 +177,25 @@ pub(super) fn lower_update_array_guard(ctx: &mut FunctionContext<'_>, inst: &Ins
     abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), register,
         crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::setjmp_argument_reg;
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::{Arch, Platform, Target};
+
+    /// The EIR try handler must pass its jump buffer using the runtime-helper ABI,
+    /// not the generated-function ABI used for ordinary PHP calls.
+    #[test]
+    fn setjmp_uses_runtime_helper_argument_register_on_windows() {
+        let windows = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        assert_eq!(setjmp_argument_reg(&windows), "rdi");
+
+        let linux = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        assert_eq!(setjmp_argument_reg(&linux), "rdi");
+
+        let arm64 = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        assert_eq!(setjmp_argument_reg(&arm64), "x0");
+    }
 }

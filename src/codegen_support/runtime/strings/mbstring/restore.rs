@@ -17,16 +17,24 @@ mod tests;
 
 /// Emits the graph entry and allocation/release callbacks for the current native architecture.
 pub(super) fn emit(emitter: &mut Emitter) {
+    for (wrapper, callback) in [
+        ("__rt_mbstring_build_array_cabi", "__rt_mbstring_build_array"),
+        ("__rt_mbstring_build_ini_array_cabi", "__rt_mbstring_build_ini_array"),
+        ("__rt_mbstring_drop_array_cabi", "__rt_mbstring_drop_array"),
+    ] {
+        abi::emit_c_callback_entry(emitter, wrapper);
+        emitter.instruction(&format!("{} {callback}", if emitter.target.arch == Arch::AArch64 { "b" } else { "jmp" })); // enter the established internal callback body
+    }
     emitter.label_global("__rt_mbstring_restore_array");
     let arm = emitter.target.arch == Arch::AArch64;
-    abi::emit_symbol_address(emitter, if arm { "x2" } else { "rdx" }, "__rt_mbstring_build_array");
-    abi::emit_symbol_address(emitter, if arm { "x3" } else { "rcx" }, "__rt_mbstring_drop_array");
+    abi::emit_symbol_address(emitter, if arm { "x2" } else { "rdx" }, &emitter.target.extern_symbol("__rt_mbstring_build_array_cabi"));
+    abi::emit_symbol_address(emitter, if arm { "x3" } else { "rcx" }, &emitter.target.extern_symbol("__rt_mbstring_drop_array_cabi"));
     abi::emit_load_int_immediate(emitter, if arm { "x4" } else { "r8" }, 0);
     let symbol = emitter.target.extern_symbol("elephc_mbstring_restore_v1");
     emitter.instruction(&format!("{} {symbol}", if arm { "b" } else { "jmp" })); // tail-call the allocator-neutral restorer through the target C ABI
     emitter.label_global("__rt_mbstring_restore_ini_array");
-    abi::emit_symbol_address(emitter, if arm { "x3" } else { "rcx" }, "__rt_mbstring_build_ini_array");
-    abi::emit_symbol_address(emitter, if arm { "x4" } else { "r8" }, "__rt_mbstring_drop_array");
+    abi::emit_symbol_address(emitter, if arm { "x3" } else { "rcx" }, &emitter.target.extern_symbol("__rt_mbstring_build_ini_array_cabi"));
+    abi::emit_symbol_address(emitter, if arm { "x4" } else { "r8" }, &emitter.target.extern_symbol("__rt_mbstring_drop_array_cabi"));
     abi::emit_load_int_immediate(emitter, if arm { "x5" } else { "r9" }, 0);
     let symbol = emitter.target.extern_symbol("elephc_mbstring_restore_ini_v1");
     emitter.instruction(&format!("{} {symbol}", if arm { "b" } else { "jmp" })); // preserve graph length as the third argument of the identity-aware restorer

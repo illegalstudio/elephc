@@ -2,7 +2,7 @@
 title: "xml_parse_into_struct() - internals"
 description: "Compiler internals for xml_parse_into_struct(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1011
+  order: 1027
 ---
 
 ## `xml_parse_into_struct()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/xml/xml_parse_into_struct.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/xml/xml_parse_into_struct.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -28,7 +28,7 @@ sidebar:
 - **Effects**: `static (20 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
-- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`, `windows-x86_64`
 
 ## EIR and runtime boundary
 
@@ -37,7 +37,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function xml_parse_into_struct(mixed $parser, string $data, mixed $values, mixed $index = null): int
+function xml_parse_into_struct(mixed $parser, string $data, mixed &$values, mixed &$index = null): int
 ```
 
 ## What the type checker enforces

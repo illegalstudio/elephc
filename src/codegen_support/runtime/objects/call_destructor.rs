@@ -141,6 +141,10 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: call_object_destructor ---");
     emitter.label_global("__rt_call_object_destructor_body");
 
+    emitter.instruction("push rbp");                                            // preserve the caller frame for every normal and throwing exit
+    emitter.instruction("mov rbp, rsp");                                        // establish one shared frame before any branch reaches a callback
+    emitter.instruction("sub rsp, 16");                                         // reserve the object and transferred-Throwable spill slots
+
     emitter.instruction("test rdi, rdi");                                       // null receiver → nothing to destruct
     emitter.instruction("jz __rt_call_object_destructor_ret");                  // skip the lookup for a null object
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // eax = object refcount (header offset -12)
@@ -152,21 +156,16 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_call_object_destructor_static_x86");           // no eval callback installed → use static class table
     emitter.instruction("or eax, 0x80000000");                                  // mark destruction in progress before boxing borrowed $this
     emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the guard flag in the refcount field
-    emitter.instruction("push rbp");                                            // align the stack and save the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the eval callback frame
-    emitter.instruction("sub rsp, 16");                                         // reserve a spill slot for the object pointer
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer across the callback
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // initialize the owned Throwable output to null
     emitter.instruction("lea rsi, [rbp - 16]");                                 // pass its address as the Rust callback's second argument
-    emitter.instruction("call r10");                                            // ask eval whether it owns and destructed this object
+    emitter.emit_native_bridge_call("r10", 2);                                  // ask eval through the target Rust ABI whether it owns and destructed this object
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // recover the transferred Throwable after Rust returns normally
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the object pointer after the callback
-    emitter.instruction("add rsp, 16");                                         // release the eval callback spill slot
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("cmp rax, 2");                                          // status two transfers an escaping eval Throwable
-    emitter.instruction("je __rt_call_object_destructor_eval_throw");           // do not perform native unwinding inside Rust frames
+    emitter.instruction("je __rt_call_object_destructor_eval_throw");           // leave the local frame only after the Rust callback returns
     emitter.instruction("test rax, rax");                                       // did eval handle this dynamic object?
     emitter.instruction("jnz __rt_call_object_destructor_ret");                 // eval handled the dynamic object → skip static lookup
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the object pointer for the static fallback
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // reload the refcount after an eval miss
     emitter.instruction("and eax, 0x7fffffff");                                 // clear the temporary eval guard before static lookup
     emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the restored refcount guard state
@@ -182,22 +181,21 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // eax = object refcount (header offset -12)
     emitter.instruction("or eax, 0x80000000");                                  // mark destruction in progress so a balanced self-ref cannot re-enter the free path
     emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the guard flag in the refcount field
-    emitter.instruction("push rbp");                                            // align the stack and save the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
-    emitter.instruction("call r10");                                            // invoke <class>::__destruct with rdi = $this (borrowed)
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.emit_platform_callback_call("r10", 1);
 
     emitter.label("__rt_call_object_destructor_ret");
+    emitter.instruction("leave");                                               // release the shared callback frame and restore rbp
     emitter.instruction("ret");                                                 // return to __rt_object_free_deep to release the storage
     emitter.label("__rt_call_object_destructor_eval_throw");
     emitter.instruction("mov rax, r11");                                        // pass the owned box to native exception propagation
+    emitter.instruction("leave");                                               // release the callback frame after the native bridge has returned
     emitter.instruction("jmp __rt_throw_boxed_destructor_exception");           // the protected collector callback catches the native throw
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::Target;
+    use crate::codegen_support::platform::{Platform, Target};
 
     /// Eval callbacks receive a Throwable output slot and return before native propagation begins.
     #[test]
@@ -215,6 +213,127 @@ mod tests {
             assert!(asm.find(callback).unwrap() < asm.find(status).unwrap(), "{name}");
             assert!(asm.find(status).unwrap() < asm.find("__rt_throw_boxed_destructor_exception").unwrap(), "{name}");
         }
+    }
+
+    /// Verifies the windows-x86_64 `__rt_call_object_destructor` call site emits
+    /// the reverse-ABI SysV->MSx64 remap immediately before the indirect
+    /// `call r10` into the generated `__destruct` method (finding F1,
+    /// reverse-ABI): without it, the generated destructor would read `$this`
+    /// from the wrong register on windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_call_object_destructor_remaps_before_indirect_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_call_object_destructor(&mut emitter);
+        let asm = emitter.output();
+
+        let static_path = asm
+            .split_once("__rt_call_object_destructor_static_x86:")
+            .expect("expected static destructor path")
+            .1;
+        let remap_idx = static_path.find("mov rcx, rdi").expect("expected SysV->MSx64 remap");
+        let shadow_idx = static_path
+            .find("sub rsp, 32")
+            .expect("expected MSx64 shadow space before the destructor call");
+        let call_idx = static_path.find("call r11").expect("expected relocated indirect call r11");
+        assert!(
+            shadow_idx < remap_idx && remap_idx < call_idx,
+            "shadow reservation and remap must precede the indirect __destruct call"
+        );
+        assert!(static_path[call_idx..].contains("add rsp, 32"));
+    }
+
+    /// The eval destructor hook is a Rust callback, so its two SysV-staged
+    /// arguments must be remapped and given MSx64 shadow space on Windows.
+    #[test]
+    fn test_windows_x86_64_eval_destructor_uses_native_bridge_abi() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_call_object_destructor(&mut emitter);
+        let asm = emitter.output();
+        let eval_path = asm
+            .split_once("_elephc_eval_dynamic_object_destruct_fn")
+            .expect("expected eval destructor callback")
+            .1
+            .split_once("__rt_call_object_destructor_static_x86:")
+            .expect("expected static fallback")
+            .0;
+
+        for instruction in ["mov r11, r10", "sub rsp, 32", "mov rdx, rsi", "mov rcx, rdi", "call r11", "add rsp, 32"] {
+            assert!(eval_path.contains(instruction), "eval destructor callback needs MSx64 staging: {instruction}");
+        }
+    }
+
+    /// Every x86 branch that reaches `leave` owns the shared frame and both eval spill slots.
+    #[test]
+    fn x86_destructor_body_establishes_one_frame_before_any_exit_or_spill() {
+        for platform in [Platform::Linux, Platform::Windows] {
+            let mut emitter = Emitter::new(Target::new(platform, Arch::X86_64));
+            emit_call_object_destructor(&mut emitter);
+            let asm = emitter.output();
+            let body = asm
+                .split_once("__rt_call_object_destructor_body:")
+                .expect("destructor body")
+                .1;
+            let prologue = body.find("push rbp").expect("shared frame save");
+            let frame = body.find("mov rbp, rsp").expect("shared frame pointer");
+            let spills = body.find("sub rsp, 16").expect("shared spill allocation");
+            let first_branch = body.find("test rdi, rdi").expect("first body branch");
+            let first_spill = body.find("[rbp - 8]").expect("object spill");
+            let first_leave = body.find("leave").expect("shared epilogue");
+            assert!(prologue < frame && frame < spills && spills < first_branch, "{platform:?}");
+            assert!(spills < first_spill && prologue < first_leave, "{platform:?}");
+            assert_eq!(body.matches("push rbp").count(), 1, "{platform:?}");
+            assert_eq!(body.matches("leave").count(), 2, "{platform:?}");
+        }
+    }
+
+    /// Dynamic-eval destructor status must dispatch while the shared outer
+    /// frame is still live: status zero falls through to the static path,
+    /// handled status returns through the shared epilogue, and a transferred
+    /// Throwable tears down that frame immediately before propagation.
+    #[test]
+    fn test_windows_x86_64_eval_destructor_keeps_its_frame_until_status_dispatch() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_call_object_destructor(&mut emitter);
+        let asm = emitter.output();
+
+        let eval_path = asm
+            .split_once("_elephc_eval_dynamic_object_destruct_fn")
+            .expect("expected eval destructor callback")
+            .1
+            .split_once("__rt_call_object_destructor_static_x86:")
+            .expect("expected static fallback")
+            .0;
+        let status = eval_path.find("cmp rax, 2").expect("expected eval status dispatch");
+        assert!(status < eval_path.len());
+        assert!(!eval_path.contains("leave"), "the dynamic status dispatch must retain the outer frame");
+        assert!(eval_path.contains("mov rdi, QWORD PTR [rbp - 8]"), "status zero must restore $this before static fallback");
+
+        let return_path = asm
+            .split_once("__rt_call_object_destructor_ret:")
+            .expect("expected shared return epilogue")
+            .1
+            .split_once("__rt_call_object_destructor_eval_throw:")
+            .expect("expected eval exception path")
+            .0;
+        assert!(return_path.contains("leave\n    ret"), "handled status must tear down the shared frame exactly once");
+        let throw_path = asm
+            .split_once("__rt_call_object_destructor_eval_throw:")
+            .expect("expected eval exception path")
+            .1;
+        assert!(throw_path.contains("mov rax, r11\n    leave\n    jmp __rt_throw_boxed_destructor_exception"));
+    }
+
+    /// Verifies linux-x86_64 emission stays byte-identical to before the
+    /// reverse-ABI remap was introduced: the remap is windows-x86_64-only, so a
+    /// linux-x86_64 build must never see a `mov rcx, rdi` instruction.
+    #[test]
+    fn test_linux_x86_64_call_object_destructor_has_no_reverse_abi_remap() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_call_object_destructor(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, rdi"));
+        assert!(!asm.contains("sub rsp, 32"));
     }
 }
 

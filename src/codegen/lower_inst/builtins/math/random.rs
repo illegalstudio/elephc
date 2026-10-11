@@ -77,6 +77,34 @@ pub(crate) fn lower_random_int(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `random_bytes()` into an owned CSPRNG binary string of the given length.
+///
+/// Materializes the single length operand as an integer, passes it to the
+/// `__rt_random_bytes` runtime helper (length in `x0` on AArch64, `rdi` on
+/// x86_64), and stores the returned owned string result (`x1`/`x2` on AArch64,
+/// `rax`/`rdx` on x86_64) into the instruction's result slot. The runtime helper
+/// owns allocation, the cryptographic fill, and the fatal paths for a length
+/// below 1 or an unavailable entropy source.
+pub(crate) fn lower_random_bytes(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "random_bytes", 1)?;
+    let length = expect_operand(inst, 0)?;
+    load_numeric_as_int(ctx, length, "random_bytes")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // length already sits in the AArch64 integer result register (x0),
+            // which is exactly where __rt_random_bytes expects it.
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the requested byte length as the SysV first argument
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_random_bytes");
+    store_if_result(ctx, inst)
+}
+
 /// Emits the shared inclusive-range lowering for random integer builtins.
 fn lower_random_range(
     ctx: &mut FunctionContext<'_>,
@@ -147,13 +175,13 @@ fn emit_inverted_range_policy(
             let ok_label = ctx.next_label("random_range_ok");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(
+                    ctx.emitter.instruction(                                    // is the requested range inverted?
                         &format!("cmp {}, {}", min_reg, max_reg)
                     );                                                          // is the requested range inverted?
                     ctx.emitter.instruction(&format!("b.le {}", ok_label));     // an ordered range samples normally
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(
+                    ctx.emitter.instruction(                                    // is the requested range inverted?
                         &format!("cmp {}, {}", min_reg, max_reg)
                     );                                                          // is the requested range inverted?
                     ctx.emitter.instruction(&format!("jle {}", ok_label));      // an ordered range samples normally
@@ -166,22 +194,22 @@ fn emit_inverted_range_policy(
             let ok_label = ctx.next_label("random_range_ordered");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(
+                    ctx.emitter.instruction(                                    // is the requested range inverted?
                         &format!("cmp {}, {}", min_reg, max_reg)
                     );                                                          // is the requested range inverted?
                     ctx.emitter.instruction(&format!("b.le {}", ok_label));     // an ordered range needs no swap
                     ctx.emitter.instruction(&format!("mov x10, {}", min_reg));  // park the larger bound while the pair is exchanged
-                    ctx.emitter.instruction(
+                    ctx.emitter.instruction(                                    // the smaller bound becomes the range minimum
                         &format!("mov {}, {}", min_reg, max_reg)
                     );                                                          // the smaller bound becomes the range minimum
                     ctx.emitter.instruction(&format!("mov {}, x10", max_reg));  // the larger bound becomes the range maximum
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(
+                    ctx.emitter.instruction(                                    // is the requested range inverted?
                         &format!("cmp {}, {}", min_reg, max_reg)
                     );                                                          // is the requested range inverted?
                     ctx.emitter.instruction(&format!("jle {}", ok_label));      // an ordered range needs no swap
-                    ctx.emitter.instruction(
+                    ctx.emitter.instruction(                                    // exchange the inverted bounds so the width stays positive
                         &format!("xchg {}, {}", min_reg, max_reg)
                     );                                                          // exchange the inverted bounds so the width stays positive
                 }
@@ -199,6 +227,10 @@ fn load_numeric_as_int(
 ) -> Result<()> {
     match ctx.load_value_to_result(value)?.codegen_repr() {
         PhpType::Int | PhpType::Bool => Ok(()),
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            Ok(())
+        }
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             Ok(())
@@ -212,7 +244,7 @@ fn load_numeric_as_int(
         // The box stays owned by its value; the call's operand release handles it afterwards.
         PhpType::Mixed | PhpType::Union(_) => {
             let result_reg = abi::int_result_reg(ctx.emitter);
-            let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
             if result_reg != arg_reg {
                 abi::emit_reg_move(ctx.emitter, arg_reg, result_reg);
             }

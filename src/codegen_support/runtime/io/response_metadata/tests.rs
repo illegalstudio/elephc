@@ -66,3 +66,19 @@ fn mbstring_response_assembles_on_all_supported_targets() {
     }
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn windows_web_header_uses_native_bridge_call() {
+    let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+    super::emit_header(&mut emitter, true);
+    let assembly = emitter.output();
+
+    assert!(assembly.contains("lea r11, [rip + elephc_web_header]"));
+    assert!(assembly.contains("sub rsp, 32"));
+    assert!(assembly.contains("mov r9, rcx"));
+    assert!(assembly.contains("mov r8, rdx"));
+    assert!(assembly.contains("mov rdx, rsi"));
+    assert!(assembly.contains("mov rcx, rdi"));
+    assert!(assembly.contains("call r11"));
+    assert!(!assembly.contains("call elephc_web_header"));
+}

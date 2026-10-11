@@ -193,5 +193,10 @@ fn test_never_overrides_void_parent() {
 #[test]
 fn test_example_never_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/never/main.php"));
-    assert_eq!(out, "port = 8080\ncaught: config error: workers must be positive, got 0\n");
+    let expected = if target().platform == Platform::Windows {
+        "port = 8080\r\ncaught: config error: workers must be positive, got 0\r\n"
+    } else {
+        "port = 8080\ncaught: config error: workers must be positive, got 0\n"
+    };
+    assert_eq!(out, expected);
 }

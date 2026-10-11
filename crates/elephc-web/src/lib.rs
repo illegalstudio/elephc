@@ -1,5 +1,5 @@
 //! Purpose:
-//! C-ABI surface for the elephc `--web` prefork HTTP server bridge. Exposes the
+//! C-ABI surface for the elephc `--web` HTTP server bridge. Exposes the
 //! server entry point and (in later phases) request/response marshaling under
 //! `#[no_mangle] extern "C"` symbols the compiled PHP program calls/links.
 //!
@@ -13,8 +13,13 @@
 //! - Every handler-owning process executes PHP serially, so request/response
 //!   data lives in process statics without cross-thread mutation.
 
+// Broker isolation transfers Unix file descriptors and forks handler processes.
+// Windows retains the supported in-process worker model instead.
+#[cfg(unix)]
 mod handler_broker;
+#[cfg(unix)]
 mod handler_ipc;
+#[cfg(unix)]
 mod isolated_worker;
 mod multipart;
 mod probe_route;

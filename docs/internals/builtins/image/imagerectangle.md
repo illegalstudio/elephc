@@ -2,7 +2,7 @@
 title: "imagerectangle() - internals"
 description: "Compiler internals for imagerectangle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 523
+  order: 529
 ---
 
 ## `imagerectangle()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2682](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2682) (`imagerectangle`)
+- **Lowering**: [`src/image_prelude.rs`:2753](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2753) (`imagerectangle`)
 - **Function symbol**: `imagerectangle()`
 
 

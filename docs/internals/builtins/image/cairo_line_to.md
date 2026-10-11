@@ -2,7 +2,7 @@
 title: "cairo_line_to() - internals"
 description: "Compiler internals for cairo_line_to(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 412
+  order: 416
 ---
 
 ## `cairo_line_to()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13489](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13489) (`cairo_line_to`)
+- **Lowering**: [`src/image_prelude.rs`:13560](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13560) (`cairo_line_to`)
 - **Function symbol**: `cairo_line_to()`
 
 

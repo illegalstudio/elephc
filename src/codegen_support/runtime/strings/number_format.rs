@@ -23,7 +23,7 @@
 //!   slots and rendered the trailing digits from whatever was there.
 
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 
 /// Bytes of the fixed on-stack buffer `snprintf` renders the ungrouped number into.
 ///
@@ -114,7 +114,7 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("scvtf d1, x9");                                        // pass that power as the libm pow() exponent
     emitter.instruction("mov x10, #10");                                        // the rounding base is ten
     emitter.instruction("scvtf d0, x10");                                       // pass the base as the libm pow() mantissa argument
-    emitter.bl_c("pow");                                                        // d0 = 10 ** -$decimals
+    emitter.emit_call_c("pow");                                                 // d0 = 10 ** -$decimals through the target C ABI shim
     emitter.instruction("ldr d1, [sp, #48]");                                   // reload the parked magnitude
     emitter.instruction("fdiv d1, d1, d0");                                     // scale the magnitude down to the requested precision
     emitter.instruction("str d0, [sp, #48]");                                   // park the scale for the rescale step
@@ -160,7 +160,7 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("add x2, sp, #64");                                     // x2 = format string pointer
     emitter.instruction("ldr d0, [sp, #88]");                                   // reload the float value
     emitter.instruction("str d0, [sp, #-16]!");                                 // push double for variadic ABI, adjust sp
-    emitter.bl_c("snprintf");                                        // call snprintf; returns char count in x0
+    emitter.emit_call_c("snprintf");                                 // call snprintf through the target-aware C ABI; returns char count in x0
     emitter.instruction("add sp, sp, #16");                                     // pop the variadic argument from stack
     emitter.instruction(&format!("cmp x0, #{}", RAW_BUFFER_BYTES - 1));         // snprintf reports the untruncated length, which may exceed the buffer
     emitter.instruction("b.le __rt_nf_raw_len_ok");                             // keep the reported length when it actually fits
@@ -179,13 +179,13 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [sp, #80]");                                  // x12 = raw string length
     emitter.instruction("mov x13, #0");                                         // x13 = integer part digit count
 
-    // -- handle leading minus sign --
-    emitter.instruction("ldrb w14, [x11]");                                     // load first character
-    emitter.instruction("cmp w14, #45");                                        // check if it's '-' (minus sign)
-    emitter.instruction("b.ne __rt_nf_count");                                  // skip if not negative
-    emitter.instruction("strb w14, [x10], #1");                                 // copy '-' to output, advance dest
-    emitter.instruction("add x11, x11, #1");                                    // advance source past '-'
-    emitter.instruction("sub x12, x12, #1");                                    // decrement remaining length
+    // -- handle the leading minus sign emitted by snprintf --
+    emitter.instruction("ldrb w14, [x11]");                                     // load the first raw formatted byte
+    emitter.instruction("cmp w14, #45");                                        // is it the leading '-' sign?
+    emitter.instruction("b.ne __rt_nf_count");                                  // non-negative values start directly with digits
+    emitter.instruction("strb w14, [x10], #1");                                 // copy '-' to output and advance the destination
+    emitter.instruction("add x11, x11, #1");                                    // advance the raw cursor past the sign
+    emitter.instruction("sub x12, x12, #1");                                    // remove the sign from the remaining raw length
 
     // -- count integer digits (before decimal point) --
     emitter.label("__rt_nf_count");
@@ -261,7 +261,7 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// ARM64 implementation of the `__rt_number_format` runtime helper.
+/// x86_64 implementation of the `__rt_number_format` runtime helper.
 fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: number_format ---");
@@ -293,7 +293,7 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cvtsi2sd xmm1, rax");                                  // pass that power as the libm pow() exponent
     emitter.instruction("mov eax, 10");                                         // the rounding base is ten
     emitter.instruction("cvtsi2sd xmm0, eax");                                  // pass the base as the libm pow() mantissa argument
-    emitter.bl_c("pow");                                                        // xmm0 = 10 ** -$decimals
+    emitter.emit_call_c("pow");                                                 // xmm0 = 10 ** -$decimals through the target C ABI shim
     emitter.instruction("movsd xmm2, QWORD PTR [rbp - 128]");                   // reload the parked magnitude
     emitter.instruction("divsd xmm2, xmm0");                                    // scale the magnitude down to the requested precision
     emitter.instruction("movsd QWORD PTR [rbp - 128], xmm0");                   // park the scale for the rescale step
@@ -321,28 +321,38 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov BYTE PTR [rbp - 72], 37");                         // seed the mini format string with the leading '%' introducer
     emitter.instruction("mov BYTE PTR [rbp - 71], 46");                         // append the '.' precision introducer to the mini format string
-    emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the now non-negative decimal count before converting it to ASCII
+    emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the now non-negative decimal count before formatting
     emitter.instruction(&format!("cmp r8, {}", MAX_FORMAT_PRECISION));          // cap the precision at what the raw buffer can hold
     emitter.instruction("jle __rt_nf_precision_capped_linux_x86_64");           // keep the requested precision when it already fits
     emitter.instruction(&format!("mov r8, {}", MAX_FORMAT_PRECISION));          // clamp an over-wide precision to the buffer limit
+    emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // publish the clamped precision for the Windows variadic shim
     emitter.label("__rt_nf_precision_capped_linux_x86_64");
-    emitter.instruction("mov rax, r8");                                         // split the precision into two ASCII digits
-    emitter.instruction("xor rdx, rdx");                                        // clear the high dividend half before the digit split
-    emitter.instruction("mov r9, 10");                                          // the digit-split divisor
-    emitter.instruction("div r9");                                              // rax = tens digit, rdx = units digit
-    emitter.instruction("add al, 48");                                          // convert the tens digit to ASCII
-    emitter.instruction("mov BYTE PTR [rbp - 70], al");                         // append the tens precision digit to the mini format string
-    emitter.instruction("mov rax, rdx");                                        // move the units digit into the byte-addressable accumulator
-    emitter.instruction("add al, 48");                                          // convert the units digit to ASCII
-    emitter.instruction("mov BYTE PTR [rbp - 69], al");                         // append the units precision digit to the mini format string
-    emitter.instruction("mov BYTE PTR [rbp - 68], 102");                        // append the trailing 'f' format type so snprintf renders a fixed-point decimal string
-    emitter.instruction("mov BYTE PTR [rbp - 67], 0");                          // null-terminate the mini format string before handing it to snprintf
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov BYTE PTR [rbp - 70], 42");                     // '*' makes precision the first variadic integer argument
+        emitter.instruction("mov BYTE PTR [rbp - 69], 102");                    // append the trailing 'f' fixed-point format type
+        emitter.instruction("mov BYTE PTR [rbp - 68], 0");                      // null-terminate the "%.*f" format string
+    } else {
+        emitter.instruction("mov rax, r8");                                     // split the precision into two ASCII digits
+        emitter.instruction("xor rdx, rdx");                                    // clear the high dividend half before the digit split
+        emitter.instruction("mov r9, 10");                                      // the digit-split divisor
+        emitter.instruction("div r9");                                          // rax = tens digit, rdx = units digit
+        emitter.instruction("add al, 48");                                      // convert the tens digit to ASCII
+        emitter.instruction("mov BYTE PTR [rbp - 70], al");                     // append the tens precision digit to the mini format string
+        emitter.instruction("mov rax, rdx");                                    // move the units digit into the byte-addressable accumulator
+        emitter.instruction("add al, 48");                                      // convert the units digit to ASCII
+        emitter.instruction("mov BYTE PTR [rbp - 69], al");                     // append the units precision digit to the mini format string
+        emitter.instruction("mov BYTE PTR [rbp - 68], 102");                    // append the trailing 'f' fixed-point format type
+        emitter.instruction("mov BYTE PTR [rbp - 67], 0");                      // null-terminate the embedded-precision format string
+    }
     emitter.instruction("lea rdi, [rbp - 512]");                                // point snprintf at the fixed local raw-decimal buffer that will be post-processed for thousands separators
     emitter.instruction(&format!("mov esi, {}", RAW_BUFFER_BYTES));             // bound the raw-decimal buffer before the variadic snprintf call
     emitter.instruction("lea rdx, [rbp - 72]");                                 // pass the mini format string to snprintf as the fixed-point format pointer
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                   // SysV variadic arg4 = precision for the Windows "%.*f" shim
+    }
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 128]");                   // reload the number, which the pre-round path may have replaced
     emitter.instruction("mov eax, 1");                                          // advertise one live SIMD variadic register because the formatted number is passed in xmm0 on SysV x86_64
-    emitter.bl_c("snprintf");                                                   // render the raw fixed-point decimal string into the local snprintf buffer
+    emitter.emit_call_c("snprintf");                                            // render the raw fixed-point decimal string through the target-aware C ABI
     emitter.instruction(&format!("cmp rax, {}", RAW_BUFFER_BYTES - 1));         // snprintf reports the untruncated length, which may exceed the buffer
     emitter.instruction("jle __rt_nf_raw_len_ok_linux_x86_64");                 // keep the reported length when it actually fits
     emitter.instruction(&format!("mov rax, {}", RAW_BUFFER_BYTES - 1));         // never scan past the raw buffer for a truncated result
@@ -354,13 +364,15 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, rbx");                                        // preserve the reserved start pointer for the final x86_64 string return pair
     emitter.instruction("lea r10, [rbp - 512]");                                // point at the raw snprintf output buffer before scanning for a leading minus sign and decimal point
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // reload the raw snprintf byte count before splitting the integer and decimal parts
-    emitter.instruction("movzx eax, BYTE PTR [r10]");                           // peek at the first raw formatted byte to detect a leading minus sign
-    emitter.instruction("cmp al, 45");                                          // is the first raw formatted byte the leading '-' sign?
-    emitter.instruction("jne __rt_nf_count_linux_x86_64");                      // skip the sign-copy fast path when the formatted number is non-negative
-    emitter.instruction("mov BYTE PTR [rbx], al");                              // copy the leading minus sign into the concat buffer before processing the remaining digits
-    emitter.instruction("add rbx, 1");                                          // advance the concat-buffer destination cursor after copying the leading minus sign
-    emitter.instruction("add r10, 1");                                          // advance the raw formatted cursor past the copied leading minus sign
-    emitter.instruction("sub rcx, 1");                                          // decrement the remaining raw formatted byte count after removing the leading minus sign
+
+    // -- handle the leading minus sign emitted by snprintf --
+    emitter.instruction("movzx eax, BYTE PTR [r10]");                           // peek at the first raw formatted byte
+    emitter.instruction("cmp al, 45");                                          // is it the leading '-' sign?
+    emitter.instruction("jne __rt_nf_count_linux_x86_64");                      // non-negative values start directly with digits
+    emitter.instruction("mov BYTE PTR [rbx], al");                              // copy the sign into the grouped output
+    emitter.instruction("add rbx, 1");                                          // advance the output cursor past the sign
+    emitter.instruction("add r10, 1");                                          // advance the raw cursor past the sign
+    emitter.instruction("sub rcx, 1");                                          // remove the sign from the remaining raw length
 
     emitter.label("__rt_nf_count_linux_x86_64");
     emitter.instruction("mov r11, r10");                                        // preserve the start of the integer digit run before scanning forward to the decimal point
@@ -437,4 +449,39 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbx");                                             // restore the saved concat-buffer destination cursor register after the x86_64 number_format() helper finishes
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the x86_64 formatted string pair
     emitter.instruction("ret");                                                 // return the formatted string pointer and length in the standard x86_64 string result registers
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::Target;
+
+    use super::*;
+
+    /// Verifies multi-digit precision uses the MSx64 shim matching
+    /// `snprintf(buf, size, "%.*f", precision, double)`: precision is positional
+    /// argument four and the double is positional argument five on the stack.
+    #[test]
+    fn test_number_format_windows_x86_64_routes_through_precision_snprintf_shim() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_number_format(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("mov BYTE PTR [rbp - 70], 42\n"));
+        assert!(asm.contains("mov rcx, QWORD PTR [rbp - 56]\n"));
+        assert!(asm.contains("call __rt_sys_snprintf\n"));
+        assert!(!asm.contains("call __rt_sys_snprintf_double\n"));
+    }
+
+    /// Companion non-Windows control: the SysV variadic staging (`mov eax, 1`
+    /// then a bare `call snprintf`) must stay unchanged on Linux/macOS x86_64.
+    #[test]
+    fn test_number_format_linux_x86_64_still_calls_bare_snprintf() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_number_format(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("mov eax, 1\n"));
+        assert!(asm.contains("call snprintf\n"));
+        assert!(!asm.contains("__rt_sys_snprintf_double"));
+    }
 }

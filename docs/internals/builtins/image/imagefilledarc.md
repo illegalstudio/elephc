@@ -2,7 +2,7 @@
 title: "imagefilledarc() - internals"
 description: "Compiler internals for imagefilledarc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 501
+  order: 505
 ---
 
 ## `imagefilledarc()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2771](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2771) (`imagefilledarc`)
+- **Lowering**: [`src/image_prelude.rs`:2842](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2842) (`imagefilledarc`)
 - **Function symbol**: `imagefilledarc()`
 
 

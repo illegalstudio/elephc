@@ -17,17 +17,20 @@ eval_builtin! {
 use super::super::super::*;
 use super::*;
 
-/// Evaluates `stream_socket_server($address)`.
+/// Evaluates `stream_socket_server($address, ...optional PHP parameters)`.
 pub(in crate::interpreter) fn eval_stream_socket_server_declared_call(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [address] = args else {
+    if !(1..=5).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
-    };
-    let address = eval_expr(address, context, scope, values)?;
+    }
+    let address = eval_expr(&args[0], context, scope, values)?;
+    for arg in &args[1..] {
+        eval_expr(arg, context, scope, values)?;
+    }
     eval_stream_socket_server_result(address, context, values)
 }
 
@@ -37,10 +40,10 @@ pub(in crate::interpreter) fn eval_stream_socket_server_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [address] = evaluated_args else {
+    if !(1..=5).contains(&evaluated_args.len()) {
         return Err(EvalStatus::RuntimeFatal);
-    };
-    eval_stream_socket_server_result(*address, context, values)
+    }
+    eval_stream_socket_server_result(evaluated_args[0], context, values)
 }
 
 /// Opens a TCP listener resource.

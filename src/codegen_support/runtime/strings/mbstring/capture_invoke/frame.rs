@@ -36,16 +36,16 @@ impl Frame {
         Self::layout("__rt_mbstring_query_invoke", 5, 144, 144)
     }
 
-    /// Reserves the V6 table and native layout pointers for live variable traversal.
+    /// Reserves the V7 table and native layout pointers for live variable traversal.
     pub(super) fn variables() -> Self {
-        let mut frame = Self::layout("__rt_mbstring_variables_invoke", 6, 176, 176);
-        frame.result = 224;
-        frame.result_status = 232;
-        frame.result_length = 240;
-        frame.result_kind = 248;
-        frame.status = 272;
-        frame.linkage = 288;
-        frame.allocation = 304;
+        let mut frame = Self::layout("__rt_mbstring_variables_invoke", 7, 240, 240);
+        frame.result = 304;
+        frame.result_status = 312;
+        frame.result_length = 320;
+        frame.result_kind = 328;
+        frame.status = 352;
+        frame.linkage = 368;
+        frame.allocation = 384;
         frame
     }
 

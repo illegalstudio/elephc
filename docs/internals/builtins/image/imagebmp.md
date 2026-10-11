@@ -2,7 +2,7 @@
 title: "imagebmp() - internals"
 description: "Compiler internals for imagebmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 461
+  order: 465
 ---
 
 ## `imagebmp()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3619](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3619) (`imagebmp`)
+- **Lowering**: [`src/image_prelude.rs`:3690](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3690) (`imagebmp`)
 - **Function symbol**: `imagebmp()`
 
 

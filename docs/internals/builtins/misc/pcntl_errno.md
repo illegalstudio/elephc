@@ -2,7 +2,7 @@
 title: "pcntl_errno() - internals"
 description: "Compiler internals for pcntl_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 648
+  order: 655
 ---
 
 ## `pcntl_errno()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_errno.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_errno.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

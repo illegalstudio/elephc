@@ -2,7 +2,7 @@
 title: "imageaffinematrixconcat() - internals"
 description: "Compiler internals for imageaffinematrixconcat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 457
+  order: 461
 ---
 
 ## `imageaffinematrixconcat()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3239](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3239) (`imageaffinematrixconcat`)
+- **Lowering**: [`src/image_prelude.rs`:3310](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3310) (`imageaffinematrixconcat`)
 - **Function symbol**: `imageaffinematrixconcat()`
 
 

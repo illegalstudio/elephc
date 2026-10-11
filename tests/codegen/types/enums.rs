@@ -54,7 +54,8 @@ fn test_backed_enum_value_and_from_identity() {
         echo $c === Color::Green;
         ",
     );
-    assert_eq!(out, "1\n1");
+    let eol = target().platform.php_eol();
+    assert_eq!(out, format!("1{eol}1"));
 }
 
 /// Regression: an enum used as a class property / promoted-constructor-param TYPE
@@ -188,7 +189,8 @@ fn test_enum_try_from_and_cases() {
         echo $cases[1] === Color::Green;
         ",
     );
-    assert_eq!(out, "1\n2\n1");
+    let eol = target().platform.php_eol();
+    assert_eq!(out, format!("1{eol}2{eol}1"));
 }
 
 /// Verifies string-backed enum: `Status::from("live")` resolves to `Status::Live` by identity,
@@ -206,7 +208,8 @@ fn test_string_backed_enum_from_and_value() {
         echo Status::Live->value;
         ",
     );
-    assert_eq!(out, "1\nlive");
+    let eol = target().platform.php_eol();
+    assert_eq!(out, format!("1{eol}live"));
 }
 
 /// Verifies pure (unit) enum: `Suit::cases()` returns all cases and `Suit::Hearts === $cases[0]` by identity.
@@ -224,7 +227,8 @@ fn test_pure_enum_cases_identity() {
         echo $cases[0] === Suit::Hearts;
         ",
     );
-    assert_eq!(out, "2\n1");
+    let eol = target().platform.php_eol();
+    assert_eq!(out, format!("2{eol}1"));
 }
 
 /// Verifies enum case objects expose PHP's readonly `name` property directly and inside methods.
@@ -355,10 +359,12 @@ fn test_enum_from_string_failure_throws_value_error() {
 #[test]
 fn test_example_enums_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enums/main.php"));
+    let eol = target().platform.php_eol();
     assert_eq!(
         out,
         "1\n2\n3\nRed=1 Green=2 Blue=3 \nDefault=default Match=match MATCH=upper-match \nDESC\n\
          Low High High same"
+            .replace('\n', eol)
     );
 }
 
@@ -649,7 +655,8 @@ fn test_enum_method_reads_this_name() {
         echo Suit::Spades->describe();
         ",
     );
-    assert_eq!(out, "Hearts=h\nSpades=s");
+    let eol = target().platform.php_eol();
+    assert_eq!(out, format!("Hearts=h{eol}Spades=s"));
 }
 
 /// Verifies that an enum method can reference a class constant via `self::`.
@@ -704,7 +711,8 @@ fn test_backed_enum_name_and_value() {
         echo Code::Err->value;
         ",
     );
-    assert_eq!(out, "Err\n2");
+    let eol = target().platform.php_eol();
+    assert_eq!(out, format!("Err{eol}2"));
 }
 
 /// Verifies a string-backed enum case `->name` returns the case identifier, not the
@@ -722,7 +730,8 @@ fn test_string_backed_enum_name_distinct_from_value() {
         echo Status::Live->value;
         ",
     );
-    assert_eq!(out, "Live\nlive");
+    let eol = target().platform.php_eol();
+    assert_eq!(out, format!("Live{eol}live"));
 }
 
 /// Verifies `->name` reads correctly when the case singleton is aliased through a local
@@ -741,7 +750,8 @@ fn test_enum_name_through_variable_and_cases() {
         echo $cases[1]->name;
         ",
     );
-    assert_eq!(out, "Clubs\nHeartsClubs");
+    let eol = target().platform.php_eol();
+    assert_eq!(out, format!("Clubs{eol}HeartsClubs"));
 }
 
 /// Verifies `->name` works inside string interpolation alongside `->value`, matching PHP's

@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_scale()"
 description: "Creates a matrix that scales by the given x and y factors."
 sidebar:
-  order: 415
+  order: 419
 ---
 
 ## cairo_matrix_init_scale()

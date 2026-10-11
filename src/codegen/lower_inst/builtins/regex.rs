@@ -24,7 +24,6 @@ use super::super::super::context::FunctionContext;
 use super::super::callables;
 
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
-const PREG_MATCH_ALL_SUPPORTED_FLAGS: i64 = 1 | 2 | 256 | 512;
 
 /// Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
 pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -55,14 +54,17 @@ pub(crate) fn lower_preg_match_all(
     super::ensure_arg_count_between(inst, "preg_match_all", 2, 4)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
-    let matches_slot = inst
-        .operands
-        .get(2)
-        .copied()
+    let matches = inst.operands.get(2).copied();
+    let matches_slot = matches
         .map(|value| optional_matches_local_slot(ctx, value))
         .transpose()?
         .flatten();
     let flags = inst.operands.get(3).copied();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => load_flags_arg(ctx, flags, "x5")?,
+        Arch::X86_64 => load_flags_arg(ctx, flags, "r8")?,
+    }
+    validate_preg_match_all_flags(ctx, pattern, subject, matches, matches_slot, flags)?;
     load_pattern_and_subject(ctx, pattern, subject)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => load_flags_arg(ctx, flags, "x5")?,
@@ -77,48 +79,85 @@ pub(crate) fn lower_preg_match_all(
     super::store_if_result(ctx, inst)
 }
 
-/// Validates count-only flags without changing the count helper's existing ABI.
+/// Calls the count helper after the shared PHP flag guard has accepted the request.
 fn lower_preg_match_all_count(ctx: &mut FunctionContext<'_>) {
-    let invalid = ctx.next_label("preg_match_all_count_invalid");
-    let done = ctx.next_label("preg_match_all_count_done");
-    let unsupported = !PREG_MATCH_ALL_SUPPORTED_FLAGS;
-    // -- reject unsupported flags and conflicting order modes --
+    abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+}
+
+/// Initializes a provided capture output, then raises PHP's catchable flag `ValueError`.
+fn validate_preg_match_all_flags(
+    ctx: &mut FunctionContext<'_>,
+    pattern: ValueId,
+    subject: ValueId,
+    matches: Option<ValueId>,
+    matches_slot: Option<LocalSlotId>,
+    flags: Option<ValueId>,
+) -> Result<()> {
+    let invalid = ctx.next_label("preg_match_all_flags_invalid");
+    let valid = ctx.next_label("preg_match_all_flags_valid");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x9", PREG_MATCH_ALL_SUPPORTED_FLAGS);
-            ctx.emitter.instruction("bic x9, x5, x9");                          // isolate unsupported bits without changing string arguments
-            ctx.emitter.instruction(&format!("cbnz x9, {}", invalid));          // unsupported bits return zero without executing the regex
-            ctx.emitter.instruction("and x9, x5, #3");                          // isolate the mutually exclusive order modes
-            ctx.emitter.instruction("cmp x9, #3");                              // both order bits together are invalid
-            ctx.emitter.instruction(&format!("b.eq {}", invalid));              // conflicting order modes return zero
+            ctx.emitter.instruction("and x9, x5, #255");                        // PHP validates only the low-byte order selector
+            ctx.emitter.instruction("cmp x9, #2");                              // 0/default, PATTERN_ORDER, and SET_ORDER are valid
+            ctx.emitter.instruction(&format!("b.hi {}", invalid));              // every other low-byte order raises PHP's ValueError
+            ctx.emitter.instruction(&format!("b {}", valid));                   // valid flags proceed to count or capture lowering
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r9, r8");                              // copy flags without changing string arguments
-            ctx.emitter.instruction(&format!("and r9, {}", unsupported));       // isolate unsupported flag bits
-            ctx.emitter.instruction(&format!("jnz {}", invalid));               // unsupported bits return zero without executing the regex
-            ctx.emitter.instruction("mov r9, r8");                              // copy flags before inspecting their order mode
-            ctx.emitter.instruction("and r9, 3");                               // isolate the mutually exclusive order modes
-            ctx.emitter.instruction("cmp r9, 3");                               // both order bits together are invalid
-            ctx.emitter.instruction(&format!("je {}", invalid));                // conflicting order modes return zero
-        }
-    }
-    // -- count only after validation, otherwise return the shared fail-closed result --
-    abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("b {}", done));                    // keep the valid regex count
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("jmp {}", done));                  // keep the valid regex count
+            ctx.emitter.instruction("and r9, 255");                             // PHP validates only the low-byte order selector
+            ctx.emitter.instruction("cmp r9, 2");                               // 0/default, PATTERN_ORDER, and SET_ORDER are valid
+            ctx.emitter.instruction(&format!("ja {}", invalid));                // every other low-byte order raises PHP's ValueError
+            ctx.emitter.instruction(&format!("jmp {}", valid));                 // valid flags proceed to count or capture lowering
         }
     }
     ctx.emitter.label(&invalid);
-    let result = match ctx.emitter.target.arch {
-        Arch::AArch64 => "x0",
-        Arch::X86_64 => "rax",
-    };
-    abi::emit_load_int_immediate(ctx.emitter, result, 0);
-    ctx.emitter.label(&done);
+    let mut released = Vec::with_capacity(4);
+    for value in [Some(pattern), Some(subject), flags].into_iter().flatten() {
+        if matches_slot.is_some() && matches == Some(value) {
+            continue;
+        }
+        if !released.contains(&value) {
+            super::super::ownership::release_value_if_owned(ctx, value)?;
+            released.push(value);
+        }
+    }
+    if let Some(slot) = matches_slot {
+        emit_empty_preg_matches_writeback(ctx, slot)?;
+    } else if let Some(matches) = matches {
+        if !released.contains(&matches) {
+            super::super::ownership::release_value_if_owned(ctx, matches)?;
+        }
+    }
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant",
+    );
+    ctx.emitter.label(&valid);
+    Ok(())
+}
+
+/// Replaces a provided `$matches` local with PHP's eagerly initialized empty array.
+fn emit_empty_preg_matches_writeback(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            ctx.emitter.instruction("mov x1, x0");                              // publish the fresh matches array in the capture-result register
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            ctx.emitter.instruction("mov rdx, rax");                            // publish the fresh matches array in the capture-result register
+            abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+        }
+    }
+    store_matches_array(ctx, slot)
 }
 
 /// Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper.

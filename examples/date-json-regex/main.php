@@ -78,6 +78,12 @@ echo "First word: " . $wordMatches[0][0] . "\n";
 preg_match_all("/[a-z]+/", "ab cd", $offsets, PREG_OFFSET_CAPTURE);
 echo "Second word at: " . $offsets[0][1][1] . "\n";
 
+// Optional suffixes disappear from SET_ORDER rows unless null padding is requested.
+preg_match_all("/(item)(-[0-9]+)?/", "item-42 item", $items, PREG_SET_ORDER);
+echo "Optional suffix row lengths: " . count($items[0]) . ":" . count($items[1]) . "\n";
+preg_match_all("/(item)(-[0-9]+)?/", "item", $paddedItems, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+echo "Missing suffix: " . json_encode($paddedItems[0][2]) . "\n";
+
 $unicode = "日本語123";
 if (preg_match("/\p{L}+/u", $unicode)) {
     echo "Unicode letters detected\n";

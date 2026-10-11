@@ -30,9 +30,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("mov QWORD PTR [rsp + 24], rcx");                   // preserve caller strictness
         emitter.instruction("mov QWORD PTR [rsp + 32], r8");                    // preserve the optional eval context
     }
-    emitter.bl_c("elephc_oniguruma_v1_provider");
+    emitter.emit_native_bridge_symbol_call("elephc_oniguruma_v1_provider", 0);
     if !arm { emitter.instruction("mov rdi, rax"); }                            // pass the native table through the SysV first argument register
-    emitter.bl_c("elephc_mbstring_regex_provider_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_regex_provider_v1", 1);
     if arm {
         emitter.instruction("cbz w0, __rt_mbregex_init_ready");                 // continue only after complete provider validation and initialization
         emitter.instruction("mov x0, #1");                                      // preserve fatal process status for an invalid native integration

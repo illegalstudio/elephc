@@ -6426,11 +6426,14 @@ echo chdir("sub") ? "D" : "!";
 $after = getcwd();
 echo strlen($after) > strlen($before) ? "W" : "!";
 echo ":";
-echo sys_get_temp_dir();
+echo strlen(sys_get_temp_dir()) > 0 ? "T" : "!";
 "#;
+    // The temporary directory is checked by marker, like the working directory
+    // above it: php resolves it from TMPDIR, so it is a per-user path on macOS
+    // rather than the "/tmp" literal this fixture used to pin.
     assert_eq!(
         compile_and_run_ir_backend("working_directory", source),
-        "CMDW:/tmp"
+        "CMDW:T"
     );
 }
 

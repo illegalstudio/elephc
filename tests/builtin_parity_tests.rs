@@ -15,8 +15,24 @@ use elephc_builtin_contract::{
     aot_signature_profile, aot_support, contracts, eval_execution, eval_signature,
     eval_signature_profile, eval_support, Area, AotSignatureOverrideReason,
     BackendImplementation, BackendSupport, BuiltinContract, BuiltinKind, BuiltinSignature,
-    EvalAdapterReason, EvalExecution,
+    EvalAdapterReason, EvalExecution, PhpTarget, PhpTargetAvailability, php_target_availability,
 };
+
+/// Returns the PHP registration target represented by this native test process.
+fn test_host_php_target() -> PhpTarget {
+    if cfg!(target_os = "windows") {
+        PhpTarget::Windows
+    } else if cfg!(target_os = "macos") {
+        PhpTarget::MacOs
+    } else {
+        PhpTarget::Linux
+    }
+}
+
+/// Reports whether PHP registers one neutral contract on this test host.
+fn contract_is_available_on_test_host(contract: &BuiltinContract) -> bool {
+    contract.is_php_available_on(test_host_php_target())
+}
 
 /// PHP-visible `curl_*` contracts the shared catalog publishes in this configuration.
 ///
@@ -68,9 +84,10 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
         );
     }
     // Five language constructs, one dedicated-syntax surface, three compiler transforms,
-    // the 346 prelude-provided functions outside `ext/curl` (including XML), and the
+    // the 348 prelude-provided functions outside `ext/curl` (including XML and
+    // Windows-only image capture), and the
     // 54 date/calendar functions the name resolver rewrites.
-    assert_eq!(exceptional.len(), 409);
+    assert_eq!(exceptional.len(), 411);
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
@@ -112,7 +129,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
         BTreeSet::from(["func_get_arg", "func_get_args", "func_num_args"])
     );
     assert_eq!(rewrites, 54);
-    assert_eq!(preludes.len(), 346);
+    assert_eq!(preludes.len(), 348);
     for name in [
         "hash_copy",
         "hash_final",
@@ -303,6 +320,7 @@ fn backend_public_name_sets_derive_from_shared_support() {
 
     let expected_eval = contracts()
         .iter()
+        .filter(|contract| contract_is_available_on_test_host(contract))
         .filter(|contract| {
             matches!(
                 eval_support(contract),
@@ -396,7 +414,7 @@ fn backend_signature_shapes_derive_from_shared_contracts() {
         if matches!(
             eval_support(contract),
             BackendSupport::Implemented(BackendImplementation::Registry)
-        ) {
+        ) && contract_is_available_on_test_host(contract) {
             let actual =
                 elephc_magician::builtin_metadata::builtin_signature_metadata(contract.name)
                     .unwrap_or_else(|| panic!("missing eval signature for {}", contract.name));
@@ -439,6 +457,7 @@ fn extension_builtin_sets_derive_from_shared_contracts() {
     let expected_eval = contracts()
         .iter()
         .filter(|contract| contract.extension)
+        .filter(|contract| contract_is_available_on_test_host(contract))
         .filter(|contract| {
             matches!(
                 eval_support(contract),
@@ -465,8 +484,27 @@ fn eval_registry_coverage_matches_shared_support_records() {
         let expected = matches!(
             eval_support(contract),
             BackendSupport::Implemented(BackendImplementation::Registry)
-        );
+        ) && contract_is_available_on_test_host(contract);
         assert_eq!(registered, expected, "{} eval coverage", contract.name);
+    }
+}
+
+/// Windows-only contracts remain in the neutral catalog but register only on Windows hosts.
+#[test]
+fn eval_windows_only_contracts_follow_host_registration() {
+    let windows_only = contracts()
+        .iter()
+        .filter(|contract| {
+            php_target_availability(contract.id) == PhpTargetAvailability::WindowsOnly
+        })
+        .collect::<Vec<_>>();
+    assert!(!windows_only.is_empty(), "catalog must retain Windows-only contracts");
+    for contract in windows_only {
+        let registered =
+            elephc_magician::builtin_metadata::php_visible_builtin_is_registry_declared(
+                contract.name,
+            );
+        assert_eq!(registered, cfg!(target_os = "windows"), "{} host registration", contract.name);
     }
 }
 

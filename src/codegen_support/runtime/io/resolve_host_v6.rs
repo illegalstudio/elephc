@@ -76,7 +76,7 @@ pub fn emit_resolve_host_v6(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #0");                                          // arg 2: service = NULL (name-only mode)
     emitter.instruction("mov x2, sp");                                          // arg 3: &hints
     emitter.instruction("add x3, sp, #48");                                     // arg 4: &res (output slot)
-    emitter.bl_c("getaddrinfo");                                                // returns 0 on success, error code otherwise
+    emitter.emit_call_c("getaddrinfo");                                                // returns 0 on success, error code otherwise
     emitter.instruction("cbnz x0, __rt_rhv6_fail");                             // non-zero means resolution failed
 
     // -- copy res->ai_addr->sin6_addr (16 bytes) into the caller's out buffer --
@@ -92,7 +92,7 @@ pub fn emit_resolve_host_v6(emitter: &mut Emitter) {
 
     // -- freeaddrinfo(res) so libc's allocation is released --
     emitter.instruction("ldr x0, [sp, #48]");                                   // arg 1: res
-    emitter.bl_c("freeaddrinfo");                                               // libc releases the returned list
+    emitter.emit_call_c("freeaddrinfo");                                               // libc releases the returned list
 
     emitter.instruction("mov x0, #1");                                          // success
     emitter.instruction("ldp x29, x30, [sp, #72]");                             // restore frame pointer and return address
@@ -101,7 +101,7 @@ pub fn emit_resolve_host_v6(emitter: &mut Emitter) {
 
     emitter.label("__rt_rhv6_free_fail");
     emitter.instruction("ldr x0, [sp, #48]");                                   // res
-    emitter.bl_c("freeaddrinfo");                                               // free even though we found no usable addr
+    emitter.emit_call_c("freeaddrinfo");                                               // free even though we found no usable addr
     // fall through
     emitter.label("__rt_rhv6_fail");
     emitter.instruction("mov x0, #0");                                          // failure
@@ -149,7 +149,7 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // arg 2: service = NULL
     emitter.instruction("lea rdx, [rbp - 48]");                                 // arg 3: &hints
     emitter.instruction("lea rcx, [rbp - 56]");                                 // arg 4: &res
-    emitter.instruction("call getaddrinfo");                                    // call external helper
+    emitter.emit_call_c("getaddrinfo");                                         // call external helper
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jnz __rt_rhv6_fail_x86");                              // non-zero return = error
 
@@ -168,7 +168,7 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
 
     // -- freeaddrinfo(res) --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("call freeaddrinfo");                                   // call external helper
+    emitter.emit_call_c("freeaddrinfo");                                        // call external helper
 
     emitter.instruction("mov eax, 1");                                          // success
     emitter.instruction("add rsp, 80");                                         // release runtime stack frame
@@ -177,7 +177,7 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_rhv6_free_fail_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("call freeaddrinfo");                                   // call external helper
+    emitter.emit_call_c("freeaddrinfo");                                        // call external helper
     // fall through
     emitter.label("__rt_rhv6_fail_x86");
     emitter.instruction("xor eax, eax");                                        // failure

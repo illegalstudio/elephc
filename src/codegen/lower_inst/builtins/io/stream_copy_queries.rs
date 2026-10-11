@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::codegen_support::platform::Platform;
 
 /// Lowers `stream_copy_to_stream(from, to, length?, offset?)` through wrapper-aware read/write loops.
 pub(crate) fn lower_stream_copy_to_stream(
@@ -132,13 +133,15 @@ pub(crate) fn lower_stream_get_transports(
     inst: &Instruction,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "stream_get_transports", 0)?;
-    emit_static_string_array(
-        ctx,
+    let transports: &[&str] = if ctx.emitter.target.platform == Platform::Windows {
+        &["tcp", "udp", "tls", "ssl", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3"]
+    } else {
         &[
-            "tcp", "udp", "unix", "udg", "tls", "ssl", "sslv2", "sslv3",
-            "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3",
-        ],
-    );
+            "tcp", "udp", "unix", "udg", "tls", "ssl", "tlsv1.0", "tlsv1.1",
+            "tlsv1.2", "tlsv1.3",
+        ]
+    };
+    emit_static_string_array(ctx, transports);
     store_if_result(ctx, inst)
 }
 

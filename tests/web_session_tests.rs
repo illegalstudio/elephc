@@ -2198,7 +2198,7 @@ echo implode('#', $parts);"#;
         .map(|directive| directive.name).min().expect("shared INI catalog");
     let expected = format!("1440,PHPSESSID,,files,nocache,180,0,/,,,,1,,1,1,,1,100,32,4,,php,\
 #1440>9999#XF#F:0:33:{all_count}:Y:{}#PHPSESSID|PHPSESSID|7#2\
-#54:F:{first_shared_key}:session.use_trans_sid:S", mbstring_ini::DIRECTIVES.len());
+#54:F:{first_shared_key}:smtp_port:S", mbstring_ini::DIRECTIVES.len());
     assert!(
         response.ends_with(expected.as_str()),
         "session ini surface pin mismatch (INI-dispatcher refactor changed \

@@ -7,18 +7,22 @@
 //! Key details:
 //! - Production eval regex support uses registered callbacks and keeps the
 //!   staticlib free of direct PCRE2 link requirements.
-//! - Unit tests install an equivalent host-PCRE2 provider; raw link arguments
+//! - Unit tests install equivalent target-native PCRE2 and iconv providers; raw link arguments
 //!   apply to this package's linked targets without propagating native-library
 //!   metadata to downstream users of the rlib/staticlib.
 //! - Musl test executables select the installed static PCRE2 archives so they
 //!   do not acquire an unavailable glibc program interpreter.
 
-use std::{env, path::Path};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 /// Emits package-local PCRE2 link arguments, selecting static archives on musl.
 fn main() {
+    println!("cargo:rerun-if-env-changed=ELEPHC_MINGW_SYSROOT");
     for path in pcre2_library_search_paths() {
-        println!("cargo:rustc-link-search=native={path}");
+        println!("cargo:rustc-link-search=native={}", path.display());
     }
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     if target_env == "musl" {
@@ -26,6 +30,22 @@ fn main() {
     }
     println!("cargo:rustc-link-arg=-lpcre2-posix");
     println!("cargo:rustc-link-arg=-lpcre2-8");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") && target_env == "gnu" {
+        // `elephc-iconv` deliberately leaves its native symbols unresolved in its
+        // staticlib. Magician's Windows test executable is the final consumer, so
+        // it must close that target-native dependency itself.
+        println!("cargo:rustc-link-arg=-liconv");
+        // The target-native static archives follow Rust's default CRT libraries
+        // under `-nodefaultlibs`. Close their fortified/stack-protector calls first,
+        // then repeat MinGW's extension and CRT libraries after every archive that
+        // references them so the one-pass GNU archive scan can resolve the tail.
+        println!("cargo:rustc-link-arg=-lssp");
+        println!("cargo:rustc-link-arg=-lmingwex");
+        println!("cargo:rustc-link-arg=-lmsvcrt");
+        // PCRE2's static JIT objects reference VirtualAlloc/VirtualFree and
+        // mutex APIs after Rust's earlier default kernel32 occurrence.
+        println!("cargo:rustc-link-arg=-lkernel32");
+    }
     if target_env == "musl" {
         // The raw PCRE2 archives follow Rust's first libc occurrence, so repeat
         // libc here to resolve their stack-protector references in link order.
@@ -39,9 +59,25 @@ fn main() {
     }
 }
 
-/// Returns common PCRE2 library directories for local macOS/Homebrew builds.
-fn pcre2_library_search_paths() -> Vec<&'static str> {
-    [
+/// Returns target-compatible native-library directories.
+///
+/// Windows cross-builds use only the explicit MinGW sysroot. Falling through to
+/// Homebrew would let a Mach-O host archive shadow or substitute a missing COFF
+/// dependency, producing a misleading linker failure.
+fn pcre2_library_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if env::var("TARGET").as_deref() == Ok("x86_64-pc-windows-gnu") {
+        if let Some(sysroot) = env::var_os("ELEPHC_MINGW_SYSROOT") {
+            let sysroot = PathBuf::from(sysroot);
+            for directory in [sysroot.join("lib"), sysroot.join("lib64")] {
+                if directory.is_dir() {
+                    paths.push(directory);
+                }
+            }
+        }
+        return paths;
+    }
+    paths.extend([
         "/opt/homebrew/opt/pcre2/lib",
         "/opt/homebrew/lib",
         "/usr/local/opt/pcre2/lib",
@@ -49,5 +85,6 @@ fn pcre2_library_search_paths() -> Vec<&'static str> {
     ]
     .into_iter()
     .filter(|path| Path::new(path).exists())
-    .collect()
+    .map(PathBuf::from));
+    paths
 }

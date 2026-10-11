@@ -40,6 +40,28 @@ echo $resolved === $direct ? "match" : "differ";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies Windows `realpath()` follows a symbolic link to its physical target.
+#[test]
+fn test_windows_realpath_resolves_symbolic_link_target() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("real-target.txt", "x");
+if (!symlink("real-target.txt", "real-link.txt")) {
+    echo "symlink-failed";
+} else {
+    echo realpath("real-link.txt") === realpath("real-target.txt") ? "resolved" : "lexical";
+    unlink("real-link.txt");
+}
+unlink("real-target.txt");
+"#,
+    );
+    assert_eq!(out, "resolved");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `realpath()` returns `false` when the path does not exist.
 /// Fixture: `/definitely/does/not/exist/anywhere/12345` → expects `false`.
 #[test]
@@ -447,4 +469,67 @@ echo dirname("/usr/local/bin", $levels);
         "unexpected stderr: {}",
         err
     );
+}
+
+/// Verifies `dirname()` and `basename()` treat the backslash as a separator on
+/// Windows, and only there.
+///
+/// PHP's `IS_SLASH` accepts both `/` and `\` on Windows (Zend/zend_virtual_cwd.h),
+/// so `dirname('C:\work\app.php')` is `C:\work`. Every backslash path used to come
+/// back as `.` / the whole input, because the helpers only ever compared against
+/// `0x2F`. On POSIX a backslash is an ordinary filename byte, which is what the
+/// non-Windows arm asserts.
+#[test]
+fn test_dirname_basename_handle_backslash_separator_on_windows() {
+    let out = compile_and_run(
+        r#"<?php
+function show(string $p): void { echo "[", dirname($p), "|", basename($p), "]"; }
+show('C:\\work\\app.php');
+show('foo\\bar');
+show('\\\\srv\\share\\f.txt');
+"#,
+    );
+    let expected = if target().platform == Platform::Windows {
+        "[C:\\work|app.php][foo|bar][\\\\srv\\share|f.txt]"
+    } else {
+        "[.|C:\\work\\app.php][.|foo\\bar][.|\\\\srv\\share\\f.txt]"
+    };
+    assert_eq!(out, expected);
+}
+
+/// Verifies the Windows drive prefix is never scanned past: `dirname('C:\app.php')`
+/// is the drive root `C:\`, and a bare `C:` is returned unchanged, mirroring the
+/// `len_adjust` handling in php-src `php_win32_ioutil_dirname` (win32/ioutil.c).
+/// Without that guard the scan would collapse the drive letter into `C`.
+#[test]
+fn test_dirname_keeps_windows_drive_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+function d(string $p): void { echo "[", dirname($p), "]"; }
+d('C:\\app.php');
+d('C:\\');
+d('C:');
+"#,
+    );
+    let expected = if target().platform == Platform::Windows {
+        "[C:\\][C:\\][C:]"
+    } else {
+        "[.][.][.]"
+    };
+    assert_eq!(out, expected);
+}
+
+/// Verifies forward-slash paths keep behaving identically on every target, so the
+/// Windows separator handling cannot regress the POSIX shape.
+#[test]
+fn test_dirname_basename_forward_slash_unchanged() {
+    let out = compile_and_run(
+        r#"<?php
+function show(string $p): void { echo "[", dirname($p), "|", basename($p), "]"; }
+show('/foo/bar');
+show('foo/bar');
+show('bare');
+"#,
+    );
+    assert_eq!(out, "[/foo|bar][foo|bar][.|bare]");
 }

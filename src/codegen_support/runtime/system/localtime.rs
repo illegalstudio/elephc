@@ -36,12 +36,12 @@ pub fn emit_localtime(emitter: &mut Emitter) {
             emitter.instruction("cmn x0, #1");                                  // timestamp == -1 (current-time sentinel)?
             emitter.instruction("b.ne __rt_localtime_have");                    // explicit timestamp supplied → use it
             emitter.instruction("mov x0, #0");                                  // NULL argument to time()
-            emitter.bl_c("time");                                               // time(NULL) → x0 = current Unix timestamp
+            emitter.emit_call_c("time");                                               // time(NULL) → x0 = current Unix timestamp
             emitter.label("__rt_localtime_have");
             emitter.instruction("str x0, [sp, #0]");                            // save the resolved timestamp
             emitter.instruction("bl __rt_tz_init_utc");                         // default the timezone to UTC on first use (PHP-compatible) unless already set
             emitter.instruction("add x0, sp, #0");                              // x0 = &timestamp for localtime()
-            emitter.bl_c("localtime");                                          // localtime(&ts) → x0 = struct tm
+            emitter.emit_call_c("localtime");                                          // localtime(&ts) → x0 = struct tm
             emitter.instruction("str x0, [sp, #8]");                            // save the struct tm pointer
             emitter.instruction("mov x0, #16");                                 // capacity 16 (>= 9 entries, avoids a realloc)
             emitter.instruction("mov x1, #7");                                  // value type = mixed
@@ -213,12 +213,12 @@ pub fn emit_localtime(emitter: &mut Emitter) {
             emitter.instruction("cmp rax, -1");                                 // timestamp == -1 (current-time sentinel)?
             emitter.instruction("jne __rt_localtime_have_x86");                 // explicit timestamp supplied → use it
             emitter.instruction("xor edi, edi");                                // NULL argument to time()
-            emitter.instruction("call time");                                   // time(NULL) → rax = current Unix timestamp
+            emitter.emit_call_c("time");                                        // time(NULL) → rax = current Unix timestamp
             emitter.label("__rt_localtime_have_x86");
             emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // save the resolved timestamp
             emitter.instruction("call __rt_tz_init_utc");                       // default the timezone to UTC on first use (PHP-compatible) unless already set
             emitter.instruction("lea rdi, [rbp - 8]");                          // rdi = &timestamp for localtime()
-            emitter.instruction("call localtime");                              // localtime(&ts) → rax = struct tm
+            emitter.emit_call_c("localtime");                                   // localtime(&ts) → rax = struct tm
             emitter.instruction("mov QWORD PTR [rbp - 16], rax");               // save the struct tm pointer
             emitter.instruction("mov rdi, 16");                                 // capacity 16 (>= 9 entries, avoids a realloc)
             emitter.instruction("mov rsi, 7");                                  // value type = mixed

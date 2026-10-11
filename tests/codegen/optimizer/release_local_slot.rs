@@ -56,9 +56,7 @@ fn run_release_fixture(source: &str, ir_opt: bool) -> (String, String) {
         "fixture compilation failed: {}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let output = Command::new(dir.join("main"))
-        .output()
-        .expect("failed to run ReleaseLocalSlot fixture");
+    let output = run_binary(&dir.join("main"), &dir);
     assert!(
         output.status.success(),
         "fixture execution failed: {}",

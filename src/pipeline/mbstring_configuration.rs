@@ -14,8 +14,7 @@ pub(super) fn arguments(overrides: &[(String, String)]) -> Vec<Vec<u8>> {
     let directive = |name: &str| {
         use elephc_builtin_contract::mbstring_abi::ini::{catalog, core};
         catalog::lookup(name.as_bytes()).is_some() || core::lookup(name.as_bytes()).is_some()
-            || matches!(name, "default_mimetype" | "default_charset" | "sendmail_path"
-                | "mail.force_extra_parameters" | "mail.mixed_lf_and_crlf")
+            || matches!(name, "default_mimetype" | "default_charset")
     };
     let core = ["default_charset", "internal_encoding", "input_encoding", "output_encoding"];
     let effective = |name: &str| overrides.iter().rev().find(|(key, _)| key == name)
@@ -90,10 +89,14 @@ mod tests {
     fn mbstring_startup_mail_settings() {
         let settings = [("sendmail_path", "/bin/true -t"),
             ("mail.force_extra_parameters", "-f forced@example.test"),
-            ("mail.mixed_lf_and_crlf", "1")]
+            ("mail.mixed_lf_and_crlf", "1"), ("mail.cr_lf_mode", "mixed"),
+            ("SMTP", "127.0.0.1"), ("smtp_port", "2525"),
+            ("sendmail_from", "sender@example.test")]
             .map(|(key, value)| (key.into(), value.into()));
         let expected: Vec<_> = ["UTF-8", "UTF-8", "UTF-8", "sendmail_path", "/bin/true -t",
-            "mail.force_extra_parameters", "-f forced@example.test", "mail.mixed_lf_and_crlf", "1"]
+            "mail.force_extra_parameters", "-f forced@example.test", "mail.mixed_lf_and_crlf", "1",
+            "mail.cr_lf_mode", "mixed", "SMTP", "127.0.0.1", "smtp_port", "2525",
+            "sendmail_from", "sender@example.test"]
             .map(|value| value.as_bytes().to_vec()).into();
         assert_eq!(arguments(&settings), expected);
     }

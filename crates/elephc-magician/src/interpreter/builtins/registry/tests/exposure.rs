@@ -181,8 +181,6 @@ use super::*;
             "json_validate",
             "krsort",
             "ksort",
-            "lchgrp",
-            "lchown",
             "link",
             "linkinfo",
             "localtime",
@@ -292,6 +290,13 @@ use super::*;
             assert!(
                 eval_declared_builtin_exists(name),
                 "{name} should be registered declaratively"
+            );
+        }
+        for name in ["lchgrp", "lchown"] {
+            assert_eq!(
+                eval_declared_builtin_exists(name),
+                !cfg!(windows),
+                "{name} must follow php-src's HAVE_LCHOWN registration guard",
             );
         }
     }

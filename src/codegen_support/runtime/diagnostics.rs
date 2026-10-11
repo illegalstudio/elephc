@@ -9,8 +9,8 @@
 //! - Suppression depth lives in _rt_diag_suppression and warning output must follow each target syscall ABI.
 
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use crate::codegen_support::platform::{Arch, Platform};
 use crate::codegen_support::RuntimeFeatures;
 
 /// Emits runtime diagnostic helpers for suppression depth and warning output.
@@ -34,6 +34,10 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     }
     super::error_handlers::emit_error_handler_invoke(emitter);
     super::warning_dispatch::emit_warning_dispatch(emitter);
+    if emitter.platform == Platform::Windows && emitter.target.arch == Arch::X86_64 {
+        emit_diagnostics_windows_x86_64(emitter);
+        return;
+    }
     if emitter.target.arch == Arch::X86_64 {
         emit_diagnostics_linux_x86_64(emitter);
         return;
@@ -66,6 +70,59 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     emitter.syscall(4);
     emitter.label("__rt_diag_warning_done");
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+}
+
+/// Emits x86_64 Windows diagnostic helpers using the existing suppressible
+/// warning channel and the Win32 `WriteFile` API.
+///
+/// The generated program uses the SysV register convention internally, while
+/// `GetStdHandle`/`WriteFile` use MSx64.  Keep the conversion here so callers
+/// such as preludes and runtime bridges never write directly to stderr and
+/// `@` suppression remains centralized in `__rt_diag_write` after the shared
+/// dispatcher has selected default output.
+fn emit_diagnostics_windows_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: Windows diagnostics ---");
+
+    emitter.label_global("__rt_diag_push_suppression");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load the current nested diagnostic-suppression depth
+    emitter.instruction("add r10, 1");                                          // enter one additional diagnostic-suppression scope
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);   // publish the incremented diagnostic-suppression depth
+    emitter.instruction("ret");                                                 // return to the suppressed expression wrapper
+
+    emitter.label_global("__rt_diag_pop_suppression");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load the current nested diagnostic-suppression depth
+    emitter.instruction("test r10, r10");                                       // check whether a suppression scope is active before decrementing
+    emitter.instruction("jz __rt_diag_pop_done_windows_x86_64");                // avoid underflow if suppression scopes are already balanced
+    emitter.instruction("sub r10, 1");                                          // leave one diagnostic-suppression scope
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);   // publish the decremented diagnostic-suppression depth
+    emitter.label("__rt_diag_pop_done_windows_x86_64");
+    emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
+
+    emitter.label_global("__rt_diag_write");
+    emitter.instruction("sub rsp, 72");                                         // shadow space, saved message, and WriteFile byte count
+    emitter.instruction("mov QWORD PTR [rsp + 48], rdi");                       // preserve the SysV warning pointer across GetStdHandle
+    emitter.instruction("mov QWORD PTR [rsp + 56], rsi");                       // preserve the SysV warning length across GetStdHandle
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load suppression depth before deciding whether to emit the warning
+    emitter.instruction("test r10, r10");                                       // is runtime warning output currently suppressed?
+    emitter.instruction("jnz __rt_diag_write_done_windows_x86_64");             // suppress the warning while inside an active @ scope
+    emitter.instruction("mov ecx, -12");                                        // STD_ERROR_HANDLE
+    emitter.instruction("call GetStdHandle");                                   // obtain the inherited stderr handle
+    emitter.instruction("mov rcx, rax");                                        // WriteFile arg1 = stderr handle
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 48]");                       // WriteFile arg2 = warning bytes
+    emitter.instruction("mov r8, QWORD PTR [rsp + 56]");                        // WriteFile arg3 = warning length
+    emitter.instruction("lea r9, [rsp + 40]");                                  // WriteFile arg4 = bytes-written output
+    emitter.instruction("mov QWORD PTR [rsp + 32], 0");                         // WriteFile arg5 = NULL overlapped state
+    emitter.instruction("call WriteFile");                                      // emit the warning through the runtime diagnostic channel
+    emitter.label("__rt_diag_write_done_windows_x86_64");
+    emitter.instruction("add rsp, 72");                                         // release the diagnostic call frame
+    emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+
+    // Bridge crates use the native Windows C ABI.  Adapt their callback into
+    // the generated SysV-shaped runtime helper instead of letting a Rust C
+    // call enter `__rt_diag_warning` with the wrong registers.
+    abi::emit_c_callback_entry(emitter, "__rt_diag_warning_c");
+    emitter.instruction("jmp __rt_diag_write");                                 // write a bridge diagnostic after its caller selected default output
 }
 
 /// Emits x86_64 Linux-specific diagnostic helpers for suppression depth and warning output.
@@ -112,4 +169,36 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("syscall");                                             // emit the runtime warning diagnostic to stderr
     emitter.label("__rt_diag_warning_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Structural tests for target-specific runtime diagnostic output.
+    //!
+    //! Called from:
+    //! - `cargo test -p elephc` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Windows warnings must use `WriteFile` and honor the shared suppression slot.
+    //! - Windows diagnostics must never inherit the Linux `syscall` implementation.
+
+    use super::*;
+    use crate::codegen::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    #[test]
+    fn windows_diagnostics_use_suppressible_write_file_channel() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_diagnostics(&mut emitter, RuntimeFeatures::all());
+        let asm = emitter.output();
+        assert!(asm.contains("__rt_diag_write"));
+        assert!(asm.contains("call GetStdHandle"));
+        assert!(asm.contains("call WriteFile"));
+        assert!(asm.contains("__rt_diag_write_done_windows_x86_64"));
+        assert!(asm.contains("__rt_diag_warning_c"));
+        assert!(asm.contains("mov rdi, rcx"));
+        assert!(asm.contains("jmp __rt_diag_write"));
+        assert!(!asm.contains("syscall"));
+    }
 }

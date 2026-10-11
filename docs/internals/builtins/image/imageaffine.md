@@ -2,7 +2,7 @@
 title: "imageaffine() - internals"
 description: "Compiler internals for imageaffine(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 456
+  order: 460
 ---
 
 ## `imageaffine()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3210](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3210) (`imageaffine`)
+- **Lowering**: [`src/image_prelude.rs`:3281](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3281) (`imageaffine`)
 - **Function symbol**: `imageaffine()`
 
 

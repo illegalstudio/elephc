@@ -104,7 +104,7 @@ pub(super) fn build_tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
-/// Builds a ZIP archive with central-directory records.
+/// Builds a ZIP archive with matching payload CRCs in both header families.
 pub(super) fn build_zip(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central = Vec::new();
@@ -118,13 +118,14 @@ pub(super) fn build_zip(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
             content.to_vec()
         };
         let method = if *deflate { ZIP_METHOD_DEFLATE } else { ZIP_METHOD_STORE };
+        let crc = crc32(content);
         out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
         out.extend_from_slice(&20u16.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&method.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&crc.to_le_bytes());
         out.extend_from_slice(&(stored.len() as u32).to_le_bytes());
         out.extend_from_slice(&(content.len() as u32).to_le_bytes());
         out.extend_from_slice(&(name.len() as u16).to_le_bytes());
@@ -139,7 +140,7 @@ pub(super) fn build_zip(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
         central.extend_from_slice(&method.to_le_bytes());
         central.extend_from_slice(&0u16.to_le_bytes());
         central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&0u32.to_le_bytes());
+        central.extend_from_slice(&crc.to_le_bytes());
         central.extend_from_slice(&(stored.len() as u32).to_le_bytes());
         central.extend_from_slice(&(content.len() as u32).to_le_bytes());
         central.extend_from_slice(&(name.len() as u16).to_le_bytes());

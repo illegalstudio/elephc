@@ -122,7 +122,7 @@ fn emit_array_reduce_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_array_reduce_call_linux_x86_64");              // keep legacy two-argument callback ABI when no environment is present
     emitter.instruction("mov rdx, r15");                                        // pass capture environment after accumulator and element
     emitter.label("__rt_array_reduce_call_linux_x86_64");
-    emitter.instruction("call r12");                                            // invoke the user callback with (accumulator, element) and read the new accumulator from rax
+    emitter.emit_platform_callback_call("r12", 3);
     emitter.instruction("mov r14, rax");                                        // update the live accumulator with the callback result before the next iteration
     emitter.instruction("add r13, 1");                                          // advance the source index after folding the current element
     emitter.instruction("jmp __rt_array_reduce_loop");                          // continue reducing until the whole source array has been consumed

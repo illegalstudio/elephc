@@ -8,8 +8,22 @@
 //! - All five supported targets are checked with direct and PIC data references.
 //! - Runtime-GC tests separately execute scalar, hash, and indexed INI results on the host.
 
-use crate::codegen_support::{emit::Emitter, platform::{Arch, Target}};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform, Target}};
 use std::process::Command;
+
+/// Ensures Rust graph restoration receives MSx64-safe build and release callbacks.
+#[test]
+fn windows_restore_callbacks_use_c_abi_entries() {
+    let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+    super::emit(&mut emitter);
+    let assembly = emitter.output();
+    for name in ["__rt_mbstring_build_array_cabi", "__rt_mbstring_build_ini_array_cabi",
+        "__rt_mbstring_drop_array_cabi"] {
+        let body = assembly.split(&format!("{name}:\n")).nth(1).expect("C ABI callback");
+        let entry = body.split(&format!("{name}__internal:")).next().unwrap();
+        assert!(entry.contains("mov rdi, rcx"), "{name}: missing MSx64 adapter");
+    }
+}
 
 /// Assembles complete mbstring adapters so INI branches and their common epilogues resolve together.
 #[test]
@@ -28,7 +42,7 @@ fn mbstring_ini_materialize_assembles_on_all_supported_targets() {
             emitter.pic_data_refs = pic;
             if emitter.target.arch == Arch::X86_64 { emitter.raw(".intel_syntax noprefix"); }
             emitter.raw(".text");
-            super::super::emit_mbstring(&mut emitter, false, false);
+            super::super::emit_mbstring(&mut emitter, false, false, false);
             let source = directory.join(format!("{name}-{pic}.s"));
             let object = directory.join(format!("{name}-{pic}.o"));
             std::fs::write(&source, emitter.output()).unwrap();

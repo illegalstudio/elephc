@@ -3,10 +3,9 @@
 //! `DateTimeZone::getLocation`/`getTransitions`/`listAbbreviations` family. The
 //! three tables are baked from the PHP interpreter (see `data/generate.php`) and
 //! embedded with `include_str!`, so results are byte-for-byte identical to PHP
-//! with no runtime dependency but `std`. The only computed value is a
-//! transition's `time` string, regenerated from its timestamp by a
-//! proleptic-Gregorian formatter that stays exact at extreme timestamps (where
-//! elephc's `gmdate` would not).
+//! with no runtime dependency but `std`. Wide Gregorian conversion formats
+//! transition timestamps and supplies calendar components to eval. Default
+//! timezone offsets use the matching complete TZif data and POSIX rules.
 //!
 //! Called from:
 //! - Compiled PHP programs via the `elephc_tz_*` C ABI (see the `abi` module).
@@ -20,12 +19,14 @@
 //!   PHP-internal timelib tables with no algorithm at all.
 //! - The 11 legacy abbreviation-zones (`CET`, `EET`, `EST`, `GMT`, `GMT+0`,
 //!   `GMT-0`, `HST`, `MET`, `MST`, `UCT`, `WET`) carry no transition/location
-//!   data in PHP; lookups return `None` so the marshalling yields `false`.
+//!   object data in PHP; introspection returns `None` for `false`. Default
+//!   timezone ID resolution remains distinct and uses their complete TZif data.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 mod abi;
+mod posix_rules;
 
 /// Embedded transition table: one line per zone, `<zone>\t<field>` where field is
 /// `F` (false), `=<canonical>` (alias), or `ts,off,dst,abbr;...`.
@@ -63,6 +64,27 @@ pub struct TzTransition {
     pub abbr: String,
 }
 
+/// UTC proleptic-Gregorian components for one Unix timestamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UtcCivilTime {
+    /// Full signed proleptic-Gregorian year.
+    pub year: i64,
+    /// Calendar month in the range 1 through 12.
+    pub month: u32,
+    /// Calendar day in the range 1 through 31.
+    pub day: u32,
+    /// Hour in the range 0 through 23.
+    pub hour: u32,
+    /// Minute in the range 0 through 59.
+    pub minute: u32,
+    /// Second in the range 0 through 59.
+    pub second: u32,
+    /// Sunday is zero, matching C/PHP's `tm_wday` convention.
+    pub weekday: u32,
+    /// Zero-based day of year, matching C/PHP's `tm_yday` convention.
+    pub yearday: u32,
+}
+
 /// A zone's `getLocation()` result. `latitude`/`longitude` keep PHP's verbatim
 /// shortest-round-trip decimal text, which a PHP `(float)` cast turns back into
 /// the exact IEEE-754 value.
@@ -90,13 +112,6 @@ pub struct AbbrevRow {
     pub timezone_id: Option<&'static str>,
 }
 
-/// Splits a Unix timestamp into whole days since the epoch and the seconds within
-/// that day, using Euclidean division so negative timestamps floor correctly
-/// (and without overflowing at `i64::MIN`, unlike truncating `/`).
-fn days_and_secs(ts: i64) -> (i64, i64) {
-    (ts.div_euclid(86_400), ts.rem_euclid(86_400))
-}
-
 /// Converts a day count relative to the Unix epoch into a proleptic-Gregorian
 /// `(year, month, day)` using Howard Hinnant's `civil_from_days` algorithm, which
 /// is exact across the full `i64` day range including the deeply negative day of
@@ -115,20 +130,85 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Converts a Unix timestamp to UTC calendar components without libc range limits.
+pub fn utc_civil_time(ts: i64) -> UtcCivilTime {
+    civil_time_at_offset(ts, 0)
+}
+
+/// Converts a Unix timestamp to civil components after applying a UTC offset in seconds.
+pub fn civil_time_at_offset(ts: i64, offset: i32) -> UtcCivilTime {
+    let shifted = i128::from(ts) + i128::from(offset);
+    let days = shifted.div_euclid(86_400);
+    let secs = shifted.rem_euclid(86_400);
+    let days = i64::try_from(days).expect("an i64 timestamp plus an i32 offset fits i64 days");
+    let (year, month, day) = civil_from_days(days);
+    let leap = year.rem_euclid(4) == 0
+        && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0);
+    let month_starts = if leap {
+        [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+    } else {
+        [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    };
+    UtcCivilTime {
+        year,
+        month,
+        day,
+        hour: (secs / 3_600) as u32,
+        minute: ((secs % 3_600) / 60) as u32,
+        second: (secs % 60) as u32,
+        weekday: (days + 4).rem_euclid(7) as u32,
+        yearday: month_starts[(month - 1) as usize] + day - 1,
+    }
+}
+
+/// Converts validated UTC calendar components to a Unix timestamp without libc limits.
+pub fn utc_timestamp_from_civil(
+    year: i64,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> Option<i64> {
+    let leap = year.rem_euclid(4) == 0
+        && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0);
+    let month_lengths = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if !(1..=12).contains(&month)
+        || day == 0
+        || day > month_lengths[(month - 1) as usize]
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    let adjusted_year = year.checked_sub(i64::from(month <= 2))?;
+    let era = adjusted_year.div_euclid(400);
+    let year_of_era = adjusted_year.rem_euclid(400);
+    let shifted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era
+        .checked_mul(146_097)?
+        .checked_add(day_of_era)?
+        .checked_sub(719_468)?;
+    let timestamp = i128::from(days) * 86_400
+        + i128::from(hour) * 3_600
+        + i128::from(minute) * 60
+        + i128::from(second);
+    i64::try_from(timestamp).ok()
+}
+
 /// Formats a Unix timestamp as the UTC civil string PHP places in a transition's
 /// `time` field: `Y-m-d\TH:i:sP` where `P` is the literal `+00:00`. The year is
 /// the full signed integer (no fixed width, so extreme negative years render in
 /// full, e.g. `-292277022657`), while month/day/hour/minute/second are
 /// zero-padded to two digits.
 pub fn format_utc_iso(ts: i64) -> String {
-    let (days, secs) = days_and_secs(ts);
-    let (year, month, day) = civil_from_days(days);
-    let hour = secs / 3_600;
-    let minute = (secs % 3_600) / 60;
-    let second = secs % 60;
+    let civil = utc_civil_time(ts);
     format!(
         "{}-{:02}-{:02}T{:02}:{:02}:{:02}+00:00",
-        year, month, day, hour, minute, second
+        civil.year, civil.month, civil.day, civil.hour, civil.minute, civil.second
     )
 }
 
@@ -206,6 +286,36 @@ pub fn zone_location(name: &str) -> Option<Location> {
     })
 }
 
+/// Returns whether `name` is one of PHP/timelib's known timezone identifiers.
+///
+/// This deliberately consults the complete baked identifier table rather than
+/// [`zone_transitions`]: PHP accepts aliases and its legacy abbreviation zones
+/// (such as `CET`) even though those zones deliberately expose no transition
+/// rows through `DateTimeZone::getTransitions()`.
+pub fn is_known_timezone_identifier(name: &str) -> bool {
+    transitions_index().contains_key(name)
+}
+
+/// Resolves a default timezone ID's offset, DST flag, and abbreviation at `ts`.
+///
+/// Uses PHP 8.5.6 / tzdb 2026.1's complete explicit TZif transitions followed
+/// by timelib's POSIX continuation rules, independently from the public
+/// [`zone_transitions`] projection. This ID path intentionally differs from
+/// `DateTimeZone`'s fixed-abbreviation constructor semantics (for example CET).
+/// Unknown IDs return `None`; known-zone endpoint overflow returns PHP's zero
+/// offset rather than triggering a host-CRT fallback.
+pub fn zone_offset_at(name: &str, ts: i64) -> Option<(i32, bool, String)> {
+    match posix_rules::resolve(name, ts)? {
+        posix_rules::Resolution::Offset(offset, is_dst, abbreviation) => {
+            Some((offset, is_dst, abbreviation))
+        }
+        // This is distinct from an unknown identifier. At the signed timestamp
+        // endpoint timelib's wrapping POSIX transition calculation yields no
+        // type; PHP then formats the zero-offset LMT fallback.
+        posix_rules::Resolution::Overflow => Some((0, false, "LMT".to_string())),
+    }
+}
+
 /// Returns the full `listAbbreviations()` table in PHP's exact key and row order,
 /// parsed once from the embedded data. An empty id field decodes to `None` (PHP's
 /// null `timezone_id`); PHP never emits an empty-string id.
@@ -261,6 +371,36 @@ mod tests {
         assert_eq!(format_utc_iso(0), "1970-01-01T00:00:00+00:00");
         assert_eq!(format_utc_iso(-2_486_592_561), "1891-03-15T23:50:39+00:00");
         assert_eq!(format_utc_iso(2_140_045_200), "2037-10-25T01:00:00+00:00");
+        let before_epoch = utc_civil_time(-1);
+        assert_eq!(
+            utc_timestamp_from_civil(
+                before_epoch.year,
+                before_epoch.month,
+                before_epoch.day,
+                before_epoch.hour,
+                before_epoch.minute,
+                before_epoch.second,
+            ),
+            Some(-1)
+        );
+        for timestamp in [i64::MIN, i64::MAX] {
+            let civil = utc_civil_time(timestamp);
+            assert_eq!(
+                utc_timestamp_from_civil(
+                    civil.year,
+                    civil.month,
+                    civil.day,
+                    civil.hour,
+                    civil.minute,
+                    civil.second,
+                ),
+                Some(timestamp)
+            );
+        }
+        assert_eq!(civil_time_at_offset(i64::MIN, -18_000).second, 52);
+        assert_eq!(civil_time_at_offset(i64::MAX, 50_400).second, 7);
+        assert_eq!(utc_timestamp_from_civil(2023, 2, 29, 0, 0, 0), None);
+        assert_eq!(utc_timestamp_from_civil(2024, 2, 29, 0, 0, 0), Some(1_709_164_800));
     }
 
     /// Europe/Paris matches PHP's `getTransitions()` exactly at the boundaries:
@@ -301,6 +441,19 @@ mod tests {
         assert!(zone_transitions("CET").is_none());
         assert!(zone_transitions("GMT+0").is_none());
         assert!(zone_transitions("Not/AZone").is_none());
+    }
+
+    /// Runtime zone-ID offsets retain hidden TZif rows, footer recurrence, and endpoint behavior.
+    #[test]
+    fn runtime_offsets_match_php_856_timelib_2026_1() {
+        assert_eq!(zone_offset_at("Europe/Paris", 2_161_598_400).unwrap().0, 7200);
+        assert_eq!(zone_offset_at("Europe/Paris", 4_118_126_400).unwrap().0, 7200);
+        assert_eq!(zone_offset_at("Africa/Casablanca", 2_169_079_200).unwrap().0, 0);
+        assert_eq!(zone_offset_at("Europe/Paris", i64::MIN).unwrap().0, 561);
+        assert_eq!(zone_offset_at("Europe/Paris", i64::MAX).unwrap().0, 0);
+        assert_eq!(zone_offset_at("CET", 2_161_598_400).unwrap().0, 7200);
+        assert_eq!(zone_offset_at("WET", 2_161_598_400).unwrap().0, 3600);
+        assert!(zone_offset_at("Not/AZone", 0).is_none());
     }
 
     /// getLocation matches PHP for a normal zone and the special `UTC` values.
@@ -354,5 +507,74 @@ mod tests {
     fn tables_cover_all_zones() {
         assert_eq!(LOCATIONS.lines().count(), 598);
         assert_eq!(TRANSITIONS.lines().count(), 598);
+    }
+
+    /// Europe/Paris resolves to standard time (CET, +3600, no DST) at a known
+    /// winter instant (2024-01-15 12:00:00 UTC).
+    #[test]
+    fn zone_offset_at_paris_winter() {
+        let (offset, isdst, abbr) = zone_offset_at("Europe/Paris", 1_705_320_000)
+            .expect("Europe/Paris resolves in winter");
+        assert_eq!(offset, 3600);
+        assert!(!isdst);
+        assert_eq!(abbr, "CET");
+    }
+
+    /// Europe/Paris resolves to daylight time (CEST, +7200, DST) at a known
+    /// summer instant (2024-07-15 12:00:00 UTC).
+    #[test]
+    fn zone_offset_at_paris_summer() {
+        let (offset, isdst, abbr) = zone_offset_at("Europe/Paris", 1_721_044_800)
+            .expect("Europe/Paris resolves in summer");
+        assert_eq!(offset, 7200);
+        assert!(isdst);
+        assert_eq!(abbr, "CEST");
+    }
+
+    /// Link-style aliases use the canonical transition stream for offset
+    /// resolution too, not only for `DateTimeZone::getTransitions()`.
+    #[test]
+    fn zone_offset_at_us_eastern_alias_matches_new_york() {
+        let alias = zone_offset_at("US/Eastern", 1_719_835_200).unwrap();
+        let canonical = zone_offset_at("America/New_York", 1_719_835_200).unwrap();
+        assert_eq!(alias, canonical);
+        assert_eq!((alias.0, alias.1, alias.2.as_str()), (-14_400, true, "EDT"));
+    }
+
+    /// Before Europe/Paris's first real transition, resolution falls back to the
+    /// synthetic LMT row 0 (561-second offset), matching `getTransitions()`'s own
+    /// row 0 semantics — exercised with a deeply negative pre-1900 timestamp.
+    #[test]
+    fn zone_offset_at_pre_first_transition_uses_lmt_row() {
+        let (offset, isdst, abbr) =
+            zone_offset_at("Europe/Paris", -2_840_140_800).expect("resolves before row 1 (1880)");
+        assert_eq!(offset, 561);
+        assert!(!isdst);
+        assert_eq!(abbr, "LMT");
+    }
+
+    /// UTC always resolves to a zero offset, unaffected by the query timestamp.
+    #[test]
+    fn zone_offset_at_utc_is_always_zero() {
+        let (offset, isdst, _) = zone_offset_at("UTC", 0).expect("UTC resolves");
+        assert_eq!(offset, 0);
+        assert!(!isdst);
+    }
+
+    /// An unknown zone name resolves to `None`, mirroring `zone_transitions`.
+    #[test]
+    fn zone_offset_at_unknown_zone_is_none() {
+        assert!(zone_offset_at("Not/AZone", 0).is_none());
+    }
+
+    /// Validation follows PHP's identifier namespace, not the narrower
+    /// transition-data namespace used by the offset resolver.
+    #[test]
+    fn known_timezone_identifier_accepts_aliases_and_legacy_zones() {
+        for name in ["UTC", "Europe/Paris", "America/New_York", "US/Eastern", "CET"] {
+            assert!(is_known_timezone_identifier(name), "{name} must be accepted");
+        }
+        assert!(!is_known_timezone_identifier(""));
+        assert!(!is_known_timezone_identifier("Europe/Nope"));
     }
 }

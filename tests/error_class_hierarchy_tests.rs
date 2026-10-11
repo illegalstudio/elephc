@@ -704,3 +704,16 @@ fn deseeded_error_classes_survive_construction_through_a_runtime_name() {
         "a de-seeded builtin Error class must still be constructible through a runtime name"
     );
 }
+
+/// Regression: eager synthetic DateTime lowering must not make a program that
+/// constructs only a runtime-named Error class require the optional tz bridge.
+#[test]
+fn runtime_named_error_construction_links_without_the_timezone_bridge() {
+    let dir = make_test_dir("error_hierarchy_dynamic_no_tz");
+    let out = run_binary(&compile(
+        &dir,
+        r#"<?php $class = "Error"; echo get_class(new $class("dynamic"));"#,
+        "app",
+    ));
+    assert_eq!(out, "Error");
+}

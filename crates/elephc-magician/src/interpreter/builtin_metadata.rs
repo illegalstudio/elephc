@@ -14,7 +14,7 @@
 use super::builtins::{
     eval_date_procedural_alias_names, eval_extension_builtin_names,
     eval_php_visible_builtin_function_names, eval_raw_declared_builtin_spec,
-    EvalBuiltinDefaultValue,
+    eval_unfiltered_declared_builtin_spec, EvalBuiltinDefaultValue,
 };
 use elephc_builtin_contract::{
     eval_signature_profile, lookup, EvalAdapterReason, EvalExecution,
@@ -126,7 +126,7 @@ pub struct BuiltinDocsMetadata {
 /// Returns documentation metadata for one registry-declared eval builtin.
 pub fn builtin_docs_metadata(name: &str) -> Option<BuiltinDocsMetadata> {
     let canonical = php_symbol_key(name);
-    let spec = eval_raw_declared_builtin_spec(&canonical)?;
+    let spec = eval_unfiltered_declared_builtin_spec(&canonical)?;
     let (execution, adapter_reason) = eval_execution_metadata(spec.execution);
     let signature_override_reason = eval_signature_profile(
         lookup(spec.name).expect("eval metadata must resolve its shared contract"),
@@ -204,6 +204,26 @@ fn eval_signature_override_reason_name(reason: EvalSignatureOverrideReason) -> &
         }
         EvalSignatureOverrideReason::AdditionalByReferenceOutput => {
             "additional-by-reference-output"
+        }
+    }
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+
+    /// Documentation is cross-target and must not inherit the build host's PHP surface filter.
+    #[test]
+    fn documentation_metadata_uses_the_unfiltered_implementation_inventory() {
+        for name in [
+            "lchown",
+            "lchgrp",
+            "sapi_windows_cp_conv",
+            "sapi_windows_vt100_support",
+        ] {
+            let metadata = builtin_docs_metadata(name)
+                .unwrap_or_else(|| panic!("missing cross-target metadata for {name}"));
+            assert_eq!(metadata.name, name);
         }
     }
 }

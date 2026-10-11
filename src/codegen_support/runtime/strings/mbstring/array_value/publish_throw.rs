@@ -16,7 +16,7 @@ mod tests;
 
 /// Emits the boxed-owner publication action used by the eval reference adapter.
 pub(super) fn emit(emitter: &mut Emitter) {
-    emitter.label_global("__rt_mbstring_publish_throw");
+    abi::emit_c_callback_entry(emitter, "__rt_mbstring_publish_throw");
     if emitter.target.arch == Arch::AArch64 { aarch64(emitter); } else { x86_64(emitter); }
 }
 

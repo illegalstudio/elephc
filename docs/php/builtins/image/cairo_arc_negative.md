@@ -2,7 +2,7 @@
 title: "cairo_arc_negative()"
 description: "Adds a counter-clockwise arc of the given radius and angle span to the current path."
 sidebar:
-  order: 400
+  order: 404
 ---
 
 ## cairo_arc_negative()

@@ -23,9 +23,35 @@ eval_builtin! {
 
 static EVAL_TZ_MUTEX: Mutex<()> = Mutex::new(());
 
+/// PHP-visible broken-down time without libc's narrow year representation.
+pub(in crate::interpreter) struct EvalDateTime {
+    pub tm_sec: i32,
+    pub tm_min: i32,
+    pub tm_hour: i32,
+    pub tm_mday: i32,
+    pub tm_mon: i32,
+    pub tm_year: i64,
+    pub tm_wday: i32,
+    pub tm_yday: i32,
+    pub tm_isdst: i32,
+    pub utc_offset: i64,
+}
+
+#[cfg(unix)]
 unsafe extern "C" {
     /// Re-reads libc's process-global timezone environment.
     fn tzset();
+}
+
+#[cfg(windows)]
+unsafe extern "C" {
+    /// Converts a 64-bit Unix timestamp into local broken-down time through the Windows CRT.
+    #[link_name = "_localtime64_s"]
+    fn windows_localtime64_s(output: *mut libc::tm, timestamp: *const i64) -> libc::c_int;
+
+    /// Re-reads the Windows CRT process-global timezone environment.
+    #[link_name = "_tzset"]
+    fn windows_tzset();
 }
 
 /// Evaluates PHP `date($format, $timestamp = time())` for the eval subset.
@@ -87,12 +113,34 @@ pub(in crate::interpreter) fn eval_date_result(
 pub(in crate::interpreter) fn eval_context_localtime(
     timestamp: i64,
     context: &ElephcEvalContext,
-) -> Result<libc::tm, EvalStatus> {
-    eval_with_timezone(context.default_timezone(), || eval_localtime(timestamp))
+) -> Result<EvalDateTime, EvalStatus> {
+    #[cfg(windows)]
+    if let Some((offset, is_dst, _abbreviation)) =
+        elephc_tz::zone_offset_at(context.default_timezone(), timestamp)
+    {
+        let mut local = eval_civil_time(elephc_tz::civil_time_at_offset(timestamp, offset), offset);
+        local.tm_isdst = i32::from(is_dst);
+        return Ok(local);
+    }
+    eval_with_timezone(context.default_timezone(), || {
+        let tm = eval_localtime(timestamp)?;
+        eval_date_time_from_libc(tm, timestamp)
+    })
+}
+
+/// Formats one RFC 2822 mail Date using the eval context's active timezone.
+pub(in crate::interpreter) fn eval_mail_date_at(
+    timestamp: i64,
+    context: &ElephcEvalContext,
+) -> Result<Vec<u8>, EvalStatus> {
+    let local = eval_context_localtime(timestamp, context)?;
+    eval_format_date_bytes(b"r", &local, timestamp)
 }
 
 /// Converts one Unix timestamp to process-local broken-down time through libc.
 pub(in crate::interpreter) fn eval_localtime(timestamp: i64) -> Result<libc::tm, EvalStatus> {
+    #[cfg(unix)]
+    {
     let raw: libc::time_t = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
     let mut tm = MaybeUninit::<libc::tm>::uninit();
     let result = unsafe { libc::localtime_r(&raw, tm.as_mut_ptr()) };
@@ -100,17 +148,69 @@ pub(in crate::interpreter) fn eval_localtime(timestamp: i64) -> Result<libc::tm,
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(unsafe { tm.assume_init() })
+    }
+    #[cfg(windows)]
+    {
+        let mut tm = MaybeUninit::<libc::tm>::uninit();
+        let status = unsafe { windows_localtime64_s(tm.as_mut_ptr(), &timestamp) };
+        if status != 0 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        Ok(unsafe { tm.assume_init() })
+    }
 }
 
 /// Converts one Unix timestamp to UTC broken-down time through libc.
-pub(in crate::interpreter) fn eval_gmtime(timestamp: i64) -> Result<libc::tm, EvalStatus> {
-    let raw: libc::time_t = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
-    let mut tm = MaybeUninit::<libc::tm>::uninit();
-    let result = unsafe { libc::gmtime_r(&raw, tm.as_mut_ptr()) };
-    if result.is_null() {
-        return Err(EvalStatus::RuntimeFatal);
+pub(in crate::interpreter) fn eval_gmtime(timestamp: i64) -> Result<EvalDateTime, EvalStatus> {
+    Ok(eval_civil_time(elephc_tz::utc_civil_time(timestamp), 0))
+}
+
+/// Adapts wide pure-Rust civil components to the PHP-facing date representation.
+fn eval_civil_time(civil: elephc_tz::UtcCivilTime, utc_offset: i32) -> EvalDateTime {
+    EvalDateTime {
+        tm_sec: civil.second as i32,
+        tm_min: civil.minute as i32,
+        tm_hour: civil.hour as i32,
+        tm_mday: civil.day as i32,
+        tm_mon: civil.month as i32 - 1,
+        tm_year: civil.year - 1900,
+        tm_wday: civil.weekday as i32,
+        tm_yday: civil.yearday as i32,
+        tm_isdst: 0,
+        utc_offset: i64::from(utc_offset),
     }
-    Ok(unsafe { tm.assume_init() })
+}
+
+/// Adapts libc local time while retaining its exact offset from the source instant.
+fn eval_date_time_from_libc(tm: libc::tm, timestamp: i64) -> Result<EvalDateTime, EvalStatus> {
+    #[cfg(unix)]
+    let local_as_utc = {
+        let mut offset_fields = tm;
+        (unsafe { libc::timegm(&mut offset_fields) }) as i128
+    };
+    #[cfg(windows)]
+    let local_as_utc = elephc_tz::utc_timestamp_from_civil(
+        i64::from(tm.tm_year) + 1900,
+        u32::try_from(tm.tm_mon + 1).map_err(|_| EvalStatus::RuntimeFatal)?,
+        u32::try_from(tm.tm_mday).map_err(|_| EvalStatus::RuntimeFatal)?,
+        u32::try_from(tm.tm_hour).map_err(|_| EvalStatus::RuntimeFatal)?,
+        u32::try_from(tm.tm_min).map_err(|_| EvalStatus::RuntimeFatal)?,
+        u32::try_from(tm.tm_sec).map_err(|_| EvalStatus::RuntimeFatal)?,
+    )
+    .ok_or(EvalStatus::RuntimeFatal)? as i128;
+    let offset = local_as_utc - i128::from(timestamp);
+    Ok(EvalDateTime {
+        tm_sec: tm.tm_sec,
+        tm_min: tm.tm_min,
+        tm_hour: tm.tm_hour,
+        tm_mday: tm.tm_mday,
+        tm_mon: tm.tm_mon,
+        tm_year: i64::from(tm.tm_year),
+        tm_wday: tm.tm_wday,
+        tm_yday: tm.tm_yday,
+        tm_isdst: tm.tm_isdst,
+        utc_offset: i64::try_from(offset).map_err(|_| EvalStatus::RuntimeFatal)?,
+    })
 }
 
 /// Runs one libc timezone-sensitive operation under the eval context timezone.
@@ -134,7 +234,12 @@ fn eval_apply_process_timezone(timezone: &str) -> Result<(), EvalStatus> {
         return Err(EvalStatus::RuntimeFatal);
     }
     std::env::set_var("TZ", timezone);
+    #[cfg(unix)]
     unsafe { tzset() };
+    #[cfg(windows)]
+    unsafe {
+        windows_tzset();
+    }
     Ok(())
 }
 
@@ -145,14 +250,19 @@ fn eval_restore_process_timezone(previous: Option<&OsStr>) -> Result<(), EvalSta
     } else {
         std::env::remove_var("TZ");
     }
+    #[cfg(unix)]
     unsafe { tzset() };
+    #[cfg(windows)]
+    unsafe {
+        windows_tzset();
+    }
     Ok(())
 }
 
 /// Applies PHP `date()` tokens to one local broken-down timestamp.
 pub(in crate::interpreter) fn eval_format_date_bytes(
     format: &[u8],
-    tm: &libc::tm,
+    tm: &EvalDateTime,
     timestamp: i64,
 ) -> Result<Vec<u8>, EvalStatus> {
     let mut output = Vec::new();
@@ -179,11 +289,11 @@ pub(in crate::interpreter) fn eval_format_date_bytes(
 pub(in crate::interpreter) fn eval_push_date_token(
     output: &mut Vec<u8>,
     token: u8,
-    tm: &libc::tm,
+    tm: &EvalDateTime,
     timestamp: i64,
 ) -> Result<(), EvalStatus> {
     match token {
-        b'Y' => eval_push_padded_number(output, i64::from(tm.tm_year) + 1900, 4),
+        b'Y' => eval_push_year(output, tm.tm_year + 1900),
         b'm' => eval_push_padded_number(output, i64::from(tm.tm_mon) + 1, 2),
         b'd' => eval_push_padded_number(output, i64::from(tm.tm_mday), 2),
         b'H' => eval_push_padded_number(output, i64::from(tm.tm_hour), 2),
@@ -211,14 +321,43 @@ pub(in crate::interpreter) fn eval_push_date_token(
         }
         b'A' => output.extend_from_slice(if tm.tm_hour < 12 { b"AM" } else { b"PM" }),
         b'a' => output.extend_from_slice(if tm.tm_hour < 12 { b"am" } else { b"pm" }),
+        b'O' => eval_push_timezone_offset(output, tm.utc_offset),
+        b'r' => {
+            let composite = eval_format_date_bytes(b"D, d M Y H:i:s O", tm, timestamp)?;
+            output.extend_from_slice(&composite);
+        }
         b'U' => output.extend_from_slice(timestamp.to_string().as_bytes()),
         _ => output.push(token),
     }
     Ok(())
 }
 
+/// Appends PHP's signed year with at least four digits excluding the sign.
+fn eval_push_year(output: &mut Vec<u8>, year: i64) {
+    if year < 0 {
+        output.push(b'-');
+        output.extend_from_slice(format!("{:04}", year.unsigned_abs()).as_bytes());
+    } else {
+        output.extend_from_slice(format!("{year:04}").as_bytes());
+    }
+}
+
+/// Appends PHP's RFC 2822 numeric timezone offset (`+HHMM` or `-HHMM`).
+fn eval_push_timezone_offset(
+    output: &mut Vec<u8>,
+    offset: i64,
+) {
+    let sign = if offset < 0 { b'-' } else { b'+' };
+    let absolute = offset.unsigned_abs();
+    let hours = absolute / 3600;
+    let minutes = (absolute % 3600) / 60;
+    output.push(sign);
+    eval_push_padded_number(output, hours as i64, 2);
+    eval_push_padded_number(output, minutes as i64, 2);
+}
+
 /// Returns a checked month index for PHP `date()` name tables.
-pub(in crate::interpreter) fn eval_tm_month_index(tm: &libc::tm) -> Result<usize, EvalStatus> {
+pub(in crate::interpreter) fn eval_tm_month_index(tm: &EvalDateTime) -> Result<usize, EvalStatus> {
     let index = usize::try_from(tm.tm_mon).map_err(|_| EvalStatus::RuntimeFatal)?;
     if index >= EVAL_MONTH_NAMES.len() {
         return Err(EvalStatus::RuntimeFatal);
@@ -227,7 +366,7 @@ pub(in crate::interpreter) fn eval_tm_month_index(tm: &libc::tm) -> Result<usize
 }
 
 /// Returns a checked weekday index for PHP `date()` name tables.
-pub(in crate::interpreter) fn eval_tm_weekday_index(tm: &libc::tm) -> Result<usize, EvalStatus> {
+pub(in crate::interpreter) fn eval_tm_weekday_index(tm: &EvalDateTime) -> Result<usize, EvalStatus> {
     let index = usize::try_from(tm.tm_wday).map_err(|_| EvalStatus::RuntimeFatal)?;
     if index >= EVAL_WEEKDAY_NAMES.len() {
         return Err(EvalStatus::RuntimeFatal);

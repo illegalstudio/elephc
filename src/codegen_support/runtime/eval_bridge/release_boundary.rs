@@ -9,7 +9,7 @@
 //! - Cleanup installs its jump target below Rust and restores the enclosing native exception state.
 //! - Its integer result distinguishes a new destructor throw from an earlier pending exception.
 
-use super::{abi, label_c_global, Emitter};
+use super::{abi, Emitter};
 
 const FRAME: usize = 64;
 const VALUE: usize = 8;
@@ -19,12 +19,15 @@ const CAUGHT: usize = 32;
 
 /// Emits bounded value release, preserving and chaining any exception already owned by the slot.
 pub(super) fn emit(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_value_release_v3");
+    // Rust enters through the target C ABI; the adapter preserves every Win64
+    // nonvolatile register and presents the body with elephc's internal helper
+    // convention before it invokes nested runtime cleanup helpers.
+    abi::emit_c_callback_entry_with_arity(emitter, "__elephc_eval_value_release_v3", 2);
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
     abi::emit_frame_prologue(emitter, FRAME);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), VALUE);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), OUTPUT);
+    abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), VALUE);
+    abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), OUTPUT);
     abi::load_at_offset(emitter, scratch, OUTPUT);
     abi::emit_load_from_address(emitter, result, scratch, 0);
     abi::emit_store_zero_to_address(emitter, scratch, 0);
@@ -54,7 +57,14 @@ mod tests {
     /// Every target contains the native release before exporting one boxed exception owner to Rust.
     #[test]
     fn eval_value_release_boundary_returns_throwables_without_native_escape() {
-        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+            "windows-x86_64",
+        ] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             emit(&mut emitter);
@@ -75,5 +85,32 @@ mod tests {
             };
             assert!(asm.contains(caught_flag), "{name}: preserve the new-throw status across boxing");
         }
+    }
+
+    /// The Windows callback adapter preserves Win64 state and translates
+    /// RCX/RDX into the runtime's internal RDI/RSI argument convention.
+    #[test]
+    fn windows_release_boundary_preserves_native_arguments() {
+        let target = Target::parse("windows-x86_64").unwrap();
+        let mut emitter = Emitter::new(target);
+        emit(&mut emitter);
+        let asm = emitter.output();
+        let cleanup = asm.find("call __rt_cleanup_invoke").unwrap();
+        let entry = &asm[..cleanup];
+
+        assert!(entry.contains("__elephc_eval_value_release_v3:"));
+        assert!(entry.contains("mov rdi, rcx"));
+        assert!(entry.contains("mov rsi, rdx"));
+        assert!(entry.contains("mov QWORD PTR [rsp + 0], r10"));
+        assert!(entry.contains("mov QWORD PTR [rsp + 8], r11"));
+        assert!(entry.contains("movdqu XMMWORD PTR [rsp + 16], xmm6"));
+        assert!(entry.contains("movdqu XMMWORD PTR [rsp + 160], xmm15"));
+        assert!(entry.contains("mov QWORD PTR [rbp - 8], rdi"));
+        assert!(entry.contains("mov QWORD PTR [rbp - 16], rsi"));
+        assert!(!entry.contains("mov QWORD PTR [rbp - 8], rcx"));
+        assert!(!entry.contains("mov QWORD PTR [rbp - 16], rdx"));
+        assert!(entry.contains("mov rsi, rax"));
+        assert!(entry.contains("lea rdi, [rip + __rt_decref_mixed]"));
+        assert!(entry.contains("lea rdx, [rbp - 24]"));
     }
 }

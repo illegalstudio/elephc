@@ -2,7 +2,7 @@
 title: "imagecopyresampled() - internals"
 description: "Compiler internals for imagecopyresampled(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 484
+  order: 488
 ---
 
 ## `imagecopyresampled()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3077](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3077) (`imagecopyresampled`)
+- **Lowering**: [`src/image_prelude.rs`:3148](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3148) (`imagecopyresampled`)
 - **Function symbol**: `imagecopyresampled()`
 
 

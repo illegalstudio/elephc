@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_identity()"
 description: "Creates an identity transformation matrix."
 sidebar:
-  order: 413
+  order: 417
 ---
 
 ## cairo_matrix_init_identity()

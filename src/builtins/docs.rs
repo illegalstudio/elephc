@@ -101,6 +101,9 @@ fn requirement_json(requirement: BuiltinRequirement) -> Value {
         BuiltinRequirement::MacOsLibrary(name) => {
             json!({"kind": "macos_library", "name": name})
         }
+        BuiltinRequirement::WindowsLibrary(name) => {
+            json!({"kind": "windows_library", "name": name})
+        }
         BuiltinRequirement::RuntimeFeature(name) => {
             json!({"kind": "runtime_feature", "name": name})
         }
@@ -108,7 +111,7 @@ fn requirement_json(requirement: BuiltinRequirement) -> Value {
 }
 
 /// Renders the complete backend-neutral semantic descriptor for migration audits.
-fn semantics_json(semantics: BuiltinSemantics) -> Value {
+fn semantics_json(name: &str, semantics: BuiltinSemantics) -> Value {
     let validation = match semantics.validation {
         BuiltinValidation::CheckerHook { lazy, .. } => {
             json!({"kind": "checker_hook", "lazy": lazy})
@@ -155,7 +158,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinTargetStrategy::EirGraph => "eir_graph",
         BuiltinTargetStrategy::RuntimeCall => "runtime_call",
     };
-    let (target_support_kind, target_support) = match semantics.target_support {
+    let (target_support_kind, mut target_support) = match semantics.target_support {
         crate::builtins::semantics::BuiltinTargetSupport::All => {
             (
                 "all",
@@ -165,21 +168,51 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
                     "ios-sim-arm64",
                     "linux-aarch64",
                     "linux-x86_64",
+                    "windows-x86_64",
                 ],
             )
         }
         crate::builtins::semantics::BuiltinTargetSupport::HostOnly => {
             (
                 "host_only",
-                vec!["macos-aarch64", "linux-aarch64", "linux-x86_64"],
+                vec![
+                    "macos-aarch64",
+                    "linux-aarch64",
+                    "linux-x86_64",
+                    "windows-x86_64",
+                ],
             )
         }
+        crate::builtins::semantics::BuiltinTargetSupport::UnixHostOnly => (
+            "unix_host_only",
+            vec!["macos-aarch64", "linux-aarch64", "linux-x86_64"],
+        ),
         crate::builtins::semantics::BuiltinTargetSupport::Linux => {
             ("linux", vec!["linux-aarch64", "linux-x86_64"])
         }
         crate::builtins::semantics::BuiltinTargetSupport::MacOs => {
             ("macos", vec!["macos-aarch64"])
         }
+        crate::builtins::semantics::BuiltinTargetSupport::WindowsOnly => {
+            ("windows", vec!["windows-x86_64"])
+        }
+    };
+    let php_availability = elephc_builtin_contract::lookup(name)
+        .map(|contract| elephc_builtin_contract::php_target_availability(contract.id));
+    target_support.retain(|target| {
+        let php_target = match *target {
+            "macos-aarch64" => elephc_builtin_contract::PhpTarget::MacOs,
+            "ios-arm64" | "ios-sim-arm64" => elephc_builtin_contract::PhpTarget::Ios,
+            "linux-aarch64" | "linux-x86_64" => elephc_builtin_contract::PhpTarget::Linux,
+            "windows-x86_64" => elephc_builtin_contract::PhpTarget::Windows,
+            other => panic!("unknown builtin documentation target {other}"),
+        };
+        php_availability.is_none_or(|availability| availability.includes(php_target))
+    });
+    let php_availability_kind = match php_availability {
+        None | Some(elephc_builtin_contract::PhpTargetAvailability::All) => "all",
+        Some(elephc_builtin_contract::PhpTargetAvailability::Unix) => "unix",
+        Some(elephc_builtin_contract::PhpTargetAvailability::WindowsOnly) => "windows_only",
     };
     let runtime_functions = match semantics.runtime_functions {
         BuiltinRuntimeFunctions::None => Vec::new(),
@@ -192,6 +225,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",
         BuiltinArgumentLowering::JsonDecode => "json_decode",
+        BuiltinArgumentLowering::ProcOpen => "proc_open",
         BuiltinArgumentLowering::Getenv => "getenv",
         BuiltinArgumentLowering::PcntlPreserveOmitted => "pcntl_preserve_omitted",
         BuiltinArgumentLowering::PregReplaceCallback => "preg_replace_callback",
@@ -231,6 +265,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         "target_strategy": target_strategy,
         "target_support_kind": target_support_kind,
         "target_support": target_support,
+        "php_availability_kind": php_availability_kind,
         "runtime_functions": runtime_functions,
         "argument_lowering": argument_lowering,
         "callable": callable,
@@ -299,7 +334,7 @@ fn build_json(include_internal: bool) -> Value {
             "min_args": spec.min_args,
             "max_args": spec.max_args,
             "arity_error": spec.arity_error,
-            "semantics": semantics_json(spec.semantics),
+            "semantics": semantics_json(spec.name, spec.semantics),
             "summary": spec.summary,
             "examples": spec.examples,
             "php_manual": spec.php_manual,
@@ -333,7 +368,7 @@ mod tests {
         assert_eq!(strlen["internal"], false);
     }
 
-    /// Verifies all-target metadata includes iOS while process and PCNTL exports stay host-gated.
+    /// Verifies all-target metadata includes Windows and iOS while PCNTL stays Unix-host-gated.
     #[test]
     fn export_distinguishes_all_targets_from_host_only_process_builtins() {
         let exported = super::export_builtins_json();
@@ -354,13 +389,36 @@ mod tests {
                 "ios-sim-arm64",
                 "linux-aarch64",
                 "linux-x86_64",
+                "windows-x86_64",
             ])
+        );
+        assert_eq!(
+            support_for("mb_send_mail"),
+            support_for("strlen"),
+            "ordinary all-target runtime builtins must advertise Windows support",
         );
         let strlen = records
             .iter()
             .find(|record| record["name"] == "strlen")
             .expect("strlen present");
         assert_eq!(strlen["semantics"]["target_support_kind"], "all");
+        for name in ["lchgrp", "lchown"] {
+            assert_eq!(
+                support_for(name),
+                serde_json::json!([
+                    "macos-aarch64",
+                    "ios-arm64",
+                    "ios-sim-arm64",
+                    "linux-aarch64",
+                    "linux-x86_64",
+                ]),
+                "{name} must follow php-src's HAVE_LCHOWN guard",
+            );
+        }
+        assert_eq!(
+            support_for("sapi_windows_cp_get"),
+            serde_json::json!(["windows-x86_64"]),
+        );
         for name in ["system", "passthru", "exec", "shell_exec", "popen", "pclose"] {
             let process_builtin = records
                 .iter()
@@ -373,8 +431,13 @@ mod tests {
             );
             assert_eq!(
                 support_for(name),
-                serde_json::json!(["macos-aarch64", "linux-aarch64", "linux-x86_64"]),
-                "{name} must remain host-only",
+                serde_json::json!([
+                    "macos-aarch64",
+                    "linux-aarch64",
+                    "linux-x86_64",
+                    "windows-x86_64",
+                ]),
+                "{name} must remain executable-host-only",
             );
         }
         let pcntl_records = records.iter().filter(|record| {
@@ -397,7 +460,7 @@ mod tests {
                 .as_str()
                 .expect("PCNTL target support kind");
             let expected = match support_kind {
-                "host_only" => {
+                "host_only" | "unix_host_only" => {
                     serde_json::json!(["macos-aarch64", "linux-aarch64", "linux-x86_64"])
                 }
                 "linux" => serde_json::json!(["linux-aarch64", "linux-x86_64"]),

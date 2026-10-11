@@ -7,8 +7,41 @@
 //! Key details:
 //! - Runtime-GC tests separately execute the adapter against the actual Rust bridge and PHP runtime.
 
-use crate::codegen_support::{emit::Emitter, platform::{Arch, Target}};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform, Target}};
 use std::process::Command;
+
+/// Covers every query-storage callback plus the seven-argument registration adapter.
+#[test]
+fn windows_query_storage_callbacks_use_c_abi_entries() {
+    let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+    super::emit(&mut emitter);
+    let assembly = emitter.output();
+    for callback in ["__rt_mbstring_query_root", "__rt_mbstring_query_next",
+        "__rt_mbstring_query_hash_enter", "__rt_mbstring_capture_hash_store",
+        "__rt_mbstring_query_hash_remove", "__rt_mbstring_query_release"] {
+        let name = format!("{callback}_cabi");
+        let body = assembly.split(&format!("{name}:\n")).nth(1).expect("C ABI callback");
+        let entry = body.split(&format!("{name}__internal:")).next().unwrap();
+        assert!(entry.contains("mov rdi, rcx"), "{name}: missing MSx64 adapter");
+    }
+    let register = assembly.split("__rt_mbstring_query_register:\n").nth(1)
+        .expect("query register C ABI entry");
+    let register = register.split("__rt_mbstring_query_register__internal:\n").next()
+        .expect("query register adapter before its internal implementation");
+    assert!(register.contains("mov r10, QWORD PTR [rsp + 56]"));
+    assert!(register.contains("mov r8, QWORD PTR [rsp + 40]"));
+    assert!(register.contains("mov r9, QWORD PTR [rsp + 48]"));
+    assert!(register.contains("mov QWORD PTR [rsp], r10"));
+    assert!(!register.contains("QWORD PTR [rsp + 64]"));
+    assert!(register.contains("movdqu XMMWORD PTR [rsp + 24], xmm6"));
+    assert!(register.contains("movdqu xmm15, XMMWORD PTR [rsp + 168]"));
+    assert!(register.contains("mov rdi, QWORD PTR [rsp + 8]"));
+    assert!(register.contains("mov rsi, QWORD PTR [rsp + 16]"));
+    assert!(assembly.contains("lea r11, [rip + elephc_mbstring_query_apply_v1]"));
+    assert!(assembly.contains("mov QWORD PTR [rsp + 48], rax"));
+    assert!(assembly.contains("mov QWORD PTR [rsp + 56], r10"));
+    assert!(!assembly.contains("call elephc_mbstring_query_apply_v1"));
+}
 
 /// The first reference lookup must retain both linkage and the writable output pointer.
 #[test]

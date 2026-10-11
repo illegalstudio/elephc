@@ -2,7 +2,7 @@
 title: "mb_convert_encoding() - internals"
 description: "Compiler internals for mb_convert_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 832
+  order: 848
 ---
 
 ## `mb_convert_encoding()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_convert_encoding.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_convert_encoding.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -29,7 +29,7 @@ sidebar:
 - **Effects**: `static (17 declared effects)`
 - **Requirements**: `static (1 requirements)`
 - **Callable policy**: `dynamic_target`
-- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`, `windows-x86_64`
 
 ## EIR and runtime boundary
 

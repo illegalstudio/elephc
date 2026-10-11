@@ -13,7 +13,7 @@
 
 use super::*;
 use elephc_builtin_contract::mbstring_abi::invoke::{MbInvokeHostV4, MbInvokeHostV5, MbNativeCaptureV1, MbNativeQueryV1};
-use elephc_builtin_contract::mbstring_abi::variables::MbInvokeHostV6;
+use elephc_builtin_contract::mbstring_abi::variables::{MbInvokeHostV6, MbInvokeHostV7, MbVariableRuntimeV1};
 
 mod initialize;
 mod query_policy;
@@ -25,6 +25,8 @@ use frame::Frame;
 pub(super) fn emit(emitter: &mut Emitter, mbregex: bool) {
     assert_eq!(std::mem::size_of::<MbInvokeHostV5>(), 144);
     assert_eq!(std::mem::size_of::<MbInvokeHostV6>(), 176);
+    assert_eq!(std::mem::size_of::<MbInvokeHostV7>(), 240);
+    assert_eq!(std::mem::size_of::<MbVariableRuntimeV1>(), 64);
     assert_eq!(std::mem::size_of::<MbNativeQueryV1>(), 40);
     if mbregex { emit_invocation(emitter, Frame::capture(), true); }
     emit_invocation(emitter, Frame::query(), mbregex);
@@ -62,7 +64,7 @@ fn emit_invocation(emitter: &mut Emitter, frame: Frame, mbregex: bool) {
         emitter.instruction(&format!("mov QWORD PTR [rsp + {state}], r9"));     // preserve capture state before the five-input provider initializer
     }
     if mbregex { abi::emit_call_label(emitter, "__rt_mbregex_init"); }
-    if frame.version != 6 {
+    if frame.version != 7 {
         if arm {
             emitter.instruction(&format!("ldr x9, [sp, #{state}]"));            // recover optional capture output state after provider registration
             emitter.instruction(&format!("cbz x9, {name}_state_ready"));        // two-argument calls require no output policy
@@ -80,17 +82,28 @@ fn emit_invocation(emitter: &mut Emitter, frame: Frame, mbregex: bool) {
     emitter.instruction(if arm { "str x9, [sp]" } else { "mov QWORD PTR [rsp], r10" }); // publish the complete host table version and size
     emitter.instruction(&if arm { format!("add x9, sp, #{context}") } else { format!("lea r10, [rsp + {context}]") }); // address this invocation's wrapped callback context
     emitter.instruction(if arm { "str x9, [sp, #8]" } else { "mov QWORD PTR [rsp + 8], r10" }); // bind callbacks to their original eval context and output policy
-    for index in 0..10 { table_entry(emitter, 16 + index * 8, &wrapper(index)); }
-    table_entry(emitter, 96, "__rt_mbstring_capture_initialize");
-    table_entry(emitter, 104, "__rt_mbstring_capture_fill_context");
-    table_entry(emitter, 112, &wrapper(5));
+    for index in 0..10 { c_table_entry(emitter, 16 + index * 8, &wrapper(index)); }
+    c_table_entry(emitter, 96, "__rt_mbstring_capture_initialize");
+    c_table_entry(emitter, 104, "__rt_mbstring_capture_fill_context");
+    c_table_entry(emitter, 112, &wrapper(5));
     if frame.version == 5 { query_policy::table(emitter, frame.state); }
-    if frame.version == 6 {
+    if frame.version == 7 {
         for (offset, symbol) in [
             (144, "elephc_mbstring_variable_inspect_v1"),
             (152, "elephc_mbstring_variable_child_next_v1"),
             (160, "elephc_mbstring_variable_prepare_write_v1"),
             (168, "elephc_mbstring_variable_write_string_v1"),
+        ] { table_entry(emitter, offset, &emitter.target.extern_symbol(symbol)); }
+        abi::emit_load_int_immediate(emitter, scratch, (64_i64 << 32) | 1);
+        emitter.instruction(if arm { "str x9, [sp, #176]" } else { "mov QWORD PTR [rsp + 176], r10" }); // publish the runtime callback table version and size
+        for (offset, symbol) in [
+            (184, "elephc_mbstring_variable_clone_v1"),
+            (192, "elephc_mbstring_variable_box_v1"),
+            (200, "elephc_mbstring_variable_reference_new_v1"),
+            (208, "elephc_mbstring_variable_release_v1"),
+            (216, "elephc_mbstring_variable_array_unique_v1"),
+            (224, "elephc_mbstring_variable_hash_unique_v1"),
+            (232, "elephc_mbstring_variable_persist_v1"),
         ] { table_entry(emitter, offset, &emitter.target.extern_symbol(symbol)); }
         for (offset, symbol) in [
             (16, "_class_gc_desc_count"),
@@ -102,6 +115,10 @@ fn emit_invocation(emitter: &mut Emitter, frame: Frame, mbregex: bool) {
             emitter.instruction(&if arm { format!("str x9, [sp, #{}]", context + offset) }
                 else { format!("mov QWORD PTR [rsp + {}], r10", context + offset) }); // publish class metadata in the wrapped host context
         }
+        let runtime = if arm { format!("add x9, sp, #176") } else { format!("lea r10, [rsp + 176]") };
+        emitter.instruction(&runtime);                                          // address this invocation's runtime-local ownership table
+        emitter.instruction(&if arm { format!("str x9, [sp, #{}]", context + 48) }
+            else { format!("mov QWORD PTR [rsp + {}], r10", context + 48) });   // bind variable mutations to the originating runtime heap
     }
     if arm {
         emitter.instruction("mov x4, sp");                                      // supply the complete callback table as the fifth C input
@@ -110,9 +127,9 @@ fn emit_invocation(emitter: &mut Emitter, frame: Frame, mbregex: bool) {
         emitter.instruction("mov r8, rsp");                                     // pass the host table in the fifth C register
         emitter.instruction(&format!("lea r9, [rsp + {result}]"));              // pass bridge-owned result storage in the sixth C register
     }
-    emitter.bl_c(if frame.version == 6 {
+    emitter.emit_native_bridge_symbol_call(if frame.version == 7 {
         "elephc_mbstring_variables_native_invoke_v1"
-    } else { "elephc_mbstring_invoke_v1" });
+    } else { "elephc_mbstring_invoke_v1" }, 6);
     finish(emitter, frame);
 }
 
@@ -128,9 +145,14 @@ fn table_entry(emitter: &mut Emitter, offset: usize, symbol: &str) {
     emitter.instruction(&instruction);                                          // keep each callback at its neutral ABI offset
 }
 
+/// Installs one generated C callback using the target's native symbol decoration.
+fn c_table_entry(emitter: &mut Emitter, offset: usize, symbol: &str) {
+    table_entry(emitter, offset, &emitter.target.extern_symbol(symbol));
+}
+
 /// Restores the original eval context while preserving all other C inputs and the caller's frame.
 fn context_wrapper(emitter: &mut Emitter, name: &str, callback: &str) {
-    emitter.label_global(name);
+    abi::emit_c_callback_entry(emitter, name);
     emitter.instruction(if emitter.target.arch == Arch::AArch64 { "ldr x0, [x0]" } else { "mov rdi, QWORD PTR [rdi]" }); // unwrap only the callback's first context argument
     emitter.instruction(&format!("{} {callback}", if emitter.target.arch == Arch::AArch64 { "b" } else { "jmp" })); // reuse the shared protected callback and its ownership rules
 }
@@ -158,7 +180,7 @@ fn finish(emitter: &mut Emitter, frame: Frame) {
     emitter.label(&format!("{name}_failed"));
     emitter.instruction(&if arm { format!("str x0, [sp, #{status}]") } else { format!("mov DWORD PTR [rsp + {status}], eax") }); // preserve status while releasing any remaining Rust result buffers
     emitter.instruction(&if arm { format!("add x0, sp, #{result}") } else { format!("lea rdi, [rsp + {result}]") }); // address the result even when initialization failed
-    emitter.bl_c("elephc_mbstring_release_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_release_v1", 1);
     if arm {
         emitter.instruction(&format!("ldr x1, [sp, #{status}]"));               // return the contained pending or fatal status
         emitter.instruction("mov x0, #0");                                      // no PHP value is owned on the failed path
@@ -179,9 +201,87 @@ fn finish(emitter: &mut Emitter, frame: Frame) {
     emitter.instruction("ret");                                                 // return without unwinding through native or Rust adapter frames
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Pins the dependency-closed V7 callback table on Unix and Windows emitters.
+    #[test]
+    fn variable_invocation_carries_runtime_local_ownership_callbacks() {
+        for platform in [Platform::Linux, Platform::Windows] {
+            let mut emitter = Emitter::new(Target::new(platform, Arch::X86_64));
+            emit(&mut emitter, false);
+            let asm = emitter.output();
+            let variables = asm
+                .split("__rt_mbstring_variables_invoke:")
+                .nth(1)
+                .expect("variables invocation helper");
+            assert!(variables.contains("mov r10, 1030792151047"), "{platform:?}: missing V7/240-byte host header");
+            assert!(variables.contains("mov r10, 274877906945"), "{platform:?}: missing V1/64-byte runtime header");
+            for symbol in [
+                "elephc_mbstring_variable_clone_v1",
+                "elephc_mbstring_variable_box_v1",
+                "elephc_mbstring_variable_reference_new_v1",
+                "elephc_mbstring_variable_release_v1",
+                "elephc_mbstring_variable_array_unique_v1",
+                "elephc_mbstring_variable_hash_unique_v1",
+                "elephc_mbstring_variable_persist_v1",
+            ] {
+                assert!(variables.contains(symbol), "{platform:?}: missing {symbol}");
+            }
+            assert!(variables.contains("mov QWORD PTR [rsp + 288], r10"),
+                "{platform:?}: wrapped context must point at its own runtime table");
+            if platform == Platform::Windows {
+                for callback in ["__rt_mbstring_capture_base_0", "__rt_mbstring_capture_initialize",
+                    "__rt_mbstring_query_configuration_context", "__rt_mbstring_query_register"] {
+                    let body = asm.split(&format!("{callback}:\n")).nth(1)
+                        .expect("C-visible capture callback");
+                    let entry = body.split(&format!("{callback}__internal:")).next().unwrap();
+                    assert!(entry.contains("mov rdi, rcx"), "{callback}: missing MSx64 adapter");
+                }
+            }
+        }
+    }
+
+    /// Mach-O host tables point at the decorated C entries emitted for every callback.
+    #[test]
+    fn apple_capture_tables_use_c_symbol_decoration() {
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let mut emitter = Emitter::new(target);
+        super::super::emit_mbstring(&mut emitter, false, false, false);
+        let assembly = emitter.output();
+        let mut callbacks = (0..10)
+            .map(|index| format!("__rt_mbstring_capture_base_{index}"))
+            .collect::<Vec<_>>();
+        callbacks.extend([
+            "__rt_mbstring_capture_initialize",
+            "__rt_mbstring_capture_fill_context",
+            "__rt_mbstring_query_configuration_context",
+            "__rt_mbstring_query_filter_context",
+            "__rt_mbstring_query_register",
+        ].into_iter().map(str::to_string));
+        for callback in callbacks {
+            let decorated = target.extern_symbol(&callback);
+            assert!(
+                assembly.contains(&format!("adrp x9, {decorated}@PAGE")),
+                "missing decorated table page relocation for {callback}"
+            );
+            assert!(
+                assembly.contains(&format!("add x9, x9, {decorated}@PAGEOFF")),
+                "missing decorated table page offset for {callback}"
+            );
+            assert!(
+                assembly.contains(&format!("{decorated}:\n")),
+                "missing decorated callback definition for {callback}"
+            );
+        }
+    }
+}
+
 /// Transfers displaced ownership to the request while preserving every native result word.
 fn adopt_deferred(emitter: &mut Emitter, frame: Frame) {
-    if frame.version == 6 { return; }
+    if frame.version >= 6 { return; }
     let name = frame.name;
     let state = frame.state;
     let result = frame.result;

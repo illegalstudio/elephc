@@ -12,4 +12,5 @@ builtin! {
     check: crate::builtins::mbstring::check,
     lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::MbSendMail),
+    requirements: crate::builtins::requirements::windows_timezone_requirements,
 }

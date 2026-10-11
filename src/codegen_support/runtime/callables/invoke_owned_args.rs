@@ -31,6 +31,8 @@ const INVOCATION_SCOPE: usize = 56;
 /// Returns an owned Mixed cell, or rethrows only after releasing the arguments and interrupted result.
 pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
+    // The entry consumes SysV runtime-helper inputs, but the loaded descriptor invoker is
+    // generated code and is called with the target ABI (MS x64 on Windows).
     let descriptor_arg = abi::int_arg_reg_name(emitter.target, 0);
     let array_arg = abi::int_arg_reg_name(emitter.target, 1);
     let invoker = abi::secondary_scratch_reg(emitter);
@@ -52,7 +54,7 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, result, PREVIOUS);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     save_handler_state(emitter);
-    abi::emit_frame_slot_address(emitter, descriptor_arg, HANDLER_OFFSET - TRY_HANDLER_JMP_BUF_OFFSET);
+    abi::emit_frame_slot_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), HANDLER_OFFSET - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.bl_c("setjmp");                                                     // catch descriptor or cleanup throws without discarding the owned slots
     abi::emit_branch_if_int_result_nonzero(emitter, caught);
     abi::load_at_offset(emitter, descriptor_arg, DESCRIPTOR);
@@ -106,12 +108,12 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
 fn emit_owned_args_entry(emitter: &mut Emitter, label: &str, owns_descriptor: bool) {
     emitter.label_global(label);
     abi::emit_frame_prologue(emitter, FRAME_SIZE);
-    let descriptor = abi::int_arg_reg_name(emitter.target, 0);
+    let descriptor = abi::runtime_helper_int_arg_reg(emitter, 0);
     abi::store_at_offset(emitter, descriptor, DESCRIPTOR);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENTS);
+    abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), ARGUMENTS);
     abi::store_at_offset(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 2),
+        abi::runtime_helper_int_arg_reg(emitter, 2),
         INVOCATION_SCOPE,
     );
     if owns_descriptor {

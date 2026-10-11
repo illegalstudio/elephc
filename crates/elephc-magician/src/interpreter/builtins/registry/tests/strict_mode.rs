@@ -55,9 +55,10 @@ fn strict_mode_defaults_off_and_guard_restores() {
         eval_declared_builtin_spec("ptr_get").is_some(),
         "extension builtins stay visible without strict mode"
     );
-    assert!(
+    assert_eq!(
         eval_declared_builtin_spec("pcntl_daemon").is_some(),
-        "pcntl_daemon must stay visible without strict mode"
+        !cfg!(windows),
+        "non-strict mode must not expose PCNTL on unsupported platforms"
     );
     {
         let _guard = scoped_enable();

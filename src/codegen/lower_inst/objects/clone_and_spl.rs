@@ -151,7 +151,7 @@ pub(super) fn lower_spl_doubly_linked_list_new(
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", class_name)))?;
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         class_id as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");
@@ -177,17 +177,17 @@ pub(super) fn lower_spl_fixed_array_new(ctx: &mut FunctionContext<'_>, inst: &In
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             class_id as i64,
         );
-        abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
+        abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1));
     } else {
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             class_id as i64,
         );
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
+        abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 0);
     }
     abi::emit_call_label(ctx.emitter, "__rt_spl_fixed_new");
     store_if_result(ctx, inst)

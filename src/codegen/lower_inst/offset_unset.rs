@@ -23,7 +23,7 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
     if ctx.value_php_type(cell)?.codegen_repr() != PhpType::Mixed {
         return Err(CodegenIrError::invalid_module("offset_unset expects a boxed PHP array"));
     }
-    ctx.load_value_to_reg(cell, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    ctx.load_value_to_reg(cell, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
     let valid = ctx.next_label("offset_unset_array");
     match ctx.emitter.target.arch {

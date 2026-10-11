@@ -70,6 +70,81 @@ fn core_ini_runtime_access_display_modes_and_restore() {
     assert_eq!(state.display_errors(), 1);
 }
 
+/// Pins PHP 8.5's mail defaults, runtime access, port conversion, and request restoration.
+#[test]
+fn core_ini_mail_state_tracks_php_access_and_defaults() {
+    let mut state = CoreIni::default();
+    assert_eq!(state.smtp_host(), b"localhost");
+    assert_eq!(state.smtp_port(), 25);
+    assert_eq!(state.sendmail_from(), None);
+    #[cfg(windows)]
+    assert_eq!(state.sendmail_path(), None);
+    #[cfg(not(windows))]
+    assert_eq!(state.sendmail_path(), Some(b"/usr/sbin/sendmail -t -i".as_slice()));
+    assert_eq!(state.mail_force_extra_parameters(), None);
+    assert_eq!(state.mail_cr_lf_mode(), b"crlf");
+    assert!(!state.mail_mixed_lf_and_crlf());
+
+    assert_eq!(&*state.set(b"SMTP", IniString::new(b"127.0.0.1")).unwrap(), b"localhost");
+    assert_eq!(&*state.set(b"smtp_port", IniString::new(b"0")).unwrap(), b"25");
+    assert_eq!(&*state.set(b"sendmail_from", IniString::new(b"sender@example.test")).unwrap(), b"");
+    assert_eq!(state.smtp_host(), b"127.0.0.1");
+    assert_eq!(state.smtp_port(), 25);
+    assert_eq!(state.sendmail_from(), Some(b"sender@example.test".as_slice()));
+    assert!(state.set(b"sendmail_path", IniString::new(b"mailer")).is_none());
+    assert!(state.set(b"mail.cr_lf_mode", IniString::new(b"invalid")).is_none());
+    for value in [b"".as_slice(), b"crlf", b"lf", b"mixed", b"os"] {
+        assert!(state.set(b"mail.cr_lf_mode", IniString::new(value)).is_none());
+        let (configured, diagnostics) = CoreIni::with_overrides(&settings(&[
+            (b"mail.cr_lf_mode", value),
+        ]));
+        assert!(diagnostics.is_empty(), "{value:?}");
+        assert_eq!(configured.mail_cr_lf_mode(), value);
+    }
+    state.reset();
+    assert_eq!(state.smtp_host(), b"localhost");
+    assert_eq!(state.smtp_port(), 25);
+    assert_eq!(state.sendmail_from(), None);
+    assert_eq!(state.mail_cr_lf_mode(), b"crlf");
+}
+
+/// Invalid startup mail line-ending policy emits PHP's startup error and retains `crlf`.
+#[test]
+fn core_ini_invalid_mail_cr_lf_mode_retains_default() {
+    let (state, diagnostics) = CoreIni::with_overrides(&settings(&[
+        (b"mail.cr_lf_mode", b"invalid"),
+    ]));
+    assert_eq!(state.mail_cr_lf_mode(), b"crlf");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].level, 1);
+    assert_eq!(diagnostics[0].message,
+        b"Invalid value \"invalid\" for mail.cr_lf_mode. Must be one of: \"crlf\", \"lf\", \"mixed\", \"os\"");
+}
+
+/// Keeps `ini_get_all()` name-sorted while preserving nullable global/local values.
+#[test]
+fn core_ini_mail_inventory_is_sorted_and_nullable() {
+    let state = CoreIni::default();
+    let (graph, owners) = state.all(true);
+    let root = &graph.arrays()[0];
+    let names: Vec<_> = root.iter().map(|(key, _)| match key {
+        elephc_builtin_contract::mbstring_abi::array::Key::String(name) => name.as_slice(),
+        _ => panic!("Core INI keys are strings"),
+    }).collect();
+    assert_eq!(names, [b"SMTP".as_slice(), b"arg_separator.input", b"display_errors",
+        b"mail.cr_lf_mode", b"mail.force_extra_parameters", b"mail.mixed_lf_and_crlf",
+        b"max_input_nesting_level", b"max_input_vars", b"sendmail_from", b"sendmail_path",
+        b"smtp_port"]);
+    let null_details = graph.arrays().iter().skip(1).flat_map(|entries| entries.iter())
+        .filter(|(_, value)| matches!(value, elephc_builtin_contract::mbstring_abi::array::Value::Null))
+        .count();
+    #[cfg(windows)]
+    assert_eq!(null_details, 6);
+    #[cfg(not(windows))]
+    assert_eq!(null_details, 4);
+    assert_eq!(owners.len() + null_details, 22);
+}
+
 /// Keeps original global/raw identities while scalar getters normalize one-byte strings.
 #[test]
 fn core_ini_array_and_scalar_identity_contracts() {
@@ -78,10 +153,10 @@ fn core_ini_array_and_scalar_identity_contracts() {
     state.set(b"display_errors", raw.clone()).unwrap();
     assert!(!state.get(b"display_errors").unwrap().same_identity(&raw));
     let (_, plain) = state.all(false);
-    assert!(plain.iter().find(|(array, entry, _)| *array == 0 && *entry == 1).unwrap().2.same_identity(&raw));
+    assert!(plain.iter().find(|(array, entry, _)| *array == 0 && *entry == 2).unwrap().2.same_identity(&raw));
     let (_, details) = state.all(true);
-    assert!(details.iter().find(|(array, entry, _)| *array == 2 && *entry == 1).unwrap().2.same_identity(&raw));
-    let original = details.iter().find(|(array, entry, _)| *array == 2 && *entry == 0).unwrap().2.clone();
+    assert!(details.iter().find(|(array, entry, _)| *array == 3 && *entry == 1).unwrap().2.same_identity(&raw));
+    let original = details.iter().find(|(array, entry, _)| *array == 3 && *entry == 0).unwrap().2.clone();
     state.reset();
     assert!(state.get(b"display_errors").unwrap().same_identity(&original));
     assert_eq!(&*raw, b"0");
@@ -138,8 +213,11 @@ fn core_ini_abi_and_query_provider_share_request_state() {
     let mut all = call(INI_GET_ALL, &[MbArgV1::boolean(true)]);
     let bytes = unsafe { std::slice::from_raw_parts(all.bytes, all.len as usize) };
     let (graph, owners) = decode_ini_array(bytes, all.value as u64).unwrap();
-    assert_eq!(graph.arrays()[0].len(), 4);
-    assert_eq!(owners.len(), 8);
+    assert_eq!(graph.arrays()[0].len(), 11);
+    #[cfg(windows)]
+    assert_eq!(owners.len(), 16);
+    #[cfg(not(windows))]
+    assert_eq!(owners.len(), 18);
     unsafe { elephc_mbstring_release_v1(&mut all); }
     std::thread::spawn(|| assert_eq!(query(QUERY_CONFIG_ENTRY), (b";&".to_vec(), 2, 1, 0))).join().unwrap();
     assert_eq!(query(QUERY_CONFIG_FIELD).3, 1);

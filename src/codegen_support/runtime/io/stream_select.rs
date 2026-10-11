@@ -246,6 +246,17 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
         emit_build_fdset_x86(emitter, arr_off, fds_off, suffix);
     }
 
+    // Winsock's select() rejects three empty fd_sets with WSAEINVAL, while
+    // POSIX pselect() treats the same zero-timeout probe as a successful wait
+    // with no ready descriptors.  User wrappers without stream_cast() are
+    // deliberately excluded above and can therefore leave all sets empty.
+    if emitter.platform == crate::codegen_support::platform::Platform::Windows {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                   // load the read descriptor bitmap
+        emitter.instruction("or rax, QWORD PTR [rbp - 40]");                    // merge the write descriptor bitmap
+        emitter.instruction("or rax, QWORD PTR [rbp - 48]");                    // merge the exception descriptor bitmap
+        emitter.instruction("jz __rt_stream_select_empty_x86");                 // bypass Winsock when every set is empty
+    }
+
     // -- pselect6(nfds=64, read, write, except, timeout, sigmask) --
     emitter.instruction("mov edi, 64");                                         // nfds: examine descriptors 0..63
     emitter.instruction("lea rsi, [rbp - 32]");                                 // read descriptor bitmap pointer
@@ -256,6 +267,12 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 270");                                        // Linux x86_64 syscall 270 = pselect6
     emitter.instruction("syscall");                                             // wait for descriptor readiness
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the ready descriptor count
+    if emitter.platform == crate::codegen_support::platform::Platform::Windows {
+        emitter.instruction("jmp __rt_stream_select_compact_x86");              // continue with the post-select bitmaps
+        emitter.label("__rt_stream_select_empty_x86");
+        emitter.instruction("mov QWORD PTR [rbp - 72], 0");                     // POSIX-compatible empty-set result
+        emitter.label("__rt_stream_select_compact_x86");
+    }
 
     for (arr_off, fds_off, suffix) in [(8, 32, "r"), (16, 40, "w"), (24, 48, "e")] {
         emit_compact_x86(emitter, arr_off, fds_off, suffix);
@@ -310,9 +327,22 @@ fn emit_build_fdset_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     emitter.label(&cast_skip_l);
     emitter.instruction("cmp rdx, 0");                                          // is the descriptor negative?
     emitter.instruction(&format!("jl {}", next_l));                             // skip descriptors that cannot be set
-    emitter.instruction("cmp rdx, 64");                                         // is the descriptor outside the word-0 range?
-    emitter.instruction(&format!("jae {}", next_l));                            // skip out-of-range descriptors
-    emitter.instruction("mov rcx, rdx");                                        // descriptor position for the shift count
+    if emitter.platform == crate::codegen_support::platform::Platform::Windows {
+        let table = match suffix {
+            "r" => "_win_select_read_handles",
+            "w" => "_win_select_write_handles",
+            _ => "_win_select_except_handles",
+        };
+        emitter.instruction("cmp rsi, 64");                                     // Windows bridge has one selectable slot per array position
+        emitter.instruction(&format!("jae {}", next_l));                        // skip positions outside the bridge table
+        emitter.instruction(&format!("lea rax, [rip + {}]", table));            // raw SOCKET lookup table for pselect6
+        emitter.instruction("mov QWORD PTR [rax + rsi * 8], rdx");              // associate compact bit position with the full-width SOCKET
+        emitter.instruction("mov rcx, rsi");                                    // bitmap position is the array slot, not the opaque SOCKET value
+    } else {
+        emitter.instruction("cmp rdx, 64");                                     // is the descriptor outside the word-0 range?
+        emitter.instruction(&format!("jae {}", next_l));                        // skip out-of-range descriptors
+        emitter.instruction("mov rcx, rdx");                                    // descriptor position for the shift count
+    }
     emitter.instruction("mov rax, 1");                                          // bit seed for the descriptor
     emitter.instruction("shl rax, cl");                                         // shift the bit into the descriptor position
     emitter.instruction(&format!("or QWORD PTR [rbp - {}], rax", fds_off));     // set the descriptor bit
@@ -372,9 +402,15 @@ fn emit_compact_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &
     emitter.label(&cast_skip_l);
     emitter.instruction("cmp rdx, 0");                                          // is the descriptor negative?
     emitter.instruction(&format!("jl {}", next_l));                             // drop descriptors that were never set
-    emitter.instruction("cmp rdx, 64");                                         // is the descriptor outside the word-0 range?
-    emitter.instruction(&format!("jae {}", next_l));                            // drop out-of-range descriptors
-    emitter.instruction("mov rcx, rdx");                                        // descriptor position for the shift count
+    if emitter.platform == crate::codegen_support::platform::Platform::Windows {
+        emitter.instruction("cmp rsi, 64");                                     // ready bitmap is keyed by original array position
+        emitter.instruction(&format!("jae {}", next_l));                        // drop out-of-range source positions
+        emitter.instruction("mov rcx, rsi");                                    // test the slot bit returned by the Win32 bridge
+    } else {
+        emitter.instruction("cmp rdx, 64");                                     // is the descriptor outside the word-0 range?
+        emitter.instruction(&format!("jae {}", next_l));                        // drop out-of-range descriptors
+        emitter.instruction("mov rcx, rdx");                                    // descriptor position for the shift count
+    }
     emitter.instruction("mov rax, r8");                                         // copy the bitmap word for testing
     emitter.instruction("shr rax, cl");                                         // shift the descriptor bit to position 0
     emitter.instruction("and rax, 1");                                          // isolate the descriptor's ready bit

@@ -105,7 +105,7 @@ fn emit_array_walk_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_array_walk_call_linux_x86_64");                // keep legacy one-argument callback ABI when no environment is present
     emitter.instruction("mov rsi, r14");                                        // pass capture environment as the wrapper's second argument
     emitter.label("__rt_array_walk_call_linux_x86_64");
-    emitter.instruction("call r12");                                            // invoke the user callback with the current source element and ignore the scalar return value
+    emitter.emit_platform_callback_call("r12", 2);
     emitter.instruction("add r13, 1");                                          // advance the source index after visiting the current element
     emitter.instruction("jmp __rt_array_walk_loop");                            // continue walking until the whole source array has been visited
 

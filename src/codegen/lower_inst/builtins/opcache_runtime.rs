@@ -16,8 +16,8 @@
 //!   merely asked for a status array. `RuntimeFeatures` is final before per-instruction
 //!   lowering runs (`ir_lower::program` recomputes it twice, last before `validate_module`),
 //!   so this reads a settled fact rather than a guess.
-//! - `__elephc_eval_opcache_rt_script_path` returns a BORROWED `(ptr, len)` into a
-//!   thread-local buffer in the bridge. The bytes are copied into an owned PHP string with
+//! - `__elephc_eval_opcache_rt_script_path` writes a BORROWED `(ptr, len)` into an explicit
+//!   output record backed by a thread-local bridge buffer. The bytes are copied into an owned PHP string with
 //!   `__rt_str_persist` immediately, before anything can call the bridge again.
 //! - The gated-off path still produces a well-typed result: `0` for the integer forms and
 //!   an owned empty string for the path form, both of which are what an empty cache
@@ -87,9 +87,10 @@ pub(crate) fn lower_opcache_rt_stat(
         return store_if_result(ctx, inst);
     }
     resolve_int_operand_to_result(ctx, expect_operand(inst, 0)?, "opcache rt stat key")?;
-    super::super::call_operands::move_int_result_to_first_arg(ctx);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_opcache_rt_stat");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    let arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0).to_string();
+    let result = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_reg_move(ctx.emitter, &arg, &result);
+    ctx.emitter.emit_native_bridge_symbol_call("__elephc_eval_opcache_rt_stat", 1);
     store_if_result(ctx, inst)
 }
 
@@ -112,11 +113,7 @@ pub(crate) fn lower_opcache_rt_reset(
         emit_zero_result(ctx);
         return store_if_result(ctx, inst);
     }
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_opcache_schedule_restart");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    ctx.emitter.emit_native_bridge_symbol_call("__elephc_eval_opcache_schedule_restart", 0);
     store_if_result(ctx, inst)
 }
 
@@ -153,8 +150,8 @@ pub(crate) fn lower_opcache_rt_path_call(
     }
     ctx.load_value_to_result(expect_operand(inst, 0)?)?;
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    let ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let len_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let ptr_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let len_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -169,11 +166,8 @@ pub(crate) fn lower_opcache_rt_path_call(
                 .instruction(&format!("mov {len_arg}, {len_reg}"));                // path length → SysV second argument register
         }
     }
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol(&format!("__elephc_eval_opcache_rt_{}", &name["__elephc_opcache_rt_".len()..]));
-    abi::emit_call_label(ctx.emitter, &symbol);
+    ctx.emitter.emit_native_bridge_symbol_call(
+        &format!("__elephc_eval_opcache_rt_{}", &name["__elephc_opcache_rt_".len()..]), 2);
     store_if_result(ctx, inst)
 }
 
@@ -220,12 +214,8 @@ pub(crate) fn lower_opcache_rt_swap(
     }
     // `as_override = 1`: this write comes from `ini_set()`, so it lands in the override
     // table and outranks the compiled install that the first eval performs afterwards.
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 1);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_opcache_swap_directive");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2), 1);
+    ctx.emitter.emit_native_bridge_symbol_call("__elephc_eval_opcache_swap_directive", 3);
     store_if_result(ctx, inst)
 }
 
@@ -259,8 +249,7 @@ pub(crate) fn lower_opcache_rt_script_field(
                 .instruction(&format!("mov rsi, {}", field_reg));               // field selector → SysV second argument register
         }
     }
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_opcache_rt_script_field");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    ctx.emitter.emit_native_bridge_symbol_call("__elephc_eval_opcache_rt_script_field", 2);
     store_if_result(ctx, inst)
 }
 
@@ -280,33 +269,13 @@ pub(crate) fn lower_opcache_rt_blacklist_entry(
         return store_if_result(ctx, inst);
     }
     resolve_int_operand_to_result(ctx, expect_operand(inst, 0)?, "opcache blacklist index")?;
-    super::super::call_operands::move_int_result_to_first_arg(ctx);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_opcache_rt_blacklist_entry");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            // The pair lands in x0/x1; str_persist reads ptr from x1 and len from x2, so
-            // the length moves FIRST or the pointer write would destroy it.
-            ctx.emitter.instruction("mov x2, x1");                              // borrowed length → str_persist length register
-            ctx.emitter.instruction("mov x1, x0");                              // borrowed pointer → str_persist source register
-        }
-        Arch::X86_64 => {
-            // Nothing to move: the bridge returns the pair in rax/rdx, which is exactly the
-            // pair `__rt_str_persist` reads on this arch. An earlier revision copied `rax`
-            // into `rdi` here and called it "the source register", which was wrong and
-            // worked only because it left `rax` untouched.
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_str_persist");                      // copy the borrowed bytes into an owned PHP string
+    emit_borrowed_string_call(ctx, "__elephc_eval_opcache_rt_blacklist_entry");
     store_if_result(ctx, inst)
 }
 
 /// Lowers `__elephc_opcache_rt_script_path(index)` to the bridge's path reader.
 ///
-/// The bridge returns a borrowed `(ptr, len)` pair in the first two result registers; a
+/// The bridge writes a borrowed `(ptr, len)` pair into an explicit output record; a
 /// null pointer means "no such script" and is persisted as the empty string, which the
 /// prelude treats as the end of the cached-script list.
 pub(crate) fn lower_opcache_rt_script_path(
@@ -321,23 +290,28 @@ pub(crate) fn lower_opcache_rt_script_path(
         return store_if_result(ctx, inst);
     }
     resolve_int_operand_to_result(ctx, expect_operand(inst, 0)?, "opcache rt script index")?;
-    super::super::call_operands::move_int_result_to_first_arg(ctx);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_opcache_rt_script_path");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_borrowed_string_call(ctx, "__elephc_eval_opcache_rt_script_path");
+    store_if_result(ctx, inst)
+}
+
+/// Copies one borrowed bridge string through an explicit, ABI-stable output record.
+fn emit_borrowed_string_call(ctx: &mut FunctionContext<'_>, symbol: &str) {
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    let index_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0).to_string();
+    let index_result = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_reg_move(ctx.emitter, &index_arg, &index_result);
+    let out_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1).to_string();
+    abi::emit_temporary_stack_address(ctx.emitter, &out_arg, 0);
+    ctx.emitter.emit_native_bridge_symbol_call(symbol, 2);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            // The pair lands in x0/x1; str_persist reads ptr from x1 and len from x2, so
-            // the length moves FIRST or the pointer write would destroy it.
-            ctx.emitter.instruction("mov x2, x1");                              // borrowed length → str_persist length register
-            ctx.emitter.instruction("mov x1, x0");                              // borrowed pointer → str_persist source register
+            ctx.emitter.instruction("ldp x1, x2, [sp]");                        // load the borrowed pointer and length before retiring output storage
         }
         Arch::X86_64 => {
-            // Nothing to move: the bridge returns the pair in rax/rdx, which is exactly the
-            // pair `__rt_str_persist` reads on this arch. An earlier revision copied `rax`
-            // into `rdi` here and called it "the source register", which was wrong and
-            // worked only because it left `rax` untouched.
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // load the borrowed pointer into the string-result register
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // load the borrowed byte length into the string-result register
         }
     }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");                      // copy the borrowed bytes into an owned PHP string
-    store_if_result(ctx, inst)
 }

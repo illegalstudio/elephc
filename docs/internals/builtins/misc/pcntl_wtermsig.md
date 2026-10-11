@@ -2,7 +2,7 @@
 title: "pcntl_wtermsig() - internals"
 description: "Compiler internals for pcntl_wtermsig(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 677
+  order: 684
 ---
 
 ## `pcntl_wtermsig()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_wtermsig.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_wtermsig.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

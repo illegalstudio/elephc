@@ -57,18 +57,10 @@ fn eval_inet_pton_bytes(address: &[u8]) -> Option<Vec<u8>> {
     if address.is_empty() || address.len() > EVAL_INET_MAX_ADDRESS_BYTES {
         return None;
     }
-    let (family, width) = if address.contains(&b':') {
-        (libc::AF_INET6, 16)
-    } else {
-        (libc::AF_INET, 4)
-    };
+    let ipv6 = address.contains(&b':');
+    let width = if ipv6 { 16 } else { 4 };
     let text = address.split(|byte| *byte == 0).next().unwrap_or_default();
     let text = CString::new(text).ok()?;
     let mut packed = [0_u8; 16];
-    // SAFETY: `text` is NUL-terminated and outlives the call, and `packed` has room for the
-    // sixteen bytes of the widest family.
-    let status = unsafe {
-        libc_inet_pton(family, text.as_ptr(), packed.as_mut_ptr().cast::<libc::c_void>())
-    };
-    (status == 1).then(|| packed[..width].to_vec())
+    eval_os_inet_pton(&text, ipv6, &mut packed).then(|| packed[..width].to_vec())
 }

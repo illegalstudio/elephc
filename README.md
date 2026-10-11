@@ -21,11 +21,11 @@
 </p>
 
 <p align="center">
-  <strong>5 compile targets &middot; 3 release hosts &middot; no Zend Engine &middot; no external PHP runtime</strong>
+  <strong>5 first-class targets + experimental Windows &middot; 3 release hosts &middot; no Zend Engine &middot; no external PHP runtime</strong>
 </p>
 
 <p align="center">
-  A PHP-to-native compiler that takes a subset of PHP and compiles it directly to native assembly. Standalone executables and compiler release archives target <strong>macOS ARM64</strong>, <strong>Linux ARM64</strong>, and <strong>Linux x86_64</strong>; a macOS host also cross-compiles libraries for <strong>iOS ARM64</strong> devices and the <strong>iOS ARM64 Simulator</strong>. Ordinary source is AOT-compiled with no opcode fallback; experimental <code>eval()</code> can embed an optional interpreter bridge when runtime parsing is required.
+  A PHP-to-native compiler that takes a subset of PHP and compiles it directly to native assembly. Standalone executables and compiler release archives target <strong>macOS ARM64</strong>, <strong>Linux ARM64</strong>, and <strong>Linux x86_64</strong>; a macOS host also cross-compiles libraries for <strong>iOS ARM64</strong> devices and the <strong>iOS ARM64 Simulator</strong>. An experimental <strong>Windows x86_64</strong> GNU/MinGW target produces native PE32+ binaries but is not yet a release host. Ordinary source is AOT-compiled with no opcode fallback; experimental <code>eval()</code> can embed an optional interpreter bridge when runtime parsing is required.
 </p>
 
 <p align="center">
@@ -345,12 +345,13 @@ elephc --with-regex eval_regex.php
 elephc native install --locked
 
 # Explicit target selection
-# Supported targets today: macos-aarch64, ios-arm64, ios-sim-arm64,
-# linux-aarch64, linux-x86_64
+# First-class targets today: macos-aarch64, ios-arm64, ios-sim-arm64,
+# linux-aarch64, linux-x86_64; Windows x86_64 is experimental
 elephc --target ios-arm64 --emit staticlib module.php
 elephc --target ios-sim-arm64 --emit staticlib module.php
 elephc --target linux-aarch64 hello.php
 elephc --target linux-x86_64 hello.php
+elephc --target windows-x86_64 hello.php  # experimental; MinGW ABI/sysroot (GNU default, LLVM optional)
 
 # Compile a standalone prefork HTTP server binary
 elephc --web app.php                          # fastest; trusted application code

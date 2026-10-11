@@ -45,7 +45,7 @@ fn emit_time_macos_arm64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // new frame pointer
     emitter.instruction("mov x0, #0");                                          // x0 = NULL (no out-param needed)
-    emitter.bl_c("time");                                                       // libc time(NULL) → x0 = Unix timestamp
+    emitter.emit_call_c("time");                                                       // libc time(NULL) → x0 = Unix timestamp
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // tear down frame
     emitter.instruction("ret");                                                 // return to caller
@@ -92,7 +92,7 @@ fn emit_time_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack storage for one timeval struct plus scratch padding before the libc call
     emitter.instruction("lea rdi, [rsp]");                                      // pass the temporary timeval storage as the first SysV integer argument to libc gettimeofday()
     emitter.instruction("xor esi, esi");                                        // pass NULL as the timezone pointer because elephc only needs the current Unix timestamp
-    emitter.bl_c("gettimeofday");                                               // fill the temporary timeval with the current wall-clock time through libc
+    emitter.emit_call_c("gettimeofday");                                        // fill the temporary timeval with the current wall-clock time through libc
     emitter.instruction("mov rax, QWORD PTR [rsp]");                            // return tv_sec from the temporary timeval as the current Unix timestamp in the native integer result register
     emitter.instruction("leave");                                               // release the temporary timeval storage and restore the caller frame pointer in one step
     emitter.instruction("ret");                                                 // return the current Unix timestamp to generated code

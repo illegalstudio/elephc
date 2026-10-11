@@ -198,7 +198,7 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r9, r9");                                         // was the bridge reader published?
     emitter.instruction("jz __rt_phar_read_fail_x86");                          // no authenticating bridge means the PHAR read must fail closed
     abi::emit_symbol_address(emitter, "rdx", "_phar_extract_len"); // pass output-length scratch to the bridge
-    emitter.instruction("call r9");                                             // elephc_phar_extract_url(url_ptr, url_len, &len)
+    emitter.emit_native_bridge_call("r9", 3);                                   // elephc_phar_extract_url(url_ptr, url_len, &len)
     emitter.instruction("test rax, rax");                                       // did the bridge find archive bytes?
     emitter.instruction("jz __rt_phar_read_fail_x86");                          // bridge miss means archive or entry was not readable
     emitter.instruction("mov rdi, rax");                                        // pass extracted bytes to data_stream
@@ -309,12 +309,12 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure (boxed false)
-    emitter.label("__rt_fgc_phar_plain_x86");
+    emitter.label_global("__rt_fgc_phar_plain_x86");
     emitter.instruction("jmp __rt_file_get_contents");                          // tail-call the generic reader (args intact)
 }
 
 #[cfg(test)]
-mod tests {
+mod windows_tests {
     use super::*;
     use crate::codegen_support::platform::{Platform, Target};
 
@@ -343,5 +343,42 @@ mod tests {
             assert!(!assembly.contains("__rt_phar_inflate_raw:"), "{target:?}");
             assert!(!assembly.contains("__rt_phar_bzip2_decompress:"), "{target:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the published PHAR extractor call routes through the native
+    /// bridge shim on Windows. The old in-assembly inflate/bzip2 parser was
+    /// removed when PHAR extraction became bridge-owned, so there is one
+    /// indirect native call in this helper today.
+    #[test]
+    fn test_windows_x86_64_phar_read_native_bridge_calls_use_shim() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_phar_read(&mut emitter);
+        let asm = emitter.output();
+
+        assert_eq!(asm.matches("call r11").count(), 1, "the phar extractor must route through the native bridge shim");
+        assert!(!asm.contains("call r9\n"), "no bare call r9 may remain (MSx64 callee reading SysV registers)");
+        assert!(!asm.contains("call r10\n"), "no bare call r10 may remain (MSx64 callee reading SysV registers)");
+        assert!(asm.contains("mov r11, r9"), "expected an r9 fn-ptr relocated off the MSx64 arg registers");
+    }
+
+    /// Verifies Linux keeps the SysV direct indirect call. The native bridge
+    /// shim is a Windows-only ABI adapter; no shadow-space sequence is emitted
+    /// on the Unix target.
+    #[test]
+    fn test_linux_x86_64_phar_read_calls_stay_bare() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_phar_read(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("    call r9\n"), "linux keeps the direct call through the extractor slot");
+        assert!(!asm.contains("call r11"), "linux must not emit the windows native-bridge shim");
     }
 }

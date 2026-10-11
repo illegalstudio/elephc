@@ -16,6 +16,7 @@ pub mod output;
 pub mod output_handler;
 pub mod invoke;
 pub mod ini;
+pub mod mail;
 pub mod regex;
 pub mod exception;
 pub mod variables;

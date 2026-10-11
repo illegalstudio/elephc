@@ -8,6 +8,8 @@
 //! - Compatibility encryption is thread-local and is not treated as secure confidentiality.
 
 use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Traditional-PKWARE (ZipCrypto) cipher state: three 32-bit keys advanced per
 /// plaintext byte. Drives both reading and writing of encrypted entries.

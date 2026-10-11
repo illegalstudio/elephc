@@ -2,7 +2,7 @@
 title: "__elephc_initialize_pdo_statement() - internals"
 description: "Compiler internals for __elephc_initialize_pdo_statement(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1120
+  order: 1136
 ---
 
 ## `__elephc_initialize_pdo_statement()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_initialize_pdo_statement.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_initialize_pdo_statement.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -28,7 +28,7 @@ sidebar:
 - **Effects**: `static (19 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
-- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`, `windows-x86_64`
 
 ## EIR and runtime boundary
 

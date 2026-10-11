@@ -390,7 +390,7 @@ fn emit_str_operand_is_float(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the clipped integer run
     emitter.instruction("mov x1, #0");                                          // strtoll endptr = NULL: the run is already clipped
     emitter.instruction("mov x2, #10");                                         // parse in base 10 like PHP string-to-int
-    emitter.bl_c("strtoll");                                                    // saturates to PHP_INT_MAX/MIN and sets ERANGE past the range
+    emitter.emit_call_c("strtoll");                                                    // saturates to PHP_INT_MAX/MIN and sets ERANGE past the range
     emitter.bl_c(errno_location_symbol(emitter));                               // fetch the thread-local errno slot strtoll just wrote
     emitter.instruction("ldr w9, [x0]");                                        // load the errno value left by strtoll
     emitter.instruction(&format!("cmp w9, #{}", ERANGE));                       // ERANGE means the integer run overflowed i64
@@ -442,7 +442,7 @@ fn emit_str_operand_is_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the clipped integer run as strtoll's first argument
     emitter.instruction("xor esi, esi");                                        // strtoll endptr = NULL: the run is already clipped
     emitter.instruction("mov edx, 10");                                         // parse in base 10 like PHP string-to-int
-    emitter.bl_c("strtoll");                                                    // saturates to PHP_INT_MAX/MIN and sets ERANGE past the range
+    emitter.emit_call_c("strtoll");                                                    // saturates to PHP_INT_MAX/MIN and sets ERANGE past the range
     emitter.bl_c(errno_location_symbol(emitter));                               // fetch the thread-local errno slot strtoll just wrote
     emitter.instruction(&format!("cmp DWORD PTR [rax], {}", ERANGE));           // ERANGE means the integer run overflowed i64
     emitter.instruction("sete al");                                             // PHP classifies an out-of-range integer string as IS_DOUBLE
@@ -467,6 +467,6 @@ fn errno_location_symbol(emitter: &Emitter) -> &'static str {
     match emitter.platform {
         Platform::MacOS => "__error",
         Platform::Linux => "__errno_location",
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        Platform::Windows => "__errno_location",
     }
 }

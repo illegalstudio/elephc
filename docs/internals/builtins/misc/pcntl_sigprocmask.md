@@ -2,7 +2,7 @@
 title: "pcntl_sigprocmask() - internals"
 description: "Compiler internals for pcntl_sigprocmask(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 663
+  order: 670
 ---
 
 ## `pcntl_sigprocmask()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_sigprocmask.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_sigprocmask.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function pcntl_sigprocmask(int $mode, mixed $signals, mixed $old_signals = []): bool
+function pcntl_sigprocmask(int $mode, mixed $signals, mixed &$old_signals = []): bool
 ```
 
 ## What the type checker enforces

@@ -85,6 +85,50 @@ pub type MbVariableWriteStringV1 = unsafe extern "C" fn(
     *mut c_void, *const MbVariableHandleV1, *const u8, u64,
 ) -> i32;
 
+pub type MbVariableCloneV1 = unsafe extern "C" fn(*const u8) -> *mut u8;
+pub type MbVariableBoxV1 = unsafe extern "C" fn(u64, u64, u64) -> *mut u8;
+pub type MbVariableReferenceNewV1 = unsafe extern "C" fn(u64) -> *mut u8;
+pub type MbVariableReleaseV1 = unsafe extern "C" fn(*mut u8);
+pub type MbVariableUniqueV1 = unsafe extern "C" fn(*mut u8) -> *mut u8;
+pub type MbVariablePersistV1 = unsafe extern "C" fn(*const u8, u64) -> *mut u8;
+
+/// Runtime allocation and COW operations supplied by generated native code.
+/// Keeping them in a callback table makes the bridge rlib dependency-closed;
+/// standalone Rust tests never need unresolved generated-runtime symbols.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct MbVariableRuntimeV1 {
+    pub version: u32,
+    pub size: u32,
+    pub clone_value: Option<MbVariableCloneV1>,
+    pub box_value: Option<MbVariableBoxV1>,
+    pub reference_new: Option<MbVariableReferenceNewV1>,
+    pub release: Option<MbVariableReleaseV1>,
+    pub array_unique: Option<MbVariableUniqueV1>,
+    pub hash_unique: Option<MbVariableUniqueV1>,
+    pub persist: Option<MbVariablePersistV1>,
+}
+
+impl MbVariableRuntimeV1 {
+    pub fn complete(&self) -> bool {
+        self.version == 1 && self.size as usize == std::mem::size_of::<Self>()
+            && self.clone_value.is_some() && self.box_value.is_some()
+            && self.reference_new.is_some() && self.release.is_some()
+            && self.array_unique.is_some() && self.hash_unique.is_some()
+            && self.persist.is_some()
+    }
+}
+
+/// Extends V6 traversal with runtime-local storage ownership operations.
+/// The V6 prefix remains readable by traversal consumers while the complete
+/// V7 table keeps allocator callbacks bound to one generated runtime image.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct MbInvokeHostV7 {
+    pub base: MbInvokeHostV6,
+    pub runtime: MbVariableRuntimeV1,
+}
+
 /// Extends the protected V5 invocation host with live PHP variable actions.
 /// All callbacks are required for mb_convert_variables and unused by older operations.
 #[derive(Clone, Copy)]
@@ -112,5 +156,10 @@ mod tests {
         assert_eq!(std::mem::offset_of!(MbInvokeHostV6, variable_child_next), 152);
         assert_eq!(std::mem::offset_of!(MbInvokeHostV6, variable_prepare_write), 160);
         assert_eq!(std::mem::offset_of!(MbInvokeHostV6, variable_write_string), 168);
+        assert_eq!(std::mem::size_of::<MbVariableRuntimeV1>(), 64);
+        assert_eq!(std::mem::offset_of!(MbVariableRuntimeV1, clone_value), 8);
+        assert_eq!(std::mem::offset_of!(MbVariableRuntimeV1, persist), 56);
+        assert_eq!(std::mem::size_of::<MbInvokeHostV7>(), 240);
+        assert_eq!(std::mem::offset_of!(MbInvokeHostV7, runtime), 176);
     }
 }

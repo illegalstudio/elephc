@@ -23,7 +23,9 @@ eval_builtin! {
 }
 
 use super::super::super::*;
-use super::user_wrapper_path_ops::{eval_user_wrapper_mkdir_result, DEFAULT_MKDIR_PERMISSIONS};
+use super::user_wrapper_path_ops::eval_user_wrapper_mkdir_result;
+#[cfg(unix)]
+use super::user_wrapper_path_ops::DEFAULT_MKDIR_PERMISSIONS;
 use crate::stream_wrappers;
 
 /// Dispatches direct eval calls for the `mkdir` filesystem builtin through the area dispatcher.

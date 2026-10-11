@@ -453,8 +453,8 @@ fn emit_classified_numeric_string_member(
 fn emit_classify_numeric_string_and_box(emitter: &mut Emitter, refuse_label: &str) {
     let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(emitter.target);
     let (_, string_len_reg) = abi::string_result_regs(emitter);
-    let ptr_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
-    let len_arg_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let ptr_arg_reg = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let len_arg_reg = abi::runtime_helper_int_arg_reg(emitter, 1);
     // The pointer is read out of the payload register FIRST: on AArch64 the length argument
     // register IS the payload register, so the other order would classify the length instead.
     abi::emit_reg_move(emitter, ptr_arg_reg, payload_reg);
@@ -1239,6 +1239,7 @@ mod tests {
             "ios-sim-arm64",
             "linux-aarch64",
             "linux-x86_64",
+            "windows-x86_64",
         ] {
             let target = Target::parse(name).unwrap();
             let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(target);
@@ -1298,13 +1299,14 @@ mod tests {
             "ios-sim-arm64",
             "linux-aarch64",
             "linux-x86_64",
+            "windows-x86_64",
         ] {
             let target = Target::parse(name).unwrap();
             let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(target);
-            let ptr_arg_reg = abi::int_arg_reg_name(target, 0);
-            let len_arg_reg = abi::int_arg_reg_name(target, 1);
-
             let mut emitter = Emitter::new(target);
+            let ptr_arg_reg = abi::runtime_helper_int_arg_reg(&emitter, 0);
+            let len_arg_reg = abi::runtime_helper_int_arg_reg(&emitter, 1);
+
             emit_classify_numeric_string_and_box(&mut emitter, ".L_refuse");
             let (_, status_reg) = abi::string_result_regs(&emitter);
             let (_, high_arg_reg) = mixed_from_value_payload_regs(&emitter);

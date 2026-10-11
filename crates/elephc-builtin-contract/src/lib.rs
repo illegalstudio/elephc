@@ -13,6 +13,7 @@
 //!   validated for uniqueness by catalog consumers.
 
 mod aot_profile;
+mod availability;
 mod callback_parameters;
 mod class_spec;
 mod constant_spec;
@@ -22,6 +23,9 @@ mod catalog_constants_curl;
 mod catalog_data;
 mod catalog_mbstring;
 mod catalog_pcntl;
+mod catalog_process;
+mod catalog_windows;
+pub mod windows_codepages;
 mod catalog_xml;
 #[cfg(feature = "curl")]
 mod catalog_curl;
@@ -44,6 +48,9 @@ mod symbol_registry;
 
 pub use aot_profile::{
     aot_signature, aot_signature_profile, AotSignatureOverrideReason, AotSignatureProfile,
+};
+pub use availability::{
+    php_builtin_is_available, php_target_availability, PhpTarget, PhpTargetAvailability,
 };
 pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,

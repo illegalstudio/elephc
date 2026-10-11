@@ -267,10 +267,10 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload the boxed flag (r9 carries no argument here)
     emitter.instruction("test r9, r9");                                         // an undeclared return type arrives boxed
     emitter.instruction("jnz __rt_uwpo_boxed_x86");                             // the mask bit selects the boxed path
-    emitter.instruction("call r11");                                            // invoke the wrapper path method
+    emitter.emit_platform_callback_call("r11", 5);                                // call generated wrapper path method with the target ABI
     emitter.instruction("jmp __rt_uwpo_called_x86");                            // the declared shape needs no conversion
     emitter.label("__rt_uwpo_boxed_x86");
-    emitter.instruction("call r11");                                            // invoke the wrapper path method; rax = owned Mixed cell
+    emitter.emit_platform_callback_call("r11", 5);                                // call generated wrapper path method with the target ABI
     emitter.instruction("call __rt_wrapper_unbox_int");                         // rax = the boolean, reference released
     emitter.label("__rt_uwpo_called_x86");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // stash the bool result across the instance release
@@ -524,10 +524,10 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // to len → second string-arg pair
     emitter.instruction(&format!("bt r9, {}", VTABLE_RENAME_SLOT));             // an undeclared return type arrives boxed
     emitter.instruction("jc __rt_uwrn_boxed_x86");                              // the mask bit selects the boxed path
-    emitter.instruction("call r11");                                            // invoke the wrapper's rename method
+    emitter.emit_platform_callback_call("r11", 5);                                // call generated wrapper rename method with the target ABI
     emitter.instruction("jmp __rt_uwrn_called_x86");                            // the declared shape needs no conversion
     emitter.label("__rt_uwrn_boxed_x86");
-    emitter.instruction("call r11");                                            // invoke rename; rax = owned Mixed cell
+    emitter.emit_platform_callback_call("r11", 5);                                // call generated wrapper rename method with the target ABI
     emitter.instruction("call __rt_wrapper_unbox_int");                         // rax = the boolean, reference released
     emitter.label("__rt_uwrn_called_x86");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // stash the bool result across the instance release
@@ -546,4 +546,88 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the bool result
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_user_wrapper_path_op` call site stages
+    /// the 5th int arg (a4) on the stack above the MSx64 shadow space before the
+    /// indirect `call r11` into the wrapper's path method (finding F1, wide
+    /// reverse-ABI variant): without this staging the generated method would
+    /// read $this/path/a3/a4 from the wrong registers and slots on
+    /// windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_user_wrapper_path_op_stages_stack_arg_before_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_user_wrapper_path_op(&mut emitter);
+        let asm = emitter.output();
+
+        let this_idx = asm.find("mov rdi, QWORD PTR [rbp - 48]").expect("expected SysV $this staging");
+        let stack_idx = asm.find("mov QWORD PTR [rsp + 32], r8").expect("expected 5th-arg stack store");
+        let call_idx = asm.find("call r11").expect("expected indirect call r11");
+        assert!(this_idx < call_idx, "$this load must precede the indirect call");
+        assert!(stack_idx < call_idx, "5th-arg stack store must precede the indirect call");
+        assert_eq!(asm.matches("sub rsp, 48").count(), 2, "expected the frame sub plus the windows call-site sub");
+        assert_eq!(asm.matches("add rsp, 48").count(), 2, "expected the frame add plus the windows call-site add");
+    }
+
+    /// Verifies linux-x86_64 emission for `__rt_user_wrapper_path_op` keeps
+    /// the plain SysV call sequence. The helper's frame is 64 bytes because
+    /// it also spills the boxed-result flag; the Windows callback adapter's
+    /// shadow-space frame is separate and must not be counted here.
+    #[test]
+    fn test_linux_x86_64_user_wrapper_path_op_has_no_msx64_stack_staging() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_user_wrapper_path_op(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, QWORD PTR [rbp - 48]"));
+        assert!(!asm.contains("mov QWORD PTR [rsp + 32], rax"));
+        assert!(asm.contains("mov rdi, QWORD PTR [rbp - 48]"));
+        assert_eq!(asm.matches("sub rsp, 64").count(), 1, "expected only the helper frame sub on linux-x86_64");
+        assert_eq!(asm.matches("add rsp, 64").count(), 1, "expected only the helper frame add on linux-x86_64");
+    }
+
+    /// Verifies Windows stages the fifth integer argument (the destination
+    /// string length) above the MSx64 shadow space. The destination pointer is
+    /// the fourth register argument and is remapped by the callback adapter;
+    /// only the fifth word belongs on the stack.
+    #[test]
+    fn test_windows_x86_64_user_wrapper_rename_stages_stack_arg_before_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_user_wrapper_rename(&mut emitter);
+        let asm = emitter.output();
+
+        let this_idx = asm.find("mov rdi, QWORD PTR [rbp - 40]").expect("expected SysV $this staging");
+        let to_len_idx = asm
+            .find("mov QWORD PTR [rsp + 40], r8")
+            .or_else(|| asm.find("mov QWORD PTR [rsp + 32], r8"))
+            .expect("expected destination length stack store");
+        let call_idx = asm.find("call r11").expect("expected indirect call r11");
+        assert!(this_idx < call_idx, "$this load must precede the indirect call");
+        assert!(to_len_idx < call_idx, "destination length store must precede the indirect call");
+        assert!(!asm.contains("mov QWORD PTR [rsp + 32], rcx"), "destination pointer remains a register argument");
+        assert_eq!(asm.matches("sub rsp, 48").count(), 3, "expected the helper frame sub plus both boxed/unboxed Windows callback subs");
+        assert_eq!(asm.matches("add rsp, 48").count(), 3, "expected the helper frame add plus both boxed/unboxed Windows callback adds");
+    }
+
+    /// Verifies linux-x86_64 emission for `__rt_user_wrapper_rename` stays
+    /// byte-identical to before the reverse-ABI staging was introduced.
+    #[test]
+    fn test_linux_x86_64_user_wrapper_rename_has_no_msx64_stack_staging() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_user_wrapper_rename(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, QWORD PTR [rbp - 40]"));
+        assert!(!asm.contains("mov QWORD PTR [rsp + 32], rax"));
+        assert!(asm.contains("mov rdi, QWORD PTR [rbp - 40]"));
+        assert_eq!(asm.matches("sub rsp, 48").count(), 1, "expected only the frame sub on linux-x86_64");
+        assert_eq!(asm.matches("add rsp, 48").count(), 1, "expected only the frame add on linux-x86_64");
+    }
 }

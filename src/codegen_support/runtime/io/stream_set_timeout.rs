@@ -1,6 +1,6 @@
 //! Purpose:
-//! Emits the `__rt_stream_set_timeout` runtime helper, which applies a read
-//! timeout to a socket descriptor through `setsockopt(SO_RCVTIMEO)`.
+//! Emits the `__rt_stream_set_timeout` runtime helper, which applies read and
+//! write timeouts to a socket descriptor through `setsockopt`.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
@@ -14,7 +14,7 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-/// stream_set_timeout: set the receive timeout on a socket descriptor.
+/// Emits the native stream timeout setter for the active target ABI.
 /// Input:  AArch64 x0 = fd, x1 = seconds, x2 = microseconds
 ///         x86_64  rdi = fd, rsi = seconds, rdx = microseconds
 /// Output: 1 on success, 0 on failure
@@ -55,6 +55,10 @@ pub fn emit_stream_set_timeout(emitter: &mut Emitter) {
 
 /// Emits the Linux x86_64 stream runtime helper for stream set timeout.
 fn emit_stream_set_timeout_linux_x86_64(emitter: &mut Emitter) {
+    if emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        emit_stream_set_timeout_windows_x86_64(emitter);
+        return;
+    }
     emitter.blank();
     emitter.comment("--- runtime: stream_set_timeout ---");
     emitter.label_global("__rt_stream_set_timeout");
@@ -80,4 +84,41 @@ fn emit_stream_set_timeout_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // setsockopt failed: report false
     emitter.instruction("add rsp, 16");                                         // release the timeval
     emitter.instruction("ret");                                                 // return the boolean result
+}
+
+/// Emits the WinSock receive/send timeout setter and clears stale timeout metadata.
+fn emit_stream_set_timeout_windows_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: stream_set_timeout ---");
+    emitter.label_global("__rt_stream_set_timeout");
+    emitter.instruction("sub rsp, 40");                                         // preserve a POSIX timeval and opaque descriptor across two shim calls
+    emitter.instruction("mov QWORD PTR [rsp + 24], rdi");                       // preserve the full-width SOCKET across both option updates
+    emitter.instruction("mov QWORD PTR [rsp], rsi");                            // timeval.tv_sec = PHP seconds
+    emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // timeval.tv_usec = PHP microseconds
+    emitter.instruction("mov rsi, 1");                                          // POSIX SOL_SOCKET, translated by the WinSock shim
+    emitter.instruction("mov rdx, 20");                                         // POSIX SO_RCVTIMEO, translated by the WinSock shim
+    emitter.instruction("mov r10, rsp");                                        // pass the POSIX timeval to the shim for millisecond conversion
+    emitter.instruction("mov r8, 16");                                          // sizeof(timeval)
+    emitter.instruction("call __rt_sys_setsockopt");                            // configure receive timeout through the audited WinSock ABI shim
+    emitter.instruction("test rax, rax");                                       // shim returns zero on success and negative on failure
+    emitter.instruction("jnz __rt_stream_set_timeout_fail_win");                // receiving timeout must succeed before reporting true
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");                       // restore the opaque SOCKET for the send timeout update
+    emitter.instruction("mov rsi, 1");                                          // POSIX SOL_SOCKET, translated by the WinSock shim
+    emitter.instruction("mov rdx, 21");                                         // POSIX SO_SNDTIMEO, translated by the WinSock shim
+    emitter.instruction("mov r10, rsp");                                        // reuse the POSIX timeval for millisecond conversion
+    emitter.instruction("mov r8, 16");                                          // sizeof(timeval)
+    emitter.instruction("call __rt_sys_setsockopt");                            // configure send timeout through the audited WinSock ABI shim
+    emitter.instruction("test rax, rax");                                       // both socket options must succeed
+    emitter.instruction("jnz __rt_stream_set_timeout_fail_win");                // partial configuration reports false
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");                       // resolve this stream's compact metadata slot
+    emitter.instruction("call __rt_win_stream_slot");                           // opaque SOCKETs must never index metadata directly
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_win_stream_timed_out"); // timeout state table base
+    emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // a new timeout configuration clears stale timeout state
+    emitter.instruction("mov eax, 1");                                          // both socket options succeeded
+    emitter.instruction("add rsp, 40");                                         // release the timeout frame
+    emitter.instruction("ret");                                                 // return PHP true
+    emitter.label("__rt_stream_set_timeout_fail_win");
+    emitter.instruction("xor eax, eax");                                        // either socket-option failure reports PHP false
+    emitter.instruction("add rsp, 40");                                         // release the timeout frame
+    emitter.instruction("ret");                                                 // return PHP false
 }

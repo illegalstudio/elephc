@@ -32,7 +32,7 @@ pub(super) fn emit(emitter: &mut Emitter, eval: bool) {
         load_arg(emitter, 2, 40);
         if arm(emitter) { emitter.instruction("add x3, sp, #80"); }             // provide separate eval result and Throwable ownership slots
         else { emitter.instruction("lea rcx, [rsp + 80]"); }                    // borrow exclusive eval result storage
-        emitter.bl_c("__elephc_eval_callable_call_array");
+        emitter.emit_native_bridge_symbol_call("__elephc_eval_callable_call_array", 4);
         branch_zero(emitter, "__rt_mbstring_callback_call_eval_value");
         if arm(emitter) {
             emitter.instruction("cmp x0, #3");                                  // recognize the eval PendingThrowable status

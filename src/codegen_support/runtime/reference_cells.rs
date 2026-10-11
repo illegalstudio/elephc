@@ -55,7 +55,7 @@ fn emit_new(emitter: &mut Emitter) {
     emitter.blank();
     emitter.label_global("__rt_reference_cell_new");
     abi::emit_frame_prologue(emitter, 32);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
+    abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), 8);
     abi::emit_load_int_immediate(emitter, result, 16);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     abi::load_at_offset(emitter, scratch, 8);
@@ -138,9 +138,9 @@ fn emit_release(emitter: &mut Emitter) {
         }
     }
     emitter.label_global("__rt_reference_cell_release");
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 1), abi::int_result_reg(emitter));
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 2), 0);
+    abi::emit_reg_move(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), abi::int_result_reg(emitter));
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), 0);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 2), 0);
     abi::emit_jump(emitter, "__rt_local_ref_cell_release");
 }
 
@@ -183,7 +183,7 @@ fn emit_clone(emitter: &mut Emitter) {
             emitter.instruction("and edi, 0x7f");                               // exclude collector flags and the heap marker
         }
     }
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 24);
+    abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), 24);
     abi::emit_call_label(emitter, "__rt_reference_cell_new");
     abi::store_at_offset(emitter, result, 16);
     abi::load_at_offset(emitter, scratch, 8);

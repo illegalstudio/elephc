@@ -146,7 +146,7 @@ fn emit_user_wrapper_stream_cast_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uwcast_neg1_x86");                             // method absent: not selectable
 
     // -- call stream_cast($this, $cast_as) → resource fd (or boxed/false) in rax --
-    emitter.instruction("call r11");                                            // invoke stream_cast on the wrapper object
+    emitter.emit_platform_callback_call("r11", 2);
 
     // -- normalize the return to a raw int fd (see the AArch64 path for the rationale) --
     emitter.instruction("test rax, rax");                                       // null/false-ish return?

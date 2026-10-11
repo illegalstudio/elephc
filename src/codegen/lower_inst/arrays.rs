@@ -397,7 +397,7 @@ pub(super) fn separate_get_for_write_receiver(
         return Ok(());
     };
     receiver.reload_local_value(ctx, array)?;
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(array, arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(array)?;
@@ -691,7 +691,7 @@ fn separate_shared_mixed_array_receiver(
         }
     }
     receiver.prepare_consuming_storeback(ctx, array)?;
-    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    ctx.load_value_to_reg(array, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_array_cell_ensure_unique");
     ctx.store_result_value(array)?;
     receiver.store_back_after_consuming_split(ctx, array)?;

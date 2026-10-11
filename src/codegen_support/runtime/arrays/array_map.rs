@@ -177,7 +177,7 @@ fn emit_array_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_map_call");                              // keep legacy string callback ABI when no environment is present
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // pass capture environment after the string ptr/len pair
     emitter.label("__rt_array_map_call");
-    emitter.instruction("call r12");                                            // invoke the user callback with the current element and read the transformed value from rax
+    emitter.emit_platform_callback_call("r12", 3);
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the destination array pointer after the callback clobbered caller-saved registers
     emitter.instruction("mov QWORD PTR [r10 + r13 * 8 + 24], rax");             // store the transformed value into the matching destination-array element slot
     emitter.instruction("add r13, 1");                                          // advance the loop index after storing the transformed destination element
@@ -192,4 +192,40 @@ fn emit_array_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop r12");                                             // restore the caller's callback scratch callee-saved register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the mapped array pointer
     emitter.instruction("ret");                                                 // return the mapped destination array pointer in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_array_map` callback call site emits the
+    /// reverse-ABI SysV->MSx64 remap immediately before the indirect `call r12`
+    /// into the generated callback (finding F1, reverse-ABI): without it, the
+    /// generated callback would read its element/env arguments from the wrong
+    /// registers on windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_array_map_remaps_before_indirect_callback_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_array_map(&mut emitter);
+        let asm = emitter.output();
+
+        let remap_idx = asm.find("mov rcx, rdi").expect("expected SysV->MSx64 remap");
+        let call_idx = asm.find("call r11").expect("expected relocated indirect call r11");
+        assert!(remap_idx < call_idx, "remap must precede the indirect callback call");
+    }
+
+    /// Verifies linux-x86_64 emission stays byte-identical to before the
+    /// reverse-ABI remap was introduced: the remap is windows-x86_64-only, so a
+    /// linux-x86_64 build must never see a `mov rcx, rdi` instruction.
+    #[test]
+    fn test_linux_x86_64_array_map_has_no_reverse_abi_remap() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_array_map(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, rdi"));
+    }
 }

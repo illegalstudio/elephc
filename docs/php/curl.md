@@ -1020,10 +1020,10 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`curl_multi_add_handle()`](./builtins/network/curl_multi_add_handle.md) | `(CurlMultiHandle $multi_handle, mixed $handle): int` | `int` | ✓ | ✓ |
 | [`curl_multi_close()`](./builtins/network/curl_multi_close.md) | `(CurlMultiHandle $multi_handle): void` | `void` | ✓ | ✓ |
 | [`curl_multi_errno()`](./builtins/network/curl_multi_errno.md) | `(CurlMultiHandle $multi_handle): int` | `int` | ✓ | ✓ |
-| [`curl_multi_exec()`](./builtins/network/curl_multi_exec.md) | `(CurlMultiHandle $multi_handle, int $still_running): int` | `int` | ✓ | ✓ |
+| [`curl_multi_exec()`](./builtins/network/curl_multi_exec.md) | `(CurlMultiHandle $multi_handle, int &$still_running): int` | `int` | ✓ | ✓ |
 | [`curl_multi_get_handles()`](./builtins/network/curl_multi_get_handles.md) | `(CurlMultiHandle $multi_handle): array` | `array` | ✓ | ✓ |
 | [`curl_multi_getcontent()`](./builtins/network/curl_multi_getcontent.md) | `(mixed $handle): ?string` | `?string` | ✓ | ✓ |
-| [`curl_multi_info_read()`](./builtins/network/curl_multi_info_read.md) | `(CurlMultiHandle $multi_handle, ?int $queued_messages = null): mixed` | `mixed` | ✓ | ✓ |
+| [`curl_multi_info_read()`](./builtins/network/curl_multi_info_read.md) | `(CurlMultiHandle $multi_handle, ?int &$queued_messages = null): mixed` | `mixed` | ✓ | ✓ |
 | [`curl_multi_init()`](./builtins/network/curl_multi_init.md) | `(): CurlMultiHandle` | `CurlMultiHandle` | ✓ | ✓ |
 | [`curl_multi_remove_handle()`](./builtins/network/curl_multi_remove_handle.md) | `(CurlMultiHandle $multi_handle, mixed $handle): int` | `int` | ✓ | ✓ |
 | [`curl_multi_select()`](./builtins/network/curl_multi_select.md) | `(CurlMultiHandle $multi_handle, float $timeout = 1.0): int` | `int` | ✓ | ✓ |

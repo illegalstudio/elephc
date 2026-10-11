@@ -93,7 +93,7 @@ fn prepare_multisort_receivers(
     let detached_second = detached_multisort_receiver_owner(ctx, slot2, arr2)?;
     detached_multisort_receiver_owner(ctx, slot1, arr1)?;
     let result = abi::int_result_reg(ctx.emitter);
-    let first_address = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let first_address = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     ctx.materialize_local_storage_address(slot1, result)?;
     abi::emit_push_reg(ctx.emitter, result);
     ctx.materialize_local_storage_address(slot2, result)?;
@@ -202,7 +202,7 @@ fn prepare_boxed_multisort_receiver(
     // Consume that owner in payload COW before publishing the sortable slots.
     abi::emit_reg_move(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         abi::int_result_reg(ctx.emitter),
     );
     abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
@@ -234,9 +234,9 @@ fn emit_boxed_multisort_call(
     arr1: ValueId,
     arr2: ValueId,
 ) -> Result<()> {
-    ctx.load_value_to_reg(arr1, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    ctx.load_value_to_reg(arr1, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_sort_require_scalars");
-    ctx.load_value_to_reg(arr2, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    ctx.load_value_to_reg(arr2, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_sort_require_scalars");
     emit_array_multisort_call(ctx, arr1, arr2, "__rt_array_multisort_boxed")
 }
@@ -247,7 +247,7 @@ fn load_boxed_array_payload(
     array: ValueId,
     argument: usize,
 ) -> Result<()> {
-    let register = abi::int_arg_reg_name(ctx.emitter.target, argument);
+    let register = abi::runtime_helper_int_arg_reg(ctx.emitter, argument);
     ctx.load_value_to_reg(array, register)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -267,8 +267,8 @@ fn emit_array_multisort_call(
     arr2: ValueId,
     helper: &str,
 ) -> Result<()> {
-    ctx.load_value_to_reg(arr1, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
-    ctx.load_value_to_reg(arr2, abi::int_arg_reg_name(ctx.emitter.target, 1))?;
+    ctx.load_value_to_reg(arr1, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
+    ctx.load_value_to_reg(arr2, abi::runtime_helper_int_arg_reg(ctx.emitter, 1))?;
     abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }

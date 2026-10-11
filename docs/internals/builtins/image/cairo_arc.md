@@ -2,7 +2,7 @@
 title: "cairo_arc() - internals"
 description: "Compiler internals for cairo_arc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 399
+  order: 403
 ---
 
 ## `cairo_arc()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13534](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13534) (`cairo_arc`)
+- **Lowering**: [`src/image_prelude.rs`:13605](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13605) (`cairo_arc`)
 - **Function symbol**: `cairo_arc()`
 
 

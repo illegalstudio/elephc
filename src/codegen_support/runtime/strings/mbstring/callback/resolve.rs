@@ -19,7 +19,7 @@ pub(super) fn emit(emitter: &mut Emitter, eval: bool) {
         branch_zero(emitter, "__rt_mbstring_callback_resolve_native");
         load_arg(emitter, 0, 0);
         load_arg(emitter, 1, 8);
-        emitter.bl_c("__elephc_eval_is_callable");
+        emitter.emit_native_bridge_symbol_call("__elephc_eval_is_callable", 2);
         branch_zero(emitter, "__rt_mbstring_callback_resolve_invalid");
         load_result(emitter, 8);
         abi::emit_call_label(emitter, "__rt_mixed_clone");

@@ -2,7 +2,7 @@
 title: "xmlwriter_write_attribute() - internals"
 description: "Compiler internals for xmlwriter_write_attribute(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1057
+  order: 1073
 ---
 
 ## `xmlwriter_write_attribute()` - internals

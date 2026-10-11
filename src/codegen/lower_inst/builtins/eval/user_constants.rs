@@ -161,17 +161,18 @@ fn eval_native_user_constant_key(key: &ExprKind) -> Option<EvalNativeCallableArr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::platform::Target;
+    use crate::codegen::platform::{Platform, Target};
     use crate::codegen::shared_helper::helper_function;
     use crate::codegen::shared_state::SharedCodegenState;
     use crate::codegen::{data_section::DataSection, emit::Emitter, frame};
 
-    const SUPPORTED_TARGETS: [&str; 5] = [
+    const SUPPORTED_TARGETS: [&str; 6] = [
         "macos-aarch64",
         "ios-arm64",
         "ios-sim-arm64",
         "linux-aarch64",
         "linux-x86_64",
+        "windows-x86_64",
     ];
 
     /// Builds a module with one seeded user scalar, one seeded user array, and one Core name.
@@ -224,17 +225,6 @@ mod tests {
             register_eval_native_user_constants(&mut ctx, EVAL_CONTEXT_HANDLE_OFFSET);
         }
         emitter.output()
-    }
-
-    /// Returns the encoded array-spec byte length the array registration must pass as its length.
-    fn user_list_spec_len() -> usize {
-        let value = ExprKind::ArrayLiteral(vec![Expr::int_lit(1), Expr::int_lit(2)]);
-        match eval_native_user_constant_value(&value, &PhpType::Int) {
-            Some(EvalNativeUserConstantValue::Array(elements)) => {
-                encode_eval_native_array_default_elements(&elements).len()
-            }
-            _ => panic!("an indexed literal constant must encode as array metadata"),
-        }
     }
 
     /// Counts assembly lines that are exactly the given instruction, ignoring indentation.
@@ -291,34 +281,56 @@ mod tests {
     /// Registration arguments land in the integer argument registers each target's ABI defines.
     #[test]
     fn user_constant_registration_uses_each_target_argument_registers() {
-        let spec_len = user_list_spec_len();
         for name in SUPPORTED_TARGETS {
             let target = Target::parse(name).unwrap();
             let asm = user_constant_registration_asm(target);
-            // Both seeded names are nine bytes long, so the shared name-length argument is
-            // the same immediate for the scalar and the array registration.
-            let expected = match target.arch {
-                Arch::AArch64 => vec![
-                    "mov x2, #9".to_string(),
-                    "mov x3, #4".to_string(),
-                    "mov x5, #6".to_string(),
-                    format!("mov x4, #{spec_len}"),
-                ],
-                Arch::X86_64 => vec![
-                    "mov rdx, 9".to_string(),
-                    "mov rcx, 4".to_string(),
-                    "mov r9, 6".to_string(),
-                    format!("mov r8, {spec_len}"),
-                ],
+            // Both seeded names are nine bytes long. The native C-ABI planner stages that
+            // immediate in the result register, then reloads each target's argument registers
+            // from temporary slots before calling the bridge.
+            let (staged_name_len, register_load_prefixes): (&str, &[&str]) = match target.arch {
+                Arch::AArch64 => (
+                    "mov x0, #9",
+                    &[
+                        "ldr x0, [sp",
+                        "ldr x1, [sp",
+                        "ldr x2, [sp",
+                        "ldr x3, [sp",
+                        "ldr x4, [sp",
+                        "ldr x5, [sp",
+                    ],
+                ),
+                Arch::X86_64 if target.platform == Platform::Windows => (
+                    "mov rax, 9",
+                    &[
+                        "mov rcx, QWORD PTR [rsp",
+                        "mov rdx, QWORD PTR [rsp",
+                        "mov r8, QWORD PTR [rsp",
+                        "mov r9, QWORD PTR [rsp",
+                    ],
+                ),
+                Arch::X86_64 => (
+                    "mov rax, 9",
+                    &[
+                        "mov rdi, QWORD PTR [rsp",
+                        "mov rsi, QWORD PTR [rsp",
+                        "mov rdx, QWORD PTR [rsp",
+                        "mov rcx, QWORD PTR [rsp",
+                        "mov r8, QWORD PTR [rsp",
+                        "mov r9, QWORD PTR [rsp",
+                    ],
+                ),
             };
-            for instruction in &expected {
+            assert_eq!(
+                exact_instruction_count(&asm, staged_name_len),
+                2,
+                "{name}: user-constant name length must be staged for both registrations\n{asm}"
+            );
+            for prefix in register_load_prefixes {
                 assert!(
-                    exact_instruction_count(&asm, instruction) >= 1,
-                    "{name}: missing {instruction}\n{asm}"
+                    asm.lines().any(|line| line.trim().starts_with(prefix)),
+                    "{name}: native C ABI did not materialize an argument into {prefix}\n{asm}"
                 );
             }
-            // The name length is loaded once per registration call.
-            assert_eq!(exact_instruction_count(&asm, &expected[0]), 2, "{name}:\n{asm}");
         }
     }
 }

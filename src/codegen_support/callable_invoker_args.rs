@@ -75,8 +75,8 @@ pub(crate) fn emit_clone_indexed_array_for_invoker(
     elem_ty: &PhpType,
     emitter: &mut Emitter,
 ) {
-    let array_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
-    let tag_arg_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let array_arg_reg = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let tag_arg_reg = abi::runtime_helper_int_arg_reg(emitter, 1);
     let result_reg = abi::int_result_reg(emitter);
     if array_arg_reg != dest_reg {
         emitter.instruction(&format!("mov {}, {}", array_arg_reg, dest_reg));   // pass the callback-argument array to the clone helper without mutating caller storage
@@ -101,8 +101,8 @@ pub(crate) fn emit_clone_indexed_array_for_invoker_with_runtime_tag(
     dest_reg: &str,
     emitter: &mut Emitter,
 ) {
-    let array_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
-    let tag_arg_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let array_arg_reg = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let tag_arg_reg = abi::runtime_helper_int_arg_reg(emitter, 1);
     let result_reg = abi::int_result_reg(emitter);
     if array_arg_reg != dest_reg {
         emitter.instruction(&format!("mov {}, {}", array_arg_reg, dest_reg));   // pass the runtime-typed callback array to the clone helper without mutating caller storage
@@ -149,7 +149,7 @@ pub(crate) fn emit_clone_assoc_array_for_invoker_with_value_type(
     value_ty: &PhpType,
     emitter: &mut Emitter,
 ) {
-    let hash_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let hash_arg_reg = abi::runtime_helper_int_arg_reg(emitter, 0);
     let result_reg = abi::int_result_reg(emitter);
     if hash_arg_reg != dest_reg {
         emitter.instruction(&format!("mov {}, {}", hash_arg_reg, dest_reg));    // pass the callback-argument hash to the clone helper without mutating caller storage

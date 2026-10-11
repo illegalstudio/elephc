@@ -25,6 +25,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::platform::Platform;
 use crate::codegen_support::runtime::data::{
     SPRINTF_ARGCOUNT_MSG, SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG,
 };
@@ -578,7 +579,7 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 160]");                                // the mini C format string
     emitter.instruction("mov rcx, r10");                                        // the integer operand as the first variadic
     emitter.instruction("xor eax, eax");                                        // no SSE variadic registers are live
-    emitter.bl_c("snprintf");                                                   // render the integer body through libc
+    emitter.emit_call_c("snprintf");                                            // render the integer body through the target-aware C ABI
     emitter.instruction("jmp __rt_sprintf_snret_x64");                          // clamp and take the result
 }
 
@@ -685,7 +686,15 @@ fn emit_float_conversion(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 160]");                                // the mini C format string
     emitter.instruction("movq xmm0, r10");                                      // the double operand as the first SSE variadic
     emitter.instruction("mov eax, 1");                                          // one SSE variadic register is live
-    emitter.bl_c("snprintf");                                                   // render the float body through libc
+    if emitter.platform == Platform::Windows {
+        // The float conversion has exactly one variadic argument. The generic
+        // Windows snprintf shim is for the precision-shaped `%.*f` ABI, where
+        // the double is the fifth argument; this path needs the dedicated
+        // register/XMM duplication for positional argument four.
+        emitter.instruction("call __rt_sys_snprintf_double");                   // bridge the variadic double through the MS x64 ABI
+    } else {
+        emitter.emit_call_c("snprintf");
+    }
     emitter.instruction("jmp __rt_sprintf_snret_x64");                          // clamp and take the result
 }
 
@@ -916,4 +925,174 @@ fn emit_fatal(emitter: &mut Emitter, label: &str, symbol: &str, len: usize) {
     emitter.instruction("mov edi, 255");                                        // PHP exits with 255 on a fatal error
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // terminate the process
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Regression test for the sprintf snprintf-call Class-1 ABI bug (WF2/F2): on
+    /// windows-x86_64, `bl_c("snprintf")` reached the raw msvcrt import with
+    /// SysV-staged arguments (rdi/rsi/rdx/rcx/xmm0) instead of the MSx64 ABI that
+    /// msvcrt `snprintf` expects (rcx/rdx/r8/r9), corrupting every sprintf-formatted
+    /// value. `emit_call_c("snprintf")` routes the call through the
+    /// `__rt_sys_snprintf` shim instead, which performs the SysV->MSx64 conversion.
+    #[test]
+    fn test_emit_sprintf_windows_x86_64_routes_snprintf_through_shim() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("call __rt_sys_snprintf\n"));
+        assert!(!asm.contains("call snprintf\n"));
+    }
+
+    /// Companion non-Windows control: on Linux x86_64 (and every other non-Windows
+    /// target), `emit_call_c` is byte-identical to `bl_c`, so the format-specifier
+    /// dispatch paths must still emit a bare `call snprintf` unchanged.
+    #[test]
+    fn test_emit_sprintf_linux_x86_64_still_calls_bare_snprintf() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("call snprintf\n"));
+        assert!(!asm.contains("__rt_sys_snprintf"));
+    }
+
+    /// Regression test for WF10b BUG A ("windows garbage output"): the `__rt_sprintf`
+    /// float path (`%f`/`%e`/`%g`/`%E`/`%G`) has NO leading integer precision
+    /// argument — its `snprintf(buf, size, fmt, double)` call shape differs from
+    /// `__rt_ftoa`'s `snprintf(buf, size, "%.*e", precision, double)` shape, so it
+    /// must route through the dedicated `__rt_sys_snprintf_double` shim on
+    /// windows-x86_64, NOT the generic `__rt_sys_snprintf` shim (which would stage
+    /// the double at the wrong argument position and produce garbage).
+    #[test]
+    fn test_emit_sprintf_windows_x86_64_float_path_routes_through_snprintf_double_shim() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        let float_start = asm
+            .find("__rt_sprintf_t_flt_x64:\n")
+            .expect("float dispatch label missing");
+        let float_end = asm[float_start..]
+            .find("__rt_sprintf_snret_x64:\n")
+            .map(|offset| float_start + offset)
+            .expect("int dispatch label missing after float section");
+        let float_section = &asm[float_start..float_end];
+
+        assert!(
+            float_section.contains("call __rt_sys_snprintf_double\n"),
+            "the float path must call the dedicated double-arg4 shim"
+        );
+        assert!(
+            !float_section.contains("call __rt_sys_snprintf\n"),
+            "the float path must NOT reach the generic (precision-int-shaped) snprintf shim"
+        );
+    }
+
+    /// Companion non-Windows control: the float path's SysV variadic staging
+    /// (`mov eax, 1` then a bare `call snprintf`) must stay unchanged on Linux/macOS.
+    #[test]
+    fn test_emit_sprintf_linux_x86_64_float_path_still_calls_bare_snprintf() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        let float_start = asm
+            .find("__rt_sprintf_t_flt_x64:\n")
+            .expect("float dispatch label missing");
+        let float_end = asm[float_start..]
+            .find("__rt_sprintf_snret_x64:\n")
+            .map(|offset| float_start + offset)
+            .expect("int dispatch label missing after float section");
+        let float_section = &asm[float_start..float_end];
+
+        assert!(float_section.contains("mov eax, 1\n"));
+        assert!(float_section.contains("call snprintf\n"));
+        assert!(!float_section.contains("__rt_sys_snprintf_double"));
+    }
+
+    /// Verifies the `%E`/`%G` uppercase specifiers dispatch to the float path
+    /// alongside `%f`/`%e`/`%g` (a WF10b fix: they previously fell through to the
+    /// integer path, reinterpreting the double's raw bits as an integer and
+    /// producing garbage — e.g. `sprintf("%E", 1.0)` read the mantissa bit pattern
+    /// as an int64 instead of formatting the float).
+    #[test]
+    fn test_emit_sprintf_dispatches_uppercase_e_and_g_to_float_path() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("cmp r8b, 69\n"), "'E' (69) must be checked");
+        assert!(asm.contains("cmp r8b, 71\n"), "'G' (71) must be checked");
+    }
+
+    /// Verifies the `%e`/`%E` exponent-trim: PHP's minimum-digit exponent
+    /// (`1.0e+4`, not CRT's `1.0e+04`) is produced by stripping a lone padded
+    /// leading zero from a 2-digit CRT exponent, guarded against corrupting an
+    /// explicit field WIDTH (see the padding-detection instructions before the
+    /// shift loop).
+    #[test]
+    fn test_emit_sprintf_float_path_has_exponent_trim_with_padding_guard() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("__rt_sprintf_expfix_scan_x64:\n"));
+        assert!(asm.contains("__rt_sprintf_expfix_zloop_x64:\n"));
+    }
+
+    /// Verifies the integer call site widens the conversion to `ll`.
+    ///
+    /// php integers are 64-bit. Without the length modifier snprintf reads 32 bits
+    /// and `sprintf("%u", -1)` renders `4294967295` instead of php's
+    /// `18446744073709551615`. This ran green on every AArch64 host for as long as
+    /// the arm existed, so the check lives here, in a unit test over the emitted
+    /// text, rather than only in a fixture that needs an x86_64 runner to fail.
+    ///
+    /// `%c` must keep the C width: it has its own call site, and the assertion that
+    /// the modifier is absent there is what keeps this from being applied blindly to
+    /// every conversion.
+    #[test]
+    fn test_emit_sprintf_integer_path_widens_conversion_to_64_bit() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        let int_start = asm
+            .find("__rt_sprintf_t_int_x64:\n")
+            .expect("int dispatch label missing");
+        let int_end = asm[int_start..]
+            .find("__rt_sprintf_snret_x64:\n")
+            .map(|offset| int_start + offset)
+            .expect("char dispatch label missing after int section");
+        let int_section = &asm[int_start..int_end];
+
+        assert_eq!(
+            int_section.matches("mov BYTE PTR [r9], 108\n").count(),
+            2,
+            "the integer conversion must be widened with the 'll' length modifier"
+        );
+        assert!(
+            int_section.contains("mov BYTE PTR [r9], r8b\n"),
+            "the conversion character must be restored after the length modifier"
+        );
+
+        let char_start = asm
+            .find("__rt_sprintf_chr_go_x64:\n")
+            .expect("char dispatch label missing");
+        let char_end = asm[char_start..]
+            .find("__rt_sprintf_t_int_x64:\n")
+            .map(|offset| char_start + offset)
+            .expect("integer dispatch label missing after char section");
+        let char_section = &asm[char_start..char_end];
+        assert!(
+            !char_section.contains("mov BYTE PTR [r9], 108"),
+            "%c takes an int in C and must not be widened"
+        );
+    }
 }

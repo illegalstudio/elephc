@@ -67,7 +67,7 @@ pub(super) fn substitute(input: &[u8]) -> Option<u32> {
 }
 
 /// Applies Zend's three textual true values followed by C atoi's signed-int conversion.
-pub(super) fn boolean(input: &[u8]) -> bool {
+pub(in crate::state) fn boolean(input: &[u8]) -> bool {
     input.eq_ignore_ascii_case(b"true") || input.eq_ignore_ascii_case(b"yes") || input.eq_ignore_ascii_case(b"on")
         || signed_prefix(input, false).0 as i32 != 0
 }

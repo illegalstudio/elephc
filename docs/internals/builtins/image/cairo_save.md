@@ -2,7 +2,7 @@
 title: "cairo_save() - internals"
 description: "Compiler internals for cairo_save(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 432
+  order: 436
 ---
 
 ## `cairo_save()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13365](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13365) (`cairo_save`)
+- **Lowering**: [`src/image_prelude.rs`:13436](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13436) (`cairo_save`)
 - **Function symbol**: `cairo_save()`
 
 

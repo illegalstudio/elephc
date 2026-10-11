@@ -355,6 +355,19 @@ fn test_heap_debug_reports_exit_summary() {
     );
 }
 
+/// Verifies platform bootstrap allocations are released before heap-debug
+/// diagnostics, including the UTF-8 argv copy required by Windows executables.
+#[test]
+fn test_heap_debug_empty_program_releases_process_bootstrap_storage() {
+    let out = compile_and_run_with_heap_debug("<?php");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies heap debug mode preserves correct alloc size during associative string-key insertions.
 /// PHP fixture: creates a string-keyed array, accesses and echoes two keys — confirms no memory corruption
 /// or size bookkeeping errors occur during string-key insert and read.

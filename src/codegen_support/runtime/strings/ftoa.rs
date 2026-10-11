@@ -29,7 +29,7 @@
 //!   `__rt_json_ftoa` with an uppercase `E` marker, so this helper only owns the
 //!   `INF`/`-INF`/`NAN` spellings that `__rt_json_ftoa`'s caller normally handles.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::{Arch, Platform}};
 
 /// Converts a double-precision float to a PHP-compatible byte string at `precision = 14`.
 ///
@@ -86,7 +86,7 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x2", "_fmt_g");
     // -- Apple ARM64 variadic ABI: float arg goes on stack, not in SIMD reg --
     emitter.instruction("str d0, [sp]");                                        // push double onto stack for variadic call
-    emitter.bl_c("snprintf");                                                   // format the double at 14 significant digits
+    emitter.emit_call_c("snprintf");                                            // format through the target-aware C ABI
 
     // -- destination: the caller window, or _concat_buf at the current _concat_off --
     emitter.instruction("ldr x13, [sp, #56]");                                  // caller destination, or 0
@@ -215,7 +215,11 @@ fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 48");                                         // scratch buffer size limit
     abi::emit_symbol_address(emitter, "rdx", "_fmt_g");
     emitter.instruction("mov eax, 1");                                          // SysV variadic ABI: one SIMD register is live for the double argument
-    emitter.instruction("call snprintf");                                       // format the double at 14 significant digits
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("call __rt_sys_snprintf_double");                   // adapt the lone variadic double to MSx64 position four
+    } else {
+        emitter.instruction("call snprintf");                                   // format the double at 14 significant digits
+    }
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // caller destination, or 0
     emitter.instruction("test r10, r10");                                       // did __rt_ftoa_into supply a window?
@@ -330,6 +334,7 @@ pub fn emit_ftoa_repr(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ftoa_repr (serialize_precision=-1, var_dump layout) ---");
     emitter.label_global("__rt_ftoa_repr");
+    emitter.label_global("__rt_var_dump_ftoa");
 
     // -- classify the double through its raw bits: finite, infinite, or NaN --
     emitter.instruction("fmov x9, d0");                                         // raw IEEE-754 bit pattern of the value
@@ -386,6 +391,7 @@ fn emit_ftoa_repr_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ftoa_repr (serialize_precision=-1, var_dump layout) ---");
     emitter.label_global("__rt_ftoa_repr");
+    emitter.label_global("__rt_var_dump_ftoa");
 
     emitter.instruction("movq r9, xmm0");                                       // raw IEEE-754 bit pattern of the value
     emitter.instruction("movabs r10, 0x7fffffffffffffff");                      // mask that drops the sign bit
@@ -452,6 +458,19 @@ mod tests {
         assert!(asm.contains("sub rdx, rax\n"));
     }
 
+    /// Keeps PHP float formatting on the MS x64 single-double variadic boundary.
+    #[test]
+    fn test_emit_ftoa_windows_uses_single_double_variadic_shim() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_ftoa(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("call __rt_sys_snprintf_double\n"));
+        assert!(!asm.contains("call __rt_sys_snprintf\n"));
+        assert!(!asm.contains("call snprintf\n"));
+        assert!(asm.contains("mov eax, 1\n"));
+    }
+
     /// Verifies that both targets emit the `zend_gcvt` fixup path: the mandatory `.0`
     /// mantissa fraction (ASCII 46/48) and the exponent leading-zero strip loop.
     #[test]
@@ -479,6 +498,7 @@ mod tests {
             emit_ftoa_repr(&mut emitter);
             let asm = emitter.output();
             assert!(asm.contains("__rt_ftoa_repr:\n"), "missing entry point for {:?}", arch);
+            assert!(asm.contains("__rt_var_dump_ftoa:\n"), "missing var_dump entry point for {:?}", arch);
             assert!(asm.contains("__rt_json_ftoa"), "missing delegation for {:?}", arch);
             assert!(asm.contains("69"), "missing uppercase 'E' marker for {:?}", arch);
         }

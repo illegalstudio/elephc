@@ -18,8 +18,7 @@ use crate::ir::{Immediate, Instruction, Op, PhpTypePredicate, ValueDef, ValueId}
 use crate::names::{define_seen_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
 use crate::types::checker::builtins::{
-    is_php_visible_builtin_function_for_profile, is_php_visible_builtin_function_for_target,
-    supported_builtin_function_names_for_target,
+    is_php_visible_builtin_function_for_target, supported_builtin_function_names_for_target,
 };
 use crate::types::{ClassInfo, PhpType};
 

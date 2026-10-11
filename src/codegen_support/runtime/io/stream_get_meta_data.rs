@@ -12,7 +12,7 @@
 //! - `wrapper_type` is reported as `"plainfile"` and `uri` as the empty string:
 //!   elephc does not track per-resource open paths.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 use crate::codegen_support::abi;
 
 /// stream_get_meta_data: build the metadata hash for a stream descriptor.
@@ -186,7 +186,7 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
 
     // Frame (rbp-relative): [-8]=fd [-16]=hash [-24]=seekable [-32]=blocked
     //                       [-40]=eof [-48]=mode_ptr [-56]=mode_len
-    //                       [-64]=stype_ptr [-72]=stype_len
+    //                       [-64]=stype_ptr [-72]=stype_len [-80]=timed_out
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 80");                                         // reserve the metadata spill slots
@@ -247,12 +247,23 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
 
     // -- end-of-file flag from the _eof_flags table --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the stream descriptor
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("call __rt_win_stream_slot");                       // map opaque SOCKET/CRT descriptor to its bounded state slot
+        emitter.instruction("mov rdi, rax");                                    // fixed EOF table is indexed only by the compact slot
+    }
     abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // address of the EOF flag table
-    emitter.instruction("movzx r11, BYTE PTR [r10 + rdi]");                     // load _eof_flags[fd]
+    emitter.instruction("movzx r11, BYTE PTR [r10 + rdi]");                     // load _eof_flags[slot] without raw Windows-handle indexing
     emitter.instruction("test r11, r11");                                       // has end-of-file been observed?
     emitter.instruction("setne r11b");                                          // eof = 1 when the flag byte is set
     emitter.instruction("movzx r11, r11b");                                     // widen the eof flag to a full word
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the eof flag
+    if emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        abi::emit_symbol_address(emitter, "r10", "_win_stream_timed_out");    // timeout state table base
+        emitter.instruction("movzx r11, BYTE PTR [r10 + rdi]");                 // load the compact slot's retryable timeout flag
+        emitter.instruction("mov QWORD PTR [rbp - 80], r11");                   // preserve timed_out while constructing metadata
+    } else {
+        emitter.instruction("mov QWORD PTR [rbp - 80], 0");                     // non-Windows timeout tracking is not slot-backed
+    }
 
     // -- create the metadata hash (capacity 16, value type = mixed) --
     emitter.instruction("mov rdi, 16");                                         // initial capacity
@@ -260,7 +271,7 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_new");                                  // allocate the hash; rax = hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the hash pointer
 
-    emit_set_bool_const_x86(emitter, "_meta_key_timed_out", 9, 0);
+    emit_set_bool_slot_x86(emitter, "_meta_key_timed_out", 9, 80);
     emit_set_bool_slot_x86(emitter, "_meta_key_blocked", 7, 32);
     emit_set_bool_slot_x86(emitter, "_meta_key_eof", 3, 40);
     emit_set_int_const_x86(emitter, "_meta_key_unread_bytes", 12);
@@ -284,14 +295,6 @@ fn emit_hash_put_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // hash pointer (first argument)
     emitter.instruction("call __rt_hash_set");                                  // insert the entry; rax = updated hash
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // persist any post-grow hash pointer
-}
-
-/// Emits the set bool const x86 stream runtime helper.
-fn emit_set_bool_const_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64, value: i64) {
-    emitter.instruction(&format!("mov rcx, {}", value));                        // value_lo = boolean payload
-    emitter.instruction("xor r8d, r8d");                                        // value_hi unused for booleans
-    emitter.instruction("mov r9, 3");                                           // value tag = bool
-    emit_hash_put_x86(emitter, key_sym, key_len);
 }
 
 /// Emits the set bool slot x86 stream runtime helper.

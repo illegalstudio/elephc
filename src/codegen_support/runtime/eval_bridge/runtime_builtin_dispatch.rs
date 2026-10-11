@@ -14,6 +14,12 @@ use elephc_builtin_contract::{RuntimeBuiltinId, RuntimeBuiltinStatus};
 
 use super::*;
 
+/// Calls a generated callback body whose arguments already use the internal runtime ABI.
+fn call_generated_callback(emitter: &mut Emitter, symbol: &str) {
+    let internal = abi::c_callback_internal_symbol(emitter.target, symbol);
+    abi::emit_call_label(emitter, &internal);
+}
+
 /// Emits the AArch64 implementation of `__elephc_runtime_builtin_call_v1`.
 pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter, features: RuntimeFeatures) {
     label_c_global(emitter, "__elephc_runtime_builtin_call_v1");
@@ -211,7 +217,7 @@ fn emit_aarch64_unary_case(emitter: &mut Emitter, _id: RuntimeBuiltinId, label: 
     emitter.instruction("cmp x21, #1");                                         // require one boxed argument
     emitter.instruction("b.ne __elephc_runtime_builtin_v1_unsupported");        // preserve fallback for unsupported arity
     emitter.instruction("ldr x0, [x20]");                                       // load the borrowed boxed argument
-    emitter.bl_c(symbol);
+    call_generated_callback(emitter, symbol);
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // validate and transfer the boxed result
 }
 
@@ -221,7 +227,7 @@ fn emit_aarch64_binary_case(emitter: &mut Emitter, _id: RuntimeBuiltinId, label:
     emitter.instruction("cmp x21, #2");                                         // require two boxed arguments
     emitter.instruction("b.ne __elephc_runtime_builtin_v1_unsupported");        // preserve fallback for unsupported arity
     emitter.instruction("ldp x0, x1, [x20]");                                   // load borrowed boxed arguments in PHP order
-    emitter.bl_c(symbol);
+    call_generated_callback(emitter, symbol);
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // validate and transfer the boxed result
 }
 
@@ -231,7 +237,7 @@ fn emit_aarch64_is_array_case(emitter: &mut Emitter) {
     emitter.instruction("cmp x21, #1");                                         // require one boxed argument
     emitter.instruction("b.ne __elephc_runtime_builtin_v1_unsupported");        // reject unsupported arity
     emitter.instruction("ldr x0, [x20]");                                       // load the borrowed boxed value
-    emitter.bl_c("__elephc_eval_value_type_tag");
+    call_generated_callback(emitter, "__elephc_eval_value_type_tag");
     emitter.instruction("cmp x0, #4");                                          // tag 4 is an indexed PHP array
     emitter.instruction("b.eq __elephc_runtime_builtin_v1_is_array_true");      // accept indexed arrays
     emitter.instruction("cmp x0, #5");                                          // tag 5 is an associative PHP array
@@ -240,7 +246,7 @@ fn emit_aarch64_is_array_case(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_is_array_true");
     emitter.instruction("mov x0, #1");                                          // report true for indexed arrays
     emitter.label("__elephc_runtime_builtin_v1_is_array_box");
-    emitter.bl_c("__elephc_eval_value_bool");
+    call_generated_callback(emitter, "__elephc_eval_value_bool");
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed boolean result
 }
 
@@ -250,8 +256,8 @@ fn emit_aarch64_bool_predicate_case(emitter: &mut Emitter, _id: RuntimeBuiltinId
     emitter.instruction("cmp x21, #1");                                         // require one boxed argument
     emitter.instruction("b.ne __elephc_runtime_builtin_v1_unsupported");        // reject unsupported arity
     emitter.instruction("ldr x0, [x20]");                                       // load the borrowed boxed value
-    emitter.bl_c(symbol);
-    emitter.bl_c("__elephc_eval_value_bool");
+    call_generated_callback(emitter, symbol);
+    call_generated_callback(emitter, "__elephc_eval_value_bool");
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed boolean result
 }
 
@@ -270,7 +276,7 @@ fn emit_aarch64_round_case(emitter: &mut Emitter) {
     emitter.instruction("mov x1, xzr");                                         // no precision pointer is present
     emitter.instruction("mov x2, xzr");                                         // mark the optional precision absent
     emitter.label("__elephc_runtime_builtin_v1_round_call");
-    emitter.bl_c("__elephc_eval_value_round");
+    call_generated_callback(emitter, "__elephc_eval_value_round");
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed numeric result
 }
 
@@ -278,8 +284,8 @@ fn emit_aarch64_round_case(emitter: &mut Emitter) {
 fn emit_aarch64_zero_arg_boxed_int_case(emitter: &mut Emitter, _id: RuntimeBuiltinId, label: &str, symbol: &str) {
     emitter.label(&format!("__elephc_runtime_builtin_v1_{label}"));
     emitter.instruction("cbnz x21, __elephc_runtime_builtin_v1_unsupported");   // require zero PHP arguments
-    emitter.bl_c(symbol);
-    emitter.bl_c("__elephc_eval_value_int");
+    call_generated_callback(emitter, symbol);
+    call_generated_callback(emitter, "__elephc_eval_value_int");
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed integer result
 }
 
@@ -287,13 +293,13 @@ fn emit_aarch64_zero_arg_boxed_int_case(emitter: &mut Emitter, _id: RuntimeBuilt
 fn emit_aarch64_ob_length_case(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_ob_get_length");
     emitter.instruction("cbnz x21, __elephc_runtime_builtin_v1_unsupported");   // require zero PHP arguments
-    emitter.bl_c("__elephc_eval_ob_length");
+    call_generated_callback(emitter, "__elephc_eval_ob_length");
     emitter.instruction("tbnz x0, #63, __elephc_runtime_builtin_v1_ob_length_false"); // negative sentinel means no active buffer
-    emitter.bl_c("__elephc_eval_value_int");
+    call_generated_callback(emitter, "__elephc_eval_value_int");
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed length
     emitter.label("__elephc_runtime_builtin_v1_ob_length_false");
     emitter.instruction("mov x0, #0");                                          // materialize raw false for the boolean boxer
-    emitter.bl_c("__elephc_eval_value_bool");
+    call_generated_callback(emitter, "__elephc_eval_value_bool");
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer boxed PHP false
 }
 
@@ -314,7 +320,7 @@ fn emit_x86_64_unary_case(emitter: &mut Emitter, _id: RuntimeBuiltinId, label: &
     emitter.instruction("cmp r13, 1");                                          // require one boxed argument
     emitter.instruction("jne __elephc_runtime_builtin_v1_unsupported_x86");     // preserve fallback for unsupported arity
     emitter.instruction("mov rdi, QWORD PTR [r12]");                            // load the borrowed boxed argument
-    emitter.bl_c(symbol);
+    call_generated_callback(emitter, symbol);
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // validate and transfer the boxed result
 }
 
@@ -325,7 +331,7 @@ fn emit_x86_64_binary_case(emitter: &mut Emitter, _id: RuntimeBuiltinId, label: 
     emitter.instruction("jne __elephc_runtime_builtin_v1_unsupported_x86");     // preserve fallback for unsupported arity
     emitter.instruction("mov rdi, QWORD PTR [r12]");                            // load the first borrowed boxed argument
     emitter.instruction("mov rsi, QWORD PTR [r12 + 8]");                        // load the second borrowed boxed argument
-    emitter.bl_c(symbol);
+    call_generated_callback(emitter, symbol);
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // validate and transfer the boxed result
 }
 
@@ -335,7 +341,7 @@ fn emit_x86_64_is_array_case(emitter: &mut Emitter) {
     emitter.instruction("cmp r13, 1");                                          // require one boxed argument
     emitter.instruction("jne __elephc_runtime_builtin_v1_unsupported_x86");     // reject unsupported arity
     emitter.instruction("mov rdi, QWORD PTR [r12]");                            // load the borrowed boxed value
-    emitter.bl_c("__elephc_eval_value_type_tag");
+    call_generated_callback(emitter, "__elephc_eval_value_type_tag");
     emitter.instruction("cmp rax, 4");                                          // tag 4 is an indexed PHP array
     emitter.instruction("je __elephc_runtime_builtin_v1_is_array_true_x86");    // accept indexed arrays
     emitter.instruction("cmp rax, 5");                                          // tag 5 is an associative PHP array
@@ -345,7 +351,7 @@ fn emit_x86_64_is_array_case(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_is_array_true_x86");
     emitter.instruction("mov edi, 1");                                          // report true for indexed arrays
     emitter.label("__elephc_runtime_builtin_v1_is_array_box_x86");
-    emitter.bl_c("__elephc_eval_value_bool");
+    call_generated_callback(emitter, "__elephc_eval_value_bool");
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed boolean result
 }
 
@@ -355,9 +361,9 @@ fn emit_x86_64_bool_predicate_case(emitter: &mut Emitter, _id: RuntimeBuiltinId,
     emitter.instruction("cmp r13, 1");                                          // require one boxed argument
     emitter.instruction("jne __elephc_runtime_builtin_v1_unsupported_x86");     // reject unsupported arity
     emitter.instruction("mov rdi, QWORD PTR [r12]");                            // load the borrowed boxed value
-    emitter.bl_c(symbol);
+    call_generated_callback(emitter, symbol);
     emitter.instruction("mov rdi, rax");                                        // pass the raw predicate to the bool boxer
-    emitter.bl_c("__elephc_eval_value_bool");
+    call_generated_callback(emitter, "__elephc_eval_value_bool");
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed boolean result
 }
 
@@ -377,7 +383,7 @@ fn emit_x86_64_round_case(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // no precision pointer is present
     emitter.instruction("xor edx, edx");                                        // mark the optional precision absent
     emitter.label("__elephc_runtime_builtin_v1_round_call_x86");
-    emitter.bl_c("__elephc_eval_value_round");
+    call_generated_callback(emitter, "__elephc_eval_value_round");
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed numeric result
 }
 
@@ -386,9 +392,9 @@ fn emit_x86_64_zero_arg_boxed_int_case(emitter: &mut Emitter, _id: RuntimeBuilti
     emitter.label(&format!("__elephc_runtime_builtin_v1_{label}_x86"));
     emitter.instruction("test r13, r13");                                       // require zero PHP arguments
     emitter.instruction("jnz __elephc_runtime_builtin_v1_unsupported_x86");     // reject unsupported arity
-    emitter.bl_c(symbol);
+    call_generated_callback(emitter, symbol);
     emitter.instruction("mov rdi, rax");                                        // pass the raw integer to the boxer
-    emitter.bl_c("__elephc_eval_value_int");
+    call_generated_callback(emitter, "__elephc_eval_value_int");
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed integer result
 }
 
@@ -397,15 +403,15 @@ fn emit_x86_64_ob_length_case(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_ob_get_length_x86");
     emitter.instruction("test r13, r13");                                       // require zero PHP arguments
     emitter.instruction("jnz __elephc_runtime_builtin_v1_unsupported_x86");     // reject unsupported arity
-    emitter.bl_c("__elephc_eval_ob_length");
+    call_generated_callback(emitter, "__elephc_eval_ob_length");
     emitter.instruction("test rax, rax");                                       // negative sentinel means no active buffer
     emitter.instruction("js __elephc_runtime_builtin_v1_ob_length_false_x86");  // select boxed PHP false
     emitter.instruction("mov rdi, rax");                                        // pass the byte length to the integer boxer
-    emitter.bl_c("__elephc_eval_value_int");
+    call_generated_callback(emitter, "__elephc_eval_value_int");
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed length
     emitter.label("__elephc_runtime_builtin_v1_ob_length_false_x86");
     emitter.instruction("xor edi, edi");                                        // materialize raw false for the boolean boxer
-    emitter.bl_c("__elephc_eval_value_bool");
+    call_generated_callback(emitter, "__elephc_eval_value_bool");
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer boxed PHP false
 }
 
@@ -419,6 +425,56 @@ fn emit_x86_64_zero_arg_boxed_bool_case(
     emitter.instruction("test r13, r13");                                       // validate the shared PHP arity
     emitter.instruction("jnz __elephc_runtime_builtin_v1_unsupported_x86");     // reject extra arguments before native output
     super::output::emit_boxed_builtin(emitter, id);
+}
+
+#[cfg(test)]
+mod internal_callback_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Nested builtin dispatch calls bypass public C adapters on every supported target.
+    #[test]
+    fn runtime_builtin_dispatch_calls_generated_internal_entries() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+            "windows-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            super::super::emit_eval_bridge_runtime(&mut emitter, RuntimeFeatures::all());
+            let assembly = emitter.output();
+            for symbol in [
+                "__elephc_eval_value_cast_bool",
+                "__elephc_eval_value_type_tag",
+                "__elephc_eval_value_round",
+                "__elephc_eval_value_int",
+                "__elephc_eval_ob_length",
+            ] {
+                let public = target.extern_symbol(symbol);
+                let internal = abi::c_callback_internal_symbol(target, symbol);
+                assert!(assembly.contains(&format!("{public}:\n")), "{name}: missing {public}");
+                assert!(assembly.contains(&format!("{internal}:\n")), "{name}: missing {internal}");
+                let call = match target.arch {
+                    Arch::AArch64 => format!("bl {internal}"),
+                    Arch::X86_64 => format!("call {internal}"),
+                };
+                assert!(assembly.contains(&call), "{name}: missing {call}");
+                if name == "windows-x86_64" {
+                    let nested_public = format!("call {public}");
+                    assert!(
+                        !assembly.lines().any(|line| {
+                            line.split("//").next().unwrap_or("").trim() == nested_public
+                        }),
+                        "{name}: nested through {public}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

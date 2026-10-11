@@ -1,17 +1,17 @@
 ---
 title: "preg_match_all()"
-description: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes return 0 and clear a supplied capture destination on both backends."
+description: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. With a valid pattern, invalid low-byte order flags raise `ValueError` after clearing a supplied capture destination on both backends. Unknown high flag bits are ignored, matching PHP. In set order, trailing unmatched groups are omitted unless `PREG_UNMATCHED_AS_NULL` is enabled. PHP's fifth offset argument and complete invalid-pattern/false-result behavior remain unsupported."
 sidebar:
-  order: 762
+  order: 776
 ---
 
 ## preg_match_all()
 
 ```php
-function preg_match_all(string $pattern, string $subject, mixed $matches = [], int $flags = 0): int
+function preg_match_all(string $pattern, string $subject, mixed &$matches = [], int $flags = 0): int
 ```
 
-Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes return 0 and clear a supplied capture destination on both backends.
+Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. With a valid pattern, invalid low-byte order flags raise `ValueError` after clearing a supplied capture destination on both backends. Unknown high flag bits are ignored, matching PHP. In set order, trailing unmatched groups are omitted unless `PREG_UNMATCHED_AS_NULL` is enabled. PHP's fifth offset argument and complete invalid-pattern/false-result behavior remain unsupported.
 
 **Parameters**:
 - `$pattern` (`string`)

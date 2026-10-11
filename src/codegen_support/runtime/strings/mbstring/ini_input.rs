@@ -25,7 +25,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("cmp x10, #1");                                     // only concrete strings have INI string identity
         emitter.instruction("b.ne __rt_mbstring_ini_input_done");               // retain successful scalar and object descriptions unchanged
         emitter.instruction("ldp x0, x1, [x9, #16]");                           // pass the retained native byte range to lazy identity resolution
-        emitter.bl_c("elephc_mbstring_native_string_resolve_v1");
+        emitter.emit_native_bridge_symbol_call("elephc_mbstring_native_string_resolve_v1", 2);
         emitter.instruction("cbz x0, __rt_mbstring_ini_input_failed");          // reject a missing retained origin without inventing an identity
         emitter.instruction("ldr x9, [sp, #16]");                               // restore output storage after the Rust registry callback
         emitter.instruction("str x0, [x9, #8]");                                // borrow the token owned by the retained native argument
@@ -50,7 +50,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("jne __rt_mbstring_ini_input_done");                // keep ordinary scalar and object metadata unchanged
         emitter.instruction("mov rdi, QWORD PTR [r10 + 16]");                   // pass the retained native string pointer to lazy resolution
         emitter.instruction("mov rsi, QWORD PTR [r10 + 24]");                   // resolve only its complete logical byte range
-        emitter.bl_c("elephc_mbstring_native_string_resolve_v1");
+        emitter.emit_native_bridge_symbol_call("elephc_mbstring_native_string_resolve_v1", 2);
         emitter.instruction("test rax, rax");                                   // require a live identity from the retained native origin
         emitter.instruction("jz __rt_mbstring_ini_input_failed");               // reject missing ownership without manufacturing a string identity
         emitter.instruction("mov r10, QWORD PTR [rsp]");                        // recover writable metadata after the registry callback

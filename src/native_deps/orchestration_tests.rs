@@ -149,7 +149,7 @@ fn fixture_version(cache: &CacheLayout) -> &'static PackageVersion {
 fn fixture_toolchain() -> NativeToolchain {
     use super::super::receipt::ToolIdentity;
     NativeToolchain {
-        cc: "cc".into(), ar: "ar".into(), ranlib: "ranlib".into(), target_tuple: "fixture-tuple".into(), abi: "fixture-abi".into(), fingerprint: "fixture-fingerprint".into(),
+        cc: "cc".into(), ar: "ar".into(), ranlib: "ranlib".into(), mingw_sysroot: None, target_tuple: "fixture-tuple".into(), abi: "fixture-abi".into(), fingerprint: "fixture-fingerprint".into(),
         compiler: ToolIdentity { command: "cc".into(), version: "fixture".into() }, archiver: ToolIdentity { command: "ar".into(), version: "fixture".into() }, ranlib_identity: ToolIdentity { command: "ranlib".into(), version: "fixture".into() },
     }
 }

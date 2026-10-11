@@ -292,7 +292,8 @@ pub(crate) fn token_as_import_name(token: &Token, metadata: &crate::lexer::Token
         | Token::Stderr
         | Token::PhpEol
         | Token::PhpOs
-        | Token::DirectorySeparator => token.word_spelling(metadata).map(str::to_string),
+        | Token::DirectorySeparator
+        | Token::PathSeparator => token.word_spelling(metadata).map(str::to_string),
         _ => None,
     }
 }

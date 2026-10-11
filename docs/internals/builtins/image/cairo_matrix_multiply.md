@@ -2,7 +2,7 @@
 title: "cairo_matrix_multiply() - internals"
 description: "Compiler internals for cairo_matrix_multiply(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 417
+  order: 421
 ---
 
 ## `cairo_matrix_multiply()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13873](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13873) (`cairo_matrix_multiply`)
+- **Lowering**: [`src/image_prelude.rs`:13944](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13944) (`cairo_matrix_multiply`)
 - **Function symbol**: `cairo_matrix_multiply()`
 
 

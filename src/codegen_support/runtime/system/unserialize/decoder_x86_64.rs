@@ -549,7 +549,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // does the class define __wakeup?
     emitter.instruction("jz __rt_unser_at_obj_box");                            // no → box the object directly
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this receiver
-    emitter.instruction("call r10");                                            // call __wakeup($this)
+    emitter.emit_platform_callback_call("r10", 1);                                // call generated __wakeup with the target ABI
     emitter.label("__rt_unser_at_obj_box");
     emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // return the stable box published before body parsing
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload position (at the closing '}')

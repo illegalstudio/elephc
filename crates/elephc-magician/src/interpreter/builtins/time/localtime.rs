@@ -57,26 +57,26 @@ pub(in crate::interpreter) fn eval_localtime_result(
         .unwrap_or(false);
     let tm = eval_context_localtime(timestamp, context)?;
     let fields = [
-        tm.tm_sec,
-        tm.tm_min,
-        tm.tm_hour,
-        tm.tm_mday,
-        tm.tm_mon,
+        i64::from(tm.tm_sec),
+        i64::from(tm.tm_min),
+        i64::from(tm.tm_hour),
+        i64::from(tm.tm_mday),
+        i64::from(tm.tm_mon),
         tm.tm_year,
-        tm.tm_wday,
-        tm.tm_yday,
-        tm.tm_isdst,
+        i64::from(tm.tm_wday),
+        i64::from(tm.tm_yday),
+        i64::from(tm.tm_isdst),
     ];
     if associative {
         let mut result = values.assoc_new(fields.len())?;
         for (key, value) in EVAL_LOCALTIME_KEYS.iter().zip(fields) {
-            result = eval_array_set_string_int(result, key, i64::from(value), values)?;
+            result = eval_array_set_string_int(result, key, value, values)?;
         }
         return Ok(result);
     }
     let mut result = values.array_new(fields.len())?;
     for (index, value) in fields.into_iter().enumerate() {
-        result = eval_array_set_int_int(result, index as i64, i64::from(value), values)?;
+        result = eval_array_set_int_int(result, index as i64, value, values)?;
     }
     Ok(result)
 }

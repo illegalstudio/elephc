@@ -64,6 +64,7 @@ fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_h
                 "next",
                 "pfsockopen",
                 "prev",
+                "proc_open",
                 "reset",
                 "rsort",
                 "settype",
@@ -85,6 +86,14 @@ fn runtime_builtin_bindings_keep_only_intval_and_round_adapters() {
     for runtime_id in elephc_builtin_contract::RuntimeBuiltinId::ALL {
         let contract = elephc_builtin_contract::lookup_id(runtime_id.builtin_id())
             .expect("runtime builtin contract must exist");
+        if !builtin_contract_is_available_on_build_target(contract) {
+            assert!(
+                eval_raw_declared_builtin_spec(contract.name).is_none(),
+                "{} must remain absent on this PHP target",
+                contract.name,
+            );
+            continue;
+        }
         if !matches!(elephc_builtin_contract::eval_support(contract),
             elephc_builtin_contract::BackendSupport::Implemented(_)) {
             assert!(eval_raw_declared_builtin_spec(contract.name).is_none(),

@@ -12,27 +12,18 @@
 use super::*;
 use crate::encoding::EncodingList;
 use crate::variables::{LiveFailure, VariablePlan, hash_child, host::{HostAdapter, HostError}};
-use elephc_builtin_contract::mbstring_abi::variables::{MbInvokeHostV6, MbVariableHandleV1};
-
-unsafe extern "C" {
-    /// Creates an owned native copy of the supplied boxed variable value.
-    fn elephc_mbstring_variable_clone_v1(value: *const u8) -> *mut u8;
-    /// Allocates a native boxed value from its runtime tag and payload words.
-    fn elephc_mbstring_variable_box_v1(tag: u64, low: u64, high: u64) -> *mut u8;
-    /// Allocates native reference storage for the requested payload tag.
-    fn elephc_mbstring_variable_reference_new_v1(tag: u64) -> *mut u8;
-    /// Releases one owner of the supplied native boxed or reference value.
-    fn elephc_mbstring_variable_release_v1(value: *mut u8);
-}
+use elephc_builtin_contract::mbstring_abi::variables::{
+    MbInvokeHostV7, MbVariableHandleV1, MbVariableReleaseV1, MbVariableRuntimeV1,
+};
 
 /// Owns temporary by-value callable roots until conversion and all host callbacks finish.
-struct TemporaryRoots(Vec<*mut u8>);
+struct TemporaryRoots { roots: Vec<*mut u8>, release: MbVariableReleaseV1 }
 
 impl Drop for TemporaryRoots {
     /// Releases temporary native variable roots after conversion and host callbacks finish.
     fn drop(&mut self) {
-        for reference in self.0.drain(..) {
-            unsafe { elephc_mbstring_variable_release_v1(reference); }
+        for reference in self.roots.drain(..) {
+            unsafe { (self.release)(reference); }
         }
     }
 }
@@ -40,7 +31,7 @@ impl Drop for TemporaryRoots {
 /// Expands the AOT variadic reference container while leaving eval's flat arguments untouched.
 ///
 /// # Safety
-/// The V6 host and all argument pointers must refer to live invocation storage. In packed mode,
+/// The V7 host and all argument pointers must refer to live invocation storage. In packed mode,
 /// the fourth input is the compiler-owned indexed or associative variadic container.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
@@ -49,10 +40,10 @@ pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
 ) -> i32 {
     if out.is_null() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
     unsafe { out.write(MbResultV1::default()); }
-    let Some(table) = (unsafe { (host as *const MbInvokeHostV6).as_ref() }) else {
+    let Some(base) = (unsafe { host.as_ref() }) else {
         return RuntimeBuiltinStatus::RuntimeFatal as i32;
     };
-    let context = table.base.base.base.base.base.context as *const u64;
+    let context = base.context as *const u64;
     if context.is_null() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
     let packed = unsafe { context.add(1).read_unaligned() };
     if packed == 0 {
@@ -61,6 +52,16 @@ pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
     if packed != 1 || count != 4 || args.is_null() {
         return RuntimeBuiltinStatus::RuntimeFatal as i32;
     }
+    if base.version != 7 || base.size as usize != std::mem::size_of::<MbInvokeHostV7>() {
+        return RuntimeBuiltinStatus::RuntimeFatal as i32;
+    }
+    let table = unsafe { &*(host.cast::<MbInvokeHostV7>()) };
+    let runtime: &MbVariableRuntimeV1 = &table.runtime;
+    if !runtime.complete() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
+    let clone_value = runtime.clone_value.expect("validated variable runtime clone callback");
+    let box_value = runtime.box_value.expect("validated variable runtime box callback");
+    let reference_new = runtime.reference_new.expect("validated variable runtime reference callback");
+    let release = runtime.release.expect("validated variable runtime release callback");
     let supplied = unsafe { std::slice::from_raw_parts(args, 4) };
     let tail = supplied[3].cast::<u8>();
     if tail.is_null() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
@@ -78,8 +79,8 @@ pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
     if expanded.try_reserve_exact(length.saturating_add(3)).is_err() {
         return RuntimeBuiltinStatus::RuntimeFatal as i32;
     }
-    let mut temporary = TemporaryRoots(Vec::new());
-    if temporary.0.try_reserve_exact(length).is_err() {
+    let mut temporary = TemporaryRoots { roots: Vec::new(), release };
+    if temporary.roots.try_reserve_exact(length).is_err() {
         return RuntimeBuiltinStatus::RuntimeFatal as i32;
     }
     expanded.extend_from_slice(&supplied[..3]);
@@ -121,18 +122,18 @@ pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
             }
         }
         let value = if kind == 2 || tag == 7 {
-            unsafe { elephc_mbstring_variable_clone_v1((if kind == 2 { marker } else { low as usize as *const u64 }).cast()) }
+            unsafe { clone_value((if kind == 2 { marker } else { low as usize as *const u64 }).cast()) }
         } else {
-            unsafe { elephc_mbstring_variable_box_v1(tag, low, high) }
+            unsafe { box_value(tag, low, high) }
         };
         if value.is_null() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
-        let reference = unsafe { elephc_mbstring_variable_reference_new_v1(7) };
+        let reference = unsafe { reference_new(7) };
         if reference.is_null() {
-            unsafe { elephc_mbstring_variable_release_v1(value); }
+            unsafe { release(value); }
             return RuntimeBuiltinStatus::RuntimeFatal as i32;
         }
         unsafe { reference.cast::<u64>().write_unaligned(value as usize as u64); }
-        temporary.0.push(reference);
+        temporary.roots.push(reference);
         expanded.push(reference.cast());
     }
     unsafe { elephc_mbstring_invoke_v1(op, expanded.as_ptr(), expanded.len() as u64, strict, host, out) }

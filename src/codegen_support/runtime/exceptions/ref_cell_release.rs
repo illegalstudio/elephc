@@ -25,7 +25,7 @@ pub fn emit_local_ref_cell_release(emitter: &mut Emitter) {
     emitter.label_global("__rt_local_ref_cell_release");
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [ENTRY, CELL, DEFER].into_iter().enumerate() {
-        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+        abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, index), offset);
     }
     abi::emit_store_zero_to_local_slot(emitter, THROWN);
     abi::load_at_offset(emitter, result, CELL);
@@ -60,15 +60,15 @@ pub fn emit_local_ref_cell_release(emitter: &mut Emitter) {
     }
     abi::load_at_offset(emitter, result, ENTRY);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_local_ref_cell_release_free");
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), ENTRY);
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), ENTRY);
     abi::load_at_offset(emitter, scratch, CELL);
-    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(emitter.target, 1), scratch, 0);
+    abi::emit_load_from_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), scratch, 0);
     abi::emit_jump(emitter, "__rt_local_ref_cell_release_invoke");
     emitter.label("__rt_local_ref_cell_release_managed");
-    abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), "__rt_reference_cell_value_release");
-    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), CELL);
+    abi::emit_symbol_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), "__rt_reference_cell_value_release");
+    abi::load_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), CELL);
     emitter.label("__rt_local_ref_cell_release_invoke");
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 2), THROWN);
+    abi::emit_frame_slot_address(emitter, abi::runtime_helper_int_arg_reg(emitter, 2), THROWN);
     abi::emit_call_label(emitter, "__rt_cleanup_invoke");
     emitter.label("__rt_local_ref_cell_release_free");
     abi::load_at_offset(emitter, result, CELL);

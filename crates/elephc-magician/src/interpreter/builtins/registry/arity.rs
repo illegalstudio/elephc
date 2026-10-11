@@ -143,7 +143,6 @@ pub(super) const PHP_ARITY_OVERRIDES: &[(&str, EvalBuiltinArity)] = &[
     ("scandir", EvalBuiltinArity::ranged(1, Some(3))),
     ("sort", EvalBuiltinArity::ranged(1, Some(2))),
     ("stream_socket_client", EvalBuiltinArity::ranged(1, Some(6))),
-    ("stream_socket_server", EvalBuiltinArity::ranged(1, Some(5))),
     ("strtr", EvalBuiltinArity::exact(2, 3)),
     ("system", EvalBuiltinArity::ranged(1, Some(2))),
     ("unlink", EvalBuiltinArity::ranged(1, Some(2))),

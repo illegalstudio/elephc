@@ -264,7 +264,7 @@ fn keys_are_sorted_ascending() {
     let bin = compile(&dir, src, "app");
     let (out, _) = run_binary(&bin);
     assert_eq!(
-        out, "SORTED\narg_separator.input\nopcache.validate_timestamps\n",
+        out, "SORTED\nSMTP\nsmtp_port\n",
         "ini_get_all keys must be sorted ascending"
     );
 }

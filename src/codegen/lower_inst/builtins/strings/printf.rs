@@ -249,12 +249,12 @@ pub(super) fn emit_vsprintf_runtime_call(
     Ok(())
 }
 
-/// Loads the current function's persistent eval context, or zero when no eval state exists.
+/// Loads the optional eval context using the shared runtime-helper ABI, not the platform C ABI.
 pub(in crate::codegen::lower_inst::builtins) fn load_optional_sprintf_eval_context(
     ctx: &mut FunctionContext<'_>,
     arg_index: usize,
 ) -> Result<()> {
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, arg_index);
     let slot = ctx
         .function
         .locals

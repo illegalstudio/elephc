@@ -74,7 +74,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("cmn x0, #1");                                          // compare x0 with -1 (cmn adds 1, checks if zero)
     emitter.instruction("b.ne __rt_date_have_time");                            // skip if timestamp provided (not -1)
     emitter.instruction("mov x0, #0");                                          // NULL argument
-    emitter.bl_c("time");                                            // time(NULL) → x0=current timestamp
+    emitter.emit_call_c("time");                                            // time(NULL) → x0=current timestamp
     emitter.instruction("str x0, [sp, #0]");                                    // save current timestamp
 
     // -- decompose timestamp via localtime (local) or gmtime (UTC) --
@@ -84,10 +84,10 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #56]");                                   // reload the UTC-vs-local decomposition flag
     emitter.instruction("cmp x4, #0");                                          // check whether UTC decomposition was requested
     emitter.instruction("b.ne __rt_date_use_gmtime");                           // nonzero flag → decompose as UTC
-    emitter.bl_c("localtime");                                       // localtime(&timestamp) → x0=struct tm (local)
+    emitter.emit_call_c("localtime");                                       // localtime(&timestamp) → x0=struct tm (local)
     emitter.instruction("b __rt_date_decomposed");                              // skip the UTC decomposition path
     emitter.label("__rt_date_use_gmtime");
-    emitter.bl_c("gmtime");                                          // gmtime(&timestamp) → x0=struct tm (UTC)
+    emitter.emit_call_c("gmtime");                                          // gmtime(&timestamp) → x0=struct tm (UTC)
     emitter.label("__rt_date_decomposed");
     emitter.instruction("str x0, [sp, #24]");                                   // save tm pointer
 

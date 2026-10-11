@@ -88,8 +88,8 @@ fn emit_finish_data(emitter: &mut Emitter) {
     emitter.blank();
     emitter.label_global("__rt_unserialize_finish_data");
     abi::emit_frame_prologue(emitter, 64);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
+    abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), 8);
+    abi::store_at_offset(emitter, abi::runtime_helper_int_arg_reg(emitter, 1), 16);
     abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
     abi::store_at_offset(emitter, result, 24);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);

@@ -18,7 +18,7 @@ pub(super) fn aarch64(emitter: &mut Emitter, eval_bridge: bool) {
     if eval_bridge {
         emitter.instruction("ldr x0, [sp]");                                    // pass the optional active caller context to object ownership lookup
         emitter.instruction("ldr x1, [sp, #8]");                                // identify the original boxed receiver before consulting native class tables
-        emitter.bl_c("__elephc_eval_object_context");
+        emitter.emit_native_bridge_symbol_call("__elephc_eval_object_context", 2);
         emitter.instruction("str x0, [sp]");                                    // retain the resolved object owner context for class and method metadata
         emitter.instruction("cbnz x0, __rt_mbstring_input_dynamic");            // eval identity takes precedence over a native stdClass payload
         emitter.instruction("ldr x10, [sp, #16]");                              // recover the concrete descriptor after the C metadata lookup
@@ -56,7 +56,7 @@ pub(super) fn aarch64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // pass the original borrowed object box
     emitter.instruction("mov x2, #0");                                          // select the existing get_class metadata lookup operation
     emitter.instruction("add x3, sp, #48");                                     // use the local versioned eval result tuple
-    emitter.bl_c("__elephc_eval_object_class_name");
+    emitter.emit_native_bridge_symbol_call("__elephc_eval_object_class_name", 4);
     emitter.instruction("str x0, [sp, #112]");                                  // preserve the returned eval status during owner transfer
     emitter.instruction("ldr x0, [sp, #56]");                                   // take the returned class-name cell even on malformed responses
     emitter.instruction("ldr x10, [sp, #24]");                                  // locate the caller's metadata-owner slot
@@ -79,7 +79,7 @@ pub(super) fn aarch64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // inspect the original receiver without converting it
     emitter.instruction("add x2, sp, #80");                                     // pass the borrowed method-name cell
     emitter.instruction("mov x3, #0");                                          // select method_exists without invoking the method
-    emitter.bl_c("__elephc_eval_member_exists");
+    emitter.emit_native_bridge_symbol_call("__elephc_eval_member_exists", 4);
     emitter.instruction("cmp w0, #0");                                          // normalize the metadata predicate into one capability bit
     emitter.instruction("cset x9, ne");                                         // a declared __toString method makes the object Stringable
     emitter.instruction("ldr x10, [sp, #16]");                                  // recover the input descriptor after eval metadata lookup
@@ -93,7 +93,7 @@ pub(super) fn x86_64(emitter: &mut Emitter, eval_bridge: bool) {
     if eval_bridge {
         emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // pass the active caller context, which may be absent in native code
         emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // identify the original boxed receiver through eval ownership metadata
-        emitter.bl_c("__elephc_eval_object_context");
+        emitter.emit_native_bridge_symbol_call("__elephc_eval_object_context", 2);
         emitter.instruction("mov QWORD PTR [rsp], rax");                        // retain the resolved context for class and method lookup
         emitter.instruction("test rax, rax");                                   // determine whether eval metadata is available for this object
         emitter.instruction("jnz __rt_mbstring_input_dynamic");                 // prefer the actual eval class over its native backing payload
@@ -138,7 +138,7 @@ pub(super) fn x86_64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                        // pass the original borrowed object box
     emitter.instruction("xor edx, edx");                                        // select get_class metadata lookup
     emitter.instruction("lea rcx, [rsp + 48]");                                 // provide local storage for the eval result tuple
-    emitter.bl_c("__elephc_eval_object_class_name");
+    emitter.emit_native_bridge_symbol_call("__elephc_eval_object_class_name", 4);
     emitter.instruction("mov QWORD PTR [rsp + 112], rax");                      // preserve status while taking metadata ownership
     emitter.instruction("mov rax, QWORD PTR [rsp + 56]");                       // take the returned class-name cell
     emitter.instruction("mov r10, QWORD PTR [rsp + 24]");                       // recover the metadata-owner output slot
@@ -161,7 +161,7 @@ pub(super) fn x86_64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                        // inspect the original receiver without a string conversion
     emitter.instruction("lea rdx, [rsp + 80]");                                 // pass the borrowed method-name cell
     emitter.instruction("xor ecx, ecx");                                        // select method_exists metadata lookup
-    emitter.bl_c("__elephc_eval_member_exists");
+    emitter.emit_native_bridge_symbol_call("__elephc_eval_member_exists", 4);
     emitter.instruction("test eax, eax");                                       // read the metadata predicate without invoking the method
     emitter.instruction("setne r9b");                                           // normalize the Stringable capability bit
     emitter.instruction("movzx r9, r9b");                                       // discard unrelated upper register bits

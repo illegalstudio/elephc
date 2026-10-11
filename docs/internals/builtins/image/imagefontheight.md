@@ -2,7 +2,7 @@
 title: "imagefontheight() - internals"
 description: "Compiler internals for imagefontheight(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 508
+  order: 512
 ---
 
 ## `imagefontheight()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2976](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2976) (`imagefontheight`)
+- **Lowering**: [`src/image_prelude.rs`:3047](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3047) (`imagefontheight`)
 - **Function symbol**: `imagefontheight()`
 
 

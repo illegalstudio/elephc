@@ -2,7 +2,7 @@
 title: "session_save_path()"
 description: "Reads or sets the directory session data is stored in."
 sidebar:
-  order: 996
+  order: 1012
 ---
 
 ## session_save_path()

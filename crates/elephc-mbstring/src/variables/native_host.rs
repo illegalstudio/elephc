@@ -13,7 +13,7 @@ use std::ffi::c_void;
 use std::ptr;
 
 use elephc_builtin_contract::mbstring_abi::variables::{
-    MbVariableChildV1, MbVariableHandleV1, MbVariableViewV1, VARIABLE_ARRAY,
+    MbVariableChildV1, MbVariableHandleV1, MbVariableRuntimeV1, MbVariableViewV1, VARIABLE_ARRAY,
     VARIABLE_CHILD_END, VARIABLE_CHILD_ENTRY, VARIABLE_OBJECT, VARIABLE_OTHER,
     VARIABLE_STRING,
 };
@@ -32,6 +32,14 @@ struct Context {
     class_sizes: *const u64,
     dynamic_flags: *const u64,
     class_descriptors: *const *const u8,
+    runtime: *const MbVariableRuntimeV1,
+}
+
+/// Resolves the runtime-local ownership callbacks carried by this invocation.
+unsafe fn runtime(context: *mut c_void) -> Option<MbVariableRuntimeV1> {
+    let context = unsafe { (context as *const Context).as_ref() }?;
+    let runtime = unsafe { context.runtime.as_ref() }?;
+    runtime.complete().then_some(*runtime)
 }
 
 /// A borrowed native slot and its static or per-entry runtime tag.
@@ -46,21 +54,6 @@ struct Value {
     low: u64,
     high: u64,
     box_ptr: *mut u8,
-}
-
-unsafe extern "C" {
-    /// Detaches shared indexed-array storage before an in-place variable conversion.
-    fn elephc_mbstring_variable_array_unique_v1(value: *mut u8) -> *mut u8;
-    /// Detaches shared associative-array storage before an in-place variable conversion.
-    fn elephc_mbstring_variable_hash_unique_v1(value: *mut u8) -> *mut u8;
-    /// Allocates native reference storage for the requested payload tag.
-    fn elephc_mbstring_variable_reference_new_v1(tag: u64) -> *mut u8;
-    /// Allocates a native boxed value from its runtime tag and payload words.
-    fn elephc_mbstring_variable_box_v1(tag: u64, low: u64, high: u64) -> *mut u8;
-    /// Copies converted string bytes into native storage that survives the conversion call.
-    fn elephc_mbstring_variable_persist_v1(bytes: *const u8, length: u64) -> *mut u8;
-    /// Releases one owner of the supplied native boxed or reference value.
-    fn elephc_mbstring_variable_release_v1(value: *mut u8);
 }
 
 /// Reads a word from potentially byte-aligned native array or hash storage.
@@ -260,9 +253,12 @@ pub unsafe extern "C" fn elephc_mbstring_variable_child_next_v1(
 /// Separates the array owned by this slot and publishes its current identity.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_mbstring_variable_prepare_write_v1(
-    _context: *mut c_void, handle: *const MbVariableHandleV1, kind: u64, identity: u64,
+    context: *mut c_void, handle: *const MbVariableHandleV1, kind: u64, identity: u64,
     output: *mut u64,
 ) -> i32 {
+    let Some(runtime) = (unsafe { runtime(context) }) else { return 1; };
+    let box_value = runtime.box_value.expect("validated variable runtime box callback");
+    let release = runtime.release.expect("validated variable runtime release callback");
     let (Some(handle), Some(output)) = (unsafe { handle.as_ref() }, unsafe { output.as_mut() })
         else { return 1; };
     let Some(slot) = (unsafe { slot(handle) }) else { return 1; };
@@ -281,20 +277,20 @@ pub unsafe extern "C" fn elephc_mbstring_variable_prepare_write_v1(
         let first_tag = unsafe { word(first, 0) };
         let owners = unsafe { first.sub(12).cast::<u32>().read_unaligned() };
         if first_tag != 7 && owners > 1 {
-            let replacement = unsafe { elephc_mbstring_variable_box_v1(
+            let replacement = unsafe { box_value(
                 first_tag, word(first, 8), word(first, 16),
             ) };
             if replacement.is_null() { return 1; }
             unsafe { put(slot.low, 0, replacement as usize as u64); }
-            unsafe { elephc_mbstring_variable_release_v1(first); }
+            unsafe { release(first); }
             let Some(reloaded) = (unsafe { value(&slot) }) else { return 1; };
             current = reloaded;
         }
     }
     let previous = current.low as usize as *mut u8;
     let next = match unsafe { heap_kind(previous) } {
-        2 => unsafe { elephc_mbstring_variable_array_unique_v1(previous) },
-        3 => unsafe { elephc_mbstring_variable_hash_unique_v1(previous) },
+        2 => unsafe { runtime.array_unique.expect("validated array COW callback")(previous) },
+        3 => unsafe { runtime.hash_unique.expect("validated hash COW callback")(previous) },
         _ => return 1,
     };
     if next.is_null() { return 1; }
@@ -310,39 +306,43 @@ pub unsafe extern "C" fn elephc_mbstring_variable_prepare_write_v1(
 /// Replaces only this root or child slot, preserving sibling keys and prior writes.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_mbstring_variable_write_string_v1(
-    _context: *mut c_void, handle: *const MbVariableHandleV1,
+    context: *mut c_void, handle: *const MbVariableHandleV1,
     bytes: *const u8, length: u64,
 ) -> i32 {
+    let Some(runtime) = (unsafe { runtime(context) }) else { return 1; };
+    let box_value = runtime.box_value.expect("validated variable runtime box callback");
+    let reference_new = runtime.reference_new.expect("validated variable runtime reference callback");
+    let release = runtime.release.expect("validated variable runtime release callback");
     let Some(handle) = (unsafe { handle.as_ref() }) else { return 1; };
     if bytes.is_null() && length != 0 { return 1; }
     let Some(slot) = (unsafe { slot(handle) }) else { return 1; };
     if !matches!(unsafe { value(&slot) }, Some(Value { tag: 1, .. })) { return 1; }
     if handle.words[3] == 1 { return 1; }
     if slot.tag == 1 {
-        let replacement = unsafe { elephc_mbstring_variable_persist_v1(bytes, length) };
+        let replacement = unsafe { runtime.persist.expect("validated string persist callback")(bytes, length) };
         if replacement.is_null() { return 1; }
         let previous = unsafe { word(slot.low, 0) } as usize as *mut u8;
         unsafe { put(slot.low, 0, replacement as usize as u64); put(slot.low, 8, length); }
-        unsafe { elephc_mbstring_variable_release_v1(previous); }
+        unsafe { release(previous); }
         return 0;
     }
-    let replacement = unsafe { elephc_mbstring_variable_box_v1(1, bytes as usize as u64, length) };
+    let replacement = unsafe { box_value(1, bytes as usize as u64, length) };
     if replacement.is_null() { return 1; }
     if handle.words[1] == CHILD && slot.tag == 11 {
-        let reference = unsafe { elephc_mbstring_variable_reference_new_v1(7) };
+        let reference = unsafe { reference_new(7) };
         if reference.is_null() {
-            unsafe { elephc_mbstring_variable_release_v1(replacement); }
+            unsafe { release(replacement); }
             return 1;
         }
         unsafe { put(reference, 0, replacement as usize as u64); }
         let previous = unsafe { word(slot.low, 0) } as usize as *mut u8;
         unsafe { put(slot.low, 0, reference as usize as u64); }
-        unsafe { elephc_mbstring_variable_release_v1(previous); }
+        unsafe { release(previous); }
         return 0;
     }
-    if slot.tag != 7 { unsafe { elephc_mbstring_variable_release_v1(replacement); } return 1; }
+    if slot.tag != 7 { unsafe { release(replacement); } return 1; }
     let previous = unsafe { word(slot.low, 0) } as usize as *mut u8;
     unsafe { put(slot.low, 0, replacement as usize as u64); }
-    unsafe { elephc_mbstring_variable_release_v1(previous); }
+    unsafe { release(previous); }
     0
 }

@@ -9,7 +9,7 @@
 //! - Heap helpers own allocator metadata, debug accounting, and free-list invariants used by all refcounted runtime values.
 
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 
 
 /// Emits the `__rt_heap_alloc` runtime helper: a free-list allocator with size-segregated
@@ -270,6 +270,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     // -- fatal error: heap memory exhausted --
     // Cross-helper callers use the shared entry; allocator conditionals stay local.
     emitter.label_shared("__rt_heap_allocation_failed");
+    emitter.label_shared("__rt_heap_exhausted_entry");
     emitter.label("__rt_heap_exhausted");
     if emitter.cdylib_boundary {
         crate::codegen_support::abi::emit_symbol_address(
@@ -530,6 +531,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     // -- fatal error: heap memory exhausted --
     // Keep the same non-returning recovery entry on every target.
     emitter.label_shared("__rt_heap_allocation_failed");
+    emitter.label_shared("__rt_heap_exhausted_entry");
     emitter.label("__rt_heap_exhausted");
     if emitter.cdylib_boundary {
         crate::codegen_support::abi::emit_symbol_address(
@@ -556,12 +558,18 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     }
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the heap exhaustion fatal error message
     crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_err_msg");
-    emitter.instruction("mov edx, 35");                                         // pass the exact heap exhaustion message length to the Linux write syscall
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // print the fatal heap exhaustion message to stderr
-    emitter.instruction("mov edi, 1");                                          // exit code 1 for heap exhaustion
-    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
-    emitter.instruction("syscall");                                             // terminate the process after reporting heap exhaustion
+    emitter.instruction("mov edx, 35");                                         // pass the exact heap exhaustion message length to the platform writer
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("call __rt_sys_write");                             // route fatal output through the Win32 WriteFile shim
+        emitter.instruction("mov edi, 1");                                      // exit code 1 for heap exhaustion
+        emitter.instruction("call __rt_sys_exit");                              // terminate through ExitProcess instead of a Linux syscall
+    } else {
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the fatal heap exhaustion message to stderr
+        emitter.instruction("mov edi, 1");                                      // exit code 1 for heap exhaustion
+        emitter.instruction("mov eax, 231");                                    // Linux x86_64 syscall 231 = exit_group
+        emitter.instruction("syscall");                                         // terminate the process after reporting heap exhaustion
+    }
 
     emitter.label("__rt_heap_alloc_size_overflow");
     emitter.instruction("jmp __rt_heap_exhausted");                             // report an impossible header size through the established fatal path
@@ -572,7 +580,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{AppleVariant, Platform, Target};
 
-    /// Cross-helper allocation failure has an unconditional shared entry on every target.
+    /// Cross-helper allocation failure has ordered shared recovery entries on every target.
     #[test]
     fn heap_allocation_failure_shared_entry_keeps_local_branches() {
         for target in [
@@ -581,17 +589,32 @@ mod tests {
             Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
             Target::new(Platform::Linux, Arch::AArch64),
             Target::new(Platform::Linux, Arch::X86_64),
+            Target::new(Platform::Windows, Arch::X86_64),
         ] {
             let mut emitter = Emitter::new_cdylib(target);
             emitter.dead_strip = true;
             emit_heap_alloc(&mut emitter);
             let internal = emitter.take_internal_labels();
             let asm = emitter.output();
-            assert!(asm.contains("__rt_heap_allocation_failed:\n__rt_heap_exhausted:\n"));
+            let failed = asm
+                .find("__rt_heap_allocation_failed:\n")
+                .expect("shared allocation-failure entry must be emitted");
+            let exhausted_entry = asm
+                .find("__rt_heap_exhausted_entry:\n")
+                .expect("shared heap-exhaustion entry must be emitted");
+            let exhausted = asm
+                .find("__rt_heap_exhausted:\n")
+                .expect("local heap-exhaustion body must be emitted");
+            assert!(
+                failed < exhausted_entry && exhausted_entry < exhausted,
+                "recovery entries must fall through in order for {target:?}:\n{asm}"
+            );
             assert!(!internal.contains("__rt_heap_allocation_failed"));
+            assert!(!internal.contains("__rt_heap_exhausted_entry"));
             if target.platform == Platform::MacOS {
                 assert!(internal.contains("__rt_heap_exhausted"));
                 assert!(asm.contains(".alt_entry __rt_heap_allocation_failed\n"));
+                assert!(asm.contains(".alt_entry __rt_heap_exhausted_entry\n"));
             }
             assert!(asm.contains(crate::codegen_support::cdylib::BOUNDARY_STATUS));
             assert!(asm.contains("__rt_throw_current"));
@@ -639,5 +662,24 @@ mod tests {
         assert!(asm.contains("cmp rax, r10\n"));
         assert!(asm.contains("ja __rt_heap_alloc_size_overflow\n"));
         assert!(asm.contains("__rt_heap_alloc_size_overflow:\n"));
+    }
+
+    /// Verifies Windows heap exhaustion uses the Win32-backed runtime shims
+    /// instead of falling through Linux syscall numbers in a PE executable.
+    #[test]
+    fn windows_heap_allocator_uses_native_fatal_io_and_exit() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_heap_alloc(&mut emitter);
+        let asm = emitter.output();
+
+        let fatal = asm
+            .split("__rt_heap_exhausted_entry:\n__rt_heap_exhausted:\n")
+            .nth(1)
+            .and_then(|tail| tail.split("__rt_heap_alloc_size_overflow:\n").next())
+            .expect("heap exhaustion section");
+        assert!(asm.contains("__rt_heap_exhausted_entry:\n__rt_heap_exhausted:\n"));
+        assert!(fatal.contains("call __rt_sys_write"));
+        assert!(fatal.contains("call __rt_sys_exit"));
+        assert!(!fatal.contains("syscall"));
     }
 }

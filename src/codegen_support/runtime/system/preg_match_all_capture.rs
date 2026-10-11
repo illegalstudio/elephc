@@ -20,12 +20,9 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-const PREG_PATTERN_ORDER: i64 = 1;
 const PREG_SET_ORDER: i64 = 2;
 const PREG_OFFSET_CAPTURE: i64 = 256;
 const PREG_UNMATCHED_AS_NULL: i64 = 512;
-const PREG_MATCH_ALL_SUPPORTED_FLAGS: i64 =
-    PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_OFFSET_CAPTURE | PREG_UNMATCHED_AS_NULL;
 
 /// Emits `__rt_preg_match_all_capture` for the active target.
 pub(crate) fn emit_preg_match_all_capture(emitter: &mut Emitter) {
@@ -88,7 +85,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass null-terminated PCRE pattern
     emitter.instruction(&format!("ldr x2, [sp, #{}]", regex_flags_off));        // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.instruction(&format!("add x3, sp, #{}", nmatch_off));               // receive the compiled match-slot count
-    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_compile", 4);      // compile through the target C ABI without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_pma_cap_empty");                         // compile failure returns count 0 and []
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", nmatch_off));             // load match-slot count returned by the shim
@@ -100,7 +97,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("lsr x10, x9, #60");                                    // reject slot counts whose 16-byte size would overflow
     emitter.instruction("cbnz x10, __rt_pma_cap_malloc_fail");                  // free the handle instead of allocating a wrapped size
     emitter.instruction("lsl x0, x9, #4");                                      // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the reusable offset-pair vector
+    emitter.emit_call_c("malloc");                                              // allocate the reusable offset-pair vector through the target C ABI
     emitter.instruction("cbz x0, __rt_pma_cap_malloc_fail");                    // allocation failure frees the handle and returns []
     emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
 
@@ -109,7 +106,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr2");                                       // materialize a null-terminated subject copy
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save subject C string
     emitter.instruction(&format!("str x0, [sp, #{}]", current_cstr_off));       // start the search cursor at the subject beginning
-    emitter.bl_c("strlen");                                                      // retain the established C-string subject boundary
+    emitter.emit_call_c("strlen");                                              // retain the established C-string subject boundary through the target C ABI
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_len_off));        // save the complete subject length for offset matching
 
     emit_preg_match_all_capture_init_matrix_arm64(
@@ -133,7 +130,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_len_off));        // load the complete C-string subject length
     emitter.instruction("str x9, [x3, #8]");                                    // publish the input range end
     super::preg_match_all::emit_global_iteration_flags(emitter, match_count_off);
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested absolute offset pair
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_exec", 5);         // execute through the target C ABI and initialize every requested offset pair
     emitter.instruction("cbnz x0, __rt_pma_cap_done");                          // stop when the shim reports no further match
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", match_count_off));        // reload the running match count
@@ -171,19 +168,19 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
         mixed_ptr_off,
     );
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_free", 1);         // release compiled regex resources through the target C ABI
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload the offset-pair buffer
-    emitter.bl_c("free");                                                       // release the reusable pair vector
+    emitter.emit_call_c("free");                                                // release the reusable pair vector through the target C ABI
     emitter.instruction(&format!("ldr x0, [sp, #{}]", match_count_off));        // return the match count in x0
     emitter.instruction(&format!("ldr x1, [sp, #{}]", outer_off));              // return the matches array in x1
     emitter.instruction("b __rt_pma_cap_ret");                                  // share the common epilogue
 
     emitter.label("__rt_pma_cap_malloc_fail");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload the opaque handle after allocation failure
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_free", 1);         // release compiled regex resources through the target C ABI
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload any allocated offset-pair buffer
     emitter.instruction("cbz x0, __rt_pma_cap_empty");                          // skip free when compile never allocated pairs
-    emitter.bl_c("free");                                                       // release the pair vector before returning []
+    emitter.emit_call_c("free");                                                // release the pair vector through the target C ABI before returning []
 
     emitter.label("__rt_pma_cap_empty");
     emitter.instruction("mov x0, #0");                                          // empty-array capacity
@@ -206,24 +203,9 @@ fn emit_preg_match_all_capture_validate_flags_arm64(
     preg_flags_off: usize,
 ) {
     emitter.instruction(&format!("ldr x9, [sp, #{}]", preg_flags_off));         // reload PHP preg_match_all flags
-    emitter.instruction(&format!("mov x10, #{}", PREG_PATTERN_ORDER));          // start the supported-flag mask
-    emitter.instruction(&format!("orr x10, x10, #{}", PREG_SET_ORDER));         // include SET_ORDER
-    emitter.instruction(&format!("mov x11, #{}", PREG_OFFSET_CAPTURE));         // materialize OFFSET_CAPTURE
-    emitter.instruction("orr x10, x10, x11");                                   // include OFFSET_CAPTURE
-    emitter.instruction(&format!("mov x11, #{}", PREG_UNMATCHED_AS_NULL));      // materialize UNMATCHED_AS_NULL
-    emitter.instruction("orr x10, x10, x11");                                   // include UNMATCHED_AS_NULL
-    emitter.instruction("mvn x11, x10");                                        // invert the supported mask
-    emitter.instruction("tst x9, x11");                                         // any unsupported extra bit?
-    emitter.instruction("b.ne __rt_pma_cap_empty");                             // unsupported flags return count 0 and []
-    emitter.instruction(&format!(
-        "and x11, x9, #{}",
-        PREG_PATTERN_ORDER | PREG_SET_ORDER
-    ));                                                                         // isolate the order bits
-    emitter.instruction(&format!(
-        "cmp x11, #{}",
-        PREG_PATTERN_ORDER | PREG_SET_ORDER
-    ));                                                                         // both order bits together are invalid
-    emitter.instruction("b.eq __rt_pma_cap_empty");                             // conflicting order flags return count 0 and []
+    emitter.instruction("and x11, x9, #255");                                   // PHP validates only the low-byte order selector
+    emitter.instruction("cmp x11, #2");                                         // 0/default, PATTERN_ORDER, and SET_ORDER are valid
+    emitter.instruction("b.hi __rt_pma_cap_empty");                             // fail closed if a direct runtime caller bypassed validation
 }
 
 /// Allocates the ARM64 SET_ORDER outer array or PATTERN_ORDER group-row table.
@@ -240,7 +222,7 @@ fn emit_preg_match_all_capture_init_matrix_arm64(
     emitter.instruction("b.ne __rt_pma_cap_init_set");                          // allocate an empty SET_ORDER outer array
     emitter.instruction(&format!("ldr x0, [sp, #{}]", nmatch_off));             // allocate one group-row pointer per compiled slot
     emitter.instruction("lsl x0, x0, #3");                                      // group-row table is nmatch 8-byte pointers
-    emitter.bl_c("malloc");                                                     // allocate the PATTERN_ORDER group-row table
+    emitter.emit_call_c("malloc");                                              // allocate the PATTERN_ORDER group-row table through the target C ABI
     emitter.instruction("cbz x0, __rt_pma_cap_malloc_fail");                    // table allocation failure shares handle cleanup
     emitter.instruction(&format!("str x0, [sp, #{}]", group_rows_off));         // save the group-row table pointer
     emitter.instruction(&format!("str xzr, [sp, #{}]", outer_off));             // PATTERN_ORDER outer is built after the search
@@ -327,7 +309,26 @@ fn emit_preg_match_all_capture_append_match_arm64(
     emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save the next group index
     emitter.instruction("b __rt_pma_cap_append_po_loop");                       // continue filling PATTERN_ORDER groups
     emitter.label("__rt_pma_cap_append_set");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", nmatch_off));             // SET_ORDER row capacity matches compiled slots
+    let set_limit_off = row_off + 8;
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", nmatch_off));            // begin with every compiled capture slot
+    emitter.instruction(&format!("str x12, [sp, #{}]", set_limit_off));         // retain this match's effective SET_ORDER width
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", preg_flags_off));         // inspect unmatched-capture policy
+    emitter.instruction(&format!("tst x9, #{}", PREG_UNMATCHED_AS_NULL));       // null mode preserves every trailing group
+    emitter.instruction("b.ne __rt_pma_cap_append_set_limit_done");             // keep the complete row when unmatched groups are explicit nulls
+    emitter.label("__rt_pma_cap_append_set_limit_loop");
+    emitter.instruction("cmp x12, #1");                                         // the full-match group is always retained
+    emitter.instruction("b.le __rt_pma_cap_append_set_limit_done");             // stop after trimming every trailing unmatched subgroup
+    emitter.instruction("sub x13, x12, #1");                                    // inspect the last currently retained subgroup
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", regmatches_ptr_off));     // load the absolute offset-pair table
+    emitter.instruction("lsl x13, x13, #4");                                    // scale subgroup index to its 16-byte pair
+    emitter.instruction("ldr x9, [x9, x13]");                                   // load subgroup start offset
+    emitter.instruction("cmp x9, #0");                                          // negative start means this subgroup did not participate
+    emitter.instruction("b.ge __rt_pma_cap_append_set_limit_done");             // retain the last participating subgroup and every prefix group
+    emitter.instruction("sub x12, x12, #1");                                    // omit one trailing unmatched subgroup
+    emitter.instruction(&format!("str x12, [sp, #{}]", set_limit_off));         // publish the shortened SET_ORDER row width
+    emitter.instruction("b __rt_pma_cap_append_set_limit_loop");                // inspect the next trailing subgroup
+    emitter.label("__rt_pma_cap_append_set_limit_done");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", set_limit_off));          // allocate only PHP-visible SET_ORDER cells
     emitter.instruction("mov x1, #8");                                          // Mixed slots store boxed pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate this match's SET_ORDER row
     emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
@@ -335,7 +336,7 @@ fn emit_preg_match_all_capture_append_match_arm64(
     emitter.instruction(&format!("str xzr, [sp, #{}]", group_idx_off));         // start at group 0
     emitter.label("__rt_pma_cap_append_set_loop");
     emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload the current group index
-    emitter.instruction(&format!("ldr x13, [sp, #{}]", nmatch_off));            // reload compiled slot count
+    emitter.instruction(&format!("ldr x13, [sp, #{}]", set_limit_off));         // reload PHP-visible SET_ORDER width
     emitter.instruction("cmp x12, x13");                                        // have all groups for this match been stored?
     emitter.instruction("b.ge __rt_pma_cap_append_set_row");                    // box the completed SET_ORDER row
     emit_preg_match_all_capture_box_cell_arm64(
@@ -518,7 +519,7 @@ fn emit_preg_match_all_capture_finish_pattern_order_arm64(
     emitter.instruction("b __rt_pma_cap_finish_loop");                          // continue boxing group rows
     emitter.label("__rt_pma_cap_finish_free");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", group_rows_off));         // reload the group-row table
-    emitter.bl_c("free");                                                       // release the PATTERN_ORDER pointer table
+    emitter.emit_call_c("free");                                                // release the PATTERN_ORDER pointer table through the target C ABI
     emitter.instruction(&format!("str xzr, [sp, #{}]", group_rows_off));        // forget the freed table pointer
     emitter.label("__rt_pma_cap_finish_skip");
 }
@@ -585,7 +586,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", regex_flags_off)); // pass PCRE2 POSIX compile flags
     emitter.instruction(&format!("lea rcx, [rsp + {}]", nmatch_off));           // receive the compiled match-slot count
-    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_compile", 4);      // compile through the target C ABI without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_pma_cap_empty_linux_x86_64");                 // compile failure returns count 0 and []
 
@@ -600,7 +601,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_pma_cap_malloc_fail_linux_x86_64");           // free the handle instead of allocating a wrapped size
     emitter.instruction("mov rdi, r9");                                         // load slot count for the pair-vector allocation
     emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the reusable offset-pair vector
+    emitter.emit_call_c("malloc");                                              // allocate the reusable offset-pair vector through the target C ABI
     emitter.instruction("test rax, rax");                                       // did malloc return a pair buffer?
     emitter.instruction("jz __rt_pma_cap_malloc_fail_linux_x86_64");            // allocation failure frees the handle and returns []
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
@@ -613,7 +614,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
         &format!("mov QWORD PTR [rsp + {}], rax", current_cstr_off)
     );
     emitter.instruction("mov rdi, rax");                                        // pass the subject C string to strlen
-    emitter.bl_c("strlen");                                                      // retain the established C-string subject boundary
+    emitter.emit_call_c("strlen");                                              // retain the established C-string subject boundary through the target C ABI
     emitter.instruction(                                                        // save the complete subject length for offset matching
         &format!("mov QWORD PTR [rsp + {}], rax", subject_len_off)
     );
@@ -643,7 +644,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     );
     emitter.instruction("mov QWORD PTR [rcx + 8], r9");                         // publish the input range end
     super::preg_match_all::emit_global_iteration_flags(emitter, match_count_off);
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested absolute offset pair
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_exec", 5);         // execute through the target C ABI and initialize every requested offset pair
     emitter.instruction("test eax, eax");                                       // did the shim find another match?
     emitter.instruction("jnz __rt_pma_cap_done_linux_x86_64");                  // stop when the shim reports no further match
 
@@ -682,20 +683,20 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
         mixed_ptr_off,
     );
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_free", 1);         // release compiled regex resources through the target C ABI
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload the offset-pair buffer
-    emitter.bl_c("free");                                                       // release the reusable pair vector
+    emitter.emit_call_c("free");                                                // release the reusable pair vector through the target C ABI
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", match_count_off)); // return the match count in rax
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", outer_off));  // return the matches array in rdx
     emitter.instruction("jmp __rt_pma_cap_ret_linux_x86_64");                   // share the common epilogue
 
     emitter.label("__rt_pma_cap_malloc_fail_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload the opaque handle after allocation failure
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
+    emitter.emit_native_bridge_symbol_call("elephc_pcre2_v1_free", 1);         // release compiled regex resources through the target C ABI
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload any allocated offset-pair buffer
     emitter.instruction("test rdi, rdi");                                       // skip free when compile never allocated pairs
     emitter.instruction("jz __rt_pma_cap_empty_linux_x86_64");                  // share the empty-result path
-    emitter.bl_c("free");                                                       // release the pair vector before returning []
+    emitter.emit_call_c("free");                                                // release the pair vector through the target C ABI before returning []
 
     emitter.label("__rt_pma_cap_empty_linux_x86_64");
     emitter.instruction("xor edi, edi");                                        // empty-array capacity
@@ -717,15 +718,9 @@ fn emit_preg_match_all_capture_validate_flags_linux_x86_64(
     preg_flags_off: usize,
 ) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload PHP preg_match_all flags
-    emitter.instruction(&format!("mov r10, {}", PREG_MATCH_ALL_SUPPORTED_FLAGS)); // load the supported-flag mask
-    emitter.instruction("mov r11, r10");                                        // copy the supported mask
-    emitter.instruction("not r11");                                             // invert the supported mask
-    emitter.instruction("test r9, r11");                                        // any unsupported extra bit?
-    emitter.instruction("jnz __rt_pma_cap_empty_linux_x86_64");                 // unsupported flags return count 0 and []
-    emitter.instruction("mov r11, r9");                                         // copy flags before isolating order bits
-    emitter.instruction(&format!("and r11, {}", PREG_PATTERN_ORDER | PREG_SET_ORDER)); // isolate the order bits
-    emitter.instruction(&format!("cmp r11, {}", PREG_PATTERN_ORDER | PREG_SET_ORDER)); // both order bits together are invalid
-    emitter.instruction("je __rt_pma_cap_empty_linux_x86_64");                  // conflicting order flags return count 0 and []
+    emitter.instruction("and r9, 255");                                         // PHP validates only the low-byte order selector
+    emitter.instruction("cmp r9, 2");                                           // 0/default, PATTERN_ORDER, and SET_ORDER are valid
+    emitter.instruction("ja __rt_pma_cap_empty_linux_x86_64");                  // fail closed if a direct runtime caller bypassed validation
 }
 
 /// Allocates the x86_64 SET_ORDER outer array or PATTERN_ORDER group-row table.
@@ -742,7 +737,7 @@ fn emit_preg_match_all_capture_init_matrix_linux_x86_64(
     emitter.instruction("jnz __rt_pma_cap_init_set_linux_x86_64");              // allocate an empty SET_ORDER outer array
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // allocate one group-row pointer per compiled slot
     emitter.instruction("shl rdi, 3");                                          // group-row table is nmatch 8-byte pointers
-    emitter.bl_c("malloc");                                                     // allocate the PATTERN_ORDER group-row table
+    emitter.emit_call_c("malloc");                                              // allocate the PATTERN_ORDER group-row table through the target C ABI
     emitter.instruction("test rax, rax");                                       // did malloc return a table?
     emitter.instruction("jz __rt_pma_cap_malloc_fail_linux_x86_64");            // table allocation failure shares handle cleanup
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", group_rows_off)); // save the group-row table pointer
@@ -825,7 +820,26 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save the next group index
     emitter.instruction("jmp __rt_pma_cap_append_po_loop_linux_x86_64");        // continue filling PATTERN_ORDER groups
     emitter.label("__rt_pma_cap_append_set_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // SET_ORDER row capacity matches compiled slots
+    let set_limit_off = row_off + 8;
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", nmatch_off)); // begin with every compiled capture slot
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", set_limit_off)); // retain this match's effective SET_ORDER width
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // inspect unmatched-capture policy
+    emitter.instruction(&format!("test r9, {}", PREG_UNMATCHED_AS_NULL));       // null mode preserves every trailing group
+    emitter.instruction("jnz __rt_pma_cap_append_set_limit_done_linux_x86_64"); // keep the complete row when unmatched groups are explicit nulls
+    emitter.label("__rt_pma_cap_append_set_limit_loop_linux_x86_64");
+    emitter.instruction("cmp r10, 1");                                          // the full-match group is always retained
+    emitter.instruction("jle __rt_pma_cap_append_set_limit_done_linux_x86_64"); // stop after trimming every trailing unmatched subgroup
+    emitter.instruction("mov r11, r10");                                        // inspect the last currently retained subgroup
+    emitter.instruction("sub r11, 1");                                          // convert width to subgroup index
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load the absolute offset-pair table
+    emitter.instruction("shl r11, 4");                                          // scale subgroup index to its 16-byte pair
+    emitter.instruction("cmp QWORD PTR [r9 + r11], 0");                         // negative start means this subgroup did not participate
+    emitter.instruction("jge __rt_pma_cap_append_set_limit_done_linux_x86_64"); // retain the last participating subgroup and every prefix group
+    emitter.instruction("sub r10, 1");                                          // omit one trailing unmatched subgroup
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", set_limit_off)); // publish the shortened SET_ORDER row width
+    emitter.instruction("jmp __rt_pma_cap_append_set_limit_loop_linux_x86_64"); // inspect the next trailing subgroup
+    emitter.label("__rt_pma_cap_append_set_limit_done_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", set_limit_off)); // allocate only PHP-visible SET_ORDER cells
     emitter.instruction("mov esi, 8");                                          // Mixed slots store boxed pointers
     emitter.instruction("call __rt_array_new");                                 // allocate this match's SET_ORDER row
     emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
@@ -833,7 +847,7 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start at group 0
     emitter.label("__rt_pma_cap_append_set_loop_linux_x86_64");
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload the current group index
-    emitter.instruction(&format!("cmp r9, QWORD PTR [rsp + {}]", nmatch_off));  // have all groups for this match been stored?
+    emitter.instruction(&format!("cmp r9, QWORD PTR [rsp + {}]", set_limit_off)); // have all PHP-visible groups for this match been stored?
     emitter.instruction("jge __rt_pma_cap_append_set_row_linux_x86_64");        // box the completed SET_ORDER row
     emit_preg_match_all_capture_box_cell_linux_x86_64(
         emitter,
@@ -1012,7 +1026,7 @@ fn emit_preg_match_all_capture_finish_pattern_order_linux_x86_64(
     emitter.instruction("jmp __rt_pma_cap_finish_loop_linux_x86_64");           // continue boxing group rows
     emitter.label("__rt_pma_cap_finish_free_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", group_rows_off)); // reload the group-row table
-    emitter.bl_c("free");                                                       // release the PATTERN_ORDER pointer table
+    emitter.emit_call_c("free");                                                // release the PATTERN_ORDER pointer table through the target C ABI
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_rows_off)); // forget the freed table pointer
     emitter.label("__rt_pma_cap_finish_skip_linux_x86_64");
 }
@@ -1027,4 +1041,76 @@ fn emit_stamp_indexed_array_mixed_x86_64(emitter: &mut Emitter, array_reg: &str)
     emitter.instruction("and r10, r8");                                         // clear stale value_type bits
     emitter.instruction("or r10, 0x700");                                       // stamp runtime value_type 7 = boxed Mixed
     emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg));    // store boxed-Mixed indexed-array metadata
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Every supported target emits the same capture helper with target-native bridge symbols.
+    #[test]
+    fn capture_helper_emits_on_all_supported_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+            "windows-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_preg_match_all_capture(&mut emitter);
+            let assembly = emitter.output();
+            for symbol in [
+                "elephc_pcre2_v1_compile",
+                "elephc_pcre2_v1_exec",
+                "elephc_pcre2_v1_free",
+            ] {
+                assert!(
+                    assembly.contains(&target.extern_symbol(symbol)),
+                    "{name}: missing target-native {symbol}"
+                );
+            }
+        }
+    }
+
+    /// Windows routes CRT calls through SysV shims and PCRE2 through MSx64 shadow/stack staging.
+    #[test]
+    fn windows_capture_helper_uses_native_c_abi_planners() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        let mut emitter = Emitter::new(target);
+        emit_preg_match_all_capture(&mut emitter);
+        let assembly = emitter.output();
+
+        for (symbol, shim) in [
+            ("malloc", "__rt_sys_malloc"),
+            ("free", "__rt_sys_free"),
+            ("strlen", "__rt_sys_strlen"),
+        ] {
+            assert!(assembly.contains(&format!("call {shim}")), "missing {shim}");
+            assert!(
+                !assembly.lines().any(|line| {
+                    line.split("//").next().unwrap_or("").trim() == format!("call {symbol}")
+                }),
+                "raw Windows CRT call remains: {symbol}"
+            );
+        }
+        for symbol in [
+            "elephc_pcre2_v1_compile",
+            "elephc_pcre2_v1_exec",
+            "elephc_pcre2_v1_free",
+        ] {
+            assert!(assembly.contains(&format!("lea r11, [rip + {symbol}]")));
+            assert!(!assembly.contains(&format!("call {symbol}")));
+        }
+        assert!(assembly.contains("sub rsp, 48"));
+        assert!(assembly.contains("mov QWORD PTR [rsp + 32], r8"));
+        assert!(assembly.contains("mov r9, rcx"));
+        assert!(assembly.contains("mov r8, rdx"));
+        assert!(assembly.contains("mov rdx, rsi"));
+        assert!(assembly.contains("mov rcx, rdi"));
+        assert!(assembly.contains("call r11"));
+    }
 }

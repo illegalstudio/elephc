@@ -142,7 +142,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.label("__rt_sid_float");
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the clipped numeric run for the libc parser
     emitter.instruction("mov x1, #0");                                          // strtod endptr = NULL: the run is already clipped
-    emitter.bl_c("strtod");                                                     // parse the clipped numeric run into d0
+    emitter.emit_call_c("strtod");                                                     // parse the clipped numeric run into d0
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the +1/-1 delta for the float increment
     emitter.instruction("scvtf d1, x3");                                        // convert the delta into a double so the addition is exact
     emitter.instruction("fadd d0, d0, d1");                                     // apply PHP's float increment to the parsed value

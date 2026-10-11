@@ -28,7 +28,12 @@ echo (function_exists("touch") ? "1" : "0")
    . (function_exists("FdAtAsYnC") ? "1" : "0");
 "#,
     );
-    assert_eq!(out, "11111111111");
+    let expected = if target().platform == Platform::Windows {
+        "11110011111"
+    } else {
+        "11111111111"
+    };
+    assert_eq!(out, expected);
 }
 
 /// Verifies file-modify builtins are case-insensitive and resolve correctly
@@ -60,8 +65,9 @@ echo chmod("perms.txt", 0o644) ? "y" : "n";
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies chmod() actually removes write permission when mode 0400 is set;
-/// fileperms() confirms the mode before chmod restores it.
+/// Verifies chmod() actually removes write permission when mode 0400 is set.
+/// Windows exposes its file-level read-only attribute as 0444 because it has no
+/// POSIX owner/group/other permission classes; POSIX targets preserve 0400.
 #[test]
 fn test_chmod_makes_file_unwritable() {
     let (out, dir) = compile_and_run_in_dir(
@@ -73,7 +79,12 @@ chmod("ro.txt", 0o644);
 echo $mode;
 "#,
     );
-    assert_eq!(out, "0400");
+    let expected = if target().platform == Platform::Windows {
+        "0444"
+    } else {
+        "0400"
+    };
+    assert_eq!(out, expected);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -104,10 +115,32 @@ fn test_chgrp_missing_path_returns_false() {
     assert_eq!(out, "n");
 }
 
+/// Verifies php-src's Windows ownership surface: chown/chgrp fail and lchown/lchgrp are absent.
+#[test]
+fn test_windows_ownership_changes_return_false_for_existing_path() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("owner.txt", "x");
+echo chown("owner.txt", 1000) ? "y" : "n";
+echo chgrp("owner.txt", 1000) ? "y" : "n";
+echo function_exists("lchown") ? "y" : "n";
+echo function_exists("lchgrp") ? "y" : "n";
+unlink("owner.txt");
+"#,
+    );
+    assert_eq!(out, "nnnn");
+}
+
 /// Verifies lchown()/lchgrp() succeed on an existing symlink when asked to leave ownership unchanged.
 /// The namespaced, mixed-case calls also verify PHP-style builtin fallback and case-insensitive lookup.
 #[test]
 fn test_lchown_lchgrp_symlink_noop_succeeds() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 namespace FsModifyLinks;
@@ -125,6 +158,9 @@ unlink("target.txt");
 /// Verifies lchown()/lchgrp() return false when the path does not exist.
 #[test]
 fn test_lchown_lchgrp_missing_path_returns_false() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 echo lchown("/nonexistent/xyz/abc-link.txt", 1000) ? "y" : "n";
@@ -137,6 +173,9 @@ echo lchgrp("/nonexistent/xyz/abc-link.txt", 1000) ? "y" : "n";
 /// Verifies lchown()/lchgrp() return false for unknown user/group names.
 #[test]
 fn test_lchown_lchgrp_unknown_principal_strings_return_false() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 file_put_contents("target.txt", "x");
@@ -237,6 +276,24 @@ echo ($ok ? "y" : "n") . "|" . filesize("ext.txt");
 "#,
     );
     assert_eq!(out, "y|8");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies ftruncate() preserves the stream position while changing file size.
+#[test]
+fn test_ftruncate_preserves_stream_position() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("position.txt", "abcdef");
+$h = fopen("position.txt", "r+");
+fseek($h, 2);
+$ok = ftruncate($h, 9);
+$position = ftell($h);
+fclose($h);
+echo ($ok ? "y" : "n") . "|" . $position . "|" . filesize("position.txt");
+"#,
+    );
+    assert_eq!(out, "y|2|9");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -458,5 +515,150 @@ echo ($ok ? "y" : "n") . "|" . filemtime("both.txt");
 "#,
     );
     assert_eq!(out, "y|1000000000");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `fopen($f, 'a')` appends instead of overwriting from byte 0.
+///
+/// This has no target-specific expectation — PHP appends everywhere — but it is
+/// the case the Windows shim got wrong: `WriteFile` writes at the handle's own
+/// file pointer, which `OPEN_ALWAYS` leaves at zero, so every append silently
+/// overwrote the start of the file. No existing fixture opened a file in append
+/// mode at all, which is why the corruption went unnoticed.
+#[test]
+fn test_fopen_append_mode_appends() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("app.txt", "AAAAA");
+$f = fopen("app.txt", "a");
+fwrite($f, "BB");
+fclose($f);
+echo file_get_contents("app.txt");
+"#,
+    );
+    assert_eq!(out, "AAAAABB");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies consecutive writes on one append handle accumulate, that reopening in
+/// append mode resumes at the new end, and that `a+` appends while still allowing
+/// reads.
+#[test]
+fn test_fopen_append_mode_accumulates_and_reopens() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("acc.txt", "X");
+$f = fopen("acc.txt", "a");
+fwrite($f, "A");
+fwrite($f, "B");
+fclose($f);
+$g = fopen("acc.txt", "a");
+fwrite($g, "C");
+fclose($g);
+$h = fopen("acc.txt", "a+");
+fwrite($h, "D");
+fclose($h);
+echo file_get_contents("acc.txt");
+"#,
+    );
+    assert_eq!(out, "XABCD");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a seek cannot defeat append mode: POSIX `O_APPEND` repositions to
+/// end-of-file before every write, so `fseek($f, 0)` then `fwrite` still lands at
+/// the end. A shim that only seeks once at open time would fail this.
+#[test]
+fn test_fopen_append_mode_ignores_seek() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("seek.txt", "12345");
+$f = fopen("seek.txt", "a");
+fseek($f, 0);
+fwrite($f, "Z");
+fclose($f);
+echo file_get_contents("seek.txt");
+"#,
+    );
+    assert_eq!(out, "12345Z");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies write mode still truncates and writes from byte 0, guarding against an
+/// append fix that leaks into non-append descriptors.
+#[test]
+fn test_fopen_write_mode_still_truncates() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("trunc.txt", "OLDDATA");
+$f = fopen("trunc.txt", "w");
+fwrite($f, "NEW");
+fclose($f);
+echo file_get_contents("trunc.txt");
+"#,
+    );
+    assert_eq!(out, "NEW");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a file can be unlinked while a handle to it is still open.
+///
+/// php-src opens every file with `PHP_WIN32_IOUTIL_DEFAULT_SHARE_MODE`, which
+/// includes `FILE_SHARE_DELETE` (win32/ioutil.h). Without that bit `unlink()`
+/// failed outright while the file was open, so the classic write-then-replace
+/// sequence could not work. Windows keeps the name visible until the last handle
+/// closes, which POSIX does not, so only the post-close state is asserted the same
+/// way on both.
+#[test]
+fn test_unlink_succeeds_while_the_file_is_open() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("open.txt", "w");
+fwrite($f, "x");
+$ok = unlink("open.txt");
+fclose($f);
+echo ($ok ? "unlinked" : "refused"), "|", (file_exists("open.txt") ? "present" : "gone");
+"#,
+    );
+    assert_eq!(out, "unlinked|gone");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a path with a trailing dot or space does not silently act on a
+/// different file.
+///
+/// Win32 strips trailing dots and spaces before resolving a name, so
+/// `unlink('keep.txt.')` would delete `keep.txt`. php-src refuses those paths with
+/// ERROR_ACCESS_DENIED at every ioutil entry point
+/// (PHP_WIN32_IOUTIL_CHECK_PATH_W, win32/ioutil.h) precisely to stop that
+/// substitution. POSIX treats both as ordinary filename bytes, so the file simply
+/// does not exist there and the expectation is the same on every target.
+#[test]
+fn test_trailing_dot_or_space_path_does_not_hit_the_real_file() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("keep.txt", "DATA");
+$dot = @unlink("keep.txt.");
+$space = @unlink("keep.txt ");
+echo ($dot ? "removed" : "refused"), "|", ($space ? "removed" : "refused"),
+     "|", (file_exists("keep.txt") ? "intact" : "lost");
+"#,
+    );
+    assert_eq!(out, "refused|refused|intact");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the trailing-dot guard still admits the paths PHP considers legal:
+/// `.`, `..`, and a component ending in a separator followed by a dot.
+#[test]
+fn test_trailing_dot_guard_admits_current_and_parent_directories() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("sub");
+echo (is_dir(".") ? "1" : "0"), (is_dir("..") ? "1" : "0"), (is_dir("sub/.") ? "1" : "0");
+rmdir("sub");
+"#,
+    );
+    assert_eq!(out, "111");
     let _ = fs::remove_dir_all(&dir);
 }

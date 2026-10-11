@@ -2,7 +2,7 @@
 title: "exif_tagname() - internals"
 description: "Compiler internals for exif_tagname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 449
+  order: 453
 ---
 
 ## `exif_tagname()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3921](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3921) (`exif_tagname`)
+- **Lowering**: [`src/image_prelude.rs`:3992](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3992) (`exif_tagname`)
 - **Function symbol**: `exif_tagname()`
 
 

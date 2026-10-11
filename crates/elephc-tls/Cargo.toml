@@ -18,7 +18,24 @@ webpki-roots = "0.26"
 # Pure-Rust PEM parser for the ssl.cafile stream-context option (a custom CA
 # bundle). musl-friendly (no C deps), so the Docker test images stay happy.
 rustls-pemfile = "2"
+# OpenSSL's legacy encrypted PEM envelope is not PKCS#8: decode it with the
+# pure-Rust RustCrypto primitives, preserving the no-system-fallback policy.
+aes = "0.8"
+base64 = "0.22"
+cbc = "0.1"
+des = "0.8"
+pkcs8 = { version = "0.10", features = ["encryption", "pem", "3des", "sha1-insecure"] }
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+zeroize = "1"
 # `libc::dup` is needed by `elephc_tls_attach_fd` to take a duplicated
 # copy of the caller-owned TCP file descriptor without invalidating the
 # original. Keeps the crate musl-friendly (default features only).
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# php-src validates against the Windows certificate store when no explicit
+# cafile/capath is configured. Keep enterprise and administrator-installed
+# trust anchors visible to the Rust bridge as well.
+rustls-native-certs = "0.8"

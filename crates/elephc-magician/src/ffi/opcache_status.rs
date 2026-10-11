@@ -13,7 +13,8 @@
 //!   is what keeps `opcache_get_status()` from dragging the interpreter in.
 //! - The key and field numbers are an ABI shared verbatim with the compiler through a
 //!   `#[path]` include of `src/opcache/rt_status_keys.rs`.
-//! - `__elephc_eval_opcache_rt_script_path` hands back a borrowed `(ptr, len)` into a
+//! - `__elephc_eval_opcache_rt_script_path` writes a borrowed `(ptr, len)` into an explicit
+//!   caller-owned output record. The bytes point into a
 //!   THREAD-LOCAL buffer, never a process-global one: a `static` buffer handing out
 //!   pointers is a cross-thread use-after-free, and `tests/ffi_buffer_hygiene.rs`
 //!   enforces the rule. The caller copies the bytes with `__rt_str_persist` before the
@@ -29,7 +30,8 @@ use rt_status_keys::{
     RT_SCRIPT_REVALIDATE, RT_SCRIPT_TIMESTAMP,
 };
 
-/// A borrowed `(pointer, length)` pair, returned in the first two result registers.
+/// A borrowed `(pointer, length)` pair written through an explicit C output pointer.
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct BorrowedStr {
     /// Pointer to the bytes, or null when there is nothing to return.
@@ -130,7 +132,19 @@ pub extern "C" fn __elephc_eval_opcache_rt_script_field(index: i64, field: i64) 
 /// next call on this thread. An out-of-range index answers a null pointer with length
 /// `0`, which the caller turns into the empty string.
 #[no_mangle]
-pub extern "C" fn __elephc_eval_opcache_rt_script_path(index: i64) -> BorrowedStr {
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_script_path(
+    index: i64,
+    out: *mut BorrowedStr,
+) -> i32 {
+    if out.is_null() || !out.is_aligned() {
+        return 1;
+    }
+    unsafe { out.write(script_path(index)) };
+    0
+}
+
+/// Borrows one cached script path from this thread's reusable output storage.
+fn script_path(index: i64) -> BorrowedStr {
     let path = script_at(index).map(|script| script.full_path);
     let Some(path) = path else {
         return BorrowedStr {
@@ -155,7 +169,19 @@ pub extern "C" fn __elephc_eval_opcache_rt_script_path(index: i64) -> BorrowedSt
 /// buffer and stay valid only until the next call on this thread, and an out-of-range index
 /// answers a null pointer with length `0` for the caller to turn into the empty string.
 #[no_mangle]
-pub extern "C" fn __elephc_eval_opcache_rt_blacklist_entry(index: i64) -> BorrowedStr {
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_blacklist_entry(
+    index: i64,
+    out: *mut BorrowedStr,
+) -> i32 {
+    if out.is_null() || !out.is_aligned() {
+        return 1;
+    }
+    unsafe { out.write(blacklist_entry(index)) };
+    0
+}
+
+/// Borrows one blacklist entry from this thread's reusable output storage.
+fn blacklist_entry(index: i64) -> BorrowedStr {
     // Indexes the loaded list rather than cloning all of it per entry: the listing loop makes
     // one call per pattern, so cloning the whole vector each time was quadratic in the number
     // of blacklist entries — the same shape the cached-script readers had.
@@ -219,9 +245,22 @@ mod tests {
         let _guard = crate::script_cache::store::lock_for_test();
 
         assert_eq!(__elephc_eval_opcache_rt_script_field(7, RT_SCRIPT_HITS), 0);
-        let path = __elephc_eval_opcache_rt_script_path(7);
+        let path = script_path(7);
         assert!(path.ptr.is_null());
         assert_eq!(path.len, 0);
+    }
+
+    /// Validates the explicit output record without dereferencing invalid storage.
+    #[test]
+    fn borrowed_string_exports_require_aligned_output_storage() {
+        let mut out = BorrowedStr { ptr: 1_usize as *const u8, len: 99 };
+        assert_eq!(unsafe { __elephc_eval_opcache_rt_script_path(-1, &mut out) }, 0);
+        assert!(out.ptr.is_null());
+        assert_eq!(out.len, 0);
+        assert_eq!(unsafe { __elephc_eval_opcache_rt_script_path(-1, std::ptr::null_mut()) }, 1);
+        assert_eq!(unsafe {
+            __elephc_eval_opcache_rt_blacklist_entry(-1, 1_usize as *mut BorrowedStr)
+        }, 1);
     }
 
     /// Distinct non-UTF-8 Unix paths survive the snapshot and borrowed-string ABI unchanged.
@@ -250,7 +289,7 @@ mod tests {
             expected.push(path.as_os_str().as_encoded_bytes().to_vec());
         }
         let reported = (0..2).map(|index| {
-            let path = __elephc_eval_opcache_rt_script_path(index);
+            let path = script_path(index);
             assert!(!path.ptr.is_null());
             unsafe { std::slice::from_raw_parts(path.ptr, path.len) }.to_vec()
         }).collect::<Vec<_>>();
@@ -265,6 +304,6 @@ mod tests {
         let _guard = crate::script_cache::store::lock_for_test();
 
         assert_eq!(__elephc_eval_opcache_rt_script_field(-1, RT_SCRIPT_HITS), 0);
-        assert!(__elephc_eval_opcache_rt_script_path(-1).ptr.is_null());
+        assert!(script_path(-1).ptr.is_null());
     }
 }

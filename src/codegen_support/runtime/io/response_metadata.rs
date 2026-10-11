@@ -83,7 +83,7 @@ fn aarch64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("str x9, [sp, #16]");                                   // install the existing protected diagnostic callback
     emitter.instruction("mov x3, sp");                                          // borrow the complete diagnostic host table
     emitter.instruction("add x4, sp, #24");                                     // provide separate bridge-owned result storage
-    emitter.bl_c("elephc_mbstring_response_header_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_response_header_v1", 5);
     emitter.instruction("str x0, [sp, #88]");                                   // retain the protected status through result release
     if web {
         emitter.instruction("cbnz x0, __rt_mbstring_header_release");           // suppress transport publication after a pending or fatal failure
@@ -92,11 +92,11 @@ fn aarch64(emitter: &mut Emitter, web: bool) {
         emitter.instruction("b.ne __rt_mbstring_header_release");               // leave rejected headers out of the web response
         emitter.instruction("ldp x0, x1, [sp, #40]");                           // borrow the bridge-owned wire header and exact byte length
         emitter.instruction("ldp x2, x3, [sp, #72]");                           // restore original replacement and response-code options
-        emitter.bl_c("elephc_web_header");
+        emitter.emit_native_bridge_symbol_call("elephc_web_header", 4);
     }
     emitter.label("__rt_mbstring_header_release");
     emitter.instruction("add x0, sp, #24");                                     // release the result through its original Rust allocator
-    emitter.bl_c("elephc_mbstring_release_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_release_v1", 1);
     emitter.instruction("ldr x0, [sp, #88]");                                   // return protected runtime status to the native wrapper or Rust callback
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore caller linkage after every borrowed header byte is retired
     emitter.instruction("add sp, sp, #128");                                    // release invocation-local metadata and result storage
@@ -119,7 +119,7 @@ fn x86_64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("mov QWORD PTR [rsp + 16], r10");                       // install the existing protected warning callback
     emitter.instruction("mov rcx, rsp");                                        // borrow the diagnostic host for this complete Rust call
     emitter.instruction("lea r8, [rsp + 24]");                                  // provide disjoint owned result storage
-    emitter.bl_c("elephc_mbstring_response_header_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_response_header_v1", 5);
     emitter.instruction("mov DWORD PTR [rsp + 88], eax");                       // retain callback status until all bridge buffers are released
     if web {
         emitter.instruction("test eax, eax");                                   // suppress transport headers after a protected callback failure
@@ -130,11 +130,11 @@ fn x86_64(emitter: &mut Emitter, web: bool) {
         emitter.instruction("mov rsi, QWORD PTR [rsp + 48]");                   // retain the exact binary header length
         emitter.instruction("mov rdx, QWORD PTR [rsp + 72]");                   // restore the caller's replacement mode
         emitter.instruction("mov rcx, QWORD PTR [rsp + 80]");                   // restore its explicit response code
-        emitter.bl_c("elephc_web_header");
+        emitter.emit_native_bridge_symbol_call("elephc_web_header", 4);
     }
     emitter.label("__rt_mbstring_header_release");
     emitter.instruction("lea rdi, [rsp + 24]");                                 // retire every result through the original bridge allocator
-    emitter.bl_c("elephc_mbstring_release_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_release_v1", 1);
     emitter.instruction("mov eax, DWORD PTR [rsp + 88]");                       // return raw status after all ownership has ended
     emitter.instruction("leave");                                               // release status storage and restore native or Rust caller linkage
     emitter.instruction("ret");                                                 // return without unwinding through Rust
@@ -145,7 +145,7 @@ pub(super) fn commit(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::AArch64 {
         emitter.instruction("stp x0, x1, [sp, #-16]!");                         // retain the terminal byte span across response-state commitment
         emitter.instruction("mov x0, x1");                                      // a zero byte count must not freeze response headers
-        emitter.bl_c("elephc_mbstring_response_commit_v1");
+        emitter.emit_native_bridge_symbol_call("elephc_mbstring_response_commit_v1", 1);
         emitter.instruction("cbnz x0, __rt_stdout_response_fatal");             // stop after an invalid request-state boundary
         emitter.instruction("ldp x0, x1, [sp], #16");                           // restore the original terminal span for web capture or the syscall
         emitter.instruction("b __rt_stdout_response_ready");                    // continue normal sink selection after successful commitment
@@ -158,7 +158,7 @@ pub(super) fn commit(emitter: &mut Emitter) {
         emitter.instruction("mov QWORD PTR [rsp], rdi");                        // retain the original output pointer
         emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                    // retain its exact byte length
         emitter.instruction("mov rdi, rsi");                                    // commit only when a nonempty span reaches the terminal sink
-        emitter.bl_c("elephc_mbstring_response_commit_v1");
+        emitter.emit_native_bridge_symbol_call("elephc_mbstring_response_commit_v1", 1);
         emitter.instruction("test eax, eax");                                   // detect a fatal request-state boundary before actual output
         emitter.instruction("jnz __rt_stdout_response_fatal");                  // preserve the bridge failure rather than silently writing
         emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // restore the original terminal output pointer

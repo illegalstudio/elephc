@@ -28,8 +28,8 @@ pub(super) fn lower_boxed_array_reverse(
         abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
     }
     abi::emit_push_reg(ctx.emitter, result_reg);
-    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
+    ctx.load_value_to_reg(array, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1));
     abi::emit_call_label(ctx.emitter, "__rt_array_reverse_boxed");
     let valid = ctx.next_label("array_reverse_boxed_valid");
     match ctx.emitter.target.arch {

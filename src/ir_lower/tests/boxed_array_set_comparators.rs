@@ -101,3 +101,40 @@ targetSetComparators([false, false]);
         assert!(!asm.contains("__rt_array_find_any_all"), "{name}");
     }
 }
+
+/// Pins the Windows runtime-helper ABI at the direct comparator call boundary.
+#[test]
+fn boxed_array_set_comparator_windows_uses_sysv_runtime_arguments() {
+    let source = r#"<?php
+function compareSetValues(int $left, int $right): int { return $left <=> $right; }
+class ComparatorScope {
+    public static function difference(array $values): array {
+        return array_udiff($values, [2], "compareSetValues");
+    }
+}
+echo count(ComparatorScope::difference([1, 2, 3]));
+"#;
+    let target = Target::parse("windows-x86_64").unwrap();
+    let module = super::lower_source_at_for_target(
+        source,
+        Path::new("main.php"),
+        Path::new("."),
+        target,
+    );
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("windows-x86_64: {error:?}"));
+    let call_prefix = asm
+        .split_once("    call __rt_array_udiff_uintersect")
+        .expect("Windows comparator runtime call")
+        .0;
+    let staging = call_prefix
+        .rsplit_once("    mov rdi, rax\n")
+        .expect("first SysV comparator argument")
+        .1;
+    assert!(
+        staging.starts_with(
+            "    mov rsi, rsp\n    lea rdx, [rsp + 64]\n    mov rcx, 0\n    mov r8, "
+        ),
+        "windows-x86_64: comparator helper must receive all five words in its SysV runtime ABI\n{asm}"
+    );
+}

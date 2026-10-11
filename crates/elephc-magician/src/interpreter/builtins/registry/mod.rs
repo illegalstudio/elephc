@@ -43,6 +43,8 @@ pub(in crate::interpreter) use signature::*;
 struct DeclaredBuiltinRegistry {
     /// Case-insensitive lookup keyed by canonical lowercase PHP builtin name.
     by_name: HashMap<String, usize>,
+    /// Unfiltered implementation inventory used only by cross-target audits and docs.
+    all_by_name: HashMap<String, usize>,
     /// Runtime-ready joins of shared contracts and Magician bindings.
     specs: Vec<EvalBuiltinSpec>,
     /// Stable ordered list of registered canonical names.
@@ -55,21 +57,27 @@ static DECLARED_BUILTIN_REGISTRY: OnceLock<DeclaredBuiltinRegistry> = OnceLock::
 /// Builds the declarative registry and rejects duplicate builtin names.
 fn build_declared_builtin_registry() -> DeclaredBuiltinRegistry {
     let mut by_name = HashMap::new();
+    let mut all_by_name = HashMap::new();
     let mut specs = Vec::new();
     let mut names = Vec::new();
 
     for binding in inventory::iter::<EvalBuiltinBinding> {
         let spec = EvalBuiltinSpec::from_binding(binding);
         validate_declared_builtin_spec(&spec);
+        let contract = elephc_builtin_contract::lookup(spec.name)
+            .expect("declared eval builtin must join a shared contract");
         let key = spec.name.to_ascii_lowercase();
         let index = specs.len();
-        if by_name.insert(key, index).is_some() {
+        if all_by_name.insert(key.clone(), index).is_some() {
             panic!(
                 "duplicate eval builtin name registered in inventory: \"{}\"",
                 spec.name
             );
         }
-        names.push(spec.name);
+        if builtin_contract_is_available_on_build_target(contract) {
+            by_name.insert(key, index);
+            names.push(spec.name);
+        }
         specs.push(spec);
     }
 
@@ -78,6 +86,7 @@ fn build_declared_builtin_registry() -> DeclaredBuiltinRegistry {
     names.sort_unstable();
     DeclaredBuiltinRegistry {
         by_name,
+        all_by_name,
         specs,
         names,
     }
@@ -87,6 +96,14 @@ fn build_declared_builtin_registry() -> DeclaredBuiltinRegistry {
 fn validate_shared_eval_coverage(by_name: &HashMap<String, usize>) {
     for contract in contracts() {
         let registered = by_name.contains_key(contract.name);
+        if !builtin_contract_is_available_on_build_target(contract) {
+            assert!(
+                !registered,
+                "platform-unavailable shared builtin contract {} must not have an exposed eval registry entry",
+                contract.name
+            );
+            continue;
+        }
         match eval_support(contract) {
             BackendSupport::Implemented(BackendImplementation::Registry) => assert!(
                 registered,
@@ -104,6 +121,26 @@ fn validate_shared_eval_coverage(by_name: &HashMap<String, usize>) {
             ),
         }
     }
+}
+
+/// Returns whether php-src registers one shared builtin on the build target.
+///
+/// The neutral contract remains the source of its signature and backend policy,
+/// while the compiled registry mirrors php-src capability guards. Windows does
+/// not define `HAVE_LCHOWN`, so neither link-ownership function exists there.
+fn builtin_contract_is_available_on_build_target(
+    contract: &elephc_builtin_contract::BuiltinContract,
+) -> bool {
+    let target = if cfg!(windows) {
+        elephc_builtin_contract::PhpTarget::Windows
+    } else if cfg!(target_os = "ios") {
+        elephc_builtin_contract::PhpTarget::Ios
+    } else if cfg!(target_os = "macos") {
+        elephc_builtin_contract::PhpTarget::MacOs
+    } else {
+        elephc_builtin_contract::PhpTarget::Linux
+    };
+    contract.is_php_available_on(target)
 }
 
 /// Validates static spec invariants before the registry is exposed.
@@ -229,7 +266,10 @@ fn builtin_is_available(
     regex_available: bool,
     mbregex_available: bool,
 ) -> bool {
-    !(strict_php && spec.is_extension())
+    let contract = elephc_builtin_contract::lookup(spec.name)
+        .expect("declared eval builtin must join a shared contract");
+    builtin_contract_is_available_on_build_target(contract)
+        && !(strict_php && spec.is_extension())
         && (!matches!(spec.area(), EvalArea::Regex) || regex_available)
         && (!spec.runtime_builtin.is_some_and(RuntimeBuiltinId::is_mbregex) || mbregex_available)
         && (!matches!(spec.area(), EvalArea::Pcntl)
@@ -247,6 +287,19 @@ pub(in crate::interpreter) fn eval_raw_declared_builtin_spec(
     let key = name.trim_start_matches('\\').to_ascii_lowercase();
     let registry = declared_builtin_registry();
     let index = *registry.by_name.get(&key)?;
+    Some(&registry.specs[index])
+}
+
+/// Looks up implementation metadata without applying host PHP availability.
+///
+/// This view is restricted to cross-target audits and documentation. Runtime
+/// dispatch, raw PHP metadata, and introspection must use the filtered lookup.
+pub(in crate::interpreter) fn eval_unfiltered_declared_builtin_spec(
+    name: &str,
+) -> Option<&'static EvalBuiltinSpec> {
+    let key = name.trim_start_matches('\\').to_ascii_lowercase();
+    let registry = declared_builtin_registry();
+    let index = *registry.all_by_name.get(&key)?;
     Some(&registry.specs[index])
 }
 

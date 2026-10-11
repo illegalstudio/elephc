@@ -13,12 +13,12 @@ use super::*;
 
 /// Walks visible native activations and invokes the indexed reader through its C ABI.
 pub(super) fn emit_backtrace_entry_wrapper(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_backtrace_entry");
+    abi::emit_c_callback_entry_with_arity(emitter, "__elephc_eval_backtrace_entry", 2);
     let arm = emitter.target.arch == Arch::AArch64;
     let cursor = if arm { "x9" } else { "r10" };
     let reader = if arm { "x10" } else { "r11" };
-    let index = abi::int_arg_reg_name(emitter.target, 0);
-    let options = abi::int_arg_reg_name(emitter.target, 1);
+    let index = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let options = abi::runtime_helper_int_arg_reg(emitter, 1);
     abi::emit_frame_prologue(emitter, 32);
     abi::emit_store_to_sp(emitter, options, 0);
     abi::emit_load_symbol_to_reg(emitter, cursor, "_exc_call_frame_top", 0);
@@ -52,7 +52,7 @@ pub(super) fn emit_backtrace_entry_wrapper(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_backtrace_entry_read");
     abi::emit_reg_move(emitter, index, cursor);
     abi::emit_load_temporary_stack_slot(emitter, options, 0);
-    let mode = abi::int_arg_reg_name(emitter.target, 2);
+    let mode = abi::runtime_helper_int_arg_reg(emitter, 2);
     abi::emit_load_int_immediate(emitter, mode, -1);
     abi::emit_call_reg(emitter, reader);
     abi::emit_jump(emitter, "__elephc_eval_backtrace_entry_done");
@@ -61,4 +61,27 @@ pub(super) fn emit_backtrace_entry_wrapper(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_backtrace_entry_done");
     abi::emit_frame_restore(emitter, 32);
     emitter.instruction("ret");                                                 // return the owned frame or a null end marker
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    /// Windows C entry adapts exactly two MSx64 arguments into the SysV-shaped body and reader.
+    #[test]
+    fn windows_backtrace_entry_uses_sysv_internal_registers() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_backtrace_entry_wrapper(&mut emitter);
+        let assembly = emitter.output();
+
+        assert!(assembly.contains("mov rdi, rcx"));
+        assert!(assembly.contains("mov rsi, rdx"));
+        assert!(assembly.contains("mov QWORD PTR [rsp], rsi"));
+        assert!(assembly.contains("mov rdi, r10"));
+        assert!(assembly.contains("mov rsi, QWORD PTR [rsp]"));
+        assert!(assembly.contains("mov rdx, -1"));
+        assert!(!assembly.contains("mov r8, QWORD PTR [rsp + 40]"));
+        assert!(!assembly.contains("mov r9, QWORD PTR [rsp + 48]"));
+    }
 }

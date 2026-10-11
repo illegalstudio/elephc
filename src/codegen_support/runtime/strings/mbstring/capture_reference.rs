@@ -122,18 +122,40 @@ pub(super) fn emit_store(emitter: &mut Emitter) {
 /// Passes a borrowed graph and retained reference to the shared validated capture insertion engine.
 fn emit_fill(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
+    abi::emit_c_callback_entry(emitter, "__rt_mbstring_capture_reference_store_cabi");
+    emitter.instruction(&format!("{} __rt_mbstring_capture_reference_store",
+        if arm { "b" } else { "jmp" }));                                        // enter the established internal store callback
     emitter.label_global("__rt_mbstring_capture_reference_fill");
     if arm {
         emitter.instruction("stp x29, x30, [sp, #-16]!");                       // preserve linkage while the shared engine invokes native stores
     } else {
         emitter.instruction("sub rsp, 8");                                      // align the five-argument C call without disturbing incoming arguments
     }
-    abi::emit_symbol_address(emitter, if arm { "x4" } else { "r8" }, "__rt_mbstring_capture_reference_store");
-    emitter.bl_c("elephc_mbstring_capture_apply_v1");
+    abi::emit_symbol_address(emitter, if arm { "x4" } else { "r8" },
+        &emitter.target.extern_symbol("__rt_mbstring_capture_reference_store_cabi"));
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_capture_apply_v1", 5);
     if arm {
         emitter.instruction("ldp x29, x30, [sp], #16");                         // restore linkage after all ordered writes have completed
     } else {
         emitter.instruction("add rsp, 8");                                      // restore caller alignment while preserving the shared status
     }
     emitter.instruction("ret");                                                 // return success, fatal failure, or the pending throwable status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Ensures Rust capture application receives the store callback through an MSx64 thunk.
+    #[test]
+    fn windows_capture_store_callback_uses_c_abi_entry() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit(&mut emitter);
+        let assembly = emitter.output();
+        let name = "__rt_mbstring_capture_reference_store_cabi";
+        let body = assembly.split(&format!("{name}:\n")).nth(1).expect("C ABI callback");
+        let entry = body.split(&format!("{name}__internal:")).next().unwrap();
+        assert!(entry.contains("mov rdi, rcx"));
+    }
 }

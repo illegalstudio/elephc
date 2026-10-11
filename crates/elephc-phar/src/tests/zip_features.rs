@@ -335,6 +335,37 @@ pub(super) fn reads_zipcrypto_encrypted_entry() {
     set_zip_password(b"");
 }
 
+/// A wrong ZipCrypto password remains rejected when its one-byte header check
+/// collides. The CRC from the central directory is the definitive integrity check.
+#[test]
+pub(super) fn rejects_zipcrypto_password_after_header_check_collision() {
+    let content = b"zipcrypto crc verification\n";
+    let password = b"hunter2";
+    let wrong_password = b"wrong-password";
+    let mut archive = build_zipcrypto_zip("zc-collision.txt", content, password);
+    let central = find_zip_eocd(&archive).expect("fixture has central directory");
+    let central_offset = le32(&archive, central + 16).expect("central offset") as usize;
+    let check_byte = (le32(&archive, central_offset + 16).expect("central crc") >> 24) as u8;
+    let local_name_len = le16(&archive, 26).expect("local name length") as usize;
+    let payload_start = 30 + local_name_len;
+
+    // Mutate the final encrypted header byte through all values. Exactly one makes
+    // the wrong password pass ZipCrypto's one-byte header check, without relying
+    // on the nonce used by the production fixture builder.
+    let original = archive[payload_start + 11];
+    let collision_found = (0..=u8::MAX).any(|byte| {
+        archive[payload_start + 11] = byte;
+        zipcrypto_decrypt(wrong_password, &archive[payload_start..], check_byte).is_some()
+    });
+    if !collision_found {
+        archive[payload_start + 11] = original;
+    }
+    assert!(collision_found, "fixture must force a header-check collision");
+    set_zip_password(wrong_password);
+    assert_eq!(extract_entry_bytes(&archive, b"zc-collision.txt"), None);
+    set_zip_password(b"");
+}
+
 /// With a zip password set, `build_zip_archive` encrypts every file entry — the
 /// stub included — so entries read back only with the correct password; a wrong
 /// or cleared password fails, and an archive built with no password stays plain.

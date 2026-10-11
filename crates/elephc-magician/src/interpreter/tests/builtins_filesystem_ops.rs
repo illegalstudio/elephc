@@ -220,10 +220,14 @@ fn execute_program_dispatches_file_modify_builtins() {
     let missing = format!("elephc_magician_modify_missing_{pid}.txt");
     let prefix = format!("evm{pid}_");
     let call_prefix = format!("evc{pid}_");
+    #[cfg(unix)]
+    let mode_check = format!("(fileperms(\"{filename}\") & 511) === 384");
+    #[cfg(windows)]
+    let mode_check = format!("(fileperms(\"{filename}\") & 128) !== 0");
     let source = format!(
         r#"file_put_contents("{filename}", "x");
 echo chmod(filename: "{filename}", permissions: 384) ? "chmod" : "bad"; echo ":";
-echo (fileperms("{filename}") & 511) === 384 ? "mode" : "bad"; echo ":";
+echo {mode_check} ? "mode" : "bad"; echo ":";
 echo chmod("{missing}", 384) ? "bad" : "chmod-false"; echo ":";
 $tmp = tempnam(directory: ".", prefix: "{prefix}");
 echo file_exists($tmp) && str_starts_with(basename($tmp), "{prefix}") ? "tempnam" : "bad"; echo ":";
@@ -273,8 +277,61 @@ return true;"#
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies Windows chmod metadata follows aliases and filesystem mutations without leaking.
+#[cfg(windows)]
+#[test]
+fn execute_program_tracks_windows_chmod_metadata_by_file_identity() {
+    let pid = std::process::id();
+    let source_file = format!("elephc_magician_ModeAlias_{pid}.txt");
+    let case_alias = source_file.to_lowercase();
+    let hard_link = format!("elephc_magician_mode_hard_{pid}.txt");
+    let renamed = format!("elephc_magician_mode_renamed_{pid}.txt");
+    let copied = format!("elephc_magician_mode_copied_{pid}.txt");
+    let plain = format!("elephc_magician_mode_plain_{pid}.txt");
+    let replaced = format!("elephc_magician_mode_replaced_{pid}.txt");
+    let source = format!(
+        r#"file_put_contents("{source_file}", "source");
+chmod("{source_file}", 384);
+echo (fileperms("./{case_alias}") & 511) === 384 ? "alias" : "bad"; echo ":";
+link("{source_file}", "{hard_link}");
+unlink("{source_file}");
+echo (fileperms("{hard_link}") & 511) === 384 ? "hard" : "bad"; echo ":";
+rename("{hard_link}", "{renamed}");
+echo (fileperms("{renamed}") & 511) === 384 ? "rename" : "bad"; echo ":";
+copy("{renamed}", "{copied}");
+echo (fileperms("{copied}") & 511) === 384 ? "copy" : "bad"; echo ":";
+chmod("{copied}", 420);
+unlink("{copied}");
+file_put_contents("{copied}", "replacement");
+echo (fileperms("{copied}") & 511) !== 420 ? "recreate" : "bad"; echo ":";
+file_put_contents("{plain}", "plain");
+file_put_contents("{replaced}", "old");
+chmod("{replaced}", 420);
+copy("{plain}", "{replaced}");
+echo (fileperms("{replaced}") & 511) !== 420 ? "replace" : "bad"; echo ":";
+unlink("{renamed}"); unlink("{copied}"); unlink("{plain}"); unlink("{replaced}");
+return true;"#
+    );
+    let paths = [&source_file, &case_alias, &hard_link, &renamed, &copied, &plain, &replaced];
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+    let program = parse_fragment(source.as_bytes()).expect("parse Windows chmod metadata fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+    assert_eq!(values.output, "alias:hard:rename:copy:recreate:replace:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval ownership builtins mutate local files and dispatch dynamically.
 #[test]
+#[cfg(unix)]
 fn execute_program_dispatches_file_ownership_builtins() {
     let pid = std::process::id();
     let filename = format!("elephc_magician_ownership_{pid}.txt");
@@ -316,6 +373,46 @@ return function_exists("lchgrp");"#
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies Windows local ownership builtins fail silently like PHP while remaining callable.
+#[test]
+#[cfg(windows)]
+fn execute_program_dispatches_windows_file_ownership_builtins() {
+    let pid = std::process::id();
+    let filename = format!("elephc_magician_ownership_{pid}.txt");
+    let missing = format!("elephc_magician_ownership_missing_{pid}.txt");
+    let source = format!(
+        r#"file_put_contents("{filename}", "x");
+echo chown("{filename}", 0) ? "bad" : "chown-false"; echo ":";
+echo chgrp(filename: "{filename}", group: 0) ? "bad" : "chgrp-false"; echo ":";
+echo chown("{filename}", "__elephc_eval_missing_user__") ? "bad" : "user-false"; echo ":";
+echo chgrp("{filename}", "__elephc_eval_missing_group__") ? "bad" : "group-false"; echo ":";
+echo chown("{missing}", 0) ? "bad" : "missing-false"; echo ":";
+echo call_user_func("chown", "{filename}", 0) ? "bad" : "call-false"; echo ":";
+echo call_user_func_array("chgrp", ["filename" => "{filename}", "group" => 0]) ? "bad" : "array-false"; echo ":";
+echo unlink("{filename}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("chown"); echo function_exists("chgrp");
+echo function_exists("lchown"); echo function_exists("lchgrp");
+return true;"#
+    );
+    let _ = std::fs::remove_file(&filename);
+    let _ = std::fs::remove_file(&missing);
+    let program = parse_fragment(source.as_bytes()).expect("parse Windows eval ownership fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute Windows eval ownership fragment");
+
+    let _ = std::fs::remove_file(&filename);
+    let _ = std::fs::remove_file(&missing);
+    assert_eq!(
+        values.output,
+        "chown-false:chgrp-false:user-false:group-false:missing-false:call-false:array-false:cleanup:1100"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `touch()` creates files, stamps mtimes, and dispatches dynamically.
 #[test]
 fn execute_program_dispatches_touch_builtin() {

@@ -16,7 +16,7 @@ const NAME: &str = "__rt_mbstring_capture_initialize";
 /// Initializes one retained caller reference and transfers writer/deferred owners into separate outputs.
 pub(super) fn emit(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
-    emitter.label_global(NAME);
+    abi::emit_c_callback_entry(emitter, NAME);
     if arm {
         emitter.instruction(&format!("cbz x2, {NAME}_invalid"));                // require the coordinator's writable sixteen-byte output
         emitter.instruction("stp xzr, xzr, [x2]");                              // expose no writer or readiness until initialization completes

@@ -71,6 +71,12 @@ use control::{
     EvalByRefBindingMode, EvalControl, EvalPredefinedConstant, EvalSprintfSpec,
     EvaluatedCallArg, EvaluatedCallable,
 };
+
+/// Formats the current instant as RFC 2822 through this eval context's PHP timezone.
+pub(crate) fn format_mail_date(context: &ElephcEvalContext) -> Result<Vec<u8>, EvalStatus> {
+    let timestamp = eval_current_unix_timestamp()?;
+    eval_mail_date_at(timestamp, context)
+}
 use dynamic_functions::*;
 use expressions::*;
 use include_exec::*;
@@ -98,9 +104,10 @@ pub(crate) use output_handlers::eval_ob_handler_callback;
 pub(crate) use output_handlers::release_ob_handler_callbacks;
 use statements::*;
 use throwables::*;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::net::ToSocketAddrs;
+#[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};

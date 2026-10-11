@@ -223,7 +223,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("b.le __rt_curl_invoke_cb_release_return");             // no → leave out_len at 0
     emitter.instruction("str x2, [x11, #40]");                                  // spec.out_len = the copied byte count
     emitter.instruction("mov x0, x12");                                         // memcpy dst = spec.out_buf
-    emitter.bl_c("memcpy"); // src (x1) and length (x2) are already in place
+    emitter.emit_call_c("memcpy");                                             // route the copy through the Windows ABI shim when required
     emitter.instruction("b __rt_curl_invoke_cb_release_return");                // release the owned string-return cell after copying bytes
 
     // -- release the invoker's owned boxed return --
@@ -373,7 +373,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg0 = the callable descriptor
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // arg1 = the boxed argument container
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the uniform invoker
-    emitter.instruction("call r10");                                            // call the PHP callable → OWNED boxed Mixed return
+    emitter.emit_platform_callback_call("r10", 2);                                // call generated PHP callable with the target ABI
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed return
 
     // -- pop the firewall before any further runtime call --
@@ -412,7 +412,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + 40], rdx");                       // spec.out_len = the copied byte count
     emitter.instruction("mov rsi, rdi");                                        // memcpy src = the string bytes
     emitter.instruction("mov rdi, r8");                                         // memcpy dst = spec.out_buf
-    emitter.bl_c("memcpy"); // length is already in rdx
+    emitter.emit_call_c("memcpy");                                             // route the copy through the Windows ABI shim when required
     emitter.instruction("jmp __rt_curl_invoke_cb_release_return_x86");          // release the owned string-return cell after copying bytes
 
     // -- release the invoker's owned boxed return --

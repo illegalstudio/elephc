@@ -34,7 +34,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_exception_next");
     emitter.instruction("ldp x0, x1, [sp]");                                    // borrow the original result and select the next oldest-first record
     emitter.instruction("add x2, sp, #24");                                     // provide a separate class/message/length record descriptor
-    emitter.bl_c("elephc_mbstring_exception_at_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_exception_at_v1", 3);
     emitter.instruction("cbz w0, __rt_mbstring_exception_publish");             // publish only at the validated exact end of the chain
     emitter.instruction("cmp w0, #1");                                          // require one complete borrowed record
     emitter.instruction("b.ne __rt_mbstring_exception_invalid");                // reject malformed chains without publishing partial objects
@@ -100,7 +100,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rsp]");                            // borrow the original complete wire result
     emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                        // select the next oldest-first exception record
     emitter.instruction("lea rdx, [rsp + 24]");                                 // provide independent borrowed class/message/length storage
-    emitter.bl_c("elephc_mbstring_exception_at_v1");
+    emitter.emit_native_bridge_symbol_call("elephc_mbstring_exception_at_v1", 3);
     emitter.instruction("test eax, eax");                                       // recognize the validated exact end of the chain
     emitter.instruction("jz __rt_mbstring_exception_publish");                  // publish only after every record was constructed
     emitter.instruction("cmp eax, 1");                                          // require a complete borrowed exception record

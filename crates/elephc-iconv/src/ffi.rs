@@ -6,8 +6,8 @@
 //! - `crate::convert`, `crate::text`, and `crate::mime` whenever bytes must be transcoded.
 //!
 //! Key details:
-//! - macOS resolves `iconv_open` from `libiconv`, so the extern block links it there;
-//!   glibc and musl provide the same symbols from libc itself.
+//! - macOS resolves `iconv_open` from `libiconv`, GNU/MinGW exports the Windows
+//!   variants as `libiconv_*`, and glibc/musl provide the ordinary names from libc.
 //! - Opening a converter first installs a UTF-8 `LC_CTYPE`, because glibc drives
 //!   `//TRANSLIT` from that locale and the PHP CLI installs one at startup too.
 //! - Apple's iconv (Citrus-based since macOS 14) stores the `//TRANSLIT` and `//IGNORE`
@@ -31,8 +31,10 @@ use crate::error::{IconvError, IconvResult};
 #[cfg_attr(target_os = "macos", link(name = "iconv"))]
 unsafe extern "C" {
     /// Opens a native conversion descriptor for the requested source and destination charsets.
+    #[cfg_attr(target_os = "windows", link_name = "libiconv_open")]
     fn iconv_open(tocode: *const c_char, fromcode: *const c_char) -> *mut c_void;
     /// Converts input bytes through the descriptor, updating buffer pointers and remaining lengths.
+    #[cfg_attr(target_os = "windows", link_name = "libiconv")]
     fn iconv(
         cd: *mut c_void,
         inbuf: *mut *mut c_char,
@@ -41,6 +43,7 @@ unsafe extern "C" {
         outbytesleft: *mut usize,
     ) -> usize;
     /// Closes a native conversion descriptor and releases its resources.
+    #[cfg_attr(target_os = "windows", link_name = "libiconv_close")]
     fn iconv_close(cd: *mut c_void) -> c_int;
     /// Queries or replaces the process locale for the requested category.
     fn setlocale(category: c_int, locale: *const c_char) -> *mut c_char;
@@ -49,17 +52,17 @@ unsafe extern "C" {
     fn iconvctl(cd: *mut c_void, request: c_int, argument: *mut c_void) -> c_int;
 }
 
-/// `LC_CTYPE` category number. glibc and musl number it 0, but Apple's BSD-derived libc
-/// numbers it 2 and uses 0 for `LC_ALL`, where the same value would replace every category.
-#[cfg(target_vendor = "apple")]
+/// `LC_CTYPE` category number. glibc and musl number it 0, while Apple and Windows
+/// number it 2 and use 0 for `LC_ALL`, where the same value would replace every category.
+#[cfg(any(target_vendor = "apple", target_os = "windows"))]
 const LC_CTYPE: c_int = 2;
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
 const LC_CTYPE: c_int = 0;
 
 /// `LC_NUMERIC` category number, read by the tests that check only `LC_CTYPE` changes.
-#[cfg(all(test, target_vendor = "apple"))]
+#[cfg(all(test, any(target_vendor = "apple", target_os = "windows")))]
 const LC_NUMERIC: c_int = 4;
-#[cfg(all(test, not(target_vendor = "apple")))]
+#[cfg(all(test, not(any(target_vendor = "apple", target_os = "windows"))))]
 const LC_NUMERIC: c_int = 1;
 
 /// `iconvctl()` request that sets a descriptor's transliteration (GNU libiconv numbering).
@@ -459,4 +462,19 @@ pub(crate) fn numeric_locale_name() -> Vec<u8> {
         return Vec::new();
     }
     unsafe { std::ffi::CStr::from_ptr(name) }.to_bytes().to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LC_CTYPE, LC_NUMERIC};
+
+    /// Keeps each supported CRT's locale category numbers explicit and regression-tested.
+    #[test]
+    fn locale_category_numbers_match_the_target_crt() {
+        #[cfg(any(target_vendor = "apple", target_os = "windows"))]
+        assert_eq!((LC_CTYPE, LC_NUMERIC), (2, 4));
+
+        #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
+        assert_eq!((LC_CTYPE, LC_NUMERIC), (0, 1));
+    }
 }
