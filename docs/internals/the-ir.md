@@ -1676,7 +1676,7 @@ reached. The isolated lowering's text AND its data section are shape-normalized:
   suffixes, the raw name the source-map marker quotes) is replaced by a
   placeholder — except inside `.ascii` payloads, where the candidate's own name is
   real string data whose bytes the program can print;
-- internal labels are renamed by first appearance (the Linux assembler spells them
+- internal labels are renamed by definition order (the Linux assembler spells them
   `.L_eir_…` where Apple spells them `L_eir_…`);
 - the isolated data section's emitted text is appended to the comparison, so two
   bodies whose literal pools intern different contents under the same label are

@@ -1745,7 +1745,7 @@ fn erase_word_bounded(line: &str, symbol: &str) -> String {
     out
 }
 
-/// Maps an internal label token to its canonical name by order of first appearance.
+/// Maps an internal label token to its canonical name by order of first definition.
 fn label_map_push(mapping: &mut Vec<(String, String)>, token: &str) -> String {
     if let Some((_, canonical)) = mapping.iter().find(|(raw, _)| raw == token) {
         return canonical.clone();
