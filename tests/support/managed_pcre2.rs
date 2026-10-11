@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Fixtures use the production cache key and receipt schema without downloading sources.
+//! - Recipe and source identity come from the catalog, not a separately pinned revision.
 //! - System PCRE2 archives are admitted only inside this test provider; production resolution
 //!   remains fail-closed and never falls back to system libraries.
 //! - Process-wide provider and shim caches reject attempts to mix supported targets.
@@ -24,11 +25,18 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 const PCRE2_VERSION: &str = "10.47";
-const PCRE2_RECIPE: u32 = 3;
-// This catalog identity and the project files embedded below are canonicalized by
-// `examples/date-json-regex/elephc.toml` and `examples/date-json-regex/elephc.lock`.
-const PCRE2_SOURCE_SHA256: &str =
-    "c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16";
+
+/// Reads the fixture's recipe and source identity from the production catalog.
+fn fixture_pcre2_version() -> &'static elephc::native_deps::PackageVersion {
+    elephc::native_deps::packages()
+        .iter()
+        .find(|package| package.name == "pcre2")
+        .expect("managed-PCRE2 fixture package must exist")
+        .versions
+        .iter()
+        .find(|version| version.version == PCRE2_VERSION)
+        .expect("managed-PCRE2 fixture version must exist")
+}
 
 /// Tool identity fields needed to reproduce the production native cache key.
 struct TestNativeToolchain {
@@ -243,13 +251,14 @@ pub(crate) fn prepare_managed_pcre2_cli_project(dir: &Path, target: Target) -> P
 
 /// Populates an existing managed-native cache with the target-aligned PCRE2 fixture.
 pub(crate) fn populate_managed_pcre2_cache(cache: &Path, target: Target) {
+    let version = fixture_pcre2_version();
     let toolchain = resolve_test_native_toolchain(target);
     let artifact = cache
         .join("artifacts")
         .join("pcre2")
-        .join(PCRE2_VERSION)
-        .join(format!("r{PCRE2_RECIPE}"))
-        .join(PCRE2_SOURCE_SHA256)
+        .join(version.version)
+        .join(format!("r{}", version.recipe_revision))
+        .join(version.source.sha256)
         .join(&toolchain.target)
         .join(&toolchain.abi)
         .join(&toolchain.fingerprint);
@@ -301,9 +310,9 @@ pub(crate) fn populate_managed_pcre2_cache(cache: &Path, target: Target) {
     let receipt = json!({
         "schema": 1,
         "package": "pcre2",
-        "version": PCRE2_VERSION,
-        "recipe": PCRE2_RECIPE,
-        "source_sha256": PCRE2_SOURCE_SHA256,
+        "version": version.version,
+        "recipe": version.recipe_revision,
+        "source_sha256": version.source.sha256,
         "target": toolchain.target,
         "abi": toolchain.abi,
         "compiler": {
@@ -543,4 +552,19 @@ fn sha256_file(path: &Path) -> String {
 /// Computes a lowercase SHA-256 digest for an in-memory fingerprint payload.
 fn sha256_bytes(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Keeps the CLI fixture's catalog identity aligned with its embedded project lock.
+#[test]
+fn managed_pcre2_fixture_identity_matches_embedded_lock() {
+    let lock: toml::Value = toml::from_str(
+        include_str!("../../examples/date-json-regex/elephc.lock"),
+    ).unwrap();
+    let package = lock["package"].as_array().unwrap().iter()
+        .find(|package| package["name"].as_str() == Some("pcre2"))
+        .unwrap();
+    let version = fixture_pcre2_version();
+    assert_eq!(package["version"].as_str(), Some(version.version));
+    assert_eq!(package["recipe"].as_integer(), Some(i64::from(version.recipe_revision)));
+    assert_eq!(package["source"]["sha256"].as_str(), Some(version.source.sha256));
 }

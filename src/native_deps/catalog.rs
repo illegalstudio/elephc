@@ -203,7 +203,7 @@ const PCRE2_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 2_792_969,
         body_limit: 32 * 1024 * 1024,
     },
-    recipe_revision: 3,
+    recipe_revision: 5,
     dependencies: &[],
     supported_targets: TARGETS,
     ordered_link_outputs: PCRE2_ARCHIVES,
@@ -453,7 +453,7 @@ mod tests {
     fn pcre2_catalog_snapshot_is_exact() {
         let version = version("pcre2", None).expect("catalogue entry");
         assert_eq!(version.version, "10.47");
-        assert_eq!(version.recipe_revision, 3);
+        assert_eq!(version.recipe_revision, 5);
         assert_eq!(version.source.exact_size, 2_792_969);
         assert_eq!(version.source.sha256, "c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16");
         assert_eq!(version.ordered_link_outputs, PCRE2_ARCHIVES);

@@ -3482,8 +3482,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 // is the wrong answer. Taking it made the caller release a class-typed value the
                 // callee handed back at `+0` (issue #1203). A freshly built operand is not a
                 // local load and still refuses, which is what #486 needs.
+                // A concrete string projected from final Mixed storage is the exception:
+                // its cast detached an owned string, whose lease flows through a passthrough.
                 let argument_is_a_caller_temporary = self.value_is_owning_temporary(lowered)
-                    && !self.value_is_owned_unboxed_local_load(*argument);
+                    && (!self.value_is_owned_unboxed_local_load(*argument)
+                        || self.builder.value_php_type(*argument).codegen_repr() == PhpType::Str);
                 !argument_is_a_caller_temporary
             })
     }
